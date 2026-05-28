@@ -249,6 +249,8 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
     const yamlChanged = existing.yaml !== content;
     const normalizationChanged =
       JSON.stringify(existing.parsed?.nodes ?? {}) !== JSON.stringify(parsed.nodes ?? {});
+    const validationChanged =
+      JSON.stringify(existing.validation ?? null) !== JSON.stringify(validation);
     if (override && (yamlChanged || normalizationChanged)) {
       await col.updateOne(
         { _id: existing._id },
@@ -264,6 +266,18 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
       );
       updated++;
       console.log(`[seed] Updated built-in workflow: ${parsed.name}`);
+    } else if (validationChanged) {
+      await col.updateOne(
+        { _id: existing._id },
+        {
+          $set: {
+            validation,
+            updatedAt: new Date(),
+          },
+        },
+      );
+      updated++;
+      console.log(`[seed] Refreshed workflow validation: ${parsed.name}`);
     }
   }
 

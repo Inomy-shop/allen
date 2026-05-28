@@ -19,8 +19,9 @@ import type { Db } from 'mongodb';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { McpService, type McpServerRecord } from './mcp.service.js';
-import { buildSingleServerConfig } from '@allen/engine';
+import { buildSingleServerConfig, type BuildMcpConfigOptions } from '@allen/engine';
 import { AlertService } from './alert.service.js';
+import { buildMcpSourceEnvForServer } from '../runtime/mcp-credentials.js';
 
 // ── Config ──
 
@@ -58,7 +59,8 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
   // loader uses at agent-execution time.
   let spawnCfg: Record<string, unknown> | null = null;
   try {
-    spawnCfg = await buildSingleServerConfig(server as unknown as Record<string, unknown>, db);
+    const options = { sourceEnv: await buildMcpSourceEnvForServer(server) } satisfies BuildMcpConfigOptions;
+    spawnCfg = await buildSingleServerConfig(server as unknown as Record<string, unknown>, db, options);
   } catch (err) {
     return { ok: false, error: `failed to resolve spawn config: ${(err as Error).message}`, durationMs: Date.now() - startMs };
   }
@@ -319,6 +321,7 @@ export async function healthCheckMcpServer(server: McpServerRecord, db: Db): Pro
 // ── Background loop ──
 
 let intervalHandle: NodeJS.Timeout | null = null;
+let startupTimeoutHandle: NodeJS.Timeout | null = null;
 let running = false;
 
 /**
@@ -404,7 +407,11 @@ export function startMcpHealthMonitor(db: Db): void {
   console.log(`[mcp-health] Monitor starting — first check in ${STARTUP_DELAY_MS / 1000}s, then every ${HEALTH_CHECK_INTERVAL_MS / 60000}min`);
 
   // First check after startup delay (don't slow down boot)
-  setTimeout(() => { void runHealthCheckPass(db); }, STARTUP_DELAY_MS);
+  startupTimeoutHandle = setTimeout(() => {
+    startupTimeoutHandle = null;
+    void runHealthCheckPass(db);
+  }, STARTUP_DELAY_MS);
+  startupTimeoutHandle.unref?.();
 
   // Recurring checks
   intervalHandle = setInterval(() => { void runHealthCheckPass(db); }, HEALTH_CHECK_INTERVAL_MS);
@@ -414,6 +421,10 @@ export function startMcpHealthMonitor(db: Db): void {
 
 /** Stop the background loop. Mainly for tests. */
 export function stopMcpHealthMonitor(): void {
+  if (startupTimeoutHandle) {
+    clearTimeout(startupTimeoutHandle);
+    startupTimeoutHandle = null;
+  }
   if (intervalHandle) {
     clearInterval(intervalHandle);
     intervalHandle = null;

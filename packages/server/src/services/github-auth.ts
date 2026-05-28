@@ -11,13 +11,18 @@
  * the user adds a token to `.env`.
  */
 
+import { getRuntimeSecretsProvider } from '../runtime/config.js';
+
 /** Env var under which the GitHub token is stored. Matches the MCP preset. */
 export const GITHUB_TOKEN_ENV_KEY = 'ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN';
 /** Legacy env var, supported for backward compatibility. */
 const LEGACY_GITHUB_TOKEN_ENV_KEY = 'GITHUB_PERSONAL_ACCESS_TOKEN';
 
-function readToken(): string | null {
-  return process.env[GITHUB_TOKEN_ENV_KEY] ?? process.env[LEGACY_GITHUB_TOKEN_ENV_KEY] ?? null;
+async function readToken(): Promise<string | null> {
+  const secrets = getRuntimeSecretsProvider();
+  return await secrets.getSecret(GITHUB_TOKEN_ENV_KEY)
+    ?? await secrets.getSecret(LEGACY_GITHUB_TOKEN_ENV_KEY)
+    ?? null;
 }
 
 /**
@@ -30,7 +35,7 @@ function readToken(): string | null {
  * Always preserves PATH, HOME, and other parent env vars `gh` needs.
  */
 export async function buildGhEnv(): Promise<NodeJS.ProcessEnv> {
-  const token = readToken();
+  const token = await readToken();
   if (!token) return { ...process.env };
   return {
     ...process.env,
@@ -44,5 +49,5 @@ export async function buildGhEnv(): Promise<NodeJS.ProcessEnv> {
  * Useful for surfacing setup hints in the UI.
  */
 export async function hasGithubToken(): Promise<boolean> {
-  return Boolean(readToken());
+  return Boolean(await readToken());
 }

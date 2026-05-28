@@ -3,7 +3,7 @@
  * Manages real PTY shells via node-pty + WebSocket transport.
  */
 
-import { createServer, type IncomingMessage } from 'http';
+import { createServer, type IncomingMessage, type Server } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createRequire } from 'module';
 import { statSync, constants as fsConstants, accessSync, chmodSync, existsSync } from 'node:fs';
@@ -68,6 +68,21 @@ interface TerminalSession {
 
 const sessions = new Map<string, TerminalSession>();
 
+export interface TerminalWebSocketServerOptions {
+  host?: string;
+  port?: number;
+  server?: Server;
+  serverPort?: number;
+}
+
+export interface TerminalWebSocketServerHandle {
+  server: Server | null;
+  port: number | null;
+  url: string | null;
+  ready: Promise<void>;
+  stop(): Promise<void>;
+}
+
 /**
  * Resolve a shell binary that actually exists on this machine. Walks
  * a fallback chain so that a missing $SHELL doesn't break the terminal.
@@ -112,6 +127,25 @@ function getWsPort(): number {
   return parseInt(process.env.TERMINAL_WS_PORT ?? '4024', 10);
 }
 
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function killAllTerminalSessions(): void {
+  for (const [key, session] of sessions) {
+    try { session.pty.kill(); } catch { /* ignore */ }
+    for (const client of session.ws) {
+      try { client.close(); } catch { /* ignore */ }
+    }
+    sessions.delete(key);
+  }
+}
+
 /**
  * Start a dedicated WebSocket server for terminal PTY on its own port.
  * URL patterns:
@@ -121,20 +155,28 @@ function getWsPort(): number {
 export function startTerminalWebSocketServer(
   getWorkspacePath: (workspaceId: string) => Promise<string | null>,
   getRepoPath?: (repoId: string) => Promise<string | null>,
-): void {
+  options: TerminalWebSocketServerOptions = {},
+): TerminalWebSocketServerHandle {
   if (!pty) {
     console.warn('[terminal] Skipping WebSocket setup — node-pty not available');
-    return;
+    return {
+      server: null,
+      port: null,
+      url: null,
+      ready: Promise.resolve(),
+      stop: async () => { killAllTerminalSessions(); },
+    };
   }
 
-  const httpServer = createServer((_req: IncomingMessage, res: any) => {
+  const ownsServer = options.server == null;
+  const httpServer = options.server ?? createServer((_req: IncomingMessage, res: any) => {
     res.writeHead(404);
     res.end();
   });
 
   const wss = new WebSocketServer({ noServer: true });
 
-  httpServer.on('upgrade', (request: IncomingMessage, socket: any, head: Buffer) => {
+  const upgradeHandler = (request: IncomingMessage, socket: any, head: Buffer) => {
     const url = request.url ?? '';
 
     // Terminal WebSocket
@@ -170,12 +212,49 @@ export function startTerminalWebSocketServer(
     }
 
     socket.destroy();
-  });
+  };
+  httpServer.on('upgrade', upgradeHandler);
 
-  const port = getWsPort();
-  httpServer.listen(port, () => {
-    console.log(`[terminal] WebSocket PTY server running on ws://localhost:${port}`);
-  });
+  const host = options.host ?? '127.0.0.1';
+  const port = options.port ?? getWsPort();
+  let boundPort: number | null = options.serverPort ?? (typeof port === 'number' && port !== 0 ? port : null);
+  let url: string | null = boundPort == null ? null : `ws://${host}:${boundPort}`;
+
+  const ready = ownsServer
+    ? new Promise<void>((resolve, reject) => {
+      httpServer.once('error', reject);
+      httpServer.listen(port, host, () => {
+        httpServer.off('error', reject);
+        const address = httpServer.address();
+        if (address && typeof address === 'object') {
+          boundPort = address.port;
+          url = `ws://${host}:${boundPort}`;
+        }
+        console.log(`[terminal] WebSocket PTY server running on ${url ?? `ws://${host}:${port}`}`);
+        resolve();
+      });
+    })
+    : Promise.resolve().then(() => {
+      console.log(`[terminal] WebSocket PTY handler attached to Allen server on ${url ?? `ws://${host}`}`);
+    });
+
+  return {
+    server: httpServer,
+    get port() { return boundPort; },
+    get url() { return url; },
+    ready,
+    stop: async () => {
+      killAllTerminalSessions();
+      httpServer.off('upgrade', upgradeHandler);
+      wss.close();
+      if (ownsServer) {
+        await closeServer(httpServer).catch((err) => {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== 'ERR_SERVER_NOT_RUNNING') throw err;
+        });
+      }
+    },
+  };
 }
 
 async function handleConnection(

@@ -89,14 +89,14 @@ export default function NotificationBell() {
       <button
         ref={buttonRef}
         onClick={() => { setOpen(!open); if (!open) loadAlerts(); }}
-        className={`relative p-2 rounded-sm transition-all duration-200 ${
-          open ? 'text-accent-blue bg-accent-blue/10' : 'text-theme-muted hover:text-theme-secondary hover:bg-app-muted'
-        }`}
+        className={`foot-btn topbar-icon-btn relative ${open ? 'is-active' : ''}`}
         title="Notifications"
+        aria-label="Notifications"
+        aria-expanded={open}
       >
         <Bell className="w-4 h-4" />
         {unreadCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 rounded-full bg-accent-red text-[9px] text-white font-bold flex items-center justify-center px-1 animate-pulse">
+          <span className="topbar-notification-count">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -109,20 +109,20 @@ export default function NotificationBell() {
 
           {/* Dropdown */}
           <div
-            className="fixed z-50 w-80 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden"
+            className="fixed z-50 w-80 overflow-hidden rounded-md border border-app bg-app-card shadow-popover"
             style={dropdownStyle}
           >
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-2.5 border-b border-app bg-surface-50">
+            <div className="flex items-center justify-between border-b border-app bg-app-muted px-4 py-2.5">
               <div className="flex items-center gap-2">
-                <Bell className="w-3.5 h-3.5 text-accent-blue" />
-                <span className="text-xs font-heading text-theme-primary tracking-wider">Notifications</span>
+                <Bell className="w-3.5 h-3.5 text-accent" />
+                <span className="text-xs font-heading text-theme-primary">Notifications</span>
                 {unreadCount > 0 && (
-                  <span className="text-[9px] font-mono text-accent-blue bg-accent-blue/10 px-1.5 py-0.5 rounded-full">{unreadCount}</span>
+                  <span className="rounded-full bg-accent-soft px-1.5 py-0.5 font-mono text-[9px] text-accent">{unreadCount}</span>
                 )}
               </div>
               {unreadCount > 0 && (
-                <button onClick={handleMarkAllRead} className="text-[10px] text-theme-muted hover:text-accent-blue flex items-center gap-1 transition-colors" title="Mark all as read">
+                <button onClick={handleMarkAllRead} className="flex items-center gap-1 text-[10px] text-theme-muted transition-colors hover:text-accent" title="Mark all as read">
                   <CheckCheck className="w-3 h-3" /> Read all
                 </button>
               )}
@@ -156,7 +156,7 @@ export default function NotificationBell() {
                       </div>
                       <div className="text-[11px] text-theme-muted font-body mt-0.5 line-clamp-2">{alert.message}</div>
                       {alert.link && (
-                        <a href={alert.link} onClick={() => setOpen(false)} className="inline-flex items-center gap-1 text-[10px] text-accent-blue hover:text-accent-blue/80 mt-1.5 transition-colors">
+                        <a href={alert.link} onClick={() => setOpen(false)} className="mt-1.5 inline-flex items-center gap-1 text-[10px] text-accent transition-colors hover:text-accent-hover">
                           <ExternalLink className="w-2.5 h-2.5" /> View details
                         </a>
                       )}

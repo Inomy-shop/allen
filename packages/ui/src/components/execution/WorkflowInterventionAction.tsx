@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronRight, ExternalLink, X } from 'lucide-react';
+import { ChevronRight, X } from 'lucide-react';
 import { executions as executionsApi, interventions as interventionsApi, workflows as workflowsApi } from '../../services/api';
 import ClarificationPanel, {
   type ClarificationDecision,
@@ -24,6 +24,8 @@ export type WorkflowInterventionLike = {
   intervention_id?: string;
   status?: string;
   stage?: string;
+  kind?: 'clarify' | 'review' | 'recover';
+  widget?: 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate';
   severity?: string;
   title?: string;
   question?: string;
@@ -32,6 +34,13 @@ export type WorkflowInterventionLike = {
   createdAt?: string;
   fields?: WorkflowInterventionFieldLike[];
   options?: Array<{ label?: string; value?: string; primary?: boolean; destructive?: boolean; description?: string }>;
+  docs?: Array<{ label?: string; url?: string; kind?: string }>;
+  evidence?: Array<{ label?: string; value?: string; url?: string; type?: string }>;
+  highlights?: string[];
+  review_content?: string;
+  review_content_type?: 'markdown' | 'json' | 'code' | 'text';
+  review_language?: string;
+  retry_exhaustion?: Record<string, unknown>;
 };
 
 export type WorkflowInterventionRunLike = {
@@ -51,6 +60,7 @@ export type WorkflowInterventionRunLike = {
 export type WorkflowInterventionSubmit = {
   executionId: string;
   interventionId?: string;
+  actionId?: string;
   decision: 'approve' | 'request_changes' | 'reject' | 'answer';
   fieldValues?: Record<string, unknown>;
   feedback?: string;
@@ -131,6 +141,8 @@ export function WorkflowInterventionDialog({
   const title = activeIntervention.title ?? run.runContext?.humanInput?.title ?? 'Workflow input needed';
   const question = activeIntervention.question ?? activeIntervention.context_summary ?? '';
   const model = useMemo(() => buildPresentationModel(activeIntervention), [activeIntervention]);
+  const docs = useMemo(() => docsForIntervention(activeIntervention), [activeIntervention]);
+  const reviewContent = useMemo(() => reviewContentForIntervention(activeIntervention), [activeIntervention]);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -189,7 +201,7 @@ export function WorkflowInterventionDialog({
         throw new Error('Workflow input is still syncing. Please wait a moment and try again.');
       }
 
-      if (submitModel.mode === 'approval' && !payload.decision) {
+      if ((submitModel.mode === 'approval' || submitModel.mode === 'escalation') && !payload.decision) {
         throw new Error('Choose approve, request changes, or reject before submitting.');
       }
 
@@ -198,6 +210,7 @@ export function WorkflowInterventionDialog({
       await onAnswer({
         executionId: run.executionId,
         interventionId: submitIntervention.intervention_id,
+        actionId: submitModel.decisionField ? decisionValueForField(decision, submitModel.decisionField) : decision,
         decision,
         fieldValues,
         feedback: payload.feedback,
@@ -213,14 +226,14 @@ export function WorkflowInterventionDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-6"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/55 p-6 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label={title}
       onClick={() => !submitting && onClose()}
     >
       <div
-        className="my-[3vh] flex w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-app-strong bg-app-card shadow-2xl"
+        className="flex max-h-[92vh] w-[96vw] max-w-7xl flex-col overflow-hidden rounded-lg border border-app-strong bg-app-card shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-app bg-app-card px-4 py-3">
@@ -232,19 +245,10 @@ export function WorkflowInterventionDialog({
             </span>
           </div>
           <div className="flex items-center gap-1">
-            <a
-              href={`/executions/${run.executionId}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rounded-md p-1 text-theme-muted transition-colors hover:bg-app-muted hover:text-accent"
-              title="Open execution"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
             <button
               type="button"
               onClick={() => !submitting && onClose()}
-              className="rounded-md p-1 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
+              className="rounded-sm p-1 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
               disabled={submitting}
               aria-label="Close approval dialog"
             >
@@ -252,18 +256,24 @@ export function WorkflowInterventionDialog({
             </button>
           </div>
         </div>
-        <ClarificationPanel
-          layout="modal"
-          title={model.title ?? title}
-          subtitle={activeIntervention.stage ? `node · ${activeIntervention.stage}` : `execution · ${run.executionId.slice(0, 8)}`}
-          prompt={question}
-          severity={model.severity}
-          fields={model.visibleFields}
-          mode={model.mode}
-          submitting={submitting}
-          onSubmit={submit}
-          onCancel={onClose}
-        />
+        <div className="min-h-0 overflow-auto">
+          <ClarificationPanel
+            layout="modal"
+            title={model.title ?? title}
+            subtitle={activeIntervention.stage ? `node · ${activeIntervention.stage}` : `execution · ${run.executionId.slice(0, 8)}`}
+            prompt={question}
+            severity={model.severity}
+            fields={model.visibleFields}
+            mode={model.mode}
+            docs={docs}
+            reviewContent={reviewContent.content}
+            reviewContentType={reviewContent.type}
+            reviewLanguage={activeIntervention.review_language}
+            submitting={submitting}
+            onSubmit={submit}
+            onCancel={onClose}
+          />
+        </div>
         {error && (
           <div className="border-t border-app px-6 py-3 text-[12px] text-accent-red">
             {error}
@@ -285,6 +295,7 @@ type PresentationModel = {
   decisionField?: ClarificationField;
   feedbackField?: ClarificationField;
   responseField?: ClarificationField;
+  passthroughFields?: boolean;
 };
 
 const FREEFORM_RESPONSE_FIELD = '__human_response';
@@ -305,9 +316,12 @@ function buildPresentationModel(intervention: WorkflowInterventionLike): Present
   // they all rendered as a single freeform textarea.
   const hasOptions = Array.isArray(intervention.options) && intervention.options.length > 0;
   const decisionField = fields.find(isDecisionField);
-  const hasDecision = hasOptions || !!decisionField;
-  const mode: DialogMode = hasDecision ? 'approval' : 'simple';
-  const resolvedDecisionField = decisionField ?? (mode === 'approval'
+  const widgetHasDecision = intervention.widget === 'approval_gate'
+    || intervention.widget === 'retry_exhausted_gate'
+    || intervention.widget === 'escalation_gate';
+  const hasDecision = intervention.kind !== 'clarify' && (widgetHasDecision || hasOptions || !!decisionField);
+  const mode: DialogMode = hasDecision ? (severity === 'escalation' ? 'escalation' : 'approval') : 'simple';
+  const resolvedDecisionField = decisionField ?? (mode === 'approval' || mode === 'escalation'
     ? defaultDecisionField(intervention)
     : undefined);
   const feedbackField = fields.find((field) => {
@@ -317,8 +331,18 @@ function buildPresentationModel(intervention: WorkflowInterventionLike): Present
     return name.includes('feedback') || name.includes('reason') || name.includes('comment') || type === 'textarea';
   });
 
-  if (mode !== 'approval') {
+  if (mode === 'simple') {
     const responseField = feedbackField ?? fields.find(field => field !== resolvedDecisionField);
+    if (fields.length > 0) {
+      return {
+        mode,
+        severity,
+        title: 'Input Required',
+        visibleFields: fields,
+        responseField,
+        passthroughFields: true,
+      };
+    }
     return {
       mode,
       severity,
@@ -377,6 +401,7 @@ async function hydrateIntervention(
     ...intervention,
     stage: waitingNode,
     severity: intervention.severity ?? (waitingNode.toLowerCase().includes('approval') ? 'approval' : waitingNode.toLowerCase().includes('escalation') ? 'escalation' : 'question'),
+    widget: intervention.widget ?? nodeDef.human?.widget,
     title: intervention.title ?? nodeDef.displayName ?? humanLabel(waitingNode),
     question: renderTemplate(nodeDef.prompt ?? intervention.question ?? intervention.context_summary ?? '', execution.state ?? {}),
     fields: Array.isArray(nodeDef.fields) ? nodeDef.fields : intervention.fields,
@@ -404,6 +429,7 @@ function mergeHydrated(
     context_summary: hydrated.context_summary ?? fallback.context_summary,
     fields: hydrated.fields ?? fallback.fields,
     options: hydrated.options ?? fallback.options,
+    widget: hydrated.widget ?? fallback.widget,
   };
 }
 
@@ -475,12 +501,15 @@ function severityForIntervention(
   fields: ClarificationField[],
 ): ClarificationSeverity {
   const haystack = [
+    intervention.widget,
     intervention.severity,
     intervention.title,
     intervention.stage,
   ].filter(Boolean).join(' ').toLowerCase();
+  if (intervention.widget === 'retry_exhausted_gate' || intervention.widget === 'escalation_gate') return 'escalation';
+  if (intervention.widget === 'approval_gate') return 'approval';
+  if (haystack.includes('escalation') || haystack.includes('retry_exhausted')) return 'escalation';
   if (haystack.includes('approval') || haystack.includes('gate')) return 'approval';
-  if (haystack.includes('escalation')) return 'escalation';
   // Promote to 'approval' when any field is a decision field carrying
   // approve/request_changes/reject/cancel options — handles human nodes
   // whose stage names don't trip the heuristics above (e.g.
@@ -514,7 +543,8 @@ function toWorkflowFieldValues(
   },
   model: PresentationModel,
 ): Record<string, unknown> {
-  if (model.mode !== 'approval') {
+  if (model.mode === 'simple' || model.mode === 'question') {
+    if (model.passthroughFields) return { ...payload.fieldValues };
     const text = firstTextValue(payload.fieldValues);
     const values: Record<string, unknown> = {};
     if (model.decisionField) {
@@ -529,7 +559,7 @@ function toWorkflowFieldValues(
   }
 
   const values: Record<string, unknown> = { ...payload.fieldValues };
-  if (model.mode === 'approval' && payload.decision && model.decisionField) {
+  if ((model.mode === 'approval' || model.mode === 'escalation') && payload.decision && model.decisionField) {
     values[model.decisionField.name] = decisionValueForField(payload.decision, model.decisionField);
   }
   if (payload.feedback) {
@@ -555,6 +585,7 @@ function decisionValueForField(decision: ClarificationDecision, field: Clarifica
   const values = normalizeFieldOptions(field).map(option => option.value);
   if (decision === 'request_changes' && values.includes('retry_with_feedback')) return 'retry_with_feedback';
   if (decision === 'approve' && values.includes('override_and_continue')) return 'override_and_continue';
+  if (decision === 'approve' && values.includes('force_continue')) return 'force_continue';
   if (decision === 'reject' && values.includes('abandon')) return 'abandon';
   if (decision === 'reject' && values.includes('cancel')) return 'cancel';
   if (values.includes(decision)) return decision;
@@ -583,6 +614,68 @@ function normalizeOptions(
       description: option.description,
     };
   }).filter(option => (typeof option === 'string' ? option : option.value));
+}
+
+function docsForIntervention(
+  intervention: WorkflowInterventionLike,
+): Array<{ label: string; url: string }> {
+  const docs = Array.isArray(intervention.docs)
+    ? intervention.docs
+      .filter((doc) => typeof doc.url === 'string' && doc.url.trim())
+      .map((doc) => ({ label: doc.label ?? doc.kind ?? 'Reference', url: doc.url! }))
+    : [];
+  const evidenceDocs = Array.isArray(intervention.evidence)
+    ? intervention.evidence
+      .filter((item) => typeof item.url === 'string' && item.url.trim())
+      .map((item) => ({ label: item.label ?? item.type ?? 'Evidence', url: item.url! }))
+    : [];
+  return uniqueDocs([...docs, ...evidenceDocs]);
+}
+
+function uniqueDocs(docs: Array<{ label: string; url: string }>): Array<{ label: string; url: string }> {
+  const byUrl = new Map<string, { label: string; url: string }>();
+  for (const doc of docs) {
+    const url = doc.url.trim();
+    if (!url) continue;
+    const existing = byUrl.get(url);
+    if (!existing || isGenericDocLabel(existing.label)) {
+      byUrl.set(url, { label: doc.label || existing?.label || 'Artifact', url });
+    }
+  }
+  return [...byUrl.values()];
+}
+
+function isGenericDocLabel(label: string): boolean {
+  const normalized = label.trim().toLowerCase();
+  return normalized === 'evidence'
+    || normalized === 'external'
+    || normalized === 'artifact'
+    || normalized.endsWith('artifact');
+}
+
+function reviewContentForIntervention(
+  intervention: WorkflowInterventionLike,
+): { content?: string; type: 'markdown' | 'json' | 'code' | 'text' } {
+  if (intervention.review_content) {
+    return {
+      content: intervention.review_content,
+      type: intervention.review_content_type ?? 'markdown',
+    };
+  }
+  const blocks: string[] = [];
+  if (Array.isArray(intervention.highlights) && intervention.highlights.length > 0) {
+    blocks.push(['### Highlights', ...intervention.highlights.map(item => `- ${item}`)].join('\n'));
+  }
+  if (Array.isArray(intervention.evidence)) {
+    const textEvidence = intervention.evidence
+      .filter(item => typeof item.value === 'string' && item.value.trim())
+      .map(item => `#### ${item.label ?? item.type ?? 'Evidence'}\n${item.value}`);
+    blocks.push(...textEvidence);
+  }
+  if (intervention.retry_exhaustion) {
+    blocks.push(`### Retry context\n\`\`\`json\n${JSON.stringify(intervention.retry_exhaustion, null, 2)}\n\`\`\``);
+  }
+  return { content: blocks.length > 0 ? blocks.join('\n\n') : undefined, type: 'markdown' };
 }
 
 function firstTextValue(values: Record<string, unknown>): string {

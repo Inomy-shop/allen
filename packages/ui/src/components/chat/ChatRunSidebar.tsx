@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import Editor from '@monaco-editor/react';
+import type * as Monaco from 'monaco-editor';
 import {
   Activity,
   AlertTriangle,
@@ -18,11 +18,9 @@ import {
   GitBranch,
   Loader2,
   ListTree,
-  Maximize2,
-  Minimize2,
   PanelRightClose,
   PlayCircle,
-  Route,
+  RefreshCw,
   Rows3,
   StopCircle,
   Terminal,
@@ -33,24 +31,26 @@ import {
 import type { SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { artifacts as artifactsApi, repos as reposApi, type ArtifactDoc, type RunStatus } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
-import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
 import ArtifactViewer from '../artifacts/ArtifactViewer';
 import { WorkflowInterventionAction, type WorkflowInterventionLike } from '../execution/WorkflowInterventionAction';
 import { XTerminal } from '../workspace/XTerminal';
+import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
 import { renderMarkdown } from './ChatMessageList';
 
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 const TERMINAL_STATUSES = new Set(['completed', 'merged', 'failed', 'failure', 'error', 'errored', 'cancelled', 'canceled', 'closed']);
+const CHAT_RUN_SIDEBAR_MIN_WIDTH = 388;
 
-export type ChatRunPanelTab = 'tasks' | 'artifacts' | 'executions' | 'files';
-type FilePanelView = 'changes' | 'browser' | 'terminal';
+export type ChatRunPanelTab = 'tasks' | 'executions' | 'files' | 'changes';
+type FilePanelView = 'files' | 'changes';
 
 type RepoBrowseSource = {
   id?: string | null;
   name?: string | null;
   path?: string | null;
 };
+type SidebarWorkflowStep = NonNullable<RunStatus['workflowSteps']>[number];
 
 function humanLabel(value?: string | null): string {
   if (!value) return '';
@@ -111,6 +111,11 @@ function runExecutionLabel(context: RunStatus | null): string {
   if (context?.runType === 'workflow') return 'Workflow Execution';
   if (context?.runType === 'agent') return 'Agent Execution';
   return 'Execution Trace';
+}
+
+function isChildExecutionRun(run: SpawnedAgent): boolean {
+  if (run.parentExecutionId ?? run.runContext?.execution.parentExecutionId) return true;
+  return (run.spawnDepth ?? run.runContext?.execution.spawnDepth ?? 0) > 0;
 }
 
 function RunExecutionIcon({ context }: { context: RunStatus | null }) {
@@ -314,6 +319,28 @@ function compactSteps(context: RunStatus | null): Array<{ id: string; name: stri
   return items;
 }
 
+function workflowStepStatusFromState(state: ReturnType<typeof compactSteps>[number]['state']): string {
+  if (state === 'ok') return 'completed';
+  if (state === 'run') return 'running';
+  if (state === 'wait-you') return 'waiting_for_input';
+  if (state === 'fail') return 'failed';
+  return 'pending';
+}
+
+function workflowStepsForContext(context: RunStatus | null): SidebarWorkflowStep[] {
+  const hydratedSteps = context?.workflowSteps ?? [];
+  if (hydratedSteps.length > 0) return hydratedSteps;
+  if (context?.runType !== 'workflow') return [];
+  return compactSteps(context).map((step, index): SidebarWorkflowStep => ({
+    id: step.id,
+    name: step.name,
+    index,
+    status: workflowStepStatusFromState(step.state),
+    attempts: step.state === 'wait' ? 0 : 1,
+    type: step.meta || 'workflow',
+  }));
+}
+
 function runState(context: RunStatus | null, run: SpawnedAgent): 'ok' | 'run' | 'wait-you' | 'fail' | 'wait' {
   const status = (context?.status ?? run.status ?? '').toLowerCase();
   if (context?.humanInput.required || status === 'waiting_for_input' || status === 'waiting') return 'wait-you';
@@ -477,6 +504,44 @@ function workflowAttemptFailureLabel(run: SpawnedAgent): string {
   return 'Failed';
 }
 
+function WorkflowExecutionHeader({ run, context }: { run: SpawnedAgent; context: RunStatus }) {
+  const workflowName = safeRunName(context.execution.workflowName) ?? runDisplayName(context, run);
+  const executionName = safeRunName(context.title);
+  const status = humanLabel(context.status ?? run.status);
+  const cost = formatCost(context.execution.cost);
+  const progress = `${context.progress.completed ?? 0}/${context.progress.total ?? workflowStepsForContext(context).length} steps`;
+  const subtitle = [
+    executionName && executionName !== workflowName ? executionName : 'Workflow execution',
+    progress,
+    status,
+    cost,
+  ].filter(Boolean).join(' · ');
+
+  return (
+    <Link
+      to={`/executions/${run.executionId}`}
+      className="group flex items-center gap-3 rounded px-2 py-2 text-left transition-colors hover:bg-app"
+      title="Open workflow execution"
+    >
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded border border-app bg-app-muted text-theme-muted transition-colors group-hover:text-theme-secondary">
+        <GitBranch className="h-3.5 w-3.5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-theme-muted">
+          Workflow execution
+        </span>
+        <span className="mt-0.5 block truncate text-[13px] font-semibold text-theme-primary">
+          {workflowName}
+        </span>
+        <span className="mt-0.5 block truncate font-mono text-[10.5px] text-theme-muted">
+          {subtitle}
+        </span>
+      </span>
+      <ExternalLink className="h-3.5 w-3.5 shrink-0 text-theme-subtle transition-colors group-hover:text-theme-secondary" />
+    </Link>
+  );
+}
+
 function AttemptRow({
   run,
   index,
@@ -490,14 +555,14 @@ function AttemptRow({
   onOpenExecution: (executionId: string) => void;
   onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() => run.runContext?.runType === 'workflow');
   const context = run.runContext ?? null;
   const state = runState(context, run);
   const status = context?.status ?? run.status;
   const cost = formatCost(context?.execution.cost);
   const percent = Math.max(0, Math.min(100, context?.progress.percent ?? (state === 'ok' ? 100 : 0)));
   const kind = runDisplayName(context, run);
-  const workflowSteps = context?.runType === 'workflow' ? context.workflowSteps ?? [] : [];
+  const workflowSteps = workflowStepsForContext(context);
   const isWorkflow = context?.runType === 'workflow';
   const summary =
     !isWorkflow ? humanLabel(status)
@@ -590,27 +655,122 @@ function ReferenceLinks({ run, context }: { run: SpawnedAgent; context: RunStatu
   );
 }
 
-function PullRequestTaskCard({ pr }: { pr: NonNullable<RunStatus['pullRequest']> }) {
-  const age = timeAgo(pr.mergedAt ?? pr.updatedAt ?? pr.createdAt);
+function WorkContextSection({ runs }: { runs: SpawnedAgent[] }) {
+  const pullRequests = useMemo(() => {
+    const prs = new Map<string, NonNullable<RunStatus['pullRequest']>>();
+    for (const run of runs) {
+      const pr = run.runContext?.pullRequest;
+      const key = pr?.id ?? pr?.url ?? (pr?.number != null ? String(pr.number) : '');
+      if (pr && key) prs.set(key, pr);
+    }
+    return [...prs.values()];
+  }, [runs]);
+
+  const workspaces = useMemo(() => {
+    const refs = new Map<string, NonNullable<RunStatus['workspace']>>();
+    for (const run of runs) {
+      const workspace = run.runContext?.workspace;
+      const key = workspace?.id ?? workspace?.worktreePath ?? workspace?.branch ?? workspace?.name ?? '';
+      if (workspace && key) refs.set(key, workspace);
+    }
+    return [...refs.values()];
+  }, [runs]);
+
+  const linearRefs = useMemo(() => {
+    const refs = new Map<string, NonNullable<RunStatus['linear']>>();
+    for (const run of runs) {
+      const linear = run.runContext?.linear;
+      const key = linear?.issueId ?? linear?.identifier ?? linear?.url ?? '';
+      if (linear && key) refs.set(key, linear);
+    }
+    return [...refs.values()];
+  }, [runs]);
+
+  const count = pullRequests.length + workspaces.length + linearRefs.length;
+  if (count === 0) return null;
+
   return (
-    <div className="cr-pr-task-card">
-      <div className="cr-pr-task-main">
-        <span className="cr-pr-task-tag">Pull request</span>
-        <span className="cr-pr-task-title">PR {pr.number ? `#${pr.number}` : ''} {humanLabel(pr.status ?? 'open')}</span>
-        <span className="cr-pr-task-age">{age}</span>
-        {pr.branch && <code className="cr-pr-task-branch">{pr.branch}</code>}
-        <div className="cr-pr-task-actions">
-          {pr.url && (
-            <a href={pr.url} target="_blank" rel="noreferrer" title="Review on GitHub" aria-label="Review on GitHub">
-              <ExternalLink className="h-3.5 w-3.5" />
+    <RailSection title="references" count={`${count}`}>
+      <div className="cr-context-grid">
+        {pullRequests.map(pr => {
+          const status = humanLabel(pr.status ?? 'open');
+          const title = `PR ${pr.number ? `#${pr.number}` : ''} ${status}`.trim();
+          const subtitle = [pr.title, pr.branch, pr.baseBranch ? `base ${pr.baseBranch}` : null].filter(Boolean).join(' · ');
+          const content = (
+            <>
+              <span className="cr-context-ic pr"><GitBranch className="h-3.5 w-3.5" /></span>
+              <span className="cr-context-body">
+                <span className="cr-context-kicker">Pull request</span>
+                <span className="cr-context-title">{title}</span>
+                {subtitle && <span className="cr-context-sub">{subtitle}</span>}
+              </span>
+              <span className="cr-context-meta">{timeAgo(pr.mergedAt ?? pr.updatedAt ?? pr.createdAt)}</span>
+              {pr.url && <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />}
+            </>
+          );
+          return pr.url ? (
+            <a key={pr.id ?? pr.url ?? pr.number ?? pr.title ?? 'pr'} href={pr.url} target="_blank" rel="noreferrer" className="cr-context-card">
+              {content}
             </a>
-          )}
-          <Link to="/pull-requests" title="Open pull requests" aria-label="Open pull requests">
-            <GitBranch className="h-3.5 w-3.5" />
-          </Link>
-        </div>
+          ) : (
+            <div key={pr.id ?? pr.number ?? pr.title ?? 'pr'} className="cr-context-card">
+              {content}
+            </div>
+          );
+        })}
+
+        {workspaces.map(workspace => {
+          const title = workspace.name ?? workspace.branch ?? 'Workspace';
+          const subtitle = [workspace.repoName, workspace.branch, workspace.baseBranch ? `base ${workspace.baseBranch}` : null].filter(Boolean).join(' · ');
+          const content = (
+            <>
+              <span className="cr-context-ic workspace"><FolderGit2 className="h-3.5 w-3.5" /></span>
+              <span className="cr-context-body">
+                <span className="cr-context-kicker">Workspace</span>
+                <span className="cr-context-title">{title}</span>
+                {subtitle && <span className="cr-context-sub">{subtitle}</span>}
+              </span>
+              {workspace.status && <span className="cr-context-meta">{humanLabel(workspace.status)}</span>}
+              <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />
+            </>
+          );
+          return workspace.id ? (
+            <Link key={workspace.id} to={`/workspaces/${workspace.id}`} className="cr-context-card">
+              {content}
+            </Link>
+          ) : (
+            <div key={workspace.worktreePath ?? workspace.branch ?? workspace.name ?? 'workspace'} className="cr-context-card">
+              {content}
+            </div>
+          );
+        })}
+
+        {linearRefs.map(linear => {
+          const title = linear.identifier ?? linear.title ?? 'Linear issue';
+          const subtitle = [linear.title && linear.title !== title ? linear.title : null, humanLabel(String(linear.assignment?.status ?? 'linked'))].filter(Boolean).join(' · ');
+          const content = (
+            <>
+              <span className="cr-context-ic linear">L</span>
+              <span className="cr-context-body">
+                <span className="cr-context-kicker">Reference</span>
+                <span className="cr-context-title">{title}</span>
+                {subtitle && <span className="cr-context-sub">{subtitle}</span>}
+              </span>
+              {linear.url && <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />}
+            </>
+          );
+          return linear.url ? (
+            <a key={linear.issueId ?? linear.identifier ?? linear.url ?? 'linear'} href={linear.url} target="_blank" rel="noreferrer" className="cr-context-card">
+              {content}
+            </a>
+          ) : (
+            <div key={linear.issueId ?? linear.identifier ?? linear.title ?? 'linear'} className="cr-context-card">
+              {content}
+            </div>
+          );
+        })}
       </div>
-    </div>
+    </RailSection>
   );
 }
 
@@ -792,6 +952,141 @@ function dirname(path: string): string {
   return parts.join('/');
 }
 
+function getLanguage(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+  const map: Record<string, string> = {
+    bash: 'shell',
+    c: 'c',
+    cjs: 'javascript',
+    cpp: 'cpp',
+    css: 'css',
+    dockerfile: 'dockerfile',
+    env: 'ini',
+    go: 'go',
+    graphql: 'graphql',
+    h: 'c',
+    html: 'html',
+    java: 'java',
+    js: 'javascript',
+    json: 'json',
+    jsx: 'javascript',
+    kt: 'kotlin',
+    less: 'less',
+    log: 'plaintext',
+    md: 'markdown',
+    mdx: 'markdown',
+    mjs: 'javascript',
+    prisma: 'graphql',
+    py: 'python',
+    rb: 'ruby',
+    rs: 'rust',
+    scss: 'scss',
+    sh: 'shell',
+    sql: 'sql',
+    swift: 'swift',
+    tf: 'hcl',
+    toml: 'ini',
+    ts: 'typescript',
+    tsx: 'typescript',
+    txt: 'plaintext',
+    xml: 'xml',
+    yaml: 'yaml',
+    yml: 'yaml',
+    zsh: 'shell',
+  };
+  if (filePath.toLowerCase().endsWith('dockerfile')) return 'dockerfile';
+  return map[ext] ?? 'plaintext';
+}
+
+function CodePreviewEditor({ filePath, value }: { filePath: string; value: string }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<typeof Monaco | null>(null);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let resizeObserver: ResizeObserver | null = null;
+
+    async function mountEditor() {
+      try {
+        const monaco = await import('monaco-editor');
+        if (cancelled || !containerRef.current) return;
+
+        monacoRef.current = monaco;
+        setupMonaco(monaco);
+        const editor = monaco.editor.create(containerRef.current, {
+          automaticLayout: true,
+          bracketPairColorization: { enabled: true },
+          cursorBlinking: 'smooth',
+          fontFamily: "'JetBrains Mono', 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+          fontLigatures: true,
+          fontSize: 12,
+          folding: true,
+          glyphMargin: false,
+          language: getLanguage(filePath),
+          lineDecorationsWidth: 8,
+          lineNumbers: 'on',
+          minimap: { enabled: true, scale: 1 },
+          padding: { top: 12, bottom: 24 },
+          readOnly: true,
+          renderLineHighlight: 'line',
+          scrollBeyondLastLine: false,
+          smoothScrolling: true,
+          theme: getMonacoTheme(),
+          value,
+          wordWrap: 'off',
+        });
+
+        editorRef.current = editor;
+        resizeObserver = new ResizeObserver(() => editor.layout());
+        resizeObserver.observe(containerRef.current);
+        requestAnimationFrame(() => editor.layout());
+        setReady(true);
+      } catch (error) {
+        console.warn('[chat-files] monaco direct mount failed', error);
+        if (!cancelled) setFailed(true);
+      }
+    }
+
+    mountEditor();
+
+    return () => {
+      cancelled = true;
+      resizeObserver?.disconnect();
+      editorRef.current?.dispose();
+      editorRef.current = null;
+      monacoRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+    const model = editor.getModel();
+    if (model && model.getValue() !== value) model.setValue(value);
+    if (model) monaco.editor.setModelLanguage(model, getLanguage(filePath));
+    requestAnimationFrame(() => editor.layout());
+  }, [filePath, value]);
+
+  if (failed) {
+    return <pre>{value}</pre>;
+  }
+
+  return (
+    <div className="ws-code-monaco" ref={containerRef}>
+      {!ready && (
+        <div className="cr-loading-state">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Loading editor...</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type FileTreeStatus = 'modified' | 'added';
 
 type FileTreeNode = {
@@ -828,21 +1123,6 @@ function diffLineCounts(diff?: string): { additions: number; deletions: number }
     else if (line.startsWith('-')) acc.deletions += 1;
     return acc;
   }, { additions: 0, deletions: 0 });
-}
-
-function getLanguage(filePath: string): string {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
-  const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
-    mjs: 'javascript', cjs: 'javascript', json: 'json', md: 'markdown', mdx: 'markdown',
-    css: 'css', scss: 'scss', less: 'less', html: 'html', xml: 'xml',
-    yml: 'yaml', yaml: 'yaml', toml: 'ini', py: 'python', rb: 'ruby',
-    go: 'go', rs: 'rust', java: 'java', kt: 'kotlin', swift: 'swift',
-    c: 'c', cpp: 'cpp', h: 'c', sh: 'shell', bash: 'shell', zsh: 'shell',
-    sql: 'sql', graphql: 'graphql', tf: 'hcl', env: 'ini', txt: 'plaintext',
-    log: 'plaintext', prisma: 'graphql', dockerfile: 'dockerfile',
-  };
-  return map[ext] ?? 'plaintext';
 }
 
 function buildFileTree(files: WorkspaceFileEntry[], changedStatuses: ReadonlyMap<string, FileTreeStatus>): FileTreeNode[] {
@@ -1184,12 +1464,11 @@ function PanelTabs({
 }) {
   const tabs: Array<{ id: ChatRunPanelTab; label: string; icon: React.ElementType }> = [
     { id: 'tasks', label: 'Tasks', icon: ListTree },
-    { id: 'executions', label: 'Executions', icon: Route },
-    { id: 'artifacts', label: 'Artifacts', icon: FileText },
-    { id: 'files', label: 'Files', icon: Code2 },
+    { id: 'files', label: 'Files', icon: FileText },
+    { id: 'changes', label: 'Changes', icon: Code2 },
   ];
   return (
-    <div className="inline-flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Chat resources">
+    <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Chat resources">
       {tabs.map(tab => {
         const Icon = tab.icon;
         const isActive = activeTab === tab.id;
@@ -1197,22 +1476,20 @@ function PanelTabs({
           <button
             key={tab.id}
             type="button"
-            className={`inline-flex min-w-max items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[13px] leading-none transition-colors ${
+            className={`inline-flex min-w-max items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] leading-none transition-colors ${
               isActive
                 ? 'border border-app-strong bg-app-card text-theme-primary shadow-sm'
-                : 'border border-transparent text-theme-secondary hover:bg-app-muted hover:text-theme-primary'
+                : 'border border-transparent text-theme-muted hover:bg-app-card/60 hover:text-theme-secondary'
             }`}
             onClick={() => onTabChange(tab.id)}
           >
-            <span className={`grid h-5 w-5 place-items-center rounded-md border transition-colors ${
-              isActive
-                ? 'border-app-strong bg-app-muted text-theme-primary'
-                : 'border-app bg-app-muted text-theme-muted'
-            }`}>
-              <Icon className="h-3.5 w-3.5" />
-            </span>
+            <Icon className={`h-3.5 w-3.5 ${isActive ? 'text-theme-primary' : 'text-theme-subtle'}`} aria-hidden="true" />
             <span>{tab.label}</span>
-            {counts[tab.id] != null && counts[tab.id]! > 0 && <span className="font-mono text-[11px] opacity-70">{counts[tab.id]}</span>}
+            {counts[tab.id] != null && counts[tab.id]! > 0 && (
+              <span className={`font-mono text-[10.5px] ${isActive ? 'text-theme-secondary' : 'text-theme-subtle'}`}>
+                {counts[tab.id]}
+              </span>
+            )}
           </button>
         );
       })}
@@ -1626,7 +1903,7 @@ function FileTreeNodeView({
 }) {
   if (node.isDir) {
     return (
-      <details className={`cr-tree-dir ${node.status ?? ''}`}>
+      <details className={`cr-tree-dir ${node.status ?? ''}`} open={depth < 1 || Boolean(node.status)}>
         <summary className="ws-tree-node" style={{ paddingLeft: 8 + depth * 12 }}>
           <ChevronRight className="h-3 w-3" />
           <FolderOpen className="h-3.5 w-3.5" />
@@ -1665,14 +1942,29 @@ function FileChangesPanel({
   rootType,
   rootId,
   repoBrowseSource,
+  activeView,
   viewRequest,
 }: {
   runs: SpawnedAgent[];
   rootType?: 'chat' | 'workflow' | 'agent';
   rootId?: string | null;
   repoBrowseSource?: RepoBrowseSource | null;
+  activeView: FilePanelView;
   viewRequest?: { view: FilePanelView; nonce: number };
 }) {
+  const withTimeout = async <T,>(label: string, promise: Promise<T>, ms = 15_000): Promise<T> => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  };
   const [files, setFiles] = useState<PanelDiffFile[]>([]);
   const [activeDiffPath, setActiveDiffPath] = useState('');
   const [diffMode, setDiffMode] = useState<'split' | 'unified'>('unified');
@@ -1684,10 +1976,34 @@ function FileChangesPanel({
   const [fileLoading, setFileLoading] = useState(false);
   const [browserLoading, setBrowserLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [fileReloadNonce, setFileReloadNonce] = useState(0);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminals, setTerminals] = useState<Array<{ id: string; label: string }>>([{ id: 'default', label: 'Terminal 1' }]);
+  const [activeTerminalId, setActiveTerminalId] = useState('default');
+  const [terminalHeight, setTerminalHeight] = useState(260);
 
   useEffect(() => {
     if (viewRequest) setView(viewRequest.view);
   }, [viewRequest]);
+
+  useEffect(() => {
+    setView(activeView);
+  }, [activeView]);
+
+  useEffect(() => {
+    console.log('[chat-files] panel view state', {
+      activeView,
+      view,
+      rootType,
+      rootId,
+      runCount: runs.length,
+      repoBrowseSource: repoBrowseSource?.id ? {
+        id: repoBrowseSource.id,
+        name: repoBrowseSource.name ?? null,
+        path: repoBrowseSource.path ?? null,
+      } : null,
+    });
+  }, [activeView, view, rootType, rootId, runs.length, repoBrowseSource?.id, repoBrowseSource?.name, repoBrowseSource?.path]);
 
   const workspaceRefs = useMemo(() => {
     const refs: Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'workspace' }> = [];
@@ -1807,25 +2123,36 @@ function FileChangesPanel({
     : repoBrowseSource?.id
       ? { type: 'repo' as const, id: repoBrowseSource.id, name: repoBrowseSource.name ?? repoBrowseSource.path ?? 'Repository terminal', href: null }
       : null;
-  const activeDiff = files.find(file => file.path === activeDiffPath) ?? files[0] ?? null;
+  const terminalId = rootId ? `chat-${rootId.replace(/[^a-zA-Z0-9_-]/g, '-')}` : 'chat-files';
+  const activeDiff = files.find(file => file.path === activeDiffPath) ?? null;
   const changedStatuses = useMemo(() => new Map(files.map(file => [file.path, changedFileStatus(file)])), [files]);
   const fileTree = useMemo(() => buildFileTree(workspaceFiles, changedStatuses), [workspaceFiles, changedStatuses]);
-  const browserDiffFile = files.find(file => file.path === browserPath) ?? null;
+  const diffFileTree = useMemo(() => buildFileTree(files.map(file => ({
+    path: file.path,
+    isDir: false,
+    status: file.status,
+  })), changedStatuses), [files, changedStatuses]);
 
   useEffect(() => {
     if (files.length === 0) {
       setActiveDiffPath('');
       return;
     }
-    if (!files.some(file => file.path === activeDiffPath)) {
-      setActiveDiffPath(files[0].path);
+    if (activeDiffPath && !files.some(file => file.path === activeDiffPath)) {
+      setActiveDiffPath('');
     }
   }, [files, activeDiffPath]);
 
   useEffect(() => {
-    if (view !== 'browser') return;
+    if (view !== 'files') return;
     let cancelled = false;
     const nextRepoId = repoBrowseSource?.id ?? null;
+    console.log('[chat-files] load file tree:start', {
+      activeWorkspaceId: activeWorkspace?.id ?? null,
+      activeWorkspaceName: activeWorkspace?.name ?? null,
+      repoId: nextRepoId,
+      repoName: repoBrowseSource?.name ?? repoBrowseSource?.path ?? null,
+    });
     setBrowserLoading(true);
     (async () => {
       let result: WorkspaceFileEntry[] = [];
@@ -1833,19 +2160,43 @@ function FileChangesPanel({
 
       if (activeWorkspace?.id) {
         try {
-          result = (await workspacesApi.getAllFiles(activeWorkspace.id) ?? []) as WorkspaceFileEntry[];
+          console.log('[chat-files] request:start', { endpoint: 'workspaces.getAllFiles', workspaceId: activeWorkspace.id });
+          result = (await withTimeout('workspaces.getAllFiles', workspacesApi.getAllFiles(activeWorkspace.id)) ?? []) as WorkspaceFileEntry[];
           source = { kind: 'workspace', id: activeWorkspace.id, name: activeWorkspace.name };
-        } catch {}
+          console.log('[chat-files] load file tree:workspace success', {
+            workspaceId: activeWorkspace.id,
+            count: result.length,
+          });
+        } catch (err) {
+          console.log('[chat-files] load file tree:workspace failed', {
+            workspaceId: activeWorkspace.id,
+            error: (err as Error).message,
+          });
+        }
       }
 
       if (!source && nextRepoId) {
         try {
-          result = (await reposApi.getAllFiles(nextRepoId) ?? []) as WorkspaceFileEntry[];
+          console.log('[chat-files] request:start', { endpoint: 'repos.getAllFiles', repoId: nextRepoId });
+          result = (await withTimeout('repos.getAllFiles', reposApi.getAllFiles(nextRepoId)) ?? []) as WorkspaceFileEntry[];
           source = { kind: 'repo', id: nextRepoId, name: repoBrowseSource?.name ?? repoBrowseSource?.path ?? 'repository' };
-        } catch {}
+          console.log('[chat-files] load file tree:repo success', {
+            repoId: nextRepoId,
+            count: result.length,
+          });
+        } catch (err) {
+          console.log('[chat-files] load file tree:repo failed', {
+            repoId: nextRepoId,
+            error: (err as Error).message,
+          });
+        }
       }
 
       if (!cancelled) {
+        console.log('[chat-files] load file tree:complete', {
+          source,
+          count: result.length,
+        });
         setWorkspaceFiles(result);
         setBrowserSource(source);
         setBrowserPath(current => {
@@ -1860,13 +2211,52 @@ function FileChangesPanel({
         }
       }
     })().finally(() => {
-      if (!cancelled) setBrowserLoading(false);
+      if (!cancelled) {
+        setBrowserLoading(false);
+        console.log('[chat-files] load file tree:loading false');
+      }
     });
     return () => {
       cancelled = true;
       setBrowserLoading(false);
+      console.log('[chat-files] load file tree:cancelled');
     };
-  }, [activeWorkspace?.id, activeWorkspace?.name, repoBrowseSource?.id, repoBrowseSource?.name, repoBrowseSource?.path, view]);
+  }, [activeWorkspace?.id, activeWorkspace?.name, repoBrowseSource?.id, repoBrowseSource?.name, repoBrowseSource?.path, view, fileReloadNonce]);
+
+  function addTerminal() {
+    const nextIndex = terminals.length + 1;
+    const id = `${Date.now().toString(36)}-${nextIndex}`;
+    setTerminals(current => [...current, { id, label: `Terminal ${nextIndex}` }]);
+    setActiveTerminalId(id);
+    setTerminalOpen(true);
+  }
+
+  function closeTerminal(id: string) {
+    setTerminals(current => {
+      if (current.length === 1) return current;
+      const next = current.filter(item => item.id !== id);
+      if (activeTerminalId === id) setActiveTerminalId(next[0]?.id ?? 'default');
+      return next;
+    });
+  }
+
+  function startTerminalResize(event: ReactMouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = terminalHeight;
+    const onMove = (moveEvent: MouseEvent) => {
+      const delta = startY - moveEvent.clientY;
+      setTerminalHeight(Math.max(170, Math.min(520, startHeight + delta)));
+      window.dispatchEvent(new Event('resize'));
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.dispatchEvent(new Event('resize'));
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
 
   async function openBrowserFile(path: string) {
     const source = browserSource ?? (activeWorkspace?.id
@@ -1874,22 +2264,41 @@ function FileChangesPanel({
       : repoBrowseSource?.id
         ? { kind: 'repo' as const, id: repoBrowseSource.id, name: repoBrowseSource.name }
         : null);
-    if (!source) return;
-    setBrowserPath(path);
-    if (changedStatuses.has(path)) {
-      setBrowserContent('');
+    if (!source) {
+      console.log('[chat-files] open file:missing source', { path, activeWorkspaceId: activeWorkspace?.id ?? null, repoId: repoBrowseSource?.id ?? null });
       return;
     }
+    console.log('[chat-files] open file:start', { path, source });
+    setBrowserPath(path);
     setFileLoading(true);
     try {
+      console.log('[chat-files] request:start', {
+        endpoint: source.kind === 'workspace' ? 'workspaces.getFile' : 'repos.getFile',
+        sourceId: source.id,
+        path,
+      });
       const file = source.kind === 'workspace'
-        ? await workspacesApi.getFile(source.id, path)
-        : await reposApi.getFile(source.id, path);
+        ? await withTimeout('workspaces.getFile', workspacesApi.getFile(source.id, path))
+        : await withTimeout('repos.getFile', reposApi.getFile(source.id, path));
+      console.log('[chat-files] open file:success', {
+        path,
+        source,
+        isImage: Boolean(file.isImage),
+        contentLength: typeof file.content === 'string' ? file.content.length : null,
+      });
       setBrowserContent(file.isImage ? '[binary image preview is available in the dedicated editor]' : file.content ?? '');
     } catch (err) {
-      setBrowserContent(`Failed to load ${path}: ${(err as Error).message}`);
+      const diffBackedContent = files.find(file => file.path === path)?.modifiedContent;
+      console.log('[chat-files] open file:failed', {
+        path,
+        source,
+        error: (err as Error).message,
+        fallbackContentLength: diffBackedContent?.length ?? null,
+      });
+      setBrowserContent(diffBackedContent ?? `Failed to load ${path}: ${(err as Error).message}`);
     } finally {
       setFileLoading(false);
+      console.log('[chat-files] open file:loading false', { path });
     }
   }
 
@@ -1897,23 +2306,102 @@ function FileChangesPanel({
     return <div className="cr-empty">No file changes are linked to this chat yet.</div>;
   }
 
+  const renderDiffPreview = (file: PanelDiffFile | null) => (
+    <section className="cr-adjacent-preview">
+      <div className="ws-diff-h">
+        <FileText className="h-3.5 w-3.5 text-theme-muted" />
+        <span className="mono truncate">{file?.path ?? 'Code changes'}</span>
+        <div className="ws-diff-h-r">
+          {file && (
+            <>
+              <span className="add">+{file.additions ?? 0}</span>
+              <span className="del">-{file.deletions ?? 0}</span>
+            </>
+          )}
+          <div className="ws-diff-mode" role="group" aria-label="Diff view mode">
+            <button className={diffMode === 'unified' ? 'active' : ''} onClick={() => setDiffMode('unified')} type="button">unified</button>
+            <button className={diffMode === 'split' ? 'active' : ''} onClick={() => setDiffMode('split')} type="button">split</button>
+          </div>
+        </div>
+      </div>
+      <div className="ws-diff-body">
+        {file ? (
+          <div className="cr-file-detail-diff browse-diff">
+            {diffMode === 'split'
+              ? <SplitDiffView key={`${file.path}:split`} file={file} />
+              : <UnifiedDiffView key={`${file.path}:unified`} file={file} />}
+          </div>
+        ) : (
+          <div className="ws-diff-empty">Select a changed file to preview the diff.</div>
+        )}
+      </div>
+    </section>
+  );
+
+  const renderFilePreview = () => (
+    <section className="cr-adjacent-preview">
+      <div className="ws-diff-h">
+        <FileText className="h-3.5 w-3.5 text-theme-muted" />
+        <span className="truncate">{browserPath || browserSource?.name || activeWorkspace?.name || repoBrowseSource?.name || 'Repository files'}</span>
+      </div>
+      {browserLoading ? (
+        <div className="cr-loading-state"><Loader2 className="h-4 w-4 animate-spin" /><span>Loading workspace files...</span></div>
+      ) : fileLoading ? (
+        <div className="cr-loading-state"><Loader2 className="h-4 w-4 animate-spin" /><span>Loading file...</span></div>
+      ) : browserPath ? (
+        <div className="ws-code-preview">
+          <CodePreviewEditor key={browserPath} filePath={browserPath} value={browserContent} />
+        </div>
+      ) : (
+        <div className="ws-diff-empty">Select a file to preview it here.</div>
+      )}
+    </section>
+  );
+
+  const renderTerminalDock = () => {
+    if (!terminalSource || !terminalOpen) return null;
+    const activeTerminal = terminals.find(item => item.id === activeTerminalId) ?? terminals[0];
+    return (
+      <div className="cr-terminal-dock" style={{ height: terminalHeight }}>
+        <div className="cr-terminal-resize" onMouseDown={startTerminalResize} title="Resize terminal" />
+        <div className="cr-terminal-tabs">
+          {terminals.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              className={item.id === activeTerminal.id ? 'active' : ''}
+              onClick={() => setActiveTerminalId(item.id)}
+            >
+              <Terminal className="h-3 w-3" />
+              <span>{item.label}</span>
+              {terminals.length > 1 && (
+                <X
+                  className="h-3 w-3"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closeTerminal(item.id);
+                  }}
+                />
+              )}
+            </button>
+          ))}
+          <button type="button" className="icon" onClick={addTerminal} title="Open another terminal">
+            +
+          </button>
+        </div>
+        <div className="cr-terminal-body">
+          <XTerminal workspaceId={terminalSource.id} sourceType={terminalSource.type} terminalId={`${terminalId}-${activeTerminal.id}`} className="h-full" />
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="cr-files-panel">
-      <div className="cr-files-summary">
-        <button type="button" className={view === 'changes' ? 'active' : ''} onClick={() => setView('changes')}>
-          <FileText className="h-3.5 w-3.5" />
-          <span>{files.length} changed</span>
-        </button>
-        <button type="button" className={view === 'browser' ? 'active' : ''} onClick={() => setView('browser')} disabled={!activeWorkspace && !repoBrowseSource?.id}>
-          <FolderOpen className="h-3.5 w-3.5" />
-          <span>Browse</span>
-        </button>
-        <button type="button" className={view === 'terminal' ? 'active' : ''} onClick={() => setView('terminal')} disabled={!terminalSource}>
-          <Terminal className="h-3.5 w-3.5" />
-          <span>Terminal</span>
-        </button>
-        <span className="spacer" />
-        {view === 'changes' && (
+      {view === 'changes' && (
+        <div className="cr-files-summary">
+          <span className="inline-flex items-center gap-1.5"><Code2 className="h-3.5 w-3.5" />{files.length} changed</span>
+          <span className="spacer" />
           <>
             <span className="add">+{additions}</span>
             <span className="del">-{deletions}</span>
@@ -1924,35 +2412,15 @@ function FileChangesPanel({
               <Rows3 className="h-3.5 w-3.5" />
             </button>
           </>
-        )}
-      </div>
-
-      {view === 'terminal' ? (
-        <div className="cr-files-terminal ws-panel">
-          {terminalSource ? (
-            <>
-              <div className="ws-diff-h">
-                <Terminal className="h-3.5 w-3.5 text-theme-muted" />
-                <span className="truncate">{terminalSource.name}</span>
-                {terminalSource.href && (
-                  <Link to={terminalSource.href} className="btn btn-ghost btn-sm">
-                    <ExternalLink className="h-3.5 w-3.5" /> workspace
-                  </Link>
-                )}
-              </div>
-              <div className="ws-terminal-body">
-                <XTerminal workspaceId={terminalSource.id} sourceType={terminalSource.type} terminalId="chat-files" className="h-full" />
-              </div>
-            </>
-          ) : (
-            <div className="cr-empty">No workspace or repository terminal is available for this chat yet.</div>
-          )}
         </div>
-      ) : view === 'changes' ? (
+      )}
+
+      {view === 'changes' ? (
         loading ? (
           <div className="cr-empty">Checking workspace changes...</div>
         ) : (
-        <div className="ws-main ws-panel cr-workspace-view">
+        <>
+        <div className="ws-main ws-panel cr-workspace-view cr-rail-list-only">
           <aside className="ws-tree scroll-hide">
             <div className="ws-tree-h">
               <span>files changed</span>
@@ -1961,59 +2429,38 @@ function FileChangesPanel({
             <div className="ws-tree-list">
               {files.length === 0 ? (
                 <div className="ws-tree-empty">No changed files were found in the linked workspaces.</div>
-              ) : files.map(file => (
-                <button
-                  key={`${file.workspaceId}:${file.path}`}
-                  className={`ws-file ${activeDiff?.path === file.path ? 'active' : ''}`}
-                  onClick={() => setActiveDiffPath(file.path)}
-                  type="button"
-                >
-                  <span className={`ws-file-tag ${file.status ?? 'modified'}`}>{file.status === 'added' ? 'A' : file.status === 'deleted' ? 'D' : 'M'}</span>
-                  <span className="ws-file-p">{file.path}</span>
-                  <span className="ws-file-d mono">
-                    {file.additions ? <span className="pos">+{file.additions}</span> : null}
-                    {file.deletions ? <span className="neg">-{file.deletions}</span> : null}
-                  </span>
-                </button>
+              ) : diffFileTree.map(node => (
+                <FileTreeNodeView
+                  key={node.path}
+                  node={node}
+                  activePath={activeDiffPath}
+                  onOpenFile={setActiveDiffPath}
+                />
               ))}
             </div>
           </aside>
-
-          <section className="ws-diff scroll-hide">
-            <div className="ws-diff-h">
-              <FileText className="h-3.5 w-3.5 text-theme-muted" />
-              <span className="mono truncate">{activeDiff?.path ?? 'workspace preview'}</span>
-              <div className="ws-diff-h-r">
-                <div className="ws-diff-mode" role="group" aria-label="Diff view mode">
-                  <button className={diffMode === 'unified' ? 'active' : ''} onClick={() => setDiffMode('unified')} type="button">
-                    unified
-                  </button>
-                  <button className={diffMode === 'split' ? 'active' : ''} onClick={() => setDiffMode('split')} type="button">
-                    split
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div className="ws-diff-body">
-              {activeDiff ? (
-                <div className="cr-file-detail-diff browse-diff">
-                  {diffMode === 'split'
-                    ? <SplitDiffView key={`${activeDiff.path}:split`} file={activeDiff} />
-                    : <UnifiedDiffView key={`${activeDiff.path}:unified`} file={activeDiff} />}
-                </div>
-              ) : (
-                <div className="ws-diff-empty">No changed file selected.</div>
-              )}
-            </div>
-          </section>
         </div>
+        {activeDiff && renderDiffPreview(activeDiff)}
+        </>
         )
       ) : (
-        <div className="ws-files-body ws-panel cr-workspace-view">
+        <>
+        <div className="ws-files-body ws-panel cr-workspace-view cr-rail-file-stack">
           <aside className="ws-files-list scroll-hide">
             <div className="ws-tree-h">
-              <span>file explorer</span>
-              <span className="mono ws-tree-ct">{workspaceFiles.length}</span>
+              <span>Explorer</span>
+              <span className="ws-tree-actions">
+                {terminalSource && (
+                  <>
+                    <button type="button" className={terminalOpen ? 'active' : ''} onClick={() => setTerminalOpen(value => !value)} title="Toggle terminal">
+                      <Terminal className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                )}
+                <button type="button" onClick={() => setFileReloadNonce(value => value + 1)} title="Refresh files">
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </button>
+              </span>
             </div>
             <div className="ws-tree-list">
             {browserLoading ? (
@@ -2036,60 +2483,10 @@ function FileChangesPanel({
             )}
             </div>
           </aside>
-          <section className="ws-file-editor">
-            <div className="ws-diff-h">
-              <FileText className="h-3.5 w-3.5 text-theme-muted" />
-              <span className="truncate">{browserPath || browserSource?.name || activeWorkspace?.name || repoBrowseSource?.name || 'Repository files'}</span>
-              {browserDiffFile && (
-                <>
-                  <span className="add">+{browserDiffFile.additions ?? 0}</span>
-                  <span className="del">-{browserDiffFile.deletions ?? 0}</span>
-                </>
-              )}
-            </div>
-            {browserLoading ? (
-              <div className="cr-loading-state">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Loading workspace files...</span>
-              </div>
-            ) : fileLoading ? (
-              <div className="cr-loading-state">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Loading file...</span>
-              </div>
-            ) : browserDiffFile ? (
-              <div className="cr-file-detail-diff browse-diff">
-                {diffMode === 'split'
-                  ? <SplitDiffView key={`${browserDiffFile.path}:split`} file={browserDiffFile} />
-                  : <UnifiedDiffView key={`${browserDiffFile.path}:unified`} file={browserDiffFile} />}
-              </div>
-            ) : browserPath ? (
-              <div className="ws-monaco-wrap">
-                <Editor
-                  path={browserPath}
-                  value={browserContent}
-                  language={getLanguage(browserPath)}
-                  theme={getMonacoTheme()}
-                  beforeMount={setupMonaco}
-                  options={{
-                    readOnly: true,
-                    minimap: { enabled: true },
-                    fontSize: 12,
-                    fontFamily: "'JetBrains Mono', 'Geist Mono', ui-monospace, monospace",
-                    lineNumbers: 'on',
-                    wordWrap: 'on',
-                    scrollBeyondLastLine: false,
-                    automaticLayout: true,
-                    tabSize: 2,
-                    insertSpaces: true,
-                  }}
-                />
-              </div>
-            ) : (
-              <div className="ws-diff-empty">Select a file to preview it here.</div>
-            )}
-          </section>
+          {renderTerminalDock()}
         </div>
+        {browserPath && renderFilePreview()}
+        </>
       )}
     </div>
   );
@@ -2099,6 +2496,7 @@ function TasksPanel({
   activeRun,
   activeContext,
   sortedRuns,
+  contextRuns,
   expanded,
   onOpenNode,
   onOpenExecution,
@@ -2107,6 +2505,7 @@ function TasksPanel({
   activeRun: SpawnedAgent;
   activeContext: RunStatus | null;
   sortedRuns: SpawnedAgent[];
+  contextRuns: SpawnedAgent[];
   expanded: boolean;
   onOpenNode: (executionId: string, nodeId: string) => void;
   onOpenExecution: (executionId: string) => void;
@@ -2114,48 +2513,15 @@ function TasksPanel({
 }) {
   const attemptRuns = sortedRuns;
   const showAttempts = attemptRuns.length > 1;
-  const showWorkflowNodes = !showAttempts && activeContext?.runType === 'workflow' && (activeContext.workflowSteps?.length ?? 0) > 0;
-  const pullRequests = useMemo(() => {
-    const prs = new Map<string, NonNullable<RunStatus['pullRequest']>>();
-    for (const run of sortedRuns) {
-      const pr = run.runContext?.pullRequest;
-      const key = pr?.id ?? pr?.url ?? (pr?.number != null ? String(pr.number) : '');
-      if (pr && key) prs.set(key, pr);
-    }
-    return [...prs.values()];
-  }, [sortedRuns]);
-
-  const percent = Math.max(0, Math.min(100, activeContext?.progress.percent ?? 0));
-  const activeCost = showAttempts ? formatRunSequenceCost(attemptRuns) : formatCost(activeContext?.execution.cost);
-  const statusText = humanLabel(activeContext?.status ?? activeRun.status);
-  const currentText = activeContext?.progress.currentStep ?? activeContext?.progress.label ?? null;
+  const activeWorkflowSteps = workflowStepsForContext(activeContext);
+  const showWorkflowNodes = !showAttempts && activeContext?.runType === 'workflow' && activeWorkflowSteps.length > 0;
 
   return (
     <div className={`cr-task-panel ${expanded ? 'expanded' : 'compact'}`}>
-      <section className="cr-progress">
-        <div className="bar">
-          <span style={{ width: `${percent}%` }} />
-        </div>
-        <div className="cr-task-summary">
-          <span>{statusText}</span>
-          <span>{percent}%</span>
-          <span>{activeCost}</span>
-          {currentText && <span className="current">{humanLabel(currentText)}</span>}
-        </div>
-      </section>
-
-      {pullRequests.length > 0 && (
-        <RailSection title="pull requests" count={`${pullRequests.length}`}>
-          <div className="space-y-2">
-            {pullRequests.map(pr => (
-              <PullRequestTaskCard key={pr.id ?? pr.url ?? pr.number ?? pr.title ?? 'pr'} pr={pr} />
-            ))}
-          </div>
-        </RailSection>
-      )}
+      <WorkContextSection runs={contextRuns} />
 
       {showAttempts && (
-        <RailSection title="executions" count={`${attemptRuns.length}`}>
+        <RailSection title="runs" count={`${attemptRuns.length}`}>
           <div className="cr-steps">
             {attemptRuns.map((run, index) => (
               <AttemptRow
@@ -2172,20 +2538,23 @@ function TasksPanel({
       )}
 
       {showWorkflowNodes ? (
-        <>
-          <RailSection title="steps" count={`${activeContext?.progress.completed ?? 0}/${activeContext?.progress.total ?? activeContext?.workflowSteps.length}`}>
-            <div className="cr-steps">
-              {activeContext!.workflowSteps.map((step, index) => (
-                <WorkflowNodeStep
-                  key={step.id}
-                  step={step}
-                  isLast={index === activeContext!.workflowSteps.length - 1}
-                  onOpenDetails={(nodeId) => onOpenNode(activeRun.executionId, nodeId)}
-                />
-              ))}
-            </div>
-          </RailSection>
-        </>
+        <div className="rounded-md border border-app bg-app-card/30 p-2">
+          <WorkflowExecutionHeader run={activeRun} context={activeContext!} />
+          <div className="mt-2 border-t border-app pt-3">
+            <RailSection title="workflow steps" count={`${activeContext?.progress.completed ?? 0}/${activeContext?.progress.total ?? activeWorkflowSteps.length}`}>
+              <div className="cr-steps">
+                {activeWorkflowSteps.map((step, index) => (
+                  <WorkflowNodeStep
+                    key={step.id}
+                    step={step}
+                    isLast={index === activeWorkflowSteps.length - 1}
+                    onOpenDetails={(nodeId) => onOpenNode(activeRun.executionId, nodeId)}
+                  />
+                ))}
+              </div>
+            </RailSection>
+          </div>
+        </div>
       ) : !showAttempts ? (
         <RailSection title="steps" count={`${sortedRuns.length}`}>
           <div className="cr-steps">
@@ -2201,27 +2570,6 @@ function TasksPanel({
           </div>
         </RailSection>
       ) : null}
-
-      {activeContext?.childAgents && activeContext.childAgents.length > 0 && (
-        <RailSection title="agents">
-          <div className="space-y-1">
-            {activeContext.childAgents.map(child => (
-              <Link
-                key={child.executionId}
-                to={`/executions/${child.executionId}`}
-                className="flex items-center justify-between gap-2 rounded border border-app bg-app-card px-2 py-1.5 text-[10.5px] text-theme-muted transition-colors hover:bg-app-muted hover:text-accent"
-              >
-                <span className="truncate">{child.agentName}</span>
-                <span className="inline-flex shrink-0 items-center gap-1">
-                  <span className="font-mono text-[10px] text-theme-subtle">{formatCost(child.cost)}</span>
-                  <StatusBadge status={child.status} />
-                  <ExternalLink className="h-3.5 w-3.5 text-theme-subtle" />
-                </span>
-              </Link>
-            ))}
-          </div>
-        </RailSection>
-      )}
 
     </div>
   );
@@ -2250,34 +2598,25 @@ export default function ChatRunSidebar({
   onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
   onClose: () => void;
 }) {
-  const sortedRuns = useMemo(() => [...runs], [runs]);
+  const allRuns = useMemo(() => [...runs], [runs]);
+  const sortedRuns = useMemo(() => allRuns.filter(run => !isChildExecutionRun(run)), [allRuns]);
+  const visibleTab: Exclude<ChatRunPanelTab, 'executions'> = activeTab === 'executions' ? 'tasks' : activeTab;
   const [width, setWidth] = useState(() => {
-    if (typeof window === 'undefined') return 720;
-    return Math.max(520, Math.min(760, Math.round(window.innerWidth * 0.42)));
+    return CHAT_RUN_SIDEBAR_MIN_WIDTH;
   });
-  const [fullScreen, setFullScreen] = useState(false);
-  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
-  const [selectedWorkflowNodeId, setSelectedWorkflowNodeId] = useState<string | null>(null);
-  const [tabSlide, setTabSlide] = useState<'tasks-to-executions' | null>(null);
+  const fullScreen = false;
   const activeRun = sortedRuns.find(run => {
     const status = (run.runContext?.status ?? run.status ?? '').toLowerCase();
     return !['completed', 'failed', 'cancelled', 'canceled'].includes(status);
   }) ?? sortedRuns[sortedRuns.length - 1] ?? null;
   const activeContext = activeRun?.runContext ?? null;
-  const runtimeArtifactCount = sortedRuns.reduce((sum, run) => sum + artifactsForRun(run, run.runContext ?? null).length, 0);
-  const visibleExecutionIds = new Set(sortedRuns.map(run => run.executionId));
-  const childExecutionCount = sortedRuns.reduce(
-    (sum, run) => sum + (run.runContext?.childAgents ?? []).filter(child => !visibleExecutionIds.has(child.executionId)).length,
-    0,
-  );
-  const workspaceCount = new Set(sortedRuns.map(run => run.runContext?.workspace?.id).filter(Boolean)).size;
-  const pullRequestCount = new Set(sortedRuns.map(run => run.runContext?.pullRequest?.id).filter(Boolean)).size;
+  const workspaceCount = new Set(allRuns.map(run => run.runContext?.workspace?.id).filter(Boolean)).size;
+  const pullRequestCount = new Set(allRuns.map(run => run.runContext?.pullRequest?.id).filter(Boolean)).size;
   const repoBrowseCount = repoBrowseSource?.id ? 1 : 0;
   const counts: Partial<Record<ChatRunPanelTab, number>> = {
     tasks: sortedRuns.length,
-    executions: sortedRuns.length + childExecutionCount,
-    artifacts: runtimeArtifactCount,
     files: Math.max(workspaceCount, pullRequestCount, repoBrowseCount),
+    changes: Math.max(workspaceCount, pullRequestCount),
   };
 
   useEffect(() => {
@@ -2293,13 +2632,7 @@ export default function ChatRunSidebar({
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
     };
-  }, [open, fullScreen, activeTab]);
-
-  useEffect(() => {
-    if (!tabSlide) return;
-    const timeout = window.setTimeout(() => setTabSlide(null), 520);
-    return () => window.clearTimeout(timeout);
-  }, [tabSlide]);
+  }, [open, fullScreen, visibleTab]);
 
   if (!open) return null;
 
@@ -2311,7 +2644,7 @@ export default function ChatRunSidebar({
     const onMove = (moveEvent: MouseEvent) => {
       const delta = startX - moveEvent.clientX;
       const max = Math.max(560, window.innerWidth - 360);
-      setWidth(Math.max(420, Math.min(max, startWidth + delta)));
+      setWidth(Math.max(CHAT_RUN_SIDEBAR_MIN_WIDTH, Math.min(max, startWidth + delta)));
     };
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
@@ -2321,80 +2654,51 @@ export default function ChatRunSidebar({
     window.addEventListener('mouseup', onUp);
   }
 
-  function openExecutionNode(executionId: string, nodeId: string) {
-    setSelectedExecutionId(executionId);
-    setSelectedWorkflowNodeId(nodeId);
-    setTabSlide('tasks-to-executions');
-    onTabChange('executions');
-  }
-
-  function openExecution(executionId: string) {
-    setSelectedExecutionId(executionId);
-    setSelectedWorkflowNodeId(null);
-    setTabSlide('tasks-to-executions');
-    onTabChange('executions');
-  }
-
   return (
     <aside
-      className={`chat-rail relative flex h-full flex-none flex-col gap-3 overflow-hidden border-l border-app bg-app-muted px-3.5 pb-8 pt-2.5 ${
+      className={`chat-rail relative flex h-full flex-none flex-col gap-3 overflow-visible border-l border-app bg-app-muted px-3.5 pt-2.5 ${visibleTab === 'files' || visibleTab === 'changes' ? 'pb-0' : 'pb-8'} ${
         fullScreen ? 'fullscreen absolute inset-0 z-[80] h-full w-full max-w-none border-l-0 px-5' : ''
       }`}
       style={fullScreen ? undefined : { width }}
     >
       {!fullScreen && <div className="chat-rail-resize" onMouseDown={startResize} title="Drag to resize" />}
       <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between gap-2 border-b border-app-strong bg-app-muted pb-2">
-        <PanelTabs activeTab={activeTab} onTabChange={onTabChange} counts={counts} />
-        <div className="inline-flex shrink-0 items-center gap-1">
-          <button type="button" className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-card hover:text-theme-primary" onClick={() => setFullScreen(value => !value)} title={fullScreen ? 'Exit full screen' : 'Expand side panel'} aria-label={fullScreen ? 'Exit full screen' : 'Expand side panel'}>
-            {fullScreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-          </button>
-          <button type="button" className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-card hover:text-theme-primary" onClick={onClose} title="Close side panel" aria-label="Close side panel">
+        <PanelTabs activeTab={visibleTab} onTabChange={onTabChange} counts={counts} />
+        <div className="inline-flex shrink-0 items-center">
+          <button type="button" className="rounded p-1.5 text-theme-muted transition-colors hover:bg-app-card hover:text-theme-primary" onClick={onClose} title="Close side panel" aria-label="Close side panel">
             <PanelRightClose className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
 
-      <div className="relative min-h-0 w-full flex-1 overflow-hidden">
-        {tabSlide === 'tasks-to-executions' && activeTab === 'executions' && activeRun && (
-          <div className="cr-tab-ghost cr-tab-exit-left" aria-hidden="true">
-            <TasksPanel
-              activeRun={activeRun}
-              activeContext={activeContext}
-              sortedRuns={sortedRuns}
-              expanded={fullScreen}
-              onOpenNode={() => undefined}
-              onOpenExecution={() => undefined}
-              onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
-            />
-          </div>
-        )}
-        <div className={`h-full w-full min-h-0 ${activeTab === 'files' || activeTab === 'artifacts' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto overflow-x-hidden pr-1'} ${activeTab} ${tabSlide === 'tasks-to-executions' && activeTab === 'executions' ? 'cr-tab-enter-right' : ''}`}>
-        {activeTab === 'tasks' && (
+      <div className="relative min-h-0 w-full flex-1 overflow-visible">
+        <div className={`h-full w-full min-h-0 ${visibleTab === 'files' || visibleTab === 'changes' ? 'flex flex-col overflow-visible' : 'scroll-hide overflow-y-auto overflow-x-hidden pr-1'} ${visibleTab}`}>
+        {visibleTab === 'tasks' && (
           activeRun
             ? (
               <TasksPanel
                 activeRun={activeRun}
                 activeContext={activeContext}
                 sortedRuns={sortedRuns}
+                contextRuns={allRuns}
                 expanded={fullScreen}
-                onOpenNode={openExecutionNode}
-                onOpenExecution={openExecution}
+                onOpenNode={() => undefined}
+                onOpenExecution={() => undefined}
                 onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
               />
             )
             : <div className="cr-empty">No task sequence is linked to this chat yet.</div>
         )}
-        {activeTab === 'executions' && (
-          <ExecutionsPanel
-            runs={sortedRuns}
-            selectedExecutionId={selectedExecutionId}
-            selectedNodeId={selectedWorkflowNodeId}
-            renderExecutionHeaderAction={(run) => <SidebarApprovalButton run={run} onAnswer={onAnswerWorkflowIntervention} />}
+        {(visibleTab === 'files' || visibleTab === 'changes') && (
+          <FileChangesPanel
+            runs={allRuns}
+            rootType={rootType}
+            rootId={rootId}
+            repoBrowseSource={repoBrowseSource}
+            activeView={visibleTab}
+            viewRequest={filesViewRequest}
           />
         )}
-        {activeTab === 'artifacts' && <ChatArtifactsPanel rootType={rootType} rootId={rootId} runs={sortedRuns} />}
-        {activeTab === 'files' && <FileChangesPanel runs={sortedRuns} rootType={rootType} rootId={rootId} repoBrowseSource={repoBrowseSource} viewRequest={filesViewRequest} />}
         </div>
       </div>
     </aside>

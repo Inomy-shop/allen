@@ -242,9 +242,10 @@ function safeRepoPath(repoPath: string, rawPath: string): string | null {
 }
 
 async function listRepoFiles(repoPath: string): Promise<Array<{ path: string; isDir: boolean }>> {
+  const execOptions = { cwd: repoPath, timeout: 10_000 };
   const [tracked, untracked] = await Promise.all([
-    exec('git', ['ls-files'], { cwd: repoPath }).catch(() => ({ stdout: '' })),
-    exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: repoPath }).catch(() => ({ stdout: '' })),
+    exec('git', ['ls-files'], execOptions).catch(() => ({ stdout: '' })),
+    exec('git', ['ls-files', '--others', '--exclude-standard'], execOptions).catch(() => ({ stdout: '' })),
   ]);
   const ignored = ['.git', 'node_modules/', '.DS_Store', 'dist/', '.turbo/', 'coverage/', '.next/'];
   return Array.from(new Set([
@@ -366,7 +367,6 @@ export function repoRoutes(db: Db): Router {
   // id="context" and the ObjectId() call throws.
   router.get('/context', async (req: Request, res: Response) => {
     try {
-      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
       const path = String(req.query.path ?? '');
       if (!path) return res.status(400).json({ error: 'path query param is required' });
       const ctx = await service.getContextByPath(path);
@@ -510,24 +510,36 @@ export function repoRoutes(db: Db): Router {
 
   // GET /api/repos/:id/all-files — browse registered repository files.
   router.get('/:id/all-files', async (req: Request, res: Response) => {
+    const repoId = param(req, 'id');
+    const started = Date.now();
+    console.info('[chat-files-api] repo all-files:start', { repoId });
     try {
-      const repo = await service.getById(param(req, 'id'));
+      const repo = await service.getById(repoId);
       if (!repo?.path || typeof repo.path !== 'string') return res.status(404).json({ error: 'Repo not found' });
-      res.json(await listRepoFiles(repo.path));
+      const files = await listRepoFiles(repo.path);
+      console.info('[chat-files-api] repo all-files:success', { repoId, count: files.length, ms: Date.now() - started });
+      res.json(files);
     } catch (err: unknown) {
+      console.error('[chat-files-api] repo all-files:failed', { repoId, ms: Date.now() - started, error: (err as Error).message });
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // GET /api/repos/:id/file/* — read a file from a registered repository.
   router.get('/:id/file/*', async (req: Request, res: Response) => {
+    const repoId = param(req, 'id');
+    const rawFilePath = (req.params as Record<string, string>)[0] ?? '';
+    const started = Date.now();
+    console.info('[chat-files-api] repo file:start', { repoId, path: rawFilePath });
     try {
-      const repo = await service.getById(param(req, 'id'));
+      const repo = await service.getById(repoId);
       if (!repo?.path || typeof repo.path !== 'string') return res.status(404).json({ error: 'Repo not found' });
-      const rawFilePath = (req.params as Record<string, string>)[0] ?? '';
-      res.json(readRepoFile(repo.path, rawFilePath));
+      const file = readRepoFile(repo.path, rawFilePath);
+      console.info('[chat-files-api] repo file:success', { repoId, path: rawFilePath, ms: Date.now() - started });
+      res.json(file);
     } catch (err: unknown) {
       const status = typeof (err as { status?: unknown }).status === 'number' ? (err as { status: number }).status : 500;
+      console.error('[chat-files-api] repo file:failed', { repoId, path: rawFilePath, ms: Date.now() - started, error: (err as Error).message });
       res.status(status).json({ error: (err as Error).message });
     }
   });
@@ -584,10 +596,19 @@ export function repoRoutes(db: Db): Router {
     }
   });
 
+  // POST /api/repos/:id/scan/cancel — cancel/clear an in-progress repo scan
+  router.post('/:id/scan/cancel', async (req: Request, res: Response) => {
+    try {
+      const result = await service.cancelScan(param(req, 'id'));
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   // POST /api/repos/:id/rescan-context — deep agent-driven context rescan (async, returns 202)
   router.post('/:id/rescan-context', async (req: Request, res: Response) => {
     try {
-      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
       const result = await service.rescanContext(param(req, 'id'));
       res.status(result.scheduled ? 202 : 409).json(result);
     } catch (err: unknown) {
@@ -897,7 +918,6 @@ export function repoRoutes(db: Db): Router {
   // GET /api/repos/:id/context — fetch the stored deep context doc
   router.get('/:id/context', async (req: Request, res: Response) => {
     try {
-      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Allen context provider is disabled.'));
       const ctx = await service.getContext(param(req, 'id'));
       if (!ctx) return res.status(404).json({ error: 'No context found for that repo' });
       res.json(ctx);

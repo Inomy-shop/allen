@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  ChevronDown, ChevronRight, ExternalLink, FileText, FolderGit2, GitBranch,
+  Check, ChevronDown, ChevronRight, Copy, ExternalLink, FileText, FolderGit2, GitBranch,
   GitPullRequest, Loader2, MessageSquare, Play, Plus, RefreshCw, RotateCw,
   Save, Settings, Square, Terminal, Trash2, X,
 } from 'lucide-react';
@@ -9,6 +9,9 @@ import Editor, { DiffEditor } from '@monaco-editor/react';
 import { workspaces } from '../services/workspaceService';
 import { repos as repoApi } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
+import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
+import IconTooltipButton from '../components/common/IconTooltipButton';
+import Select from '../components/common/Select';
 import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 import { EmbeddedChat } from '../components/workspace/EmbeddedChat';
@@ -246,6 +249,26 @@ function getLanguage(filePath: string): string {
   return map[ext] ?? 'plaintext';
 }
 
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (window.allenDesktop?.writeClipboardText) {
+      return await window.allenDesktop.writeClipboardText(text);
+    }
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function compactPath(path?: string): string {
+  if (!path) return '';
+  const normalized = path.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length <= 3) return normalized;
+  return `.../${parts.slice(-3).join('/')}`;
+}
+
 function buildFileTree(files: FileEntry[]): FileTreeNodeData[] {
   const root: Record<string, any> = {};
   for (const file of files) {
@@ -333,6 +356,8 @@ export default function WorkspaceListPage() {
   const [form, setForm] = useState({ repoId: '', repoPath: '', repoName: '', branch: '', baseBranch: 'main', name: '' });
   const [pendingWsId, setPendingWsId] = useState<string | null>(null);
   const [configRepoId, setConfigRepoId] = useState<string | null>(null);
+  const [deletingWorkspace, setDeletingWorkspace] = useState<{ id: string; name: string } | null>(null);
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
 
   const active = useMemo(
     () => workspaceList.find(ws => ws._id === activeId) ?? null,
@@ -625,9 +650,7 @@ export default function WorkspaceListPage() {
     }
   }
 
-  async function deleteWorkspace(workspaceId: string, workspaceName?: string) {
-    const label = workspaceName || 'this workspace';
-    if (!window.confirm(`Delete ${label}? This removes the worktree and archives the workspace.`)) return;
+  async function deleteWorkspace(workspaceId: string) {
     setGitBusy(`delete:${workspaceId}`);
     try {
       await workspaces.archive(workspaceId);
@@ -636,11 +659,20 @@ export default function WorkspaceListPage() {
         setActiveId('');
         navigate('/workspaces');
       }
+      setDeletingWorkspace(null);
     } catch (err: any) {
       alert(err.message);
     } finally {
       setGitBusy(null);
     }
+  }
+
+  async function copyWorkspacePath(path?: string) {
+    if (!path) return;
+    const ok = await copyText(path);
+    if (!ok) return;
+    setCopiedPath(path);
+    window.setTimeout(() => setCopiedPath(current => current === path ? null : current), 1400);
   }
 
   function handleLinkedChat(tempId: string, realId: string) {
@@ -657,81 +689,155 @@ export default function WorkspaceListPage() {
   const showWorkspaceDetail = Boolean(routeWorkspaceId) || creating;
 
   const listContent = (
-    <div className="ws-list-content scroll-hide">
-      <div className="ws-list-head">
-        <div>
-          <h1>Workspaces</h1>
-          <div className="sub">Isolated agent code environments</div>
+    <div className="content h-full overflow-y-auto !p-0 scroll-hide bg-app" data-screen-label="workspaces">
+      <div className="w-full px-8 py-8">
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
+              <FolderGit2 className="h-[18px] w-[18px]" />
+            </span>
+            <div>
+              <h1 className="text-[24px] font-semibold leading-tight text-theme-primary">Workspaces</h1>
+              <p className="mt-1 text-[13px] text-theme-muted">Isolated agent worktrees for active implementation work.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <IconTooltipButton
+              label="Refresh workspaces"
+              onClick={loadWorkspaces}
+              className="h-9 w-9 border border-app bg-app-card hover:border-app-strong"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </IconTooltipButton>
+            <button
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+              onClick={startCreateWorkspace}
+              type="button"
+            >
+              <Plus className="h-3.5 w-3.5" /> New workspace
+            </button>
+          </div>
         </div>
-        <div className="ws-list-actions">
-          <button className="btn btn-secondary btn-sm" onClick={loadWorkspaces} type="button" title="Refresh workspaces">
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-          </button>
-          <button className="btn btn-primary btn-sm" onClick={startCreateWorkspace} type="button">
-            <Plus className="h-3.5 w-3.5" /> New workspace
-          </button>
-        </div>
-      </div>
 
-      {loading && workspaceList.length === 0 ? (
-        <div className="ws-list-empty">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> loading workspaces...
-        </div>
-      ) : workspaceList.length === 0 ? (
-        <div className="ws-list-empty">no workspaces yet.</div>
-      ) : workspaceGroups.map(group => (
-        <section key={group.key} className="ws-list-card">
-          <div className="ws-list-card-head">
-            <FolderGit2 className="h-3.5 w-3.5 text-theme-muted" />
-            <h2>{group.label}</h2>
+        {loading && workspaceList.length === 0 ? (
+          <div className="space-y-3">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <div key={index} className="rounded-md border border-app bg-app-card px-5 py-4">
+                <div className="h-4 w-48 animate-pulse rounded-md bg-app-muted" />
+                <div className="mt-3 h-3 w-72 animate-pulse rounded-md bg-app-muted" />
+              </div>
+            ))}
           </div>
-          <div className="ws-list-rows">
-            {group.items.map((ws, index) => {
-              const status = (ws.status ?? 'active').toLowerCase();
-              const changed = ws.changedFiles ?? 0;
-              return (
-                <div key={ws._id} className="ws-list-row" data-first={index === 0 ? 'true' : undefined}>
-                  <div className="ws-list-row-main">
-                    <div className="ws-list-row-title">
-                      <FolderGit2 className="h-3 w-3 text-accent" />
-                      <span>{ws.name}</span>
-                      <span className={`ws-workspace-state ${status}`}>{ws.status ?? 'active'}</span>
-                      {changed > 0 ? <span className="ws-list-change">{changed} changed</span> : null}
-                      {ws.prNumber ? <span className="ws-list-change">PR #{ws.prNumber}</span> : null}
-                    </div>
-                    <div className="ws-list-row-meta">
-                      <span>{ws.branch ?? 'branch unknown'}</span>
-                      <span>→</span>
-                      <span>{ws.baseBranch ?? 'base unknown'}</span>
-                      {ws.basePort ? <><span>·</span><span>port {ws.basePort}</span></> : null}
-                      {ws.updatedAt ? <><span>·</span><span>{new Date(ws.updatedAt).toLocaleDateString()}</span></> : null}
-                    </div>
+        ) : workspaceList.length === 0 ? (
+          <div className="rounded-md border border-dashed border-app bg-app-card px-5 py-12 text-center">
+            <FolderGit2 className="mx-auto h-8 w-8 text-theme-subtle" />
+            <div className="mt-4 text-[15px] font-semibold text-theme-primary">No workspaces yet</div>
+            <p className="mt-1 text-[13px] text-theme-muted">Create an isolated worktree when Allen needs to edit code.</p>
+            <button
+              onClick={startCreateWorkspace}
+              className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+              type="button"
+            >
+              <Plus className="h-3.5 w-3.5" /> New workspace
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {workspaceGroups.map(group => (
+              <section key={group.key} className="rounded-md border border-app bg-app-card">
+                <div className="flex items-center justify-between border-b border-app px-5 py-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-accent" />
+                    <h2 className="truncate text-[14px] font-semibold text-theme-primary">{group.label}</h2>
                   </div>
-                  <div className="ws-list-row-actions">
-                    {ws.prUrl ? (
-                      <a className="btn btn-ghost btn-sm" href={ws.prUrl} target="_blank" rel="noreferrer" title="Open pull request">
-                        <GitPullRequest className="h-3.5 w-3.5" />
-                      </a>
-                    ) : null}
-                    <button className="btn btn-ghost btn-sm" type="button" onClick={() => openWorkspace(ws._id)} title="Open workspace">
-                      <ExternalLink className="h-3.5 w-3.5" /> Open
-                    </button>
-                    <button
-                      className="btn btn-ghost btn-sm ws-danger-action"
-                      type="button"
-                      onClick={() => deleteWorkspace(ws._id, ws.name)}
-                      title="Delete workspace"
-                      disabled={gitBusy === `delete:${ws._id}`}
-                    >
-                      {gitBusy === `delete:${ws._id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                    </button>
-                  </div>
+                  <span className="font-mono text-[11px] text-theme-muted">{group.items.length} workspace{group.items.length === 1 ? '' : 's'}</span>
                 </div>
-              );
-            })}
+                <div className="divide-y divide-[rgb(var(--color-border))]">
+                  {group.items.map((ws) => {
+                    const status = (ws.status ?? 'active').toLowerCase();
+                    const changed = ws.changedFiles ?? 0;
+                    const workspacePath = ws.worktreePath ?? ws.repoPath ?? '';
+                    return (
+                      <div key={ws._id} className="flex items-start gap-2.5 px-3 py-1.5 transition-colors hover:bg-app-muted/30">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="truncate text-[14px] font-semibold text-theme-primary">{ws.name}</span>
+                            <span className={`font-mono text-[11px] ${status === 'active' ? 'text-accent-green' : 'text-theme-muted'}`}>
+                              {ws.status ?? 'active'}
+                            </span>
+                            <span className="inline-flex items-center gap-1 font-mono text-[11px] text-theme-muted">
+                              <GitBranch className="h-3 w-3" />
+                              {ws.branch ?? 'branch unknown'} <span className="text-theme-subtle">-&gt;</span> {ws.baseBranch ?? 'base unknown'}
+                            </span>
+                            {changed > 0 && <span className="font-mono text-[11px] text-theme-muted">{changed} changed</span>}
+                            {ws.prNumber && <span className="font-mono text-[11px] text-theme-muted">PR #{ws.prNumber}</span>}
+                          </div>
+                          {workspacePath && (
+                            <div className="mt-1 flex max-w-full items-center gap-1 font-mono text-[10.5px] leading-4 text-theme-subtle">
+                              <span className="uppercase tracking-[0.12em] text-theme-subtle">local</span>
+                              <span className="truncate" title={workspacePath}>{compactPath(workspacePath)}</span>
+                              <IconTooltipButton
+                                label={copiedPath === workspacePath ? 'Copied' : 'Copy workspace path'}
+                                onClick={() => void copyWorkspacePath(workspacePath)}
+                                className="h-[18px] w-[18px] shrink-0 text-theme-muted hover:text-theme-primary"
+                              >
+                                {copiedPath === workspacePath ? <Check className="h-3 w-3 text-accent-green" /> : <Copy className="h-3 w-3" />}
+                              </IconTooltipButton>
+                              {ws.basePort ? <><span>·</span><span>port {ws.basePort}</span></> : null}
+                            </div>
+                          )}
+                        </div>
+                        <div className="ml-auto flex self-stretch shrink-0 flex-col items-end justify-between gap-1">
+                          <div className="flex items-center gap-1">
+                            {ws.prUrl ? (
+                              <IconTooltipButton
+                                label="Open pull request"
+                                onClick={() => window.open(ws.prUrl, '_blank', 'noopener,noreferrer')}
+                                className="h-[26px] w-[26px] border border-app bg-app hover:border-app-strong"
+                              >
+                                <GitPullRequest className="h-3 w-3" />
+                              </IconTooltipButton>
+                            ) : null}
+                            <button
+                              className="inline-flex h-[26px] items-center gap-1 rounded-md border border-app bg-app px-1.5 text-[11.5px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
+                              type="button"
+                              onClick={() => openWorkspace(ws._id)}
+                              title="Open workspace"
+                            >
+                              <ExternalLink className="h-3 w-3" /> Open
+                            </button>
+                            <IconTooltipButton
+                              label="Delete workspace"
+                              tone="danger"
+                              onClick={() => setDeletingWorkspace({ id: ws._id, name: ws.name })}
+                              className="h-[26px] w-[26px] border border-app bg-app hover:border-accent-red/50"
+                              disabled={gitBusy === `delete:${ws._id}`}
+                            >
+                              {gitBusy === `delete:${ws._id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                            </IconTooltipButton>
+                          </div>
+                          {ws.updatedAt ? (
+                            <span className="font-mono text-[10px] leading-4 text-theme-subtle">
+                              updated {new Date(ws.updatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
           </div>
-        </section>
-      ))}
+        )}
+        <DeleteConfirmDialog
+          open={!!deletingWorkspace}
+          resourceType="workspace"
+          resourceName={deletingWorkspace?.name ?? ''}
+          onConfirm={() => deletingWorkspace && void deleteWorkspace(deletingWorkspace.id)}
+          onCancel={() => setDeletingWorkspace(null)}
+        />
+      </div>
     </div>
   );
 
@@ -772,9 +878,9 @@ export default function WorkspaceListPage() {
             </div>
             <div className="ws-ide-actions">
               {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-theme-muted" />}
-              <button onClick={loadWorkspaces} className="btn btn-ghost btn-sm" title="Refresh workspace" type="button">
+              <IconTooltipButton label="Refresh workspace" onClick={loadWorkspaces} className="h-8 w-8">
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-              </button>
+              </IconTooltipButton>
               {active?.prUrl ? (
                 <a href={active.prUrl} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm">
                   <GitPullRequest className="h-3.5 w-3.5" /> open PR
@@ -785,15 +891,15 @@ export default function WorkspaceListPage() {
                 </button>
               ) : null}
               {active ? (
-                <button
-                  onClick={() => deleteWorkspace(active._id, active.name)}
-                  className="btn btn-ghost btn-sm ws-danger-action"
-                  title="Delete workspace"
-                  type="button"
+                <IconTooltipButton
+                  label="Delete workspace"
+                  tone="danger"
+                  onClick={() => setDeletingWorkspace({ id: active._id, name: active.name })}
+                  className="h-8 w-8"
                   disabled={gitBusy === `delete:${active._id}`}
                 >
                   {gitBusy === `delete:${active._id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                </button>
+                </IconTooltipButton>
               ) : null}
             </div>
           </header>
@@ -815,16 +921,18 @@ export default function WorkspaceListPage() {
               <button className="btn btn-ghost btn-sm" onClick={openNewChat} type="button">
                 <Plus className="h-3.5 w-3.5" /> new chat
               </button>
-              <select
-                className="ws-prev-chat"
+              <Select
+                className="w-[180px]"
                 value=""
-                onChange={(event) => { if (event.target.value) openChat(event.target.value); }}
+                onChange={(value) => { if (value) openChat(value); }}
                 disabled={!active || availablePreviousChats.length === 0}
-                title="Open previous workspace conversation"
-              >
-                <option value="">previous chats</option>
-                {availablePreviousChats.map(chat => <option key={chat._id} value={chat._id}>{chatLabel(chat)}</option>)}
-              </select>
+                placeholder="Previous chats"
+                searchPlaceholder="Search chats..."
+                options={availablePreviousChats.map(chat => ({
+                  value: chat._id,
+                  label: chatLabel(chat),
+                }))}
+              />
               <button className={`btn btn-ghost btn-sm ${activeTab === 'terminal' ? 'active' : ''}`} onClick={focusTerminal} type="button">
                 <Terminal className="h-3.5 w-3.5" /> terminal
               </button>
@@ -880,10 +988,17 @@ export default function WorkspaceListPage() {
                       <div className="grid grid-cols-2 gap-3">
                         <label>
                           <span>repository</span>
-                          <select value={form.repoId} onChange={e => selectRepo(e.target.value)} className="input w-full text-[12px]">
-                            <option value="">select repo...</option>
-                            {repos.map(r => <option key={r._id} value={r._id}>{r.name}</option>)}
-                          </select>
+                          <Select
+                            value={form.repoId}
+                            onChange={selectRepo}
+                            placeholder="Select repo..."
+                            searchPlaceholder="Search repositories..."
+                            options={repos.map(repo => ({
+                              value: repo._id,
+                              label: repo.name,
+                              sublabel: repo.path,
+                            }))}
+                          />
                         </label>
                         <label>
                           <span>workspace name</span>
@@ -1083,6 +1198,13 @@ export default function WorkspaceListPage() {
           onFailed={() => { setPendingWsId(null); loadWorkspaces(); }}
         />
       )}
+      <DeleteConfirmDialog
+        open={!!deletingWorkspace}
+        resourceType="workspace"
+        resourceName={deletingWorkspace?.name ?? ''}
+        onConfirm={() => deletingWorkspace && void deleteWorkspace(deletingWorkspace.id)}
+        onCancel={() => setDeletingWorkspace(null)}
+      />
     </div>
   );
 }

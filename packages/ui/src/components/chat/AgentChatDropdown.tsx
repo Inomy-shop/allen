@@ -22,6 +22,14 @@ interface AgentChatDropdownProps {
   showAssistant?: boolean;
 }
 
+const panelClass = 'fixed z-[9999] flex min-w-[240px] max-w-[280px] flex-col overflow-hidden rounded-md border border-app bg-app-card p-2 shadow-2xl';
+const sectionLabelClass = 'px-2 pb-1.5 pt-0.5 text-[12px] font-medium text-theme-muted';
+const rowClass = 'flex min-h-9 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-app-muted';
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
 export default function AgentChatDropdown({
   value,
   onChange,
@@ -97,11 +105,13 @@ export default function AgentChatDropdown({
     if (disabled) return;
     if (!open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
+      const margin = 12;
+      const panelWidth = 280;
       const spaceBelow = window.innerHeight - rect.bottom;
       const dropUp = spaceBelow < 340 && rect.top > spaceBelow;
       setPos({
         top: dropUp ? rect.top : rect.bottom + 4,
-        left: rect.left,
+        left: clamp(rect.left, margin, window.innerWidth - panelWidth - margin),
         dropUp,
       });
     }
@@ -185,38 +195,38 @@ export default function AgentChatDropdown({
         createPortal(
           <div
             ref={dropdownRef}
-            className="fixed z-[9999] bg-surface-100 border border-app rounded-lg shadow-2xl min-w-[240px] max-w-[320px] flex flex-col overflow-hidden"
+            className={panelClass}
             style={{
               top: pos.dropUp ? undefined : pos.top,
               bottom: pos.dropUp ? window.innerHeight - pos.top + 4 : undefined,
               left: pos.left,
-              maxHeight: 340,
+              maxHeight: 380,
             }}
           >
             {/* Search */}
-            <div className="p-2 border-b border-app shrink-0">
+            <div className="shrink-0 pb-2">
               <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-muted pointer-events-none" />
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-muted" />
                 <input
                   ref={searchRef}
                   type="text"
                   value={query}
                   onChange={e => setQuery(e.target.value)}
                   placeholder="Search agents…"
-                  className="w-full pl-7 pr-2 py-1.5 text-xs font-mono bg-app-muted rounded-md border border-app text-theme-primary placeholder:text-theme-muted focus:outline-none"
+                  className="h-8 w-full rounded-md border border-app bg-app px-8 pr-3 text-[12px] text-theme-primary placeholder:text-theme-muted focus:outline-none focus:ring-2 focus:ring-accent/15"
                 />
               </div>
             </div>
 
             {/* Results */}
-            <div className="overflow-y-auto min-h-0 py-1" style={{ maxHeight: 224 }}>
+            <div className="min-h-0 overflow-y-auto" style={{ maxHeight: 304 }}>
               {loading ? (
                 /* Loading skeleton */
-                <div className="px-3 py-2 space-y-2">
+                <div className="space-y-2 px-3 py-2">
                   {[1, 2, 3].map(i => (
                     <div key={i} className="flex items-center gap-2">
-                      <div className="w-5 h-5 rounded bg-app-muted animate-pulse shrink-0" />
-                      <div className="h-3 rounded bg-app-muted animate-pulse flex-1" />
+                      <div className="h-5 w-5 shrink-0 animate-pulse rounded bg-app-muted" />
+                      <div className="h-3 flex-1 animate-pulse rounded bg-app-muted" />
                     </div>
                   ))}
                 </div>
@@ -224,46 +234,53 @@ export default function AgentChatDropdown({
                 <>
                   {/* Assistant option (always at top) */}
                   {showAssistantOption && (
-                    <button
-                      type="button"
-                      onClick={() => pick(null, null)}
-                      className="flex items-center gap-2 px-3 py-1.5 text-xs font-mono cursor-pointer hover:bg-app-muted text-theme-secondary w-full text-left"
-                    >
-                      <User className="w-3.5 h-3.5 text-theme-muted shrink-0" />
-                      <span className="flex-1">Assistant</span>
-                      {value === null && (
-                        <Check className="w-3.5 h-3.5 text-accent-blue shrink-0" />
-                      )}
-                    </button>
+                    <div>
+                      <div className={sectionLabelClass}>Default</div>
+                      <button
+                        type="button"
+                        onClick={() => pick(null, null)}
+                        className={`${rowClass} ${value === null ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary'}`}
+                      >
+                        <User className="h-3.5 w-3.5 shrink-0 text-theme-muted" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate">Assistant</span>
+                          <span className="block truncate text-[11px] text-theme-muted">General chat routing</span>
+                        </span>
+                        {value === null && (
+                          <Check className="h-3.5 w-3.5 shrink-0 text-theme-secondary" />
+                        )}
+                      </button>
+                    </div>
                   )}
 
                   {/* Agent groups */}
-                  {grouped.map(group => (
-                    <div key={group.key}>
-                      {(grouped.length > 1 || group.key !== '__ungrouped__') && (
-                        <div className="px-3 pt-2 pb-1 text-[10px] font-mono font-medium uppercase tracking-wider text-theme-muted">
-                          {group.title}
-                        </div>
-                      )}
+                  {grouped.map((group, groupIndex) => (
+                    <div key={group.key} className={(showAssistantOption || groupIndex > 0) ? 'mt-2 border-t border-app pt-2' : ''}>
+                      <div className={sectionLabelClass}>
+                        {group.key === '__ungrouped__' ? 'Agents' : group.title}
+                      </div>
                       {group.agents.map(agent => (
                         <button
                           key={agent.name}
                           type="button"
                           onClick={() => pick(agent.name, agent.sourceRepoPath ?? null)}
-                          className={`flex items-center gap-2 px-3 py-1.5 text-xs font-mono cursor-pointer hover:bg-app-muted w-full text-left ${
-                            value === agent.name ? 'text-accent-blue bg-accent-blue/5' : 'text-theme-secondary'
+                          className={`${rowClass} ${
+                            value === agent.name ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary'
                           }`}
                         >
                           {agent.isBuiltIn ? (
-                            <Crown className="w-3.5 h-3.5 text-accent-amber shrink-0" />
+                            <Crown className="h-3.5 w-3.5 shrink-0 text-accent" />
                           ) : (
-                            <Bot className="w-3.5 h-3.5 text-theme-muted shrink-0" />
+                            <Bot className="h-3.5 w-3.5 shrink-0 text-theme-muted" />
                           )}
-                          <span className="flex-1 truncate">
-                            {agent.displayName ?? agent.name}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">{agent.displayName ?? agent.name}</span>
+                            {agent.teamName && (
+                              <span className="block truncate text-[11px] text-theme-muted">{agent.teamName}</span>
+                            )}
                           </span>
                           {value === agent.name && (
-                            <Check className="w-3.5 h-3.5 text-accent-blue shrink-0" />
+                            <Check className="h-3.5 w-3.5 shrink-0 text-theme-secondary" />
                           )}
                         </button>
                       ))}
@@ -272,7 +289,7 @@ export default function AgentChatDropdown({
 
                   {/* Empty state */}
                   {!showAssistantOption && totalVisible === 0 && (
-                    <div className="px-3 py-6 text-center text-xs text-theme-muted italic">
+                    <div className="px-3 py-6 text-center text-[13px] text-theme-muted">
                       No agents found
                     </div>
                   )}

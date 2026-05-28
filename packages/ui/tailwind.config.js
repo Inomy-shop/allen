@@ -80,6 +80,10 @@ export default {
         'pulse-running': 'pulse-running 2s ease-in-out infinite',
         'msg-enter':     'al-msg-enter 0.3s ease-out',
         'agent-pulse':   'al-agent-pulse 1.6s ease-in-out infinite',
+        'onboarding-fade-in': 'onboarding-fade-in 180ms ease-out both',
+        'onboarding-fade-out': 'onboarding-fade-out 180ms ease-in both',
+        'onboarding-modal-enter': 'onboarding-modal-enter 260ms cubic-bezier(0.16, 1, 0.3, 1) both',
+        'onboarding-modal-exit': 'onboarding-modal-exit 180ms cubic-bezier(0.4, 0, 1, 1) both',
         // Legacy aliases (no-op visual but keep className compiling)
         'pulse-glow':    'pulse-glow 2s ease-in-out infinite',
         'scan-line':     'scan-line 4s linear infinite',
@@ -96,6 +100,22 @@ export default {
         'al-agent-pulse': {
           '0%,100%': { opacity: '0.55' },
           '50%':     { opacity: '1' },
+        },
+        'onboarding-fade-in': {
+          from: { opacity: '0' },
+          to:   { opacity: '1' },
+        },
+        'onboarding-fade-out': {
+          from: { opacity: '1' },
+          to:   { opacity: '0' },
+        },
+        'onboarding-modal-enter': {
+          from: { opacity: '0', transform: 'translateY(12px) scale(0.98)' },
+          to:   { opacity: '1', transform: 'translateY(0) scale(1)' },
+        },
+        'onboarding-modal-exit': {
+          from: { opacity: '1', transform: 'translateY(0) scale(1)' },
+          to:   { opacity: '0', transform: 'translateY(10px) scale(0.985)' },
         },
         'pulse-glow': {
           '0%, 100%': { opacity: '1' },

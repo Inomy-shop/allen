@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import mermaid from 'mermaid';
 import { Copy, Check, Code2, Image as ImageIcon, AlertCircle, Maximize2, Minimize2, X } from 'lucide-react';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { resolveColorMode, getCssVarHex } from '../../lib/theme';
+import { initializeMermaid, mermaid } from '../../lib/mermaid';
 
 function getMermaidTheme(colorMode: 'light' | 'dark') {
   if (colorMode === 'light') {
@@ -66,7 +66,7 @@ export default function MermaidChatBlock({ code }: Props) {
     (async () => {
       try {
         const themeConfig = getMermaidTheme(resolved);
-        mermaid.initialize({
+        initializeMermaid({
           startOnLoad: false,
           theme: themeConfig.theme as any,
           themeVariables: themeConfig.themeVariables,

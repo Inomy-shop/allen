@@ -189,6 +189,9 @@ const EXECUTION_LIST_PROJECTION = {
   'meta.requestText': 1,
   'meta.workspaceId': 1,
   'meta.workspacePath': 1,
+  'meta.repoId': 1,
+  'meta.repoPath': 1,
+  'meta.cwd': 1,
   'meta.prUrl': 1,
   'meta.prTitle': 1,
   'meta.prStatus': 1,
@@ -221,6 +224,8 @@ const EXECUTION_LIST_PROJECTION = {
   'state.ticket_url': 1,
   'state.workspace_id': 1,
   'state.worktree_path': 1,
+  'state.repo_id': 1,
+  'state.repo_path': 1,
   'state.pr_url': 1,
   'state.url': 1,
   'state.pr_title': 1,
@@ -1079,6 +1084,9 @@ export class ExecutionService {
         failedNode: exec.failedNode ?? null,
         errorMessage: exec.errorMessage ?? null,
         isAgentExecution,
+        parentExecutionId: stringValue(row.parentExecutionId) ?? null,
+        rootExecutionId: stringValue(row.rootExecutionId) ?? null,
+        spawnDepth: typeof row.spawnDepth === 'number' ? row.spawnDepth : null,
         contextWorkflowEvaluation: contextWorkflowEvaluation ?? null,
       },
       progress: {
@@ -1654,6 +1662,7 @@ export class ExecutionService {
       || (!item.workflowId && item.source === 'chat');
 
     const workspace = await this.findExecutionWorkspace(input, state, meta);
+    const repository = workspace ? null : await this.findExecutionRepository(input, state, meta);
     const assignment = id ? await this.findExecutionAssignment(id, workspace, input, state, meta) : null;
     const pullRequest = id ? await this.findExecutionPullRequest(id, workspace, input, state, meta, [item]) : null;
     const chatSummary = await this.runChatSummary(input, meta);
@@ -1666,6 +1675,8 @@ export class ExecutionService {
       user: this.runUserSummary(meta, chatSummary),
       chat: chatSummary,
       linear: this.linearContext(assignment, input, state, meta),
+      workspace: workspace ? this.workspaceContext(workspace) : null,
+      repository: repository ? this.repositoryContext(repository) : null,
       pullRequest: pullRequest ? this.pullRequestContext(pullRequest) : null,
     };
   }
@@ -1898,6 +1909,29 @@ export class ExecutionService {
     return null;
   }
 
+  private async findExecutionRepository(
+    input: Record<string, unknown>,
+    state: Record<string, unknown>,
+    meta: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | null> {
+    const repoId =
+      stringValue(meta.repoId)
+      ?? stringValue(state.repo_id)
+      ?? stringValue(input.repo_id);
+    if (repoId && ObjectId.isValid(repoId)) {
+      const repo = await this.db.collection('repos').findOne({ _id: new ObjectId(repoId) });
+      if (repo) return repo;
+    }
+
+    const repoPath =
+      stringValue(meta.repoPath)
+      ?? stringValue(state.repo_path)
+      ?? stringValue(input.repo_path)
+      ?? stringValue(meta.cwd);
+    if (!repoPath) return null;
+    return this.db.collection('repos').findOne({ path: repoPath });
+  }
+
   private async findExecutionAssignment(
     executionId: string,
     workspace: Record<string, unknown> | null,
@@ -2046,6 +2080,16 @@ export class ExecutionService {
       baseBranch: workspace.baseBranch ?? null,
       worktreePath: workspace.worktreePath ?? null,
       prUrl: workspace.prUrl ?? null,
+    };
+  }
+
+  private repositoryContext(repo: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: repo._id ? String(repo._id) : undefined,
+      name: repo.name ?? null,
+      path: repo.path ?? null,
+      defaultBranch: repo.defaultBranch ?? null,
+      status: repo.status ?? null,
     };
   }
 
@@ -2284,6 +2328,9 @@ export class ExecutionService {
 
         const nodeName = (event.data.node as string) ?? 'unknown';
         const promptText = (event.data.prompt as string) ?? '';
+        const normalizedIntervention = event.data.intervention && typeof event.data.intervention === 'object' && !Array.isArray(event.data.intervention)
+          ? event.data.intervention as Record<string, unknown>
+          : null;
         const rawFields = (event.data.fields as Array<{
           name: string;
           label?: string;
@@ -2294,7 +2341,17 @@ export class ExecutionService {
         }>) ?? [];
         // Normalise into InterventionField shape so the intervention
         // record carries exactly what the UI and respond handler need.
-        const fields: InterventionField[] = rawFields.map(f => ({
+        const normalizedFields = Array.isArray(normalizedIntervention?.fields)
+          ? normalizedIntervention.fields as Array<{
+            name: string;
+            label?: string;
+            type?: string;
+            required?: boolean;
+            options?: string[];
+            placeholder?: string;
+          }>
+          : rawFields;
+        const fields: InterventionField[] = normalizedFields.map(f => ({
           name: f.name,
           label: f.label,
           type: f.type,
@@ -2323,38 +2380,61 @@ export class ExecutionService {
             const execDoc = await db.collection('executions').findOne({ id: executionId });
             const workflowState = (execDoc?.state as Record<string, unknown>) ?? {};
 
-            // Derive severity from the stage name. Convention:
+            // Derive severity from normalized payload when available, else
+            // fall back to the stage-name convention.
             //   *_gate / *_approval → approval (🟢)
             //   *_escalation        → escalation (🔴)
             //   everything else     → question (🟡)
-            let severity: InterventionSeverity = 'question';
+            let severity: InterventionSeverity = normalizedIntervention?.severity === 'approval' || normalizedIntervention?.severity === 'escalation' || normalizedIntervention?.severity === 'question'
+              ? normalizedIntervention.severity as InterventionSeverity
+              : 'question';
             const stageLower = nodeName.toLowerCase();
-            if (stageLower.endsWith('_gate') || stageLower.includes('approval')) {
+            if (!normalizedIntervention && (stageLower.endsWith('_gate') || stageLower.includes('approval'))) {
               severity = 'approval';
-            } else if (stageLower.includes('escalation')) {
+            } else if (!normalizedIntervention && stageLower.includes('escalation')) {
               severity = 'escalation';
             }
 
             // Derive a short title: prefer the node def's displayName, else
             // the humanised node name.
             const nodeDef = workflow.nodes?.[nodeName];
-            const title = (nodeDef as { displayName?: string } | undefined)?.displayName
+            const title = typeof normalizedIntervention?.title === 'string'
+              ? normalizedIntervention.title
+              : (nodeDef as { displayName?: string } | undefined)?.displayName
               ?? humaniseNodeName(nodeName);
+            const summary = typeof normalizedIntervention?.summary === 'string'
+              ? normalizedIntervention.summary
+              : undefined;
 
             // Derive the context summary from the rendered prompt's first
             // 400 chars. The prompt is the only human-readable context we
             // have without introspecting every workflow's state schema.
-            const contextSummary = promptText.slice(0, 400) || `The workflow is paused at node "${nodeName}".`;
+            const contextSummary = (summary ?? promptText.slice(0, 400)) || `The workflow is paused at node "${nodeName}".`;
 
             // Derive the question from the prompt too — the full prompt
             // already contains the question text for most nodes. The
             // Interventions page renders it verbatim.
-            const question = promptText || `Please respond to continue.`;
+            const question = typeof normalizedIntervention?.question === 'string'
+              ? normalizedIntervention.question
+              : promptText || `Please respond to continue.`;
 
             // Build options from the human node's fields. Any field of
             // type "select" becomes a list of options; other fields are
             // surfaced as free-form inputs on the Interventions page.
-            const options = fields.flatMap(f => {
+            const normalizedActions = Array.isArray(normalizedIntervention?.actions)
+              ? normalizedIntervention.actions as Array<Record<string, unknown>>
+              : undefined;
+            const options = normalizedActions && normalizedActions.length > 0
+              ? normalizedActions.map((action) => {
+                const value = typeof action.id === 'string' ? action.id : String(action.label ?? '');
+                return {
+                  label: typeof action.label === 'string' ? action.label : value.replace(/_/g, ' '),
+                  value,
+                  primary: value === 'approve' || value === 'answer' || value === 'retry_with_feedback',
+                  destructive: value === 'reject' || value === 'cancel' || value === 'abandon',
+                };
+              }).filter((option) => option.value)
+              : fields.flatMap(f => {
               if (f.type === 'select' && 'options' in f) {
                 const fieldOpts = (f as unknown as { options?: string[] }).options ?? [];
                 return fieldOpts.map(o => ({
@@ -2393,6 +2473,9 @@ export class ExecutionService {
             // will have prd_url / hla_url / tdd_url set by persist_docs;
             // summary_url set by summary node; etc.
             const docs: InterventionDocLink[] = [];
+            const normalizedEvidence = Array.isArray(normalizedIntervention?.evidence)
+              ? normalizedIntervention.evidence as Array<Record<string, unknown>>
+              : undefined;
             const kindFromKey = (k: string): InterventionDocLink['kind'] => {
               if (k.startsWith('prd')) return 'prd';
               if (k.startsWith('hla')) return 'hla';
@@ -2412,6 +2495,17 @@ export class ExecutionService {
                 });
               }
             }
+            if (normalizedEvidence) {
+              for (const item of normalizedEvidence) {
+                if (typeof item.url !== 'string' || !item.url) continue;
+                docs.push({
+                  label: typeof item.label === 'string' ? item.label : 'Evidence',
+                  url: item.url,
+                  kind: 'external',
+                });
+              }
+            }
+            const dedupedDocs = dedupeInterventionDocs(docs);
 
             // Round info for clarification nodes (best-effort — state
             // may or may not have a clarify_round counter).
@@ -2426,13 +2520,25 @@ export class ExecutionService {
               started_by_user_id: (input.started_by_user_id as string | undefined),
               started_by_user_email: (input.started_by_user_email as string | undefined),
               stage: nodeName,
+              kind: normalizedIntervention?.kind === 'clarify' || normalizedIntervention?.kind === 'review' || normalizedIntervention?.kind === 'recover'
+                ? normalizedIntervention.kind
+                : undefined,
               severity,
               title,
+              summary,
               context_summary: contextSummary,
               question,
               options,
               fields,
-              docs,
+              actions: normalizedActions,
+              highlights: Array.isArray(normalizedIntervention?.highlights)
+                ? normalizedIntervention.highlights.filter((item): item is string => typeof item === 'string')
+                : undefined,
+              evidence: normalizedEvidence,
+              retry_exhaustion: normalizedIntervention?.retryExhaustion && typeof normalizedIntervention.retryExhaustion === 'object' && !Array.isArray(normalizedIntervention.retryExhaustion)
+                ? normalizedIntervention.retryExhaustion as Record<string, unknown>
+                : undefined,
+              docs: dedupedDocs,
               round_info: roundInfo,
               user_request: (input.user_request as string | undefined)
                 ?? (input.bug_report as string | undefined)
@@ -2457,4 +2563,25 @@ function humaniseNodeName(name: string): string {
     .filter(Boolean)
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
+}
+
+function dedupeInterventionDocs(docs: InterventionDocLink[]): InterventionDocLink[] {
+  const byUrl = new Map<string, InterventionDocLink>();
+  for (const doc of docs) {
+    const url = doc.url.trim();
+    if (!url) continue;
+    const existing = byUrl.get(url);
+    if (!existing || isGenericInterventionDocLabel(existing.label)) {
+      byUrl.set(url, { ...doc, url });
+    }
+  }
+  return [...byUrl.values()];
+}
+
+function isGenericInterventionDocLabel(label: string): boolean {
+  const normalized = label.trim().toLowerCase();
+  return normalized === 'evidence'
+    || normalized === 'external'
+    || normalized === 'artifact'
+    || normalized.endsWith('artifact');
 }

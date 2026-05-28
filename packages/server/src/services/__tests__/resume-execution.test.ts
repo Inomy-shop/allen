@@ -141,7 +141,18 @@ function makeFakeDb(state: FakeDbState): Db {
         },
         async updateOne(filter: unknown, update: unknown) {
           updates.push({ filter, update });
-          return { modifiedCount: 1 };
+          let matched = true;
+          if (name === 'executions') {
+            const f = filter as Record<string, any>;
+            matched = Boolean(state.exec);
+            if (matched && f.id && state.exec?.id !== f.id) matched = false;
+            if (matched && f.status?.$nin && f.status.$nin.includes(state.exec?.status)) matched = false;
+            if (matched) {
+              const set = (update as Record<string, any>).$set as Record<string, unknown> | undefined;
+              if (set && state.exec) state.exec = { ...state.exec, ...set };
+            }
+          }
+          return { matchedCount: matched ? 1 : 0, modifiedCount: matched ? 1 : 0 };
         },
         async insertOne(_doc: unknown) {
           return { insertedId: 'fake-id' };
@@ -181,6 +192,54 @@ beforeEach(() => {
   mockRunSpawn.mockClear();
   // Replace the test-injection seam so all runSpawnInBackground calls go to mockRunSpawn.
   __internalsForTest.runSpawnInBackground = mockRunSpawn as typeof __internalsForTest.runSpawnInBackground;
+});
+
+describe('spawn completion guard', () => {
+  it('does not overwrite a cancelled spawned-agent execution as completed', async () => {
+    const updates: Array<{ filter: unknown; update: unknown }> = [];
+    const state: FakeDbState = {
+      exec: { ...BASE_EXEC, status: 'cancelled', completedNodes: [], currentNodes: [] },
+      role: BASE_ROLE,
+      updates,
+    };
+    const db = makeFakeDb(state);
+
+    const completed = await __internalsForTest.markSpawnCompletedUnlessTerminal(
+      db,
+      EXEC_ID,
+      AGENT_NAME,
+      0.42,
+      12_000,
+      'session-after-cancel',
+    );
+
+    expect(completed).toBe(false);
+    expect(state.exec?.status).toBe('cancelled');
+  });
+
+  it('marks a running spawned-agent execution as completed', async () => {
+    const updates: Array<{ filter: unknown; update: unknown }> = [];
+    const state: FakeDbState = {
+      exec: { ...BASE_EXEC, status: 'running', completedNodes: [], currentNodes: [AGENT_NAME] },
+      role: BASE_ROLE,
+      updates,
+    };
+    const db = makeFakeDb(state);
+
+    const completed = await __internalsForTest.markSpawnCompletedUnlessTerminal(
+      db,
+      EXEC_ID,
+      AGENT_NAME,
+      0.42,
+      12_000,
+      'session-complete',
+    );
+
+    expect(completed).toBe(true);
+    expect(state.exec?.status).toBe('completed');
+    expect(state.exec?.currentNodes).toEqual([]);
+    expect(state.exec?.completedNodes).toEqual([AGENT_NAME]);
+  });
 });
 
 // ── Tests: session-ID fallback chain ─────────────────────────────────────

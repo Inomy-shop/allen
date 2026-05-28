@@ -15,6 +15,9 @@ import type {
   LogCategory,
   LogLevel,
   WorkflowFeedbackEntry,
+  HumanField,
+  HumanResumeInput,
+  ResumeContext,
 } from './types.js';
 import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-executor.js';
 import { evaluateCondition } from './condition-parser.js';
@@ -22,6 +25,16 @@ import { renderTemplate, renderTemplateWithBindings, collectPlaceholders } from 
 import { mergeParallelOutputs } from './parallel.js';
 import { extractAutoGateFields, buildNodeContext } from './output-extractor.js';
 import { needsSynthesis, synthesizeClarifyContext } from './clarify-synthesizer.js';
+import {
+  appendHumanEvent,
+  buildHumanEvent,
+  buildHumanResumeInput,
+  buildRetryExhaustionContext,
+  renderClarifyIntervention,
+  renderHumanHistory,
+  renderHumanIntervention,
+  renderHumanResumePrompt,
+} from './human-intervention.js';
 import { StateManager } from './state-manager.js';
 import { LearningManager, type ExtractionContext } from './learning-manager.js';
 import type { Db } from 'mongodb';
@@ -69,6 +82,10 @@ function hasMeaningfulRepoContextUsage(value: unknown): boolean {
     const current = record[key];
     return Array.isArray(current) ? current.length > 0 : current != null && current !== '';
   });
+}
+
+function humanizeStateKey(value: string): string {
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export class AllenEngine {
@@ -130,7 +147,12 @@ export class AllenEngine {
       workflowVersion: workflow.version ?? 1,
       status: 'running',
       input,
-      state: { ...input },
+      state: {
+        ...input,
+        inputs: { ...input },
+        nodes: {},
+        human: {},
+      },
       sessions: {},
       retryCounts: {},
       feedbackEntries: [],
@@ -338,8 +360,30 @@ export class AllenEngine {
     const state = checkpoint
       ? ({ ...checkpoint.state } as Record<string, unknown>)
       : { ...(existing.input ?? {}) };
+    if (existing.state && typeof existing.state === 'object') {
+      for (const key of ['__retry_target', '__retry_source', '__retry_attempt', 'human_input', 'resume_context']) {
+        if (Object.prototype.hasOwnProperty.call(existing.state, key)) {
+          state[key] = (existing.state as Record<string, unknown>)[key];
+        }
+      }
+      if (existing.state.nodes && typeof existing.state.nodes === 'object' && !Array.isArray(existing.state.nodes)) {
+        state.nodes = existing.state.nodes;
+      }
+      if (existing.state.human && typeof existing.state.human === 'object' && !Array.isArray(existing.state.human)) {
+        state.human = existing.state.human;
+      }
+      if (existing.state.inputs && typeof existing.state.inputs === 'object' && !Array.isArray(existing.state.inputs)) {
+        state.inputs = existing.state.inputs;
+      }
+    }
     if (!checkpoint && existing.state?.__contextTags) {
       state.__contextTags = existing.state.__contextTags;
+    }
+    if (!state.resume_context && state.human_input && typeof state.human_input === 'object' && !Array.isArray(state.human_input)) {
+      const humanInput = state.human_input as HumanResumeInput;
+      if (typeof humanInput.sourceNode === 'string') {
+        state.resume_context = this.buildHumanResumeContext(humanInput, nodeName);
+      }
     }
     const exec: ExecutionState = {
       id: executionId,
@@ -697,6 +741,100 @@ ${lines.join('\n')}
 `;
   }
 
+  private ensureScopedState(state: Record<string, unknown>): {
+    inputs: Record<string, unknown>;
+    nodes: Record<string, Record<string, unknown>>;
+    human: Record<string, { latest?: HumanResumeInput; events: HumanResumeInput[] }>;
+  } {
+    if (!state.inputs || typeof state.inputs !== 'object' || Array.isArray(state.inputs)) {
+      state.inputs = {};
+    }
+    if (!state.nodes || typeof state.nodes !== 'object' || Array.isArray(state.nodes)) {
+      state.nodes = {};
+    }
+    if (!state.human || typeof state.human !== 'object' || Array.isArray(state.human)) {
+      state.human = {};
+    }
+    return {
+      inputs: state.inputs as Record<string, unknown>,
+      nodes: state.nodes as Record<string, Record<string, unknown>>,
+      human: state.human as Record<string, { latest?: HumanResumeInput; events: HumanResumeInput[] }>,
+    };
+  }
+
+  private writeNodeScopedOutput(state: Record<string, unknown>, nodeName: string, outputs: Record<string, unknown>): void {
+    const scoped = this.ensureScopedState(state);
+    const clean = { ...outputs };
+    delete clean.__waiting_for_input;
+    delete clean.__node;
+    scoped.nodes[nodeName] = clean;
+  }
+
+  private writeHumanScopedInput(
+    state: Record<string, unknown>,
+    nodeName: string,
+    humanInput: HumanResumeInput,
+    targetNode?: string,
+  ): HumanResumeInput[] {
+    const scoped = this.ensureScopedState(state);
+    const current = scoped.human[nodeName] ?? { events: [] };
+    const events = [...(Array.isArray(current.events) ? current.events : []), humanInput];
+    scoped.human[nodeName] = { latest: humanInput, events };
+    const history = events.slice(0, -1);
+    state.resume_context = this.buildHumanResumeContext(humanInput, targetNode, history);
+    return history;
+  }
+
+  private buildHumanResumeContext(
+    humanInput: HumanResumeInput,
+    targetNode?: string,
+    history: HumanResumeInput[] = [],
+  ): ResumeContext {
+    return {
+      type: humanInput.kind === 'clarify' ? 'human_input' : 'human_review_feedback',
+      sourceNode: humanInput.sourceNode,
+      targetNode,
+      attempt: history.length + 1,
+      humanInput,
+      retryExhaustion: humanInput.retryExhaustion,
+      history,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  private buildNodeFeedbackResumeContext(input: {
+    sourceNodes: string[];
+    targetNodes: string[];
+    attempt?: number;
+    retryContext?: string;
+    retryExhaustion?: ResumeContext['retryExhaustion'];
+    state: Record<string, unknown>;
+  }): ResumeContext {
+    const sourceNode = input.sourceNodes.join(',');
+    const scoped = this.ensureScopedState(input.state);
+    const fields: Array<{ name: string; label: string; value: unknown }> = [];
+    for (const node of input.sourceNodes) {
+      const outputs = scoped.nodes[node] ?? {};
+      for (const [key, value] of Object.entries(outputs)) {
+        if (key.startsWith('__') || value == null || value === '') continue;
+        if (!/(failure|error|verdict|blocked|blocker|violation|status|report|artifact_url|details|feedback)/i.test(key)) continue;
+        fields.push({ name: key, label: humanizeStateKey(key), value });
+      }
+    }
+    return {
+      type: input.retryExhaustion ? 'retry_exhausted' : 'node_feedback',
+      sourceNode,
+      targetNode: input.targetNodes.find((node) => node !== 'END'),
+      attempt: input.attempt,
+      nodeFeedback: {
+        summary: input.retryContext,
+        fields,
+      },
+      retryExhaustion: input.retryExhaustion,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
   // ── Post-Execution Review ──────────────────────────────────────────────────
 
   private async triggerPostExecutionReview(exec: ExecutionState): Promise<void> {
@@ -832,9 +970,9 @@ ${lines.join('\n')}
             const clarifyFields = exec.state.__clarify_fields as any[] | undefined;
 
             // Use agent-provided form fields, or fallback to single text input
-            const fields = Array.isArray(clarifyFields) && clarifyFields.length > 0
-              ? clarifyFields
-              : [{ name: 'clarification', type: 'text', label: 'Your response', required: true, placeholder: 'Type your answer here...' }];
+            const fields: HumanField[] = Array.isArray(clarifyFields) && clarifyFields.length > 0
+              ? clarifyFields as HumanField[]
+              : [{ name: 'clarification', type: 'text', label: 'Your response', required: true }];
             for (const f of fields) {
               const n = (f as { name?: unknown }).name;
               if (typeof n === 'string' && n && !n.startsWith('__')) {
@@ -855,6 +993,7 @@ ${lines.join('\n')}
                 node: nodeName,
                 prompt: reason,
                 fields,
+                intervention: renderClarifyIntervention(nodeName, reason, fields),
               },
             });
 
@@ -867,7 +1006,14 @@ ${lines.join('\n')}
 
             const humanData = await this.waitForInput(exec.id, nodeName);
             this.emit({ event: 'input_received', data: { node: nodeName, data: humanData } });
-            Object.assign(exec.state, humanData);
+            const intervention = renderClarifyIntervention(nodeName, reason, fields);
+            const humanInput = buildHumanResumeInput(intervention, humanData);
+            exec.state.human_input = humanInput;
+            this.writeHumanScopedInput(exec.state, nodeName, humanInput, clarifyAction === 'retry' ? nodeName : undefined);
+            appendHumanEvent(
+              exec.state,
+              buildHumanEvent(intervention, { human_input: humanInput }),
+            );
 
             // Learning system: DON'T extract from every human correction inline
             // Single clarification is routine — not worth a learning
@@ -915,11 +1061,9 @@ ${lines.join('\n')}
               exec.completedNodes = exec.completedNodes.filter(n => n !== nodeName);
               // Capture state before retry for delta extraction
               const preRetryState = { ...exec.state };
-              // Build retry context from all human-provided fields
-              const clarificationParts = Object.entries(humanData)
-                .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
-                .join('\n');
-              exec.state.retry_context = `Human provided:\n${clarificationParts}`;
+              exec.state.__retry_target = [nodeName];
+              exec.state.__retry_source = nodeName;
+              exec.state.__retry_attempt = clarifyCount + 1;
               // Re-run the same node immediately with the clarification
               gateAction = await this.executeSingleNode(nodeName, nodes[nodeName], exec, nestingDepth, edges, workflow);
 
@@ -936,7 +1080,7 @@ ${lines.join('\n')}
                   preRetryState,
                   exec.state,
                   retryDeltaCtx,
-                  exec.state.retry_context as string | undefined,
+                  renderHumanResumePrompt(humanInput),
                 );
                 if (retryLearning) {
                   this.learningManager.classifyAndStore(retryLearning).catch(() => {});
@@ -1209,6 +1353,12 @@ ${lines.join('\n')}
         data: { feedbackIds: applicableFeedbackEntries.map((entry) => entry.id) },
       });
     }
+    if (nodeType === 'agent') {
+      const humanHistory = renderHumanHistory(exec.state);
+      if (humanHistory) {
+        nodeContext = `${nodeContext}\n\n${humanHistory}\n`;
+      }
+    }
 
     // Create abort controller for this node — cancelled via cancelExecution()
     const ac = new AbortController();
@@ -1255,6 +1405,7 @@ ${lines.join('\n')}
 
       // Handle human node waiting
       if (result.outputs.__waiting_for_input) {
+        const intervention = renderHumanIntervention(nodeName, nodeDef, exec.state, workflow);
         exec.status = 'waiting_for_input';
         await this.stateManager.updateExecution(exec.id, {
           status: 'waiting_for_input',
@@ -1277,9 +1428,17 @@ ${lines.join('\n')}
         const humanData = await this.waitForInput(exec.id, nodeName);
         this.emit({ event: 'input_received', data: { node: nodeName, data: humanData } });
 
-        // Merge human input into state and outputs
-        Object.assign(exec.state, humanData);
-        Object.assign(result.outputs, humanData);
+        const humanInput = buildHumanResumeInput(intervention, humanData);
+        exec.state.human_input = humanInput;
+        this.writeHumanScopedInput(exec.state, nodeName, humanInput, humanInput.route?.targetNode);
+        appendHumanEvent(exec.state, buildHumanEvent(intervention, { human_input: humanInput }));
+        result.outputs.human_input = humanInput;
+        for (const field of humanInput.fields) {
+          if (nodeDef.outputs && Object.prototype.hasOwnProperty.call(nodeDef.outputs, field.name)) {
+            exec.state[field.name] = field.value;
+            result.outputs[field.name] = field.value;
+          }
+        }
         delete result.outputs.__waiting_for_input;
         delete result.outputs.__node;
 
@@ -1332,6 +1491,7 @@ ${lines.join('\n')}
 
       // Update state with outputs after context usage synthesis so downstream
       // nodes see repo_context_usage even when the agent omitted it.
+      this.writeNodeScopedOutput(exec.state, nodeName, result.outputs);
       Object.assign(exec.state, result.outputs);
 
       // If this node ran as the target of a retry edge, consume the retry
@@ -1341,6 +1501,8 @@ ${lines.join('\n')}
       const retryTargets = exec.state.__retry_target as string[] | undefined;
       if (Array.isArray(retryTargets) && retryTargets.includes(nodeName)) {
         delete exec.state.retry_context;
+        delete exec.state.human_input;
+        delete exec.state.resume_context;
         delete exec.state.__retry_target;
         delete exec.state.__retry_attempt;
         delete exec.state.__retry_source;
@@ -1979,6 +2141,9 @@ ${lines.join('\n')}
       delete outputs.__node;
       return { node: br.node, outputs };
     });
+    for (const result of cleanResults) {
+      this.writeNodeScopedOutput(exec.state, result.node, result.outputs);
+    }
     const merged = mergeParallelOutputs(cleanResults, edge.merge);
     Object.assign(exec.state, merged);
 
@@ -2165,6 +2330,15 @@ ${lines.join('\n')}
         const count = retryCounts[edgeKey] ?? 0;
         if (count >= edge.max_retries) {
           state.__retry_exhausted_from = fromNodes.join(',');
+          const retryTargets = Array.isArray(edge.to) ? edge.to : [edge.to];
+          state.__retry_exhaustion = buildRetryExhaustionContext({
+            exhaustedFrom: fromNodes.join(','),
+            retryEdgeKey: edgeKey,
+            attemptsUsed: count,
+            maxRetries: edge.max_retries,
+            retryTarget: retryTargets.find((target) => target !== 'END'),
+            state,
+          });
           if (executionId) {
             this.log(executionId, {
               category: 'condition',
@@ -2201,6 +2375,14 @@ ${lines.join('\n')}
         state.__retry_target = targetNodes;
         state.__retry_source = fromNodes.join(',');
         state.__retry_attempt = attemptForDisplay ?? 1;
+        state.resume_context = this.buildNodeFeedbackResumeContext({
+          sourceNodes: fromNodes,
+          targetNodes,
+          attempt: attemptForDisplay ?? 1,
+          retryContext: rendered,
+          retryExhaustion: state.__retry_exhaustion as ResumeContext['retryExhaustion'],
+          state,
+        });
 
         // ── Human-override path (Fix C) ────────────────────────────────
         //
@@ -2226,6 +2408,7 @@ ${lines.join('\n')}
             }
           }
           delete state.__retry_exhausted_from;
+          delete state.__retry_exhaustion;
         }
 
         const targetNode = targetNodes[0];

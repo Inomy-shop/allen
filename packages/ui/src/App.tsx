@@ -1,21 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import NotificationBell from './components/common/NotificationBell';
+import ShortcutKey from './components/common/ShortcutKey';
 import {
-  GitBranch, Play, Users, Settings,
-  FolderGit2, MessageSquare,
-  ChevronRight, ChevronLeft,
-  GitPullRequest, Ticket, LogOut,
-  Sun, Moon, Search, PanelLeft, Command, ArrowRight,
-  Sparkles,
+  CirclePlay, GitBranch, GitPullRequest, History, LayoutDashboard, Settings,
+  FolderGit2, TicketCheck, Workflow,
+  ChevronRight,
+  Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
+  SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
 import { useAuthStore } from './stores/authStore';
 import { BRAND_NAME } from './lib/brand';
 import {
-  auth as authApi,
   chat as chatApi,
   dashboard as dashboardApi,
   executions as executionsApi,
@@ -32,7 +31,13 @@ interface NavItem {
   badgeKey?: keyof NavCounts;
   activePrefixes?: string[];
   end?: boolean;
-  children?: Array<{ to: string; label: string }>;
+}
+
+interface NavGroup {
+  id: string;
+  label?: string;
+  collapsible?: boolean;
+  items: NavItem[];
 }
 
 interface CommandItem {
@@ -52,49 +57,52 @@ interface NavCounts {
   activity?: number;
 }
 
-// ── Nav Groups (prototype direction: personal work, sources, org) ──
+// ── Nav Groups (Allen design system: primary actions, sources, studio) ──
 
-const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
-  { label: '', items: [
-    { to: '/', icon: Sparkles, label: 'new chat', badgeKey: 'mywork', end: true },
-    { to: '/executions', icon: Play, label: 'executions', badgeKey: 'activity', activePrefixes: ['/executions'] },
-    { to: '/chats', icon: MessageSquare, label: 'chats', badgeKey: 'chats', activePrefixes: ['/chats', '/chat'] },
+const NAV_GROUPS: NavGroup[] = [
+  { id: 'primary', items: [
+    { to: '/', icon: LayoutDashboard, label: 'Dashboard', badgeKey: 'mywork', end: true },
+    { to: '/executions', icon: CirclePlay, label: 'Executions', badgeKey: 'activity', activePrefixes: ['/executions'] },
+    { to: '/chats', icon: History, label: 'History', badgeKey: 'chats', activePrefixes: ['/chats', '/chat'] },
   ]},
-  { label: 'Sources', items: [
-    { to: '/tickets', icon: Ticket, label: 'tickets', badgeKey: 'tickets' },
-    { to: '/pull-requests', icon: GitPullRequest, label: 'pull requests', badgeKey: 'pulls' },
-    { to: '/workspaces', icon: FolderGit2, label: 'workspaces', badgeKey: 'workspaces' },
+  { id: 'sources', label: 'Sources', collapsible: true, items: [
+    { to: '/tickets', icon: TicketCheck, label: 'Linear', badgeKey: 'tickets' },
+    { to: '/pull-requests', icon: GitPullRequest, label: 'Pull requests', badgeKey: 'pulls' },
+    { to: '/agents?section=repos', icon: GitBranch, label: 'Repositories' },
+    { to: '/workspaces', icon: FolderGit2, label: 'Workspaces', badgeKey: 'workspaces' },
   ]},
-  { label: 'Org', items: [
-    {
-      to: '/agents',
-      icon: Users,
-      label: 'library',
-      activePrefixes: ['/agents', '/repos'],
-      children: [
-        { to: '/agents?section=teams-agents', label: 'teams & agents' },
-        { to: '/agents?section=skills', label: 'skills' },
-        { to: '/agents?section=repos', label: 'repos' },
-        { to: '/agents?section=integrations', label: 'integrations' },
-      ],
-    },
-    { to: '/workflows', icon: GitBranch, label: 'workflows', activePrefixes: ['/workflows'] },
+  { id: 'studio', label: 'Studio', collapsible: true, items: [
+    { to: '/agents?section=teams-agents', icon: UsersRound, label: 'Teams & Agents' },
+    { to: '/workflows', icon: Workflow, label: 'Workflows', activePrefixes: ['/workflows'] },
   ]},
-  { label: 'Personal', items: [
-    { to: '/settings', icon: Settings, label: 'settings', activePrefixes: ['/settings'] },
+];
+
+const SETTINGS_NAV_GROUPS: NavGroup[] = [
+  { id: 'settings-primary', items: [
+    { to: '/settings/general', icon: SlidersHorizontal, label: 'General', activePrefixes: ['/settings/general'], end: true },
+    { to: '/settings/runtime', icon: HardDrive, label: 'Runtime', activePrefixes: ['/settings/runtime'] },
+    { to: '/settings/mcp', icon: Server, label: 'MCP Servers', activePrefixes: ['/settings/mcp'] },
+  ]},
+  { id: 'settings-allen', label: 'Allen', items: [
+    { to: '/settings/schedules', icon: CalendarClock, label: 'Schedules', activePrefixes: ['/settings/schedules'] },
+    { to: '/settings/learnings', icon: Brain, label: 'Learnings', activePrefixes: ['/settings/learnings'] },
+    { to: '/settings/team', icon: UsersRound, label: 'Team', activePrefixes: ['/settings/team'] },
+  ]},
+  { id: 'settings-account', label: 'User', items: [
+    { to: '/settings/account', icon: CircleUserRound, label: 'Account', activePrefixes: ['/settings/account'] },
   ]},
 ];
 
 const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
-  { prefix: '/chats', label: 'Chats' },
-  { prefix: '/threads', label: 'Chats' },
+  { prefix: '/chats', label: 'History' },
+  { prefix: '/threads', label: 'History' },
   { prefix: '/chat', label: 'Chat' },
   { prefix: '/interventions', label: 'Interventions' },
-  { prefix: '/tickets', label: 'Tickets' },
+  { prefix: '/tickets', label: 'Linear' },
   { prefix: '/pull-requests', label: 'Pull requests' },
   { prefix: '/repos', label: 'Repositories' },
   { prefix: '/workspaces', label: 'Workspaces' },
-  { prefix: '/agents', label: 'Library' },
+  { prefix: '/agents', label: 'Studio' },
   { prefix: '/workflows', label: 'Workflows' },
   { prefix: '/executions', label: 'Executions' },
   { prefix: '/crons', label: 'Schedules' },
@@ -104,24 +112,27 @@ const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
 ];
 
 const COMMANDS: CommandItem[] = [
-  { id: 'my-work', label: 'Go to new chat', group: 'Navigate', to: '/', icon: Sparkles },
-  { id: 'executions', label: 'Open executions', group: 'Navigate', to: '/executions', icon: Play },
-  { id: 'chats', label: 'Open chats', group: 'Navigate', to: '/chats', icon: MessageSquare },
-  { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: MessageSquare },
-  { id: 'activity', label: 'View execution log', group: 'Executions', to: '/executions', icon: Play },
-  { id: 'running', label: 'View running executions', group: 'Executions', to: '/executions?status=running', icon: Play },
-  { id: 'tickets', label: 'Open Linear tickets', group: 'Sources', to: '/tickets', icon: Ticket },
+  { id: 'dashboard', label: 'Open dashboard', group: 'Navigate', to: '/', icon: LayoutDashboard },
+  { id: 'executions', label: 'Open executions', group: 'Navigate', to: '/executions', icon: CirclePlay },
+  { id: 'chats', label: 'Open history', group: 'Navigate', to: '/chats', icon: History },
+  { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: History },
+  { id: 'activity', label: 'View execution log', group: 'Executions', to: '/executions', icon: CirclePlay },
+  { id: 'running', label: 'View running executions', group: 'Executions', to: '/executions?status=running', icon: CirclePlay },
+  { id: 'tickets', label: 'Open Linear', group: 'Sources', to: '/tickets', icon: TicketCheck },
   { id: 'pulls', label: 'Open pull requests', group: 'Sources', to: '/pull-requests', icon: GitPullRequest },
-  { id: 'workspaces', label: 'Open workspaces', group: 'Code', to: '/workspaces', icon: FolderGit2 },
-  { id: 'schedules', label: 'Open scheduled jobs', group: 'Settings', to: '/settings/schedules', icon: Settings },
-  { id: 'analytics', label: 'Open analytics', group: 'Settings', to: '/settings/analytics', icon: Settings },
-  { id: 'learnings', label: 'Open learnings', group: 'Settings', to: '/settings/learnings', icon: Settings },
-  { id: 'workflows', label: 'Open workflows', group: 'Library', to: '/workflows', icon: GitBranch },
-  { id: 'agents', label: 'Open agents and teams', group: 'Library', to: '/agents', icon: Users },
+  { id: 'repos', label: 'Open repositories', group: 'Sources', to: '/agents?section=repos', icon: GitBranch },
+  { id: 'workspaces', label: 'Open workspaces', group: 'Sources', to: '/workspaces', icon: FolderGit2 },
+  { id: 'settings-general', label: 'Open settings', group: 'Settings', to: '/settings/general', icon: SlidersHorizontal },
+  { id: 'settings-runtime', label: 'Open runtime settings', group: 'Settings', to: '/settings/runtime', icon: HardDrive },
+  { id: 'settings-mcp', label: 'Open MCP servers', group: 'Settings', to: '/settings/mcp', icon: Server },
+  { id: 'settings-schedules', label: 'Open schedules', group: 'Settings', to: '/settings/schedules', icon: CalendarClock },
+  { id: 'settings-learnings', label: 'Open learnings', group: 'Settings', to: '/settings/learnings', icon: Brain },
+  { id: 'workflows', label: 'Open workflows', group: 'Studio', to: '/workflows', icon: Workflow },
+  { id: 'agents', label: 'Open teams & agents', group: 'Studio', to: '/agents?section=teams-agents', icon: UsersRound },
 ];
 
 function routeTitle(pathname: string): string {
-  if (pathname === '/') return 'New Chat';
+  if (pathname === '/') return 'Dashboard';
   const match = ROUTE_TITLES.find(route => pathname.startsWith(route.prefix));
   return match?.label ?? 'Allen';
 }
@@ -136,22 +147,30 @@ function AppTopbar({
   title,
   detail,
   liveCount,
+  approvalCount,
   healthy,
   commandOpen,
   onCommandOpen,
   onRunningOpen,
+  onApprovalsOpen,
   onSidebarToggle,
+  onBack,
+  canGoBack,
   colorMode,
   onColorModeToggle,
 }: {
   title: string;
   detail?: string | null;
   liveCount: number;
+  approvalCount: number;
   healthy: boolean;
   commandOpen: boolean;
   onCommandOpen: () => void;
   onRunningOpen: () => void;
+  onApprovalsOpen: () => void;
   onSidebarToggle: () => void;
+  onBack: () => void;
+  canGoBack: boolean;
   colorMode: 'light' | 'dark';
   onColorModeToggle: () => void;
 }) {
@@ -160,11 +179,22 @@ function AppTopbar({
       <button
         type="button"
         onClick={onSidebarToggle}
-        className="btn ghost sm"
+        className="foot-btn topbar-icon-btn"
         title="Toggle sidebar"
         aria-label="Toggle sidebar"
       >
         <PanelLeft className="h-4 w-4" />
+      </button>
+
+      <button
+        type="button"
+        onClick={onBack}
+        disabled={!canGoBack}
+        className="foot-btn topbar-icon-btn disabled:cursor-not-allowed disabled:opacity-40"
+        title="Go back"
+        aria-label="Go back"
+      >
+        <ArrowLeft className="h-4 w-4" />
       </button>
 
       <div className="crumb">
@@ -181,19 +211,28 @@ function AppTopbar({
 
       <div className="spacer" />
 
-      <div className="hidden items-center gap-1.5 md:flex">
+      <div className="topbar-status hidden md:flex">
         <button
           type="button"
           onClick={onRunningOpen}
-          className="chip"
+          className="chip topbar-chip"
           title="Active runs across all workspaces"
         >
           <span className={`dot ${liveCount > 0 ? 'dot-run' : 'dot-idle'} ${liveCount > 0 ? 'animate-pulse' : ''}`} />
-          {liveCount} live
+          {liveCount} running
         </button>
-        <span className={healthy ? 'chip chip-ok' : 'chip chip-warn'}>
+        <button
+          type="button"
+          onClick={onApprovalsOpen}
+          className="chip topbar-chip"
+          title="Pending approvals and questions"
+        >
+          <span className={`dot ${approvalCount > 0 ? 'dot-warn' : 'dot-idle'}`} />
+          {approvalCount} approvals
+        </button>
+        <span className={healthy ? 'chip topbar-chip chip-ok' : 'chip topbar-chip chip-warn'}>
           <span className={healthy ? 'dot dot-ok' : 'dot dot-warn'} />
-          {healthy ? 'healthy' : 'checking'}
+          {healthy ? 'Connected' : 'Reconnecting'}
         </span>
       </div>
 
@@ -205,13 +244,13 @@ function AppTopbar({
       >
         <Search className="h-3.5 w-3.5" />
         <span className="flex-1">Search or run command</span>
-        <kbd>⌘K</kbd>
+        <ShortcutKey value="⌘K" />
       </button>
 
       <button
         type="button"
         onClick={onColorModeToggle}
-        className="btn ghost sm"
+        className="foot-btn topbar-icon-btn"
         title={`Switch to ${colorMode === 'dark' ? 'light' : 'dark'} mode`}
         aria-label="Toggle theme"
       >
@@ -298,7 +337,7 @@ function ShellCommandPalette({
             placeholder="Search navigation and actions..."
             className="flex-1 bg-transparent text-[14px] text-theme-primary outline-none placeholder:text-theme-subtle"
           />
-          <kbd className="rounded border border-app bg-app-muted px-1.5 py-0.5 font-mono text-[10px] text-theme-subtle">esc</kbd>
+          <ShortcutKey value="esc" className="h-5 min-w-[30px]" />
         </div>
         <div className="max-h-[360px] overflow-y-auto py-2">
           {filtered.length === 0 ? (
@@ -343,13 +382,7 @@ function formatNavBadge(value?: number): string | null {
   return String(value);
 }
 
-function isNavItemActive(item: NavItem, pathname: string, isActive: boolean): boolean {
-  if (item.end) return pathname === item.to;
-  if (item.activePrefixes?.some(prefix => pathname.startsWith(prefix))) return true;
-  return isActive;
-}
-
-function isNavChildActive(to: string, location: ReturnType<typeof useLocation>): boolean {
+function navTargetMatches(to: string, location: ReturnType<typeof useLocation>): boolean {
   const [path, query = ''] = to.split('?');
   if (location.pathname !== path) return false;
   if (!query) return true;
@@ -362,44 +395,39 @@ function isNavChildActive(to: string, location: ReturnType<typeof useLocation>):
   return true;
 }
 
+function isNavItemActive(
+  item: NavItem,
+  location: ReturnType<typeof useLocation>,
+  isActive = false,
+): boolean {
+  if (navTargetMatches(item.to, location)) return true;
+  if (item.end) return location.pathname === item.to;
+  if (item.activePrefixes?.some(prefix => location.pathname.startsWith(prefix))) return true;
+  if (item.to.includes('?')) return false;
+  return isActive;
+}
+
+function isNavGroupActive(group: NavGroup, location: ReturnType<typeof useLocation>): boolean {
+  return group.items.some(item => isNavItemActive(item, location));
+}
+
 // ── Main App ──
 
 export default function App() {
-  const initSettings = useSettingsStore((s) => s.initFromLocalStorage);
-  const addSystemThemeListener = useSettingsStore((s) => s.addSystemThemeListener);
-  useEffect(() => { initSettings(); }, [initSettings]);
-
-  useEffect(() => {
-    const cleanup = addSystemThemeListener();
-    return cleanup;
-  }, [addSystemThemeListener]);
-
   const location = useLocation();
   const navigate = useNavigate();
   const title = routeTitle(location.pathname);
-  const [expandedNav, setExpandedNav] = useState<Record<string, boolean>>(() => ({
-    '/agents': location.pathname.startsWith('/agents'),
-  }));
+  const [expandedNav, setExpandedNav] = useState<Record<string, boolean>>({});
   const [chatTopbarTitle, setChatTopbarTitle] = useState<string | null>(null);
   const detail = routeDetail(location.pathname, chatTopbarTitle);
   const [commandOpen, setCommandOpen] = useState(false);
   const [liveCount, setLiveCount] = useState(0);
+  const [approvalCount, setApprovalCount] = useState(0);
   const [healthKnown, setHealthKnown] = useState(false);
   const [navCounts, setNavCounts] = useState<NavCounts>({});
+  const [canGoBack, setCanGoBack] = useState(false);
 
   const currentUser = useAuthStore((s) => s.user);
-  const refreshToken = useAuthStore((s) => s.refreshToken);
-  const clearAuth = useAuthStore((s) => s.clear);
-
-  async function handleLogout() {
-    try {
-      if (refreshToken) await authApi.logout(refreshToken);
-    } catch {
-      // ignore — clear locally regardless
-    }
-    clearAuth();
-    navigate('/login', { replace: true });
-  }
 
   // Initials for the avatar tile
   const userInitial = currentUser?.name?.charAt(0)?.toUpperCase()
@@ -415,12 +443,21 @@ export default function App() {
   const toggleColorMode = () => setColorMode(resolvedMode === 'dark' ? 'light' : 'dark');
 
   useEffect(() => {
+    const index = window.history.state?.idx;
+    setCanGoBack(typeof index === 'number' ? index > 0 : window.history.length > 1);
+  }, [location.key]);
+
+  useEffect(() => {
     let cancelled = false;
     async function loadLiveCount() {
       try {
-        const { count } = await executionsApi.count({ status: ['running', 'queued'] });
+        const [{ count }, pending] = await Promise.all([
+          executionsApi.count({ status: ['running', 'queued'] }),
+          interventionsApi.list({ status: 'pending', limit: 100 }),
+        ]);
         if (cancelled) return;
         setLiveCount(count ?? 0);
+        setApprovalCount(pending.length ?? 0);
         setHealthKnown(true);
       } catch {
         if (!cancelled) setHealthKnown(false);
@@ -507,6 +544,12 @@ export default function App() {
   }, [currentUser?.id]);
 
   useEffect(() => {
+    const activeGroup = NAV_GROUPS.find(group => group.collapsible && isNavGroupActive(group, location));
+    if (!activeGroup) return;
+    setExpandedNav(prev => prev[activeGroup.id] ? prev : { ...prev, [activeGroup.id]: true });
+  }, [location.pathname, location.search]);
+
+  useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
@@ -520,52 +563,128 @@ export default function App() {
   const navPanel = usePanelLayout({
     storageKey: 'app-nav',
     direction: 'horizontal',
-    defaultSize: 228,
-    minSize: 180,
-    maxSize: 320,
+    defaultSize: 264,
+    minSize: 236,
+    maxSize: 360,
   });
 
-  const toggleNavSection = (item: NavItem) => {
-    const isActiveSection = isNavItemActive(item, location.pathname, location.pathname === item.to);
-    setExpandedNav(prev => ({ ...prev, [item.to]: !prev[item.to] }));
-    if (!isActiveSection) navigate(item.to);
+  const toggleNavGroup = (groupId: string) => {
+    setExpandedNav(prev => ({ ...prev, [groupId]: !prev[groupId] }));
   };
 
+  const isSettingsRoute = location.pathname.startsWith('/settings');
+  const shellNavState = navPanel.collapsed && !isSettingsRoute ? 'nav-collapsed' : 'nav-expanded';
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${shellNavState} ${isSettingsRoute ? 'settings-shell' : ''}`}>
       {/* Navigation sidebar — collapsible and resizable */}
-      {navPanel.collapsed ? (
-        <div className="sidebar sidebar-icon">
-          <button
-            onClick={navPanel.toggle}
-            className="brand-mark"
-            title="Expand navigation"
-            aria-label="Expand navigation"
-          >
-            [a]
-          </button>
-          {NAV_GROUPS.flatMap(g => g.items).map(item => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }: { isActive: boolean }) =>
-                `relative rounded-md p-2 transition-colors ${
-                  isNavItemActive(item, location.pathname, isActive)
-                    ? 'border border-accent/20 bg-accent-soft text-accent'
-                    : 'border border-transparent text-theme-muted hover:bg-app-muted hover:text-theme-primary'
-                }`
-              }
-              title={item.label}
-              aria-label={item.label}
+      {isSettingsRoute ? (
+        <nav className="sidebar settings-mode-sidebar">
+          <div className="settings-mode-head">
+            <button
+              type="button"
+              className="settings-back-button"
+              onClick={() => navigate('/')}
             >
-              <item.icon className="w-4 h-4" />
-              {formatNavBadge(item.badgeKey ? navCounts[item.badgeKey] : undefined) && (
-                <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-accent" />
-              )}
+              <ArrowLeft className="h-4 w-4" />
+              <span>Back to app</span>
+            </button>
+          </div>
+
+          <div className="sidebar-inner settings-mode-inner scroll-hide">
+            {SETTINGS_NAV_GROUPS.map(group => (
+              <div key={group.id} className="settings-mode-group">
+                {group.label && <div className="settings-mode-label">{group.label}</div>}
+                <div className="settings-mode-items">
+                  {group.items
+                    .filter(item => item.to !== '/settings/team' || currentUser?.role === 'admin')
+                    .map(item => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      end={item.end}
+                      className={({ isActive }) =>
+                        `settings-mode-item ${
+                          isNavItemActive(item, location, isActive)
+                          || (item.to === '/settings/general' && location.pathname === '/settings')
+                            ? 'active'
+                            : ''
+                        }`
+                      }
+                    >
+                      <item.icon className="ico" />
+                      <span>{item.label}</span>
+                    </NavLink>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </nav>
+      ) : navPanel.collapsed ? (
+        <div className="sidebar sidebar-icon">
+          <div className="brand brand-collapsed">
+            <button
+              onClick={navPanel.toggle}
+              className="brand-mark"
+              title="Expand navigation"
+              aria-label="Expand navigation"
+            >
+              [a]
+            </button>
+          </div>
+          <div className="sidebar-inner scroll-hide">
+            {NAV_GROUPS.map(group => {
+              const groupOpen = !group.collapsible || Boolean(expandedNav[group.id]);
+              const groupActive = group.collapsible && isNavGroupActive(group, location);
+
+              return (
+                <div key={group.id} className="nav-group">
+                  {group.label && group.collapsible && (
+                    <button
+                      type="button"
+                      className={`nav-group-toggle nav-group-toggle-icon ${groupActive ? 'active' : ''}`}
+                      aria-expanded={groupOpen}
+                      onClick={() => toggleNavGroup(group.id)}
+                      aria-label={group.label}
+                      data-sidebar-tooltip={group.label}
+                    >
+                      <ChevronRight className={`nav-caret ${groupOpen ? 'open' : ''}`} />
+                    </button>
+                  )}
+
+                  {groupOpen && (
+                    <div className="nav-group-items">
+                      {group.items.map(item => (
+                        <NavLink
+                          key={item.to}
+                          to={item.to}
+                          end={item.end ?? item.to === '/'}
+                          className={({ isActive }) =>
+                            `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`
+                          }
+                          aria-label={item.label}
+                          data-sidebar-tooltip={item.label}
+                        >
+                          <item.icon className="ico" />
+                          <span className="lbl">{item.label}</span>
+                        </NavLink>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="sidebar-foot-wrap sidebar-foot-icon">
+            <NavLink
+              to="/settings/general"
+              className="foot-btn"
+              aria-label="Settings"
+              data-sidebar-tooltip="Settings"
+            >
+              <Settings className="w-4 h-4" />
             </NavLink>
-          ))}
-          <div className="mt-auto">
             <button
               onClick={navPanel.toggle}
               className="foot-btn"
@@ -587,79 +706,57 @@ export default function App() {
               </div>
               <span className="brand-name">{BRAND_NAME}</span>
             </NavLink>
-            <span className="brand-sub">v0.2</span>
-            <button
-              onClick={navPanel.toggle}
-              className="foot-btn"
-              title="Collapse navigation"
-              aria-label="Collapse navigation"
-            >
-              <ChevronLeft className="w-3.5 h-3.5" />
-            </button>
+            <span className="brand-sub">v0.1.0</span>
           </div>
 
           {/* Nav groups */}
           <div className="sidebar-inner scroll-hide">
-            {NAV_GROUPS.map((group, gi) => (
-              <div key={gi} className="nav-group">
-                {group.label && (
-                  <div className="nav-group-title">{group.label}</div>
-                )}
-                {group.items.map(item => (
-                  <div key={item.to}>
-                    {item.children ? (
-                      <button
-                        type="button"
-                        className={`nav-item nav-accordion ${
-                          isNavItemActive(item, location.pathname, location.pathname === item.to) ? 'active' : ''
-                        }`}
-                        aria-expanded={Boolean(expandedNav[item.to])}
-                        onClick={() => toggleNavSection(item)}
-                      >
-                        <item.icon className="ico" />
-                        <span className="lbl">{item.label}</span>
-                        <ChevronRight className={`nav-caret ${expandedNav[item.to] ? 'open' : ''}`} />
-                      </button>
-                    ) : (
-                      <NavLink
-                        to={item.to}
-                        end={item.end ?? item.to === '/'}
-                        className={({ isActive }) =>
-                          `nav-item ${
-                            isNavItemActive(item, location.pathname, isActive)
-                              ? 'active'
-                              : ''
-                          }`
-                        }
-                      >
-                        <>
-                          <item.icon className="ico" />
-                          <span className="lbl">{item.label}</span>
-                          {formatNavBadge(item.badgeKey ? navCounts[item.badgeKey] : undefined) && (
-                            <span className="badge">
-                              {formatNavBadge(item.badgeKey ? navCounts[item.badgeKey] : undefined)}
-                            </span>
-                          )}
-                        </>
-                      </NavLink>
-                    )}
-                    {item.children && expandedNav[item.to] && (
-                      <div className="nav-sublist">
-                        {item.children.map(child => (
-                          <Link
-                            key={child.to}
-                            to={child.to}
-                            className={`nav-subitem ${isNavChildActive(child.to, location) ? 'active' : ''}`}
+            {NAV_GROUPS.map(group => {
+              const groupOpen = !group.collapsible || Boolean(expandedNav[group.id]);
+              const groupActive = group.collapsible && isNavGroupActive(group, location);
+
+              return (
+                <div key={group.id} className="nav-group">
+                  {group.label && group.collapsible && (
+                    <button
+                      type="button"
+                      className={`nav-group-toggle ${groupActive ? 'active' : ''}`}
+                      aria-expanded={groupOpen}
+                      onClick={() => toggleNavGroup(group.id)}
+                    >
+                      <span>{group.label}</span>
+                      <ChevronRight className={`nav-caret ${groupOpen ? 'open' : ''}`} />
+                    </button>
+                  )}
+
+                  {groupOpen && (
+                    <div className="nav-group-items">
+                      {group.items.map(item => {
+                        const badge = formatNavBadge(item.badgeKey ? navCounts[item.badgeKey] : undefined);
+                        return (
+                          <NavLink
+                            key={item.to}
+                            to={item.to}
+                            end={item.end ?? item.to === '/'}
+                            className={({ isActive }) =>
+                              `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`
+                            }
                           >
-                            {child.label}
-                          </Link>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ))}
+                            <item.icon className="ico" />
+                            <span className="lbl">{item.label}</span>
+                            {badge && (
+                              <span className="badge">
+                                {badge}
+                              </span>
+                            )}
+                          </NavLink>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           {/* Bottom — user chip + version */}
@@ -673,14 +770,23 @@ export default function App() {
                   <div className="nm">{currentUser.name}</div>
                   <div className="em">{currentUser.email}</div>
                 </div>
-                <button
-                  onClick={handleLogout}
+                <NavLink
+                  to="/settings/general"
                   className="foot-btn"
-                  title="Sign out"
+                  title="Settings"
                 >
-                  <LogOut className="w-3.5 h-3.5" />
-                </button>
+                  <Settings className="w-3.5 h-3.5" />
+                </NavLink>
               </div>
+            )}
+            {!currentUser && (
+              <NavLink
+                to="/settings/general"
+                className={({ isActive }) => `nav-item sidebar-settings-link ${isActive ? 'active' : ''}`}
+              >
+                <Settings className="ico" />
+                <span className="lbl">Settings</span>
+              </NavLink>
             )}
           </div>
         </nav>
@@ -691,11 +797,15 @@ export default function App() {
           title={title}
           detail={detail}
           liveCount={liveCount}
+          approvalCount={approvalCount}
           healthy={healthKnown}
           commandOpen={commandOpen}
           onCommandOpen={() => setCommandOpen(true)}
           onRunningOpen={() => navigate('/executions?status=running')}
+          onApprovalsOpen={() => navigate('/interventions')}
           onSidebarToggle={navPanel.toggle}
+          onBack={() => navigate(-1)}
+          canGoBack={canGoBack}
           colorMode={resolvedMode}
           onColorModeToggle={toggleColorMode}
         />

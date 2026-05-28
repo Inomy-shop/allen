@@ -103,16 +103,44 @@ async function resolveExecutable(command: string, options?: {
   return candidates[0] ?? null;
 }
 
-function checkNode(): SystemHealthCheck {
-  const major = Number(process.versions.node.split('.')[0] ?? 0);
+async function checkNode(): Promise<SystemHealthCheck> {
+  let version = process.version;
+  let detailRuntime = 'Node runtime';
+
+  if (process.env.ALLEN_DESKTOP === '1') {
+    const executable = await resolveExecutable('node', { skipNodeModulesBin: true });
+    if (!executable) {
+      return {
+        id: 'node',
+        label: 'Node.js',
+        required: true,
+        status: 'fail',
+        version: process.version,
+        detail: `Allen Desktop is running inside Electron's embedded Node ${process.version}, but workflows need a Node.js 22+ command on PATH.`,
+        fix: {
+          summary: 'Install Node.js 22 or newer, then restart Allen Desktop from an environment where node is on PATH.',
+          commands: ['nvm install 22 && nvm use 22'],
+          docsPath: 'README.md',
+        },
+      };
+    }
+
+    const result = await runCommand(executable, ['--version'], 2000);
+    if (result.ok && result.stdout.trim()) {
+      version = result.stdout.trim();
+      detailRuntime = `Node command at ${executable}`;
+    }
+  }
+
+  const major = Number(version.replace(/^v/, '').split('.')[0] ?? 0);
   const ok = major >= 22;
   return {
     id: 'node',
     label: 'Node.js',
     required: true,
     status: ok ? 'pass' : 'fail',
-    version: process.version,
-    detail: ok ? 'Node runtime is compatible.' : 'Allen requires Node.js 22 or newer.',
+    version,
+    detail: ok ? `${detailRuntime} is compatible.` : 'Allen requires Node.js 22 or newer.',
     fix: ok ? undefined : {
       summary: 'Install Node.js 22 or newer, then restart Allen.',
       commands: ['nvm install 22 && nvm use 22'],
@@ -305,7 +333,7 @@ export async function runSystemHealth(db?: Db): Promise<SystemHealthSummary> {
   // missing Claude (and vice versa); preserve mode keeps both required.
   const llm = getRequiredProviders();
   const checks = await Promise.all([
-    Promise.resolve(checkNode()),
+    checkNode(),
     checkVersionCommand({
       id: 'npm',
       label: 'npm',

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bot, AlertCircle, AlertTriangle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
   Sparkles, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
@@ -102,6 +102,23 @@ type ChatDiffSnapshot = {
   workspaceName?: string | null;
   files?: ChatDiffFile[];
 };
+
+type ExecutionLifecycleEvent = {
+  key: string;
+  executionId: string;
+  sourceMessageId?: string;
+  kind: 'agent' | 'workflow';
+  status: 'started' | 'completed' | 'failed' | 'cancelled' | 'needs_input';
+  name: string;
+  detail?: string;
+  timestamp: string;
+  timeMs: number;
+};
+
+type ChatTimelineItem =
+  | { type: 'message'; key: string; message: ChatMessage; index: number; timeMs: number }
+  | { type: 'message-part'; key: string; message: ChatMessage; index: number; part: 'thinking' | 'response'; timeMs: number }
+  | { type: 'execution-event'; key: string; event: ExecutionLifecycleEvent; timeMs: number };
 
 /* ── Copy button for code blocks ─────────────────────────────────────────── */
 function CopyButton({ text }: { text: string }) {
@@ -216,6 +233,309 @@ function formatTimestampTitle(dateStr?: string): string {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+function isoFromMs(ms: number): string {
+  return new Date(ms).toISOString();
+}
+
+function timestampMs(value?: string | number | Date | null): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number') {
+    const ms = value < 1_000_000_000_000 ? value * 1000 : value;
+    return Number.isFinite(ms) ? ms : null;
+  }
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function firstActivityMs(run: SpawnedAgent): number | null {
+  const values = [
+    ...(run.runContext?.recentActivity ?? []).map((item: any) => timestampMs(item.at ?? item.timestamp)),
+    ...run.activity.map(item => timestampMs(item.timestamp)),
+  ].filter((value): value is number => value != null);
+  return values.length ? Math.min(...values) : null;
+}
+
+function lastActivityMs(run: SpawnedAgent): number | null {
+  const values = [
+    ...(run.runContext?.recentActivity ?? []).map((item: any) => timestampMs(item.at ?? item.timestamp)),
+    ...run.activity.map(item => timestampMs(item.timestamp)),
+  ].filter((value): value is number => value != null);
+  return values.length ? Math.max(...values) : null;
+}
+
+function sourceMessageMs(run: SpawnedAgent, messageTimes: Map<string, number>): number | null {
+  return run.sourceMessageId ? messageTimes.get(run.sourceMessageId) ?? null : null;
+}
+
+function runStartedMs(run: SpawnedAgent, messageTimes: Map<string, number>): number | null {
+  return timestampMs(run.runContext?.execution.startedAt)
+    ?? firstActivityMs(run)
+    ?? sourceMessageMs(run, messageTimes);
+}
+
+function runFinishedMs(run: SpawnedAgent, messageTimes: Map<string, number>): number | null {
+  const started = runStartedMs(run, messageTimes);
+  return timestampMs(run.runContext?.execution.completedAt)
+    ?? lastActivityMs(run)
+    ?? (started != null && run.durationMs != null ? started + Math.max(run.durationMs, 1) : null)
+    ?? started;
+}
+
+function interventionTimestampMs(run: SpawnedAgent, messageTimes: Map<string, number>): number | null {
+  const context = run.runContext;
+  const pending = context?.interventions?.find((item: any) => item.status === 'pending')
+    ?? context?.interventions?.[0];
+  const started = runStartedMs(run, messageTimes);
+  return timestampMs((pending as any)?.created_at ?? (pending as any)?.createdAt)
+    ?? lastActivityMs(run)
+    ?? (started != null ? started + 1 : null);
+}
+
+function safeExecutionName(value?: string | null): string | null {
+  const text = value
+    ?.replace(/^chat:spawn_agent\//, '')
+    .replace(/^.*:spawn_agent\//, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return null;
+  if (text.length > 80) return null;
+  if (/^(you are|your task|task:|please|implement the|fix the)\b/i.test(text)) return null;
+  if (/[{}]/.test(text)) return null;
+  return text;
+}
+
+function executionKind(run: SpawnedAgent): 'agent' | 'workflow' {
+  return run.runContext?.runType === 'workflow' || run.kind === 'workflow' ? 'workflow' : 'agent';
+}
+
+function executionDisplayName(run: SpawnedAgent): string {
+  const context = run.runContext;
+  const workflowName = safeExecutionName(context?.execution.workflowName);
+  const title = safeExecutionName(context?.title);
+  const progress = safeExecutionName(context?.progress.label);
+  const agent = safeExecutionName(run.agent);
+  if (executionKind(run) === 'workflow') return workflowName ?? progress ?? title ?? agent ?? 'workflow';
+  return agent ?? title ?? workflowName ?? progress ?? 'agent';
+}
+
+function interventionDetail(run: SpawnedAgent): string | undefined {
+  const context = run.runContext;
+  const pending = context?.interventions?.find((item: any) => item.status === 'pending')
+    ?? context?.interventions?.[0];
+  return safeExecutionName((pending as any)?.title)
+    ?? safeExecutionName(context?.humanInput.title)
+    ?? safeExecutionName(context?.humanInput.stage)
+    ?? safeExecutionName(context?.progress.currentStep)
+    ?? undefined;
+}
+
+function isChildExecutionRun(run: SpawnedAgent): boolean {
+  if (run.parentExecutionId ?? run.runContext?.execution.parentExecutionId) return true;
+  return (run.spawnDepth ?? run.runContext?.execution.spawnDepth ?? 0) > 0;
+}
+
+function buildExecutionLifecycleEvents(
+  runs: SpawnedAgent[],
+  messages: ChatMessage[],
+): ExecutionLifecycleEvent[] {
+  const messageTimes = new Map(
+    messages
+      .map((message) => [message._id, timestampMs(message.createdAt)] as const)
+      .filter((entry): entry is [string, number] => Boolean(entry[0]) && entry[1] != null),
+  );
+  const events: ExecutionLifecycleEvent[] = [];
+
+  for (const run of runs) {
+    if (isChildExecutionRun(run)) continue;
+
+    const startedAt = runStartedMs(run, messageTimes);
+    if (startedAt == null) continue;
+    const kind = executionKind(run);
+    const name = executionDisplayName(run);
+    const status = (run.runContext?.status ?? run.status ?? '').toLowerCase();
+
+    events.push({
+      key: `${run.executionId}:started`,
+      executionId: run.executionId,
+      sourceMessageId: run.sourceMessageId,
+      kind,
+      status: 'started',
+      name,
+      timestamp: isoFromMs(startedAt),
+      timeMs: startedAt,
+    });
+
+    if (status === 'waiting_for_input' || status === 'waiting' || run.runContext?.humanInput.required) {
+      const inputAt = interventionTimestampMs(run, messageTimes) ?? startedAt + 1;
+      events.push({
+        key: `${run.executionId}:needs_input`,
+        executionId: run.executionId,
+        sourceMessageId: run.sourceMessageId,
+        kind,
+        status: 'needs_input',
+        name,
+        detail: interventionDetail(run),
+        timestamp: isoFromMs(inputAt),
+        timeMs: inputAt,
+      });
+    }
+
+    if (status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'canceled') {
+      const finishedAt = runFinishedMs(run, messageTimes) ?? startedAt + 1;
+      events.push({
+        key: `${run.executionId}:${status === 'canceled' ? 'cancelled' : status}`,
+        executionId: run.executionId,
+        sourceMessageId: run.sourceMessageId,
+        kind,
+        status: status === 'canceled' ? 'cancelled' : status as ExecutionLifecycleEvent['status'],
+        name,
+        detail: status === 'failed' ? workflowAttemptFailureLabel(run) : undefined,
+        timestamp: isoFromMs(finishedAt),
+        timeMs: finishedAt,
+      });
+    }
+  }
+
+  const seen = new Set<string>();
+  return events
+    .filter((event) => {
+      if (seen.has(event.key)) return false;
+      seen.add(event.key);
+      return true;
+    })
+    .sort((a, b) => a.timeMs - b.timeMs || executionLifecyclePriority(a.status) - executionLifecyclePriority(b.status));
+}
+
+function executionLifecyclePriority(status: ExecutionLifecycleEvent['status']): number {
+  if (status === 'started') return 1;
+  if (status === 'needs_input') return 2;
+  return 3;
+}
+
+function buildChatTimeline(messages: ChatMessage[], events: ExecutionLifecycleEvent[]): ChatTimelineItem[] {
+  const eventsBySourceMessage = new Map<string, ExecutionLifecycleEvent[]>();
+  for (const event of events) {
+    if (!event.sourceMessageId) continue;
+    const current = eventsBySourceMessage.get(event.sourceMessageId) ?? [];
+    current.push(event);
+    eventsBySourceMessage.set(event.sourceMessageId, current);
+  }
+  const consumedEvents = new Set<string>();
+  const timeline: ChatTimelineItem[] = [];
+
+  messages.forEach((message, index) => {
+    const messageTime = timestampMs(message.createdAt) ?? index;
+    const linkedEvents = (message._id ? eventsBySourceMessage.get(message._id) ?? [] : [])
+      .sort((a, b) => a.timeMs - b.timeMs || executionLifecyclePriority(a.status) - executionLifecyclePriority(b.status));
+    const shouldSplit = message.role === 'assistant' && linkedEvents.length > 0;
+    if (!shouldSplit) {
+      timeline.push({
+        type: 'message',
+        key: `message:${message._id ?? index}`,
+        message,
+        index,
+        timeMs: messageTime,
+      });
+      return;
+    }
+
+    if (message.thinkingText) {
+      timeline.push({
+        type: 'message-part',
+        key: `message:${message._id ?? index}:thinking`,
+        message,
+        index,
+        part: 'thinking',
+        timeMs: messageTime,
+      });
+    }
+    for (const event of linkedEvents) {
+      consumedEvents.add(event.key);
+      timeline.push({
+        type: 'execution-event',
+        key: `event:${event.key}`,
+        event,
+        timeMs: event.timeMs,
+      });
+    }
+    const hasResponse = Boolean(message.content || message.error);
+    if (hasResponse) {
+      const latestEventMs = Math.max(...linkedEvents.map(event => event.timeMs));
+      timeline.push({
+        type: 'message-part',
+        key: `message:${message._id ?? index}:response`,
+        message,
+        index,
+        part: 'response',
+        timeMs: Math.max(messageTime, latestEventMs + 1),
+      });
+    }
+    if (!message.thinkingText && !hasResponse) {
+      timeline.push({
+      type: 'message',
+      key: `message:${message._id ?? index}`,
+      message,
+      index,
+      timeMs: messageTime,
+      });
+    }
+  });
+
+  const unlinkedEvents = events
+    .filter(event => !consumedEvents.has(event.key))
+    .map((event) => ({
+      type: 'execution-event' as const,
+      key: `event:${event.key}`,
+      event,
+      timeMs: event.timeMs,
+    }))
+    .sort((a, b) => a.timeMs - b.timeMs || a.key.localeCompare(b.key));
+
+  return [...timeline, ...unlinkedEvents];
+}
+
+function executionLifecycleText(event: ExecutionLifecycleEvent): string {
+  const label = event.kind === 'workflow' ? 'Workflow' : 'Agent';
+  if (event.status === 'started') return `${label} started: ${event.name}`;
+  if (event.status === 'completed') return `${label} completed: ${event.name}`;
+  if (event.status === 'failed') return `${label} failed: ${event.name}`;
+  if (event.status === 'cancelled') return `${label} cancelled: ${event.name}`;
+  return `${label} needs input: ${event.detail ?? event.name}`;
+}
+
+function ExecutionLifecycleRow({ event }: { event: ExecutionLifecycleEvent }) {
+  const LifecycleIcon =
+    event.status === 'started' ? PlayCircle
+      : event.status === 'completed' ? CheckCircle
+        : event.status === 'needs_input' ? AlertTriangle
+          : AlertCircle;
+  return (
+    <div className="ch-msg allen chat-exec-event al-msg-enter" data-status={event.status}>
+      <div className="ch-avatar">a</div>
+      <div className="ch-msg-body">
+        <div className="ch-msg-head">
+          <span className="ch-msg-who">allen</span>
+          <span className="ch-msg-ts" title={formatTimestampTitle(event.timestamp)}>
+            {formatTime(event.timestamp)}
+          </span>
+          <a className="chat-exec-event-link" href={`/executions/${event.executionId}`} target="_blank" rel="noopener noreferrer" title="Open execution">
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        </div>
+        <div className="ch-msg-text chat-exec-event-text">
+          <span className="chat-exec-event-title">
+            <LifecycleIcon className="h-3.5 w-3.5" />
+            <span>{executionLifecycleText(event)}</span>
+          </span>
+          {event.detail && event.status !== 'needs_input' && (
+            <span className="chat-exec-event-detail">{event.detail}</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function formatClock(dateStr?: string | null): string {
@@ -370,7 +690,9 @@ function ChatCodeDiffCard({
     deletions: file.deletions ?? 0,
     status: file.status ?? ((file as ChatDiffFile & { isNew?: boolean }).isNew ? 'added' : 'modified'),
   }));
-  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
+  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(
+    () => new Set(normalized[0]?.key ? [normalized[0].key] : []),
+  );
   const totalAdditions = normalized.reduce((sum, file) => sum + (file.additions ?? 0), 0);
   const totalDeletions = normalized.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
 
@@ -388,11 +710,13 @@ function ChatCodeDiffCard({
   return (
     <div className="ch-card code-card">
       <div className="ch-card-h">
-        <span className="cc-tag impl">code diff</span>
-        <span className="cc-title">{title}</span>
+        <span className="cc-title">
+          <FileText className="cc-title-icon" />
+          <span>{title}</span>
+        </span>
         <span className="cc-pct">
-          <span className="cf-p">+{totalAdditions}</span>
-          <span className="cf-m">-{totalDeletions}</span>
+          <span className="text-accent-green">+{totalAdditions}</span>
+          <span className="text-accent-red">-{totalDeletions}</span>
           {state && <span className="chat-diff-status">{state}</span>}
           {onOpenAllFiles && (
             <button type="button" className="cc-icon-action" onClick={onOpenAllFiles} title="Show all modified files">
@@ -410,6 +734,7 @@ function ChatCodeDiffCard({
               <div key={key} className="cc-file-wrap">
                 <button type="button" className="cc-file cc-file-btn" onClick={() => toggle(key)}>
                   {expanded ? <ChevronDown className="cf-chevron" /> : <ChevronRight className="cf-chevron" />}
+                  <FileText className="cf-file-icon" />
                   <span className="cf-n">{file.path}</span>
                   {(file.status === 'added' || file.status === 'untracked') && <span className="cf-new">new</span>}
                   {file.workspaceName && <span className="cf-ws">{file.workspaceName}</span>}
@@ -424,9 +749,6 @@ function ChatCodeDiffCard({
               </div>
             );
           })}
-          <div className="cc-file muted">
-            <span className="cf-n">{normalized.length} file{normalized.length === 1 ? '' : 's'} · {totalAdditions} additions / {totalDeletions} deletions</span>
-          </div>
         </div>
       </div>
     </div>
@@ -1050,74 +1372,72 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
   const isRunning = active && (call as ActiveToolCall).status === 'running';
   const [expanded, setExpanded] = useState(false);
   const label = humanizeToolName(call.tool);
-  const color = toolColor(call.tool);
   const result = 'result' in call ? call.result : undefined;
   const duration = 'durationMs' in call ? call.durationMs : undefined;
   const hasArgs = call.args && Object.keys(call.args).length > 0;
   const inputSummary = argsSummary(call.args);
   const outputSummary = resultSummary(result);
   const providerPrefix = call.tool.includes('__') ? call.tool.split('__').slice(0, -1).join(' / ').replace(/^mcp \/ /, '') : '';
-
-  // Check if result has an execution_id (for link to execution page)
   const executionId = result?.execution_id as string | undefined;
+  const hasError = Boolean(result?.error);
+  const state = isRunning ? 'running' : hasError ? 'error' : 'complete';
+  const summary = inputSummary || outputSummary || (isRunning ? 'Running...' : providerPrefix || call.tool);
 
   return (
-    <div className="relative">
+    <div className="chat-tool-row" data-state={state}>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="group/tool grid w-full grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 rounded-sm px-1 py-1.5 text-left transition-colors hover:bg-app-muted/35"
+        className="chat-tool-row-button"
         title={expanded ? 'Collapse tool result' : 'Expand tool result'}
       >
-        {isRunning ? (
-          <Loader2 className={`h-3.5 w-3.5 ${color} animate-spin`} />
-        ) : result?.error ? (
-          <AlertCircle className="h-3.5 w-3.5 text-accent-red" />
-        ) : (
-          <CheckCircle className="h-3.5 w-3.5 text-accent-green/70" />
-        )}
-        <Wrench className={`h-3 w-3 ${color}`} />
-        <span className="min-w-0">
-          <span className={`block text-[12px] font-medium leading-4 ${color}`}>{label}</span>
-          <span className="block truncate text-[11px] leading-4 text-theme-subtle">
-            {inputSummary || outputSummary || (isRunning ? 'Running...' : providerPrefix || call.tool)}
-          </span>
-        </span>
-
-        <span className="flex items-center gap-2 justify-end">
-          {providerPrefix && <span className="hidden sm:inline text-[10px] text-theme-subtle">{providerPrefix}</span>}
-          {duration != null && (
-            <span className="text-[10px] text-theme-subtle font-mono">{formatDuration(duration)}</span>
+        <span className="chat-tool-row-status" aria-hidden="true">
+          {isRunning ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : hasError ? (
+            <AlertCircle className="h-3.5 w-3.5" />
+          ) : (
+            <CheckCircle className="h-3.5 w-3.5" />
           )}
+        </span>
+        <span className="chat-tool-row-main">
+          <span className="chat-tool-row-title">
+            <span>{label}</span>
+          </span>
+          <span className="chat-tool-row-summary">{summary}</span>
+        </span>
+        <span className="chat-tool-row-meta">
+          {providerPrefix && <span>{providerPrefix}</span>}
+          {duration != null && <span>{formatDuration(duration)}</span>}
           {executionId && (
             <a
               href={`/executions/${executionId}`}
               onClick={e => e.stopPropagation()}
-              className="text-accent-blue hover:text-accent-blue/80 transition-colors"
+              className="chat-tool-row-link"
               title="View execution"
             >
-              <ExternalLink className="w-3 h-3" />
+              <ExternalLink className="h-3.5 w-3.5" />
             </a>
           )}
-          {expanded ? <ChevronDown className="h-3 w-3 text-theme-subtle" /> : <ChevronRight className="h-3 w-3 text-theme-subtle" />}
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </span>
       </button>
 
       {expanded && (
-        <div className="ml-6 mt-1 max-h-72 overflow-auto border-l border-border/10 pl-3 text-[11px] text-theme-secondary">
+        <div className="chat-tool-row-details">
           {hasArgs && (
-            <div className="mb-2">
-              <div className="mb-1 text-[10px] uppercase tracking-wide text-theme-subtle">Input</div>
-              <pre className="whitespace-pre-wrap font-mono leading-relaxed text-theme-secondary">{prettyJson(call.args)}</pre>
+            <div className="chat-tool-json-block">
+              <div className="chat-tool-json-label">Input</div>
+              <pre>{prettyJson(call.args)}</pre>
             </div>
           )}
           {result && (
-            <div>
-              <div className="mb-1 text-[10px] uppercase tracking-wide text-theme-subtle">Output</div>
-              <pre className="whitespace-pre-wrap font-mono leading-relaxed text-theme-secondary">{prettyJson(result)}</pre>
+            <div className="chat-tool-json-block">
+              <div className="chat-tool-json-label">Output</div>
+              <pre>{prettyJson(result)}</pre>
             </div>
           )}
           {!hasArgs && !result && (
-            <div className="text-[11px] text-theme-subtle">Waiting for tool input/output details...</div>
+            <div className="chat-tool-empty-detail">Waiting for tool input/output details...</div>
           )}
         </div>
       )}
@@ -1139,11 +1459,9 @@ function ToolCallLine({ call, count, active }: { call: ToolCallRecord | ActiveTo
   const duration = 'durationMs' in call ? call.durationMs : undefined;
   const executionId = result?.execution_id as string | undefined;
   const hasError = Boolean(result?.error);
-  const Icon = isRunning ? Loader2 : hasError ? AlertCircle : Wrench;
 
   return (
     <div className={`chat-tool-latest-line ${isRunning ? 'running' : ''} ${hasError ? 'error' : ''}`}>
-      <Icon className={`h-3.5 w-3.5 shrink-0 ${isRunning ? 'animate-spin text-accent-blue' : hasError ? 'text-accent-red' : 'text-theme-subtle'}`} />
       <span className="chat-tool-count">{count} tool call{count === 1 ? '' : 's'}</span>
       <span className="chat-tool-text">{toolCallLineText(call)}</span>
       {duration != null && <span className="chat-tool-duration">{formatDuration(duration)}</span>}
@@ -1175,13 +1493,17 @@ function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord
       ))}
 
       {latestCall && (
-        <button type="button" className="chat-tool-disclosure" onClick={() => setShowTools(value => !value)}>
+        <button type="button" className="chat-tool-disclosure" data-expanded={showTools} onClick={() => setShowTools(value => !value)}>
           {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           <ToolCallLine call={latestCall} count={calls.length} />
         </button>
       )}
       {showTools && (
         <div className="chat-tool-history">
+          <div className="chat-tool-history-head">
+            <span>Tool calls</span>
+            <span>{calls.length}</span>
+          </div>
           {calls.map((call, i) => <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} />)}
         </div>
       )}
@@ -1208,13 +1530,17 @@ function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: Activ
       ))}
 
       {latestCall && (
-        <button type="button" className="chat-tool-disclosure" onClick={() => setShowTools(value => !value)}>
+        <button type="button" className="chat-tool-disclosure" data-expanded={showTools} onClick={() => setShowTools(value => !value)}>
           {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           <ToolCallLine call={latestCall} count={calls.length} active />
         </button>
       )}
       {showTools && (
         <div className="chat-tool-history">
+          <div className="chat-tool-history-head">
+            <span>Tool calls</span>
+            <span>{calls.length}</span>
+          </div>
           {calls.map((call, i) => (
             <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} active />
           ))}
@@ -1379,7 +1705,7 @@ function ChatCodeDiffPreview({
           <ChatCodeDiffCard
             files={visibleFiles}
             title={`${totalFiles} file${totalFiles === 1 ? '' : 's'} modified`}
-            state={allTerminal ? 'completed' : <><span className="dot pulse accent" /> live</>}
+            state={allTerminal ? undefined : <><span className="dot pulse accent" /> live</>}
             onOpenAllFiles={onOpenAllFiles}
           />
         )}
@@ -1982,6 +2308,53 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
   const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
   const hasActiveSpawnedRuns = spawnedAgents.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
+  const runsBySourceMessage = useMemo(() => {
+    const byMessage = new Map<string, SpawnedAgent[]>();
+    for (const run of spawnedAgents) {
+      if (!run.sourceMessageId) continue;
+      const current = byMessage.get(run.sourceMessageId) ?? [];
+      current.push(run);
+      byMessage.set(run.sourceMessageId, current);
+    }
+    return byMessage;
+  }, [spawnedAgents]);
+  const forwardedDiffRunsByMessage = useMemo(() => {
+    const byMessage = new Map<string, SpawnedAgent[]>();
+    let pendingRuns: SpawnedAgent[] = [];
+    const appendRuns = (runs: SpawnedAgent[]) => {
+      for (const run of runs) {
+        if (!pendingRuns.some(existing => existing.executionId === run.executionId)) {
+          pendingRuns.push(run);
+        }
+      }
+    };
+
+    for (const message of messages) {
+      const ownRuns = message._id ? runsBySourceMessage.get(message._id) ?? [] : [];
+      if (ownRuns.length > 0) {
+        appendRuns(ownRuns);
+      }
+
+      const hasVisibleAssistantResponse = message.role === 'assistant' && Boolean(message.content || message.error);
+      if (hasVisibleAssistantResponse) {
+        if (message._id && ownRuns.length === 0 && pendingRuns.length > 0) {
+          byMessage.set(message._id, pendingRuns);
+        }
+        pendingRuns = [];
+      }
+    }
+
+    return byMessage;
+  }, [messages, runsBySourceMessage]);
+  const executionLifecycleEvents = useMemo(
+    () => buildExecutionLifecycleEvents(spawnedAgents, messages),
+    [messages, spawnedAgents],
+  );
+  const executionLifecycleSignature = executionLifecycleEvents.map(event => event.key).join('|');
+  const chatTimeline = useMemo(
+    () => buildChatTimeline(messages, executionLifecycleEvents),
+    [executionLifecycleEvents, messages],
+  );
 
   // Load agent info for labels, avatars, and thread display
   useEffect(() => {
@@ -2015,7 +2388,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
     if (autoScrollRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, streamText, pendingWorkflowIntervention?.intervention.intervention_id]);
+  }, [messages, streamText, executionLifecycleSignature, pendingWorkflowIntervention?.intervention.intervention_id]);
 
   const renderWorkflowInterventionHeaderAction = (run: SpawnedAgent) => {
     if (!pendingWorkflowIntervention || !onAnswerWorkflowIntervention) return null;
@@ -2035,16 +2408,30 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         <div className="chat-empty-stream" />
       )}
 
-      {/* Messages */}
-      {messages.map((msg, i) => {
+      {/* Messages and synthetic execution lifecycle rows */}
+      {chatTimeline.map((item) => {
+        if (item.type === 'execution-event') {
+          return <ExecutionLifecycleRow key={item.key} event={item.event} />;
+        }
+        const msg = item.message;
+        const i = item.index;
+        const timelinePart = item.type === 'message-part' ? item.part : 'full';
+        const showThinking = msg.role === 'assistant' && msg.thinkingText && timelinePart !== 'response';
+        const showResponse = timelinePart !== 'thinking';
+        const suppressLinkedRunPanels = item.type === 'message-part';
         const msgThreads = msg._id ? threadsByMessage[msg._id] : undefined;
         const senderLabel = msg.role === 'user' ? userDisplayName(msg) : '';
         const diffSplit = msg.role === 'assistant' ? splitFirstDiffFence(msg.content) : { text: msg.content, diff: null };
         const messageRuns = msg.role === 'assistant' && msg._id
-          ? spawnedAgents.filter(run => run.sourceMessageId === msg._id)
+          ? runsBySourceMessage.get(msg._id) ?? []
+          : [];
+        const diffPreviewRuns = msg.role === 'assistant' && msg._id
+          ? messageRuns.length > 0
+            ? messageRuns
+            : forwardedDiffRunsByMessage.get(msg._id) ?? []
           : [];
         const messageHasActiveRuns = messageRuns.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
-        return (<React.Fragment key={msg._id || i}>
+        return (<React.Fragment key={item.key}>
         <div className={`ch-msg ${msg.role === 'user' ? 'you' : 'allen'} group/msg al-msg-enter`}>
           <div className="ch-avatar">{msg.role === 'user' ? senderInitial(senderLabel) : 'a'}</div>
           <div className="ch-msg-body">
@@ -2060,25 +2447,25 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             </div>
 
             <div className={`ch-msg-text ${msg.status === 'failed' || msg.status === 'cancelled' ? 'failed' : ''}`}>
-              {msg.role === 'assistant' && msg.thinkingText && (
-                <ThinkingBlock text={msg.thinkingText} durationMs={msg.durationMs} />
+              {showThinking && (
+                <ThinkingBlock text={msg.thinkingText ?? ''} durationMs={msg.durationMs} />
               )}
-              {diffSplit.text && (
+              {showResponse && diffSplit.text && (
                 <div>
                   {renderMarkdown(diffSplit.text)}
                 </div>
               )}
-              {msg.role === 'assistant' && !messageHasActiveRuns && (
+              {showResponse && msg.role === 'assistant' && !messageHasActiveRuns && (
                 <ToolCallsSection calls={msg.toolCalls} threads={msgThreads} agentMap={agentMap} />
               )}
-              {msg.error && (
+              {showResponse && msg.error && (
                 <div className="chat-msg-error">
                   <AlertCircle className="w-3 h-3 shrink-0" />
                   {msg.error}
                 </div>
               )}
             </div>
-            {(msg.content || msg.error) && (
+            {showResponse && (msg.content || msg.error) && (
               <div className="chat-save-row">
                 <MessageCopyButton text={msg.content || msg.error || ''} />
                 {msg.role !== 'user' && msg.content && onSaveToLearnings && (
@@ -2095,7 +2482,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           </div>
         </div>
 
-        {diffSplit.diff && (
+        {showResponse && diffSplit.diff && (
           <div className="ch-msg allen al-msg-enter">
             <div className="ch-avatar">a</div>
             <div className="ch-msg-body">
@@ -2104,21 +2491,22 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           </div>
         )}
 
-        {messageRuns.length > 0 && !messageHasActiveRuns && (
-          <>
-            <section className="run-progress-feed" aria-label={`${messageRuns.length} linked execution${messageRuns.length === 1 ? '' : 's'}`}>
-              <React.Suspense fallback={<div className="run-progress-loading">Loading execution details...</div>}>
-                <ChatExecutionsPanel runs={messageRuns} renderExecutionHeaderAction={renderWorkflowInterventionHeaderAction} />
-              </React.Suspense>
-            </section>
-            <ChatCodeDiffPreview
-              runs={messageRuns}
-              sessionId={msg.sessionId}
-              messageId={msg._id}
-              onReady={scrollToBottomIfPinned}
-              onOpenAllFiles={onOpenFilesPanel}
-            />
-          </>
+        {messageRuns.length > 0 && !messageHasActiveRuns && !suppressLinkedRunPanels && (
+          <section className="run-progress-feed" aria-label={`${messageRuns.length} linked execution${messageRuns.length === 1 ? '' : 's'}`}>
+            <React.Suspense fallback={<div className="run-progress-loading">Loading execution details...</div>}>
+              <ChatExecutionsPanel runs={messageRuns} renderExecutionHeaderAction={renderWorkflowInterventionHeaderAction} />
+            </React.Suspense>
+          </section>
+        )}
+
+        {showResponse && diffPreviewRuns.length > 0 && (
+          <ChatCodeDiffPreview
+            runs={diffPreviewRuns}
+            sessionId={msg.sessionId}
+            messageId={msg._id}
+            onReady={scrollToBottomIfPinned}
+            onOpenAllFiles={onOpenFilesPanel}
+          />
         )}
 
         {/* Threads not linked to a tool call (fallback — render below message) */}

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { X, AlertCircle } from 'lucide-react';
+import { AlertCircle, Trash2, Users, X } from 'lucide-react';
+import IconTooltipButton from '../common/IconTooltipButton';
+import Select from '../common/Select';
 
 export interface Team {
   _id?: string;
@@ -96,130 +98,138 @@ export function TeamDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-lg mx-4 overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
-        <div className="p-6 space-y-5 overflow-y-auto">
-          <div className="flex items-start justify-between">
-            <div>
-              <h3 className="font-heading text-lg text-theme-primary tracking-wide">
-                {isEdit ? `Edit ${mode.team.displayName}` : 'New Team'}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-6 backdrop-blur-sm">
+      <div className="flex max-h-[90vh] w-full max-w-[620px] flex-col overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200">
+        <div className="flex items-start justify-between gap-4 border-b border-app px-6 py-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app bg-app text-accent">
+              <Users className="h-[18px] w-[18px]" />
+            </span>
+            <div className="min-w-0">
+              <h3 className="text-[17px] font-semibold tracking-tight text-theme-primary">
+                {isEdit ? 'Edit team' : 'New team'}
               </h3>
-              <p className="text-xs text-theme-muted font-body mt-1">
+              <p className="mt-1 text-[13px] text-theme-muted">
                 {isEdit
-                  ? 'Update team metadata. The slug and lead cannot be changed once set.'
+                  ? `Update ${mode.team.displayName}. Slug and lead are locked after creation.`
                   : 'Create a new team. The lead agent must already exist.'}
               </p>
             </div>
-            <button onClick={onClose} className="text-theme-muted hover:text-theme-secondary transition-colors">
-              <X className="w-4 h-4" />
-            </button>
           </div>
+          <IconTooltipButton label="Close" onClick={onClose} className="h-9 w-9">
+            <X className="h-4 w-4" />
+          </IconTooltipButton>
+        </div>
 
-          <div className="space-y-4">
-            <div>
-              <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">
+        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+          {error && (
+            <div className="flex items-start gap-2 rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="block">
+              <span className="overline mb-2 block">
                 Slug (lowercase, hyphenated)
-              </label>
+              </span>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value.toLowerCase())}
                 disabled={isEdit}
                 placeholder="finance"
-                className="input w-full disabled:opacity-60 disabled:cursor-not-allowed"
+                className="h-10 w-full rounded-md border border-app bg-app-muted px-3 font-mono text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
               />
-            </div>
+            </label>
 
-            <div>
-              <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">
+            <label className="block">
+              <span className="overline mb-2 block">
                 Display Name
-              </label>
+              </span>
               <input
                 type="text"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="Finance Team"
-                className="input w-full"
+                className="h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
               />
-            </div>
+            </label>
+          </div>
 
-            <div>
-              <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">
+          <label className="block">
+            <span className="overline mb-2 block">
                 Description
-              </label>
+            </span>
               <input
                 type="text"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Manages financial planning, accounting, and reporting"
-                className="input w-full"
+                className="h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
               />
-            </div>
+          </label>
 
-            <div>
-              <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">
+          <label className="block">
+            <span className="overline mb-2 block">
                 Mission
-              </label>
+            </span>
               <textarea
                 value={mission}
                 onChange={(e) => setMission(e.target.value)}
                 rows={3}
                 placeholder="The Finance team is responsible for..."
-                className="input w-full resize-none"
+                className="min-h-[92px] w-full resize-none rounded-md border border-app bg-app-muted px-3 py-2 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
               />
-            </div>
+          </label>
 
-            <div>
-              <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="block">
+              <span className="overline mb-2 block">
                 Lead Agent
-              </label>
-              <select
+              </span>
+              <Select
                 value={leadAgentName}
-                onChange={(e) => setLeadAgentName(e.target.value)}
+                onChange={setLeadAgentName}
                 disabled={isEdit}
-                className="input w-full disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                <option value="">-- pick an agent --</option>
-                {allAgents.map((a) => (
-                  <option key={a.name} value={a.name}>
-                    {a.displayName ?? a.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+                placeholder="Pick an agent"
+                searchPlaceholder="Search agents..."
+                options={allAgents.map((agent) => ({
+                  value: agent.name,
+                  label: agent.displayName ?? agent.name,
+                  sublabel: agent.name,
+                }))}
+              />
+            </label>
 
-            <div>
-              <label className="text-xs font-label font-semibold text-theme-secondary mb-2 uppercase tracking-widest block">
+            <label className="block">
+              <span className="overline mb-2 block">
                 Parent Team (optional)
-              </label>
-              <select
+              </span>
+              <Select
                 value={parentTeamName}
-                onChange={(e) => setParentTeamName(e.target.value)}
-                className="input w-full"
-              >
-                <option value="">-- top-level (no parent) --</option>
-                {allTeams.map((t) => (
-                  <option key={t.name} value={t.name}>
-                    {t.displayName}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {error && (
-              <div className="flex items-start gap-2 px-3 py-2 rounded-md border border-accent-red/30 bg-accent-red/10 text-xs text-accent-red font-body">
-                <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
+                onChange={setParentTeamName}
+                placeholder="Top-level"
+                searchPlaceholder="Search teams..."
+                options={[
+                  { value: '', label: 'Top-level', sublabel: 'No parent team' },
+                  ...allTeams.map((team) => ({
+                    value: team.name,
+                    label: team.displayName,
+                    sublabel: team.name,
+                  })),
+                ]}
+              />
+            </label>
           </div>
+        </div>
 
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <button onClick={onClose} disabled={busy} className="btn-ghost text-xs">Cancel</button>
-            <button onClick={handleSubmit} disabled={busy} className="btn-primary text-xs">
-              {busy ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Team'}
-            </button>
-          </div>
+        <div className="flex items-center justify-end gap-2 border-t border-app px-6 py-4">
+          <button onClick={onClose} disabled={busy} className="btn btn-secondary btn-sm">Cancel</button>
+          <button onClick={handleSubmit} disabled={busy} className="btn btn-primary btn-sm">
+            {busy ? 'Saving...' : isEdit ? 'Save changes' : 'Create team'}
+          </button>
         </div>
       </div>
     </div>
@@ -243,36 +253,46 @@ export function TeamDeleteConfirm({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-      <div className="card w-full max-w-md mx-4 overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200">
-        <div className="p-6 space-y-4">
-          <h3 className="font-heading text-lg text-theme-primary tracking-wide">Delete team?</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-6 backdrop-blur-sm">
+      <div className="w-full max-w-[460px] overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200">
+        <div className="border-b border-app px-6 py-5">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-accent-red/30 bg-accent-red/10 text-accent-red">
+              <Trash2 className="h-[18px] w-[18px]" />
+            </span>
+            <div>
+              <h3 className="text-[17px] font-semibold tracking-tight text-theme-primary">Delete team?</h3>
+              <p className="mt-1 text-[13px] text-theme-muted">{team.displayName}</p>
+            </div>
+          </div>
+        </div>
 
+        <div className="space-y-4 px-6 py-5">
           {memberCount > 0 ? (
-            <div className="flex items-start gap-2 px-3 py-2 rounded-md border border-accent-yellow/30 bg-accent-yellow/10 text-xs text-accent-yellow font-body">
-              <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <div className="flex items-start gap-2 rounded-md border border-accent-yellow/30 bg-accent-yellow/10 px-3 py-2 text-[13px] text-accent-yellow">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
                 <strong>Cannot delete:</strong> "{team.displayName}" still has {memberCount} agent(s).
                 Move or delete them first.
               </span>
             </div>
           ) : (
-            <p className="text-xs text-theme-muted font-body">
+            <p className="text-[13px] leading-6 text-theme-muted">
               This will permanently remove <span className="font-mono text-theme-primary">{team.name}</span> from
               the org chart. This cannot be undone.
             </p>
           )}
+        </div>
 
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <button onClick={onCancel} disabled={busy} className="btn-ghost text-xs">Cancel</button>
-            <button
-              onClick={handleConfirm}
-              disabled={busy || memberCount > 0}
-              className="btn-primary text-xs bg-accent-red/80 hover:bg-accent-red disabled:opacity-30"
-            >
-              {busy ? 'Deleting...' : 'Delete'}
-            </button>
-          </div>
+        <div className="flex items-center justify-end gap-2 border-t border-app px-6 py-4">
+          <button onClick={onCancel} disabled={busy} className="btn btn-secondary btn-sm">Cancel</button>
+          <button
+            onClick={handleConfirm}
+            disabled={busy || memberCount > 0}
+            className="btn btn-danger btn-sm disabled:opacity-30"
+          >
+            {busy ? 'Deleting...' : 'Delete'}
+          </button>
         </div>
       </div>
     </div>

@@ -1,86 +1,126 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import Editor from '@monaco-editor/react';
+import type * as Monaco from 'monaco-editor';
 import type { NodeState, ActivityEntry } from '../../hooks/useExecution';
+import type { ArtifactDoc } from '../../services/api';
 import StatusBadge from '../common/StatusBadge';
 import CostDisplay from '../common/CostDisplay';
 import { ContentViewer, ExpandButton, type ViewerMode } from '../common/ContentViewer';
+import ArtifactViewer from '../artifacts/ArtifactViewer';
 import { renderMarkdown } from '../chat/ChatMessageList';
 import StreamOutput from './StreamOutput';
-import { useSettingsStore } from '../../stores/settingsStore';
-import { resolveColorMode } from '../../lib/theme';
-import { Wrench, CheckCircle, Send, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react';
+import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
+import { Wrench, CheckCircle, Send, MessageSquare, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { ToolCallLog } from '../common/ToolCallLog';
+import Select from '../common/Select';
 import NodeInspector from './NodeInspector';
 import { CopyButton, DownloadButton } from '../common/CopyDownload';
 import TemplateBindingsTable from './TemplateBindingsTable';
 import StateDiffModal from './StateDiffModal';
 
-// ── Inline Monaco (read-only, compact) ──
+// ── Direct Monaco inline viewer ────────────────────────────────────────
 
-/**
- * Monaco-based read-only editor used inside the node detail tabs.
- *
- * Two sizing modes:
- *   - `fill` (default for the tab view) — stretches to fill the parent's
- *     available height via `height="100%"`. Parent MUST establish a
- *     concrete height (flex-1 + min-h-0, or a fixed px value) or Monaco
- *     renders 0px.
- *   - height-capped mode — when `fill` is false, we compute a height from
- *     the line count capped at `maxHeight`. Used by any legacy embedded
- *     uses of InlineEditor outside a tab.
- *
- * Word wrap is enabled for EVERY language now (including JSON), because
- * the tab pane is narrower than the typical deeply-nested JSON line and
- * horizontal scrolling for long string values was actively bad UX. Users
- * can still click the fullscreen expand button to see unwrapped content
- * in the ContentViewer modal.
- */
-function InlineEditor({
-  value, language, maxHeight = 200, fill = false,
+function InlineCodeViewer({
+  value,
+  language,
+  fill = false,
+  wordWrap = 'off',
 }: {
   value: string;
   language: string;
-  maxHeight?: number;
   fill?: boolean;
+  wordWrap?: 'on' | 'off';
 }) {
-  const colorMode = useSettingsStore(s => s.colorMode);
-  const theme = resolveColorMode(colorMode) === 'light' ? 'vs' : 'vs-dark';
-  const lineCount = value.split('\n').length;
-  const height = fill ? '100%' : Math.min(Math.max(lineCount * 19 + 16, 60), maxHeight);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<typeof Monaco | null>(null);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let resizeObserver: ResizeObserver | null = null;
+
+    async function mountEditor() {
+      try {
+        const monaco = await import('monaco-editor');
+        if (cancelled || !containerRef.current) return;
+
+        monacoRef.current = monaco;
+        setupMonaco(monaco);
+        const editor = monaco.editor.create(containerRef.current, {
+          automaticLayout: true,
+          bracketPairColorization: { enabled: true },
+          cursorBlinking: 'smooth',
+          fontFamily: "'JetBrains Mono', 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+          fontLigatures: true,
+          fontSize: 12,
+          folding: true,
+          glyphMargin: false,
+          language,
+          lineDecorationsWidth: 8,
+          lineNumbers: 'on',
+          minimap: { enabled: true, scale: 1 },
+          padding: { top: 12, bottom: 24 },
+          readOnly: true,
+          renderLineHighlight: 'line',
+          scrollBeyondLastLine: false,
+          smoothScrolling: true,
+          theme: getMonacoTheme(),
+          value,
+          wordWrap,
+        });
+
+        editorRef.current = editor;
+        resizeObserver = new ResizeObserver(() => editor.layout());
+        resizeObserver.observe(containerRef.current);
+        requestAnimationFrame(() => editor.layout());
+        setReady(true);
+      } catch (error) {
+        console.warn('[execution-detail] monaco direct mount failed', error);
+        if (!cancelled) setFailed(true);
+      }
+    }
+
+    mountEditor();
+
+    return () => {
+      cancelled = true;
+      resizeObserver?.disconnect();
+      editorRef.current?.dispose();
+      editorRef.current = null;
+      monacoRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+    const model = editor.getModel();
+    if (model && model.getValue() !== value) model.setValue(value);
+    if (model) monaco.editor.setModelLanguage(model, language);
+    editor.updateOptions({ wordWrap });
+    requestAnimationFrame(() => editor.layout());
+  }, [language, value, wordWrap]);
+
+  if (failed) {
+    return (
+      <pre className={`m-0 overflow-auto rounded border border-app bg-[rgb(var(--color-editor-background))] p-3 text-[11px] font-mono leading-relaxed text-theme-primary whitespace-pre-wrap break-words ${fill ? 'h-full' : 'max-h-[420px]'}`}>
+        {value}
+      </pre>
+    );
+  }
 
   return (
-    <div className={`rounded-md overflow-hidden border border-app ${fill ? 'h-full flex flex-col min-h-0' : ''}`}>
-      <Editor
-        height={height}
-        language={language}
-        value={value}
-        theme={theme}
-        options={{
-          readOnly: true,
-          fontSize: 11,
-          fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-          minimap: { enabled: false },
-          scrollBeyondLastLine: false,
-          lineNumbers: 'on',
-          glyphMargin: false,
-          folding: true,
-          foldingStrategy: 'indentation',
-          bracketPairColorization: { enabled: true },
-          // Wrap ALL languages. For JSON specifically, long string values
-          // that would otherwise cause horizontal scrolling now flow onto
-          // the next line. Fullscreen modal still shows unwrapped source.
-          wordWrap: 'on',
-          wrappingIndent: 'indent',
-          padding: { top: 6, bottom: 6 },
-          lineDecorationsWidth: 4,
-          scrollbar: { verticalScrollbarSize: 6, horizontalScrollbarSize: 6 },
-          overviewRulerBorder: false,
-          overviewRulerLanes: 0,
-          renderLineHighlight: 'none',
-          guides: { indentation: true, bracketPairs: true },
-        }}
-      />
+    <div className={`relative overflow-hidden rounded border border-app bg-[rgb(var(--color-editor-background))] ${fill ? 'h-full min-h-0' : 'h-[420px]'}`}>
+      <div ref={containerRef} className="h-full w-full" />
+      {!ready && (
+        <div className="absolute inset-0 flex items-center justify-center gap-2 bg-app-card text-[11px] font-mono text-theme-muted">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Loading editor...</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -254,8 +294,29 @@ function formatOutputValue(value: unknown): string {
   if (value == null || value === '') return 'none';
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  try { return JSON.stringify(value, null, 2); }
+  try { return safeJsonStringify(value); }
   catch { return String(value); }
+}
+
+function hasRenderableData(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === 'string') return value.length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0;
+  return true;
+}
+
+function safeJsonStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  const text = JSON.stringify(value, (_key, nestedValue) => {
+    if (typeof nestedValue === 'bigint') return nestedValue.toString();
+    if (nestedValue && typeof nestedValue === 'object') {
+      if (seen.has(nestedValue)) return '[Circular]';
+      seen.add(nestedValue);
+    }
+    return nestedValue;
+  }, 2);
+  return typeof text === 'string' ? text : String(value);
 }
 
 function humanizeKey(key: string): string {
@@ -306,6 +367,41 @@ function structuredResponseMarkdown(nodeName: string, output: Record<string, unk
   }
 
   return lines.join('\n');
+}
+
+function collectArtifactReferences(value: unknown, refs = new Set<string>()): Set<string> {
+  if (value == null) return refs;
+  if (typeof value === 'string') {
+    const uuidMatches = value.matchAll(/\/artifacts\/([0-9a-f-]{36})(?:\/content)?/gi);
+    for (const match of uuidMatches) refs.add(match[1]);
+    if (/^[0-9a-f-]{36}$/i.test(value.trim())) refs.add(value.trim());
+    return refs;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectArtifactReferences(item, refs);
+    return refs;
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value as Record<string, unknown>)) collectArtifactReferences(item, refs);
+  }
+  return refs;
+}
+
+function artifactBelongsToNode(artifact: ArtifactDoc, nodeName: string): boolean {
+  return artifact.spawnContext?.nodeName === nodeName;
+}
+
+function artifactInTraceWindow(artifact: ArtifactDoc, trace: any | undefined): boolean {
+  if (!trace?.startedAt) return false;
+  const createdMs = new Date(artifact.createdAt).getTime();
+  const startedMs = new Date(trace.startedAt).getTime();
+  if (!Number.isFinite(createdMs) || !Number.isFinite(startedMs)) return false;
+  if (createdMs + 1000 < startedMs) return false;
+  if (trace.completedAt) {
+    const completedMs = new Date(trace.completedAt).getTime();
+    if (Number.isFinite(completedMs) && createdMs - 1000 > completedMs) return false;
+  }
+  return true;
 }
 
 function InlineMarkdown({
@@ -420,6 +516,7 @@ interface Props {
   descendantsMode?: boolean;
   onToggleDescendants?: (next: boolean) => void;
   contextEngineEnabled?: boolean;
+  artifacts?: ArtifactDoc[];
 }
 
 /**
@@ -690,7 +787,7 @@ type DataTab = 'input' | 'prompt' | 'response' | 'outputs' | 'inspector';
 export default function NodeDetail({
   nodeName, nodeState, trace, allTraces = [], waitingInput, onSubmitInput,
   spawnedChildren = [], allChildren = [], descendantsMode = false, onToggleDescendants,
-  contextEngineEnabled = true,
+  contextEngineEnabled = true, artifacts = [],
 }: Props) {
   const [formData, setFormData] = useState<Record<string, unknown>>({});
   const [expandViewer, setExpandViewer] = useState<{ title: string; content: string; mode?: ViewerMode } | null>(null);
@@ -816,14 +913,31 @@ export default function NodeDetail({
 
   const handleSubmit = () => { if (onSubmitInput) onSubmitInput(formData); setFormData({}); };
 
-  const outputJson = output && Object.keys(output).length > 0 ? JSON.stringify(output, null, 2) : null;
-  const inputJson = inputState ? JSON.stringify(inputState, null, 2) : null;
+  const outputJson = hasRenderableData(output) ? safeJsonStringify(output) : null;
+  const inputJson = inputState != null ? safeJsonStringify(inputState) : null;
   const structuredResponse = !streamText && output ? structuredResponseMarkdown(nodeName, output) : '';
+  const nodeArtifacts = artifacts
+    .filter(artifact => artifactBelongsToNode(artifact, nodeName))
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const responseArtifact = (() => {
+    if (nodeArtifacts.length === 0) return undefined;
+    const outputArtifactRefs = collectArtifactReferences(output);
+    const referenced = nodeArtifacts.find(artifact => outputArtifactRefs.has(artifact.artifactId));
+    if (referenced) return referenced;
+
+    const timeScoped = nodeArtifacts.find(artifact => artifactInTraceWindow(artifact, activeTrace));
+    if (timeScoped) return timeScoped;
+
+    const activeAttempt = viewAttempt ?? nodeState?.attempt ?? activeTrace?.attempt ?? null;
+    const latestAttempt = dedupedTraces[dedupedTraces.length - 1]?.attempt ?? null;
+    if (!hasMultipleAttempts || activeAttempt === latestAttempt) return nodeArtifacts[0];
+    return undefined;
+  })();
 
   // Tab availability flags — used for auto-selection and to disable empty tabs.
   const tabHasInput = !!inputJson;
   const tabHasPrompt = !!prompt;
-  const tabHasResponse = !!streamText || !!structuredResponse;
+  const tabHasResponse = !!responseArtifact || !!streamText || !!structuredResponse;
   const tabHasOutputs = !!outputJson;
 
   // Resolve which tab to actually render. If the user's pinned tab
@@ -939,10 +1053,13 @@ export default function NodeDetail({
                     {field.label ?? field.name}{field.required !== false && <span className="text-accent-red ml-0.5">*</span>}
                   </label>
                   {field.type === 'select' && field.options ? (
-                    <select className="input w-full text-xs" value={(formData[field.name] as string) ?? ''} onChange={e => setFormData(p => ({ ...p, [field.name]: e.target.value }))}>
-                      <option value="">Select...</option>
-                      {field.options.map(o => <option key={o} value={o}>{o}</option>)}
-                    </select>
+                    <Select
+                      value={(formData[field.name] as string) ?? ''}
+                      onChange={(value) => setFormData(p => ({ ...p, [field.name]: value }))}
+                      placeholder="Select..."
+                      searchable={field.options.length > 6}
+                      options={field.options.map(option => ({ value: option, label: option }))}
+                    />
                   ) : field.type === 'boolean' ? (
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input type="checkbox" checked={!!formData[field.name]} onChange={e => setFormData(p => ({ ...p, [field.name]: e.target.checked }))} className="w-4 h-4 accent-accent-blue" />
@@ -1027,7 +1144,7 @@ export default function NodeDetail({
                     <ExpandButton onClick={() => setExpandViewer({ title: `${nodeName} — Prompt`, content: prompt, mode: 'raw' })} />
                   </>
                 )}
-                {resolvedTab === 'response' && tabHasResponse && (
+                {resolvedTab === 'response' && tabHasResponse && !responseArtifact && (
                   <>
                     <CopyButton text={responseDisplay} />
                     <DownloadButton content={responseDisplay} filename={`${nodeName}-response.md`} mime="text/markdown" />
@@ -1050,7 +1167,7 @@ export default function NodeDetail({
                 border doesn't wrap the padding. */}
             <div className="flex-1 min-h-0 p-3">
               {resolvedTab === 'input' && inputJson && (
-                <InlineEditor value={inputJson} language="json" fill />
+                <InlineCodeViewer value={inputJson} language="json" fill />
               )}
               {resolvedTab === 'prompt' && prompt && (
                 <div className="h-full min-h-0 flex flex-col gap-2">
@@ -1063,17 +1180,19 @@ export default function NodeDetail({
                     </div>
                   )}
                   <div className="flex-1 min-h-0">
-                    <InlineEditor value={prompt} language="plaintext" fill />
+                    <InlineCodeViewer value={prompt} language="plaintext" fill wordWrap="on" />
                   </div>
                 </div>
               )}
               {resolvedTab === 'response' && tabHasResponse && (
-                status === 'running'
-                  ? <div className="h-full min-h-0 overflow-auto"><StreamOutput text={responseDisplay} isLive={true} /></div>
-                  : <InlineMarkdown content={responseDisplay} fill />
+                responseArtifact
+                  ? <ArtifactViewer artifact={responseArtifact} />
+                  : status === 'running'
+                    ? <div className="h-full min-h-0 overflow-auto"><StreamOutput text={responseDisplay} isLive={true} /></div>
+                    : <InlineMarkdown content={responseDisplay} fill />
               )}
               {resolvedTab === 'outputs' && outputJson && (
-                <InlineEditor value={outputJson} language="json" fill />
+                <InlineCodeViewer value={outputJson} language="json" fill />
               )}
               {resolvedTab === 'inspector' && activeTrace && (
                 <div className="p-3 overflow-auto h-full">

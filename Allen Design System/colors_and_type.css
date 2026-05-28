@@ -1,0 +1,281 @@
+/* ============================================================
+   Allen Design System — Tokens
+   ------------------------------------------------------------
+   Mirrors the prototype-aligned v2 direction used in
+   packages/ui/src/index.css of the Inomy-shop/allen repo.
+
+   Light by default; .dark on <html> swaps to dark theme.
+   Colors are stored as space-separated RGB triplets so they can
+   be composed as `rgb(var(--color-x) / <alpha>)`. Hex aliases
+   are provided where a literal is needed (gradients, SVG fills).
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  /* ── Surfaces ─────────────────────────────────────────────── */
+  /* Palette matched to askallen.build — cool off-white & navy ink */
+  --color-surface:        252 253 255;   /* #FCFDFF — page bg */
+  --color-surface-100:    255 255 255;   /* panel / card     */
+  --color-surface-200:    244 246 251;   /* #F4F6FB — muted strip */
+  --color-surface-300:    248 250 254;   /* #F8FAFE — panel alt */
+
+  /* ── Borders ──────────────────────────────────────────────── */
+  --color-border:         226 229 237;   /* #E2E5ED */
+  --color-border-strong:  205 211 224;   /* #CDD3E0 */
+
+  /* ── Ink ──────────────────────────────────────────────────── */
+  --color-text-primary:    11  23  48;   /* #0B1730 deep navy */
+  --color-text-secondary:  53  65  88;   /* #354158 */
+  --color-text-muted:     110 119 138;   /* #6E778A */
+  --color-text-subtle:    156 165 184;   /* #9CA5B8 */
+
+  /* ── Accent (primary action / focus) ──────────────────────── */
+  --color-accent:          71  99 207;   /* #4763CF royal indigo */
+  --color-accent-soft:    223 226 247;   /* #DFE2F7 pale lavender */
+  --color-accent-hover:    92 116 212;   /* #5C74D4 */
+
+  /* ── Status colors (reserved for run state) ───────────────── */
+  --color-accent-green:    38 158  95;   /* ok / success */
+  --color-accent-red:     222  59  61;   /* err / fail   */
+  --color-accent-yellow:  222 147   0;   /* warn / queued */
+  --color-accent-purple:  151  99 204;   /* human / agent */
+  --color-accent-cyan:      0 152 192;   /* info / running */
+  --color-accent-orange:  222 147   0;   /* retry         */
+
+  /* ── Hex aliases (gradients, SVG, focus rings) ────────────── */
+  --accent-hex:        #4763CF;
+  --accent-soft-hex:   #DFE2F7;
+  --accent-red-hex:    #DE3B3D;
+  --accent-green-hex:  #269F5F;
+  --accent-yellow-hex: #DE9300;
+  --accent-purple-hex: #9763CC;
+  --accent-cyan-hex:   #0098C0;
+
+  /* ── Type stack ───────────────────────────────────────────── */
+  --font-heading: 'Inter Tight', 'Inter', system-ui, sans-serif;
+  --font-body:    'Inter Tight', 'Inter', system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Geist Mono', ui-monospace, monospace;
+  --font-label:   'JetBrains Mono', 'Geist Mono', ui-monospace, monospace;
+
+  /* ── Semantic type scale (from tailwind.config) ───────────── */
+  --fs-2xs:     11px;  --lh-2xs:     1.5;
+  --fs-meta:    11px;  --lh-meta:    1.5;
+  --fs-caption: 12px;  --lh-caption: 1.5;
+  --fs-body:    13px;  --lh-body:    1.55;
+  --fs-title:   14px;  --lh-title:   1.4;
+  --fs-h2:      18px;  --lh-h2:      1.3;
+  --fs-h1:      24px;  --lh-h1:      1.25;
+  --fs-display: 44px;  --lh-display: 1.05;
+
+  /* ── Radii ────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius:    8px;
+  --radius-lg: 12px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+
+  /* ── Elevation ────────────────────────────────────────────── */
+  --shadow-sm:      0 1px 2px rgb(0 0 0 / 0.04), 0 1px 1px rgb(0 0 0 / 0.04);
+  --shadow-popover: 0 8px 24px rgb(24 24 26 / 0.08), 0 2px 6px rgb(24 24 26 / 0.06);
+
+  /* ── Focus ring ───────────────────────────────────────────── */
+  --focus-ring: 0 0 0 3px rgb(var(--color-accent) / 0.18);
+
+  /* ── Spacing scale (Tailwind 4-pt baseline) ───────────────── */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10:40px;
+  --space-12:48px;
+}
+
+.dark {
+  --color-surface:          7   9  16;   /* #070910 cool near-black */
+  --color-surface-100:     14  18  28;   /* #0E121C */
+  --color-surface-200:     11  15  24;   /* #0B0F18 */
+  --color-surface-300:     20  25  37;   /* #141925 */
+
+  --color-border:          32  37  52;   /* #202534 */
+  --color-border-strong:   46  53  74;   /* #2E354A */
+
+  --color-text-primary:   222 226 236;
+  --color-text-secondary: 169 175 192;
+  --color-text-muted:     114 122 144;
+  --color-text-subtle:     76  84 104;
+
+  --color-accent:         138 156 236;   /* #8A9CEC */
+  --color-accent-soft:     32  38  82;   /* #202652 */
+  --color-accent-hover:   162 178 244;
+
+  --color-accent-green:    67 192 122;
+  --color-accent-red:     250 104  99;
+  --color-accent-yellow:  242 166  24;
+  --color-accent-purple:  188 136 244;
+  --color-accent-cyan:      0 184 225;
+  --color-accent-orange:  242 166  24;
+
+  --accent-hex:      #8A9CEC;
+  --accent-soft-hex: #202652;
+  --accent-red-hex:  #FA6863;
+}
+
+/* ============================================================
+   Semantic helpers — short class hooks for prototypes & cards.
+   Real product uses Tailwind + bespoke component classes; these
+   give designers a low-friction way to author specimens.
+   ============================================================ */
+
+body {
+  background: rgb(var(--color-surface));
+  color: rgb(var(--color-text-primary));
+  font-family: var(--font-body);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-feature-settings: 'cv11', 'ss01';
+  letter-spacing: 0;
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+}
+
+h1, .h1, h2, .h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+  letter-spacing: 0;
+  color: rgb(var(--color-text-primary));
+  margin: 0;
+}
+
+.display { font-size: var(--fs-display); line-height: var(--lh-display); font-weight: 600; }
+.h1      { font-size: var(--fs-h1);      line-height: var(--lh-h1);      font-weight: 600; }
+.h2      { font-size: var(--fs-h2);      line-height: var(--lh-h2);      font-weight: 600; }
+.title   { font-size: var(--fs-title);   line-height: var(--lh-title);   font-weight: 600; }
+.body    { font-size: var(--fs-body);    line-height: var(--lh-body);    font-weight: 400; }
+.caption { font-size: var(--fs-caption); line-height: var(--lh-caption); color: rgb(var(--color-text-muted)); }
+.meta    { font-family: var(--font-mono); font-size: var(--fs-meta); color: rgb(var(--color-text-subtle)); letter-spacing: 0.04em; }
+.mono    { font-family: var(--font-mono); }
+.overline {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgb(var(--color-text-subtle));
+}
+
+/* ── Foreground utilities ─────────────────────────────────── */
+.fg-1 { color: rgb(var(--color-text-primary)); }
+.fg-2 { color: rgb(var(--color-text-secondary)); }
+.fg-3 { color: rgb(var(--color-text-muted)); }
+.fg-4 { color: rgb(var(--color-text-subtle)); }
+.fg-accent { color: rgb(var(--color-accent)); }
+
+/* ── Surfaces ─────────────────────────────────────────────── */
+.bg-app       { background: rgb(var(--color-surface)); }
+.bg-panel     { background: rgb(var(--color-surface-100)); }
+.bg-muted     { background: rgb(var(--color-surface-200)); }
+.border-app   { border: 1px solid rgb(var(--color-border)); }
+
+/* ── Card ─────────────────────────────────────────────────── */
+.ds-card {
+  background: rgb(var(--color-surface-100));
+  border: 1px solid rgb(var(--color-border));
+  border-radius: var(--radius-lg);
+}
+.ds-card.hover:hover {
+  border-color: rgb(var(--color-border-strong));
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Buttons ──────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 12px;
+  border: 1px solid transparent; border-radius: var(--radius);
+  font: 500 13px var(--font-body);
+  cursor: pointer; transition: background 120ms, color 120ms, border-color 120ms;
+}
+.btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.btn-primary {
+  background: rgb(var(--color-accent));
+  border-color: rgb(var(--color-accent-hover));
+  color: #fff;
+}
+.btn-primary:hover { background: rgb(var(--color-accent-hover)); }
+.btn-secondary {
+  background: rgb(var(--color-surface-100));
+  border-color: rgb(var(--color-border));
+  color: rgb(var(--color-text-primary));
+}
+.btn-secondary:hover { background: rgb(var(--color-surface-200)); }
+.btn-ghost {
+  background: transparent;
+  color: rgb(var(--color-text-secondary));
+}
+.btn-ghost:hover { background: rgb(var(--color-surface-200)); color: rgb(var(--color-text-primary)); }
+.btn-danger {
+  background: rgb(var(--color-accent-red));
+  border-color: rgb(var(--color-accent-red));
+  color: #fff;
+}
+
+/* ── Inputs ───────────────────────────────────────────────── */
+.input {
+  width: 100%;
+  background: rgb(var(--color-surface-100));
+  border: 1px solid rgb(var(--color-border));
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font: 400 13px var(--font-body);
+  color: rgb(var(--color-text-primary));
+}
+.input::placeholder { color: rgb(var(--color-text-muted)); }
+.input:focus { outline: none; border-color: rgb(var(--color-accent)); box-shadow: var(--focus-ring); }
+
+/* ── Badges & chips ───────────────────────────────────────── */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 8px; border-radius: var(--radius-pill);
+  font: 500 11.5px var(--font-mono);
+  letter-spacing: 0;
+}
+.badge-ok    { background: rgb(var(--color-accent-green) / 0.15); color: rgb(var(--color-accent-green)); }
+.badge-info  { background: rgb(var(--color-accent-cyan) / 0.15);  color: rgb(var(--color-accent-cyan)); }
+.badge-warn  { background: rgb(var(--color-accent-yellow) / 0.15); color: rgb(var(--color-accent-yellow)); }
+.badge-err   { background: rgb(var(--color-accent-red) / 0.15);   color: rgb(var(--color-accent-red)); }
+.badge-human { background: rgb(var(--color-accent-purple) / 0.15); color: rgb(var(--color-accent-purple)); }
+.badge-muted { background: rgb(var(--color-surface-200));         color: rgb(var(--color-text-muted)); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid rgb(var(--color-border));
+  border-radius: var(--radius-sm);
+  background: rgb(var(--color-surface-100));
+  font: 500 10.5px var(--font-mono);
+  color: rgb(var(--color-text-muted));
+  white-space: nowrap;
+}
+
+/* ── Kbd ──────────────────────────────────────────────────── */
+.kbd {
+  display: inline-flex; align-items: center;
+  border: 1px solid rgb(var(--color-border));
+  background: rgb(var(--color-surface-200));
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  font: 500 10px var(--font-mono);
+  color: rgb(var(--color-text-subtle));
+}
+
+/* ── Dots (status lights) ─────────────────────────────────── */
+.dot { display:inline-block; width: 6px; height: 6px; border-radius: 999px; background: rgb(var(--color-text-subtle)); }
+.dot-run  { background: rgb(var(--color-accent-cyan)); }
+.dot-ok   { background: rgb(var(--color-accent-green)); }
+.dot-warn { background: rgb(var(--color-accent-yellow)); }
+.dot-err  { background: rgb(var(--color-accent-red)); }
+.dot-idle { background: rgb(var(--color-text-subtle)); }

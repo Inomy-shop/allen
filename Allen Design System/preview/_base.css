@@ -1,0 +1,36 @@
+/* Tiny base sheet for design-system preview cards.
+   Each card is a 700×N strip — no titles, no framing, just specimens. */
+@import url('../colors_and_type.css');
+
+html, body { margin: 0; padding: 0; background: rgb(var(--color-surface)); }
+.card-frame {
+  width: 700px;
+  padding: 20px;
+  box-sizing: border-box;
+  font-family: var(--font-body);
+  color: rgb(var(--color-text-primary));
+}
+.row { display: flex; align-items: center; gap: 12px; }
+.col { display: flex; flex-direction: column; gap: 12px; }
+.grid { display: grid; gap: 12px; }
+
+.swatch-tile {
+  display: flex; flex-direction: column;
+  border: 1px solid rgb(var(--color-border));
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: rgb(var(--color-surface-100));
+}
+.swatch-chip { height: 56px; }
+.swatch-meta {
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: rgb(var(--color-text-muted));
+  display: flex; flex-direction: column; gap: 1px;
+}
+.swatch-name { color: rgb(var(--color-text-primary)); font-weight: 600; font-size: 11px; }
+.specimen { display:flex; align-items: baseline; gap: 16px; padding: 8px 0; border-bottom: 1px solid rgb(var(--color-border)); }
+.specimen:last-child { border-bottom: 0; }
+.specimen-tag { font-family: var(--font-mono); font-size: 10px; color: rgb(var(--color-text-subtle)); width: 90px; flex-shrink: 0; letter-spacing: 0.04em; text-transform: uppercase; }
+.specimen-body { color: rgb(var(--color-text-primary)); }

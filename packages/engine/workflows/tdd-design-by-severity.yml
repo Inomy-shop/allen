@@ -151,6 +151,14 @@ nodes:
   # ── Fallback gate when codebase_grounding emits an invalid severity ────
   severity_classification_human:
     type: human
+    human:
+      kind: clarify
+      title: "Classify TDD severity"
+      summary: "Triage did not emit small, medium, or large."
+      question: "Pick the implementation/design severity so the TDD workflow can continue."
+      evidence:
+        - label: "Codebase grounding"
+          url: "{{codebase_grounding_artifact_url}}"
     fields:
       - name: severity
         label: "Pick a severity (triage did not emit a valid value)"
@@ -676,6 +684,14 @@ nodes:
 
   tdd_human_clarification:
     type: human
+    human:
+      kind: clarify
+      title: "Clarify TDD questions"
+      summary: "The TDD finalizer needs answers before it can complete the design."
+      question: "Answer the finalizer questions and add any requirement or engineering notes needed to proceed."
+      evidence:
+        - label: "TDD finalizer decision"
+          url: "{{tdd_finalizer_decision_artifact_url}}"
     fields:
       - name: tdd_clarification_answers
         label: "Answers to TDD clarification questions (engineering / requirement owner audience)"
@@ -843,6 +859,16 @@ nodes:
   # ── Escalation gate (catch-all for retry exhaustion) ──────────────────
   design_escalation_review:
     type: human
+    human:
+      kind: recover
+      title: "Recover blocked TDD workflow"
+      summary: "A clarification or validation loop exhausted its retry budget."
+      question: "Choose whether to retry with feedback, override and continue, or abandon the run."
+      highlights:
+        - "Exhausted from: {{default __retry_exhausted_from \"unknown\"}}"
+        - "Severity: {{severity}}"
+        - "TDD gaps: {{default tdd_finalizer_gaps \"none reported\"}}"
+        - "Validator blockers: {{default implementation_readiness_blockers \"none reported\"}}"
     fields:
       - name: escalation_decision
         label: "Clarification retries exhausted. What now?"
@@ -1015,16 +1041,16 @@ edges:
 
   # ── Escalation outgoing (abandon / retry / force_continue) ────────────
   - { from: design_escalation_review, to: END,
-      condition: "escalation_decision == 'abandon'" }
+      condition: "human.design_escalation_review.latest.decision == 'abandon'" }
 
   # retry_with_feedback: condition-only retry edge → engine clears
   # __retry_exhausted_from and resets retry counters for the target.
   - from: design_escalation_review
     to: tdd_finalizer
-    condition: "escalation_decision == 'retry_with_feedback' AND __retry_exhausted_from == 'tdd_human_clarification'"
+    condition: "human.design_escalation_review.latest.decision == 'retry_with_feedback' AND __retry_exhausted_from == 'tdd_human_clarification'"
     retry_context: |
       Human intervened after TDD clarification retries were exhausted.
-      Feedback: {{escalation_feedback}}
+      Feedback: {{human.design_escalation_review.latest.feedback.value}}
 
       Re-run tdd_finalizer with this feedback. Do NOT ask another round
       of clarification unless the request is genuinely impossible.
@@ -1035,10 +1061,10 @@ edges:
   # inputs (simple_tdd_artifact_url set, proposal URLs empty).
   - from: design_escalation_review
     to: tdd_finalizer
-    condition: "escalation_decision == 'retry_with_feedback' AND __retry_exhausted_from == 'implementation_readiness_validator'"
+    condition: "human.design_escalation_review.latest.decision == 'retry_with_feedback' AND __retry_exhausted_from == 'implementation_readiness_validator'"
     retry_context: |
       Validator auto-retry exhausted on the TDD. Human feedback:
-      {{escalation_feedback}}
+      {{human.design_escalation_review.latest.feedback.value}}
 
       Validator blockers:
       {{implementation_readiness_blockers}}
@@ -1053,6 +1079,6 @@ edges:
   #     (force_continue here means "ship the current TDD with its known
   #     blockers"; re-running validator would just fail again).
   - { from: design_escalation_review, to: implementation_readiness_validator,
-      condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'tdd_human_clarification'" }
+      condition: "human.design_escalation_review.latest.decision == 'force_continue' AND __retry_exhausted_from == 'tdd_human_clarification'" }
   - { from: design_escalation_review, to: END,
-      condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'implementation_readiness_validator'" }
+      condition: "human.design_escalation_review.latest.decision == 'force_continue' AND __retry_exhausted_from == 'implementation_readiness_validator'" }

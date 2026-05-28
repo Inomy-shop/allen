@@ -38,19 +38,33 @@ interface InterventionField {
   placeholder?: string;
 }
 
+interface InterventionAction {
+  label?: string;
+  value?: string;
+  id?: string;
+  primary?: boolean;
+  destructive?: boolean;
+  description?: string;
+}
+
 interface Intervention {
   _id: string;
   intervention_id: string;
   workflow_run_id: string;
   workflow_name: string;
   stage: string;
+  kind?: 'clarify' | 'review' | 'recover';
   severity: 'question' | 'approval' | 'escalation';
   title: string;
   context_summary: string;
   question: string;
-  options: Array<{ label: string; value: string; primary?: boolean; destructive?: boolean }>;
+  options: InterventionAction[];
   fields?: InterventionField[];
   docs: Array<{ label: string; url: string; kind?: string }>;
+  actions?: InterventionAction[];
+  evidence?: Array<{ label?: string; value?: string; url?: string; type?: string }>;
+  highlights?: string[];
+  retry_exhaustion?: Record<string, unknown>;
   round_info?: { current: number; max: number };
   user_request?: string;
   review_content?: string;
@@ -488,8 +502,12 @@ function InterventionDetailView() {
         || v === 'retry_with_feedback' || v === 'override_and_continue' || v === 'abandon'
       ));
   });
-  const panelMode: 'simple' | 'approval' =
-    (interventionHasOptions || interventionHasDecisionField) ? 'approval' : 'simple';
+  const panelMode: 'simple' | 'approval' | 'escalation' =
+    item.kind === 'clarify'
+      ? 'simple'
+      : (interventionHasOptions || interventionHasDecisionField)
+      ? (item.severity === 'escalation' ? 'escalation' : 'approval')
+      : 'simple';
 
   const panelSeverity: ClarificationSeverity =
     item.severity === 'approval'   ? 'approval'
@@ -509,8 +527,18 @@ function InterventionDetailView() {
     const type = String(f.type || '').toLowerCase();
     return name.includes('feedback') || name.includes('reason') || name.includes('comment') || type === 'textarea';
   }) ?? originalFields.find(f => !isDecisionFieldName(f.name));
-  const fields: ClarificationField[] = panelMode === 'approval'
-    ? originalFields
+  const decisionMode = panelMode === 'approval' || panelMode === 'escalation';
+  const decisionField = originalFields.find(isDecisionField);
+  const feedbackField = originalFields.find(f => {
+    if (f === decisionField) return false;
+    const name = f.name.toLowerCase();
+    const type = String(f.type || '').toLowerCase();
+    return name.includes('feedback') || name.includes('reason') || name.includes('comment') || type === 'textarea';
+  });
+  const fields: ClarificationField[] = decisionMode
+    ? originalFields.filter(field => field !== decisionField && field !== feedbackField)
+    : originalFields.length > 0
+      ? originalFields
     : [{
       name: '__human_response',
       type: 'textarea',
@@ -532,19 +560,23 @@ function InterventionDetailView() {
     feedback?: string;
     scope?: string;
   }) {
-    if (!item || (panelMode === 'approval' && !payload.decision)) return;
+    if (!item || (decisionMode && !payload.decision)) return;
     setSubmitting(true);
     try {
-      const decision = panelMode === 'approval' ? payload.decision! : 'answer';
-      const fieldValues = panelMode === 'approval'
-        ? payload.fieldValues
-        : freeformFieldValues(originalFields, payload.fieldValues);
+      const decision = decisionMode ? payload.decision! : 'answer';
+      const actionId = actionIdForDecision(decision, item.actions ?? item.options ?? [], panelMode);
+      const fieldValues = decisionMode
+        ? decisionFieldValues(payload, originalFields, decision, actionId)
+        : originalFields.length > 0
+          ? payload.fieldValues
+          : freeformFieldValues(originalFields, payload.fieldValues);
       await interventionsApi.respond(item.intervention_id, {
         decision,
+        action_id: actionId,
         feedback: payload.feedback,
         scope: payload.scope as 'requirements' | 'architecture' | 'technical_design' | 'all' | undefined,
         field_values:
-          decision === 'answer' || decision === 'approve'
+          decision === 'answer' || decision === 'approve' || decision === 'request_changes'
             ? (fieldValues as Record<string, string>)
             : undefined,
         human_node_name: item.stage,
@@ -667,7 +699,7 @@ function InterventionDetailView() {
             reviewLanguage={item.review_language}
             mode={panelMode}
             scopeOptions={scopeOptions}
-            docs={item.docs?.map(d => ({ label: d.label, url: d.url }))}
+            docs={uniqueDocs(item.docs?.map(d => ({ label: d.label, url: d.url })) ?? [])}
             submitting={submitting}
             onSubmit={onSubmit}
           />
@@ -751,9 +783,53 @@ function ResponseField({ label, value, pre, mono }: {
   );
 }
 
+function isDecisionField(field: ClarificationField): boolean {
+  const lower = field.name.toLowerCase();
+  const type = String(field.type || '').toLowerCase();
+  const optionValues = (field.options ?? []).map(option => (
+    typeof option === 'string' ? option : option.value
+  )).map(value => String(value).toLowerCase());
+  return isDecisionFieldName(lower)
+    || ((type === 'select' || type === 'radio') && optionValues.some(value => (
+      value === 'approve'
+      || value === 'request_changes'
+      || value === 'reject'
+      || value === 'cancel'
+      || value === 'retry_with_feedback'
+      || value === 'override_and_continue'
+      || value === 'force_continue'
+      || value === 'abandon'
+    )));
+}
+
 function isDecisionFieldName(name: string): boolean {
   const lower = name.toLowerCase();
   return lower.includes('decision') || lower.includes('approval') || lower === 'action';
+}
+
+function decisionFieldValues(
+  payload: {
+    decision?: 'approve' | 'request_changes' | 'reject' | 'answer';
+    fieldValues: Record<string, unknown>;
+    feedback?: string;
+  },
+  fields: ClarificationField[],
+  decision: 'approve' | 'request_changes' | 'reject' | 'answer',
+  actionId: string,
+): Record<string, unknown> {
+  const values: Record<string, unknown> = { ...payload.fieldValues };
+  const decisionField = fields.find(isDecisionField);
+  const feedbackField = fields.find(field => {
+    if (field === decisionField) return false;
+    const name = field.name.toLowerCase();
+    const type = String(field.type || '').toLowerCase();
+    return name.includes('feedback') || name.includes('reason') || name.includes('comment') || type === 'textarea';
+  });
+  if (decisionField) values[decisionField.name] = actionId;
+  else if (actionId !== decision) values.decision = actionId;
+  else if (decision !== 'answer') values.decision = decision;
+  if (payload.feedback) values[feedbackField?.name ?? 'feedback'] = payload.feedback;
+  return values;
 }
 
 function freeformFieldValues(
@@ -781,11 +857,53 @@ function freeformFieldValues(
   return values;
 }
 
+function actionIdForDecision(
+  decision: 'approve' | 'request_changes' | 'reject' | 'answer',
+  actions: InterventionAction[],
+  mode: 'simple' | 'approval' | 'escalation',
+): string {
+  const values = actions
+    .map(action => action.value ?? action.id)
+    .filter((value): value is string => !!value);
+  if (mode === 'escalation') {
+    if (decision === 'request_changes' && values.includes('retry_with_feedback')) return 'retry_with_feedback';
+    if (decision === 'approve') {
+      if (values.includes('override_and_continue')) return 'override_and_continue';
+      if (values.includes('force_continue')) return 'force_continue';
+    }
+    if (decision === 'reject' && values.includes('abandon')) return 'abandon';
+  }
+  if (decision === 'reject' && values.includes('cancel')) return 'cancel';
+  if (values.includes(decision)) return decision;
+  return decision;
+}
+
 function firstTextValue(values: Record<string, unknown>): string {
   for (const value of Object.values(values)) {
     if (typeof value === 'string' && value.trim()) return value;
   }
   return '';
+}
+
+function uniqueDocs(docs: Array<{ label: string; url: string }>): Array<{ label: string; url: string }> {
+  const byUrl = new Map<string, { label: string; url: string }>();
+  for (const doc of docs) {
+    const url = doc.url.trim();
+    if (!url) continue;
+    const existing = byUrl.get(url);
+    if (!existing || isGenericDocLabel(existing.label)) {
+      byUrl.set(url, { label: doc.label || existing?.label || 'Artifact', url });
+    }
+  }
+  return [...byUrl.values()];
+}
+
+function isGenericDocLabel(label: string): boolean {
+  const normalized = label.trim().toLowerCase();
+  return normalized === 'evidence'
+    || normalized === 'external'
+    || normalized === 'artifact'
+    || normalized.endsWith('artifact');
 }
 
 // ── Page component ────────────────────────────────────────────────────

@@ -9,6 +9,13 @@ import type { Db } from 'mongodb';
 import type { ChatTraceEvent } from './chat-llm.js';
 import { resolve, dirname } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
+import type { BuildMcpConfigOptions } from '@allen/engine';
+import {
+  getRuntimeApiBaseUrl,
+  getRuntimeJwtAccessSecret,
+  getRuntimePublicBaseUrl,
+} from '../runtime/config.js';
+import { buildMcpSourceEnvForServer } from '../runtime/mcp-credentials.js';
 
 // `@allen/engine` is imported lazily inside the two functions that need
 // MCP_SERVER_NAME. A static import here would fail at module-load time on
@@ -162,6 +169,20 @@ function getAllenMcpServerPath(): string {
   return resolve(thisDir, 'allen-mcp-server.js');
 }
 
+function getAllenMcpServerRunner(serverPath: string): { command: string; args: string[]; env: Record<string, string> } {
+  if (serverPath.endsWith('.ts')) {
+    return { command: 'npx', args: ['tsx', serverPath], env: {} };
+  }
+  if (serverPath.includes('.asar/')) {
+    return {
+      command: process.execPath,
+      args: [serverPath],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    };
+  }
+  return { command: 'node', args: [serverPath], env: {} };
+}
+
 export async function syncMcpToCodex(db: Db): Promise<void> {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
@@ -198,17 +219,22 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
       await execFileAsync('codex', ['mcp', 'remove', mcpServerName], { timeout: 10000 }).catch(() => {});
     }
     const serverPath = getAllenMcpServerPath();
-    // In dev: .ts file → run with npx tsx. In prod: .js file → run with node.
-    const runner = serverPath.endsWith('.ts') ? ['npx', 'tsx'] : ['node'];
-    await execFileAsync('codex', [
+    const runner = getAllenMcpServerRunner(serverPath);
+    const apiBaseUrl = getRuntimeApiBaseUrl();
+    const publicBaseUrl = getRuntimePublicBaseUrl();
+    const args = [
       'mcp', 'add', mcpServerName,
-      '--env', `ALLEN_API_URL=http://localhost:${process.env.PORT ?? '4023'}`,
+      '--env', `ALLEN_API_URL=${apiBaseUrl}`,
       // Shared with the MCP subprocess so it can mint its own access token
       // when calling back into /api/* — see allen-mcp-server.ts.
-      '--env', `JWT_ACCESS_SECRET=${process.env.JWT_ACCESS_SECRET ?? ''}`,
-      '--env', `ALLEN_PUBLIC_URL=${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}`,
-      '--', ...runner, serverPath,
-    ], { timeout: 10000 });
+      '--env', `JWT_ACCESS_SECRET=${getRuntimeJwtAccessSecret()}`,
+      '--env', `ALLEN_PUBLIC_URL=${publicBaseUrl}`,
+    ];
+    for (const [key, value] of Object.entries(runner.env)) {
+      args.push('--env', `${key}=${value}`);
+    }
+    args.push('--', runner.command, ...runner.args);
+    await execFileAsync('codex', args, { timeout: 10000 });
     log('Registered Allen MCP server with Codex CLI');
   } catch (err) {
     log(`Failed to register Allen MCP with Codex: ${(err as Error).message}`);
@@ -221,7 +247,12 @@ export async function syncMcpToCodex(db: Db): Promise<void> {
   const { buildSingleServerConfig } = await import('@allen/engine');
   for (const server of servers) {
     try {
-      const cfg = await buildSingleServerConfig(server as unknown as Record<string, unknown>, db);
+      if (server.type !== 'stdio') {
+        log(`Skipped ${server.name}: Codex CLI sync currently supports stdio MCP servers only`);
+        continue;
+      }
+      const options = { sourceEnv: await buildMcpSourceEnvForServer(server) } satisfies BuildMcpConfigOptions;
+      const cfg = await buildSingleServerConfig(server as unknown as Record<string, unknown>, db, options);
       if (!cfg) {
         log(`Skipped ${server.name}: spawn config could not be resolved`);
         continue;
@@ -300,6 +331,8 @@ export async function runCodexCLI(
   const mcpEnvOverrides: string[] = [];
   if (chatSessionId && !skipTools) {
     const mcpServerName = await getMcpServerName();
+    const apiBaseUrl = getRuntimeApiBaseUrl();
+    const publicBaseUrl = getRuntimePublicBaseUrl();
     mcpEnvOverrides.push(
       '-c', `mcp_servers.${mcpServerName}.env.ALLEN_ARTIFACT_ROOT_TYPE="chat"`,
       '-c', `mcp_servers.${mcpServerName}.env.ALLEN_ARTIFACT_ROOT_ID="${chatSessionId}"`,
@@ -307,9 +340,9 @@ export async function runCodexCLI(
       // Carry the existing required vars too — the override is a full
       // dict replacement in some codex versions, so re-state them to be
       // safe across CLI variants.
-      '-c', `mcp_servers.${mcpServerName}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
-      '-c', `mcp_servers.${mcpServerName}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
-      '-c', `mcp_servers.${mcpServerName}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}"`,
+      '-c', `mcp_servers.${mcpServerName}.env.ALLEN_API_URL="${apiBaseUrl}"`,
+      '-c', `mcp_servers.${mcpServerName}.env.JWT_ACCESS_SECRET="${getRuntimeJwtAccessSecret()}"`,
+      '-c', `mcp_servers.${mcpServerName}.env.ALLEN_PUBLIC_URL="${publicBaseUrl}"`,
     );
   }
 

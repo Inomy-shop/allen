@@ -12,6 +12,8 @@ import {
 import { XTerminal } from '../components/workspace/XTerminal';
 import { EmbeddedChat } from '../components/workspace/EmbeddedChat';
 import WorkspacesSidebar from '../components/workspace/WorkspacesSidebar';
+import ShortcutKey from '../components/common/ShortcutKey';
+import Select from '../components/common/Select';
 import { useSidebarCollapsed } from '../hooks/useSidebarCollapsed';
 import { usePanelLayout } from '../hooks/usePanelLayout';
 import { setupMonaco, getMonacoTheme } from '../lib/monaco-theme';
@@ -262,9 +264,17 @@ function PreviewBar({ id, previewService, setPreviewService, services, onClose }
     <div className="flex items-center gap-2 px-3 py-1 bg-app-muted/40 border-b border-app shrink-0">
       <Eye className="w-3 h-3 text-accent" />
       <span className="overline">Preview</span>
-      <select value={previewService} onChange={e => setPreviewService(e.target.value)} className="bg-surface-100 border border-app rounded text-[10px] font-mono text-theme-secondary px-1.5 py-0.5">
-        {ready.map((s: any) => (<option key={s.name} value={s.name}>{s.name} :{s.port}</option>))}
-      </select>
+      <Select
+        value={previewService}
+        onChange={setPreviewService}
+        searchable={false}
+        className="w-[140px]"
+        options={ready.map((service: any) => ({
+          value: service.name,
+          label: service.name,
+          sublabel: `:${service.port}`,
+        }))}
+      />
       {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-theme-subtle hover:text-theme-secondary p-0.5" title="Open in new tab"><ExternalLink className="w-3 h-3" /></a>}
       <span className="flex-1" />
       <button onClick={onClose} className="text-theme-subtle hover:text-theme-secondary p-0.5"><X className="w-3 h-3" /></button>
@@ -887,7 +897,7 @@ export default function WorkspaceDetailPage() {
                   <span className="flex-1" />
                   {dirty && !isImageFile && (
                     <button onClick={handleSave} disabled={saving} className="text-[10px] px-2 py-0.5 rounded bg-accent-soft text-accent hover:bg-accent/20 flex items-center gap-1 disabled:opacity-50">
-                      <Save className="w-3 h-3" />{saving ? '...' : 'Save'} <span className="text-theme-subtle text-[9px]">⌘S</span>
+                      <Save className="w-3 h-3" />{saving ? '...' : 'Save'} <ShortcutKey value="⌘S" className="h-4 min-w-[26px] border-0 bg-transparent px-0 text-[9px]" />
                     </button>
                   )}
                   {isImageFile ? (
@@ -981,7 +991,10 @@ export default function WorkspaceDetailPage() {
                 <div className="text-center">
                   <FileCode className="w-8 h-8 mx-auto mb-2 text-theme-subtle" />
                   <p className="text-xs">Select a file to edit</p>
-                  <p className="text-[10px] text-theme-subtle mt-0.5">⌘S to save</p>
+                  <p className="mt-1 flex items-center justify-center gap-1 text-[10px] text-theme-subtle">
+                    <ShortcutKey value="⌘S" className="h-4 min-w-[26px] px-1" />
+                    <span>to save</span>
+                  </p>
                 </div>
               </div>
             )}

@@ -1,14 +1,37 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { pullRequests, workspaces } from '../services/workspaceService';
-import { repos as reposApi } from '../services/api';
+import { pullRequests } from '../services/workspaceService';
 import {
-  GitPullRequest, RefreshCw, Loader2, ExternalLink,
-  GitMerge, XCircle, FolderGit2, Clock, FileDiff,
-  Plus, Minus, ArrowRight, Wrench, X, Bot,
+  ArrowRight, Bot, Clock, ExternalLink, FileDiff, FolderGit2,
+  GitPullRequest, ListChecks, Minus, Plus, RefreshCw,
 } from 'lucide-react';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
-import { workflows as workflowsApi, executions as executionsApi } from '../services/api';
+import { executions as executionsApi, workflows as workflowsApi } from '../services/api';
+import IconTooltipButton from '../components/common/IconTooltipButton';
+
+const STATUS_FILTERS = [
+  { id: 'open', label: 'Open' },
+  { id: 'merged', label: 'Merged' },
+  { id: 'closed', label: 'Closed' },
+  { id: '', label: 'All' },
+];
+
+function statusBadge(status: string) {
+  const cls = status === 'merged'
+    ? 'border-accent-purple/30 bg-accent-purple/10 text-accent-purple'
+    : status === 'closed'
+      ? 'border-accent-red/30 bg-accent-red/10 text-accent-red'
+      : 'border-accent-green/30 bg-accent-green/10 text-accent-green';
+  return <span className={`rounded-md border px-2 py-0.5 font-mono text-[10.5px] ${cls}`}>{status}</span>;
+}
+
+function timeAgo(date: string) {
+  const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
 
 export default function PullRequestListPage() {
   const navigate = useNavigate();
@@ -17,51 +40,42 @@ export default function PullRequestListPage() {
   const [syncing, setSyncing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('open');
   const [pendingWsId, setPendingWsId] = useState<string | null>(null);
-  const [repos, setRepos] = useState<any[]>([]);
-  // Resolve-CodeRabbit manual trigger state
-  const [resolveOpen, setResolveOpen] = useState(false);
-  const [resolveUrl, setResolveUrl] = useState('');
   const [resolveBusy, setResolveBusy] = useState(false);
-  const [resolveError, setResolveError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setPrs(await pullRequests.list({ status: statusFilter || undefined })); } catch {}
-    setLoading(false);
+    try {
+      setPrs(await pullRequests.list({ status: statusFilter || undefined }));
+    } catch {
+      setPrs([]);
+    } finally {
+      setLoading(false);
+    }
   }, [statusFilter]);
 
-  useEffect(() => { load(); }, [load]);
-
-  useEffect(() => {
-    reposApi.list().then(setRepos).catch(() => {});
-  }, []);
+  useEffect(() => { void load(); }, [load]);
 
   async function handleSync() {
     setSyncing(true);
     try {
-      // One server-side sweep instead of an N-request client-side loop.
-      // Delegates to the same `syncAllActivePrs` helper the pr-sync-all
-      // cron uses, so the manual button and the 30-min auto-sync stay
-      // consistent by construction.
       await pullRequests.syncAll().catch(() => {});
       await load();
-    } catch {}
-    setSyncing(false);
+    } finally {
+      setSyncing(false);
+    }
   }
 
   async function handleCreateWorkspace(prId: string) {
     try {
       const ws = await pullRequests.createWorkspace(prId);
       setPendingWsId(ws._id);
-    } catch (err: any) { alert(err.message); }
+    } catch (err: any) {
+      alert(err.message);
+    }
   }
 
-  /** Kick off the resolve-pr-reviews workflow for a PR URL — either a
-   *  workflow-owned PR (Flow A) or an external one (Flow B). The server
-   *  built-in handles the branching; the UI just submits the URL. */
   async function handleTriggerResolve(prUrl: string, navigateAfter = true) {
     setResolveBusy(true);
-    setResolveError(null);
     try {
       const list = await workflowsApi.list();
       const workflow = list.find((w: any) => w.name === 'resolve-pr-reviews');
@@ -71,130 +85,179 @@ export default function PullRequestListPage() {
         review_bot_logins: 'coderabbitai,coderabbitai[bot]',
         already_processed_comment_ids: '[]',
       });
-      setResolveOpen(false);
-      setResolveUrl('');
       if (navigateAfter) navigate(`/executions/${exec.id}`);
     } catch (err: any) {
-      setResolveError(err?.message ?? 'Failed to trigger resolution');
+      alert(err?.message ?? 'Failed to trigger resolution');
     } finally {
       setResolveBusy(false);
     }
   }
 
-  function statusIcon(status: string) {
-    if (status === 'merged') return <GitMerge className="w-4 h-4 text-accent-purple" />;
-    if (status === 'closed') return <XCircle className="w-4 h-4 text-accent-red" />;
-    return <GitPullRequest className="w-4 h-4 text-accent-green" />;
-  }
-
-  function statusBadge(status: string) {
-    const cls = status === 'merged' ? 'bg-accent-purple/10 text-accent-purple border-accent-purple/30'
-      : status === 'closed' ? 'bg-accent-red/10 text-accent-red border-accent-red/30'
-      : 'bg-accent-green/10 text-accent-green border-accent-green/30';
-    return <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${cls}`}>{status}</span>;
-  }
-
-  function timeAgo(date: string) {
-    const s = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
-    if (s < 60) return 'just now';
-    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-    return `${Math.floor(s / 86400)}d ago`;
-  }
+  const emptyState = statusFilter === 'closed'
+    ? {
+      title: 'No closed pull requests found',
+      description: 'Closed only includes pull requests closed without merge. Merged pull requests are listed under Merged.',
+    }
+    : statusFilter === 'merged'
+      ? {
+        title: 'No merged pull requests found',
+        description: 'Sync from GitHub to import merged pull requests.',
+      }
+      : statusFilter === 'open'
+        ? {
+          title: 'No open pull requests found',
+          description: 'Sync from GitHub to import open pull requests for review.',
+        }
+        : {
+          title: 'No pull requests found',
+          description: 'Sync from GitHub to import pull requests for review.',
+        };
 
   return (
-    <div className="content scroll-hide pr-page" data-screen-label="pull-requests">
-      {/* Header */}
-      <div className="page-head pr-head">
-        <div className="flex items-start gap-3">
-          <div>
-            <h1>Pull requests</h1>
-            <p className="sub">{prs.length} results · synced from GitHub</p>
+    <div className="content scroll-hide bg-app" data-screen-label="pull-requests">
+      <div className="w-full px-8 py-8">
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
+              <GitPullRequest className="h-[18px] w-[18px]" />
+            </span>
+            <div>
+              <h1 className="text-[24px] font-semibold leading-tight text-theme-primary">Pull requests</h1>
+              <p className="mt-1 text-[13px] text-theme-muted">Review GitHub pull requests, open workspaces, and resolve review feedback.</p>
+            </div>
           </div>
-          <span className="flex-1" />
-          <button
-            onClick={() => { setResolveOpen(true); setResolveUrl(''); setResolveError(null); }}
-            className="btn btn-secondary btn-sm"
-            title="Manually trigger CodeRabbit review resolution for any PR URL (including external ones)"
-          >
-            <Wrench className="w-3.5 h-3.5" />
-            Resolve CodeRabbit
-          </button>
-          <button onClick={handleSync} disabled={syncing} className="btn btn-secondary btn-sm disabled:opacity-50">
-            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Syncing…' : 'Sync from GitHub'}
-          </button>
-        </div>
-
-        {/* Filters */}
-        <div className="topfilter-tabs mt-6">
-          {['open', 'merged', 'closed', ''].map(s => (
-            <button key={s} onClick={() => setStatusFilter(s)}
-              className={`tft ${statusFilter === s ? 'active' : ''}`}>
-              {s || 'All'}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSync}
+              disabled={syncing}
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Syncing' : 'Sync'}
             </button>
-          ))}
+          </div>
         </div>
-      </div>
 
-      {/* List */}
-      <div className="pr-list">
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-app bg-app-card px-3 py-2">
+          <div className="flex items-center gap-1">
+            {STATUS_FILTERS.map(filter => (
+              <button
+                key={filter.id}
+                onClick={() => setStatusFilter(filter.id)}
+                className={`h-8 rounded-md px-3 text-[12px] font-medium transition-colors ${
+                  statusFilter === filter.id
+                    ? 'bg-app-muted text-theme-primary shadow-sm'
+                    : 'text-theme-muted hover:text-theme-primary'
+                }`}
+                type="button"
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+          <span className="font-mono text-[11px] text-theme-muted">{prs.length} result{prs.length === 1 ? '' : 's'}</span>
+        </div>
+
         {loading ? (
-          <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-theme-muted" /></div>
+          <div className="space-y-3">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <div key={index} className="rounded-md border border-app bg-app-card px-5 py-4">
+                <div className="h-4 w-64 animate-pulse rounded-md bg-app-muted" />
+                <div className="mt-3 h-3 w-96 animate-pulse rounded-md bg-app-muted" />
+              </div>
+            ))}
+          </div>
         ) : prs.length === 0 ? (
-          <div className="text-center py-12 text-theme-subtle">
-            <GitPullRequest className="w-10 h-10 mx-auto mb-3 text-theme-subtle" />
-            <p className="text-sm">No pull requests found</p>
-            <p className="text-xs text-theme-subtle mt-1">Click "Sync from GitHub" to import PRs</p>
+          <div className="rounded-md border border-dashed border-app bg-app-card px-5 py-12 text-center">
+            <GitPullRequest className="mx-auto h-8 w-8 text-theme-subtle" />
+            <div className="mt-4 text-[15px] font-semibold text-theme-primary">{emptyState.title}</div>
+            <p className="mt-1 text-[13px] text-theme-muted">{emptyState.description}</p>
+            <button
+              onClick={handleSync}
+              className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+              type="button"
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> Sync pull requests
+            </button>
           </div>
         ) : (
-          <div className="entity-list pr-entity-list">
+          <div className="space-y-2.5">
             {prs.map(pr => (
-              <div key={pr._id} className="entity-row pr-card cursor-pointer" onClick={() => navigate(`/pull-requests/${pr._id}`)}>
+              <div
+                key={pr._id}
+                className="cursor-pointer rounded-md border border-app bg-app-card px-4 py-3 transition-colors hover:border-app-strong hover:bg-app-muted/20"
+                onClick={() => navigate(`/pull-requests/${pr._id}`)}
+              >
                 <div className="flex items-start gap-3">
-                  {statusIcon(pr.status)}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-theme-primary">#{pr.number}</span>
-                      <span className="text-sm text-theme-secondary truncate">{pr.title}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="shrink-0 font-mono text-[12px] text-theme-muted">#{pr.number}</span>
+                      <span className="min-w-0 truncate text-[14px] font-semibold leading-5 text-theme-primary">{pr.title}</span>
                       {statusBadge(pr.status)}
                     </div>
-                    <div className="flex items-center gap-3 mt-1.5 text-[11px] text-theme-muted font-mono">
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[11px] leading-4 text-theme-muted">
                       <span>{pr.repoName}</span>
-                      <span className="flex items-center gap-1">{pr.branch} <ArrowRight className="w-3 h-3" /> {pr.baseBranch}</span>
+                      <span className="text-theme-subtle">·</span>
+                      <span className="inline-flex items-center gap-1">
+                        {pr.branch}
+                        <ArrowRight className="h-3 w-3" />
+                        {pr.baseBranch}
+                      </span>
+                      <span className="text-theme-subtle">·</span>
                       <span>by {pr.author}</span>
                       {pr.createdByAgent && (
-                        <span className="text-accent inline-flex items-center gap-1">
-                          <Bot className="w-3 h-3" /> {pr.createdByAgent}
+                        <>
+                        <span className="text-theme-subtle">·</span>
+                        <span className="inline-flex items-center gap-1 text-theme-secondary">
+                          <Bot className="h-3 w-3" /> {pr.createdByAgent}
                         </span>
+                        </>
                       )}
                     </div>
-                    <div className="flex items-center gap-3 mt-1.5 text-[10px] text-theme-subtle">
-                      <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{timeAgo(pr.updatedAt)}</span>
-                      <span className="flex items-center gap-1"><FileDiff className="w-3 h-3" />{pr.changedFiles} files</span>
-                      <span className="text-accent-green flex items-center gap-0.5"><Plus className="w-3 h-3" />{pr.additions}</span>
-                      <span className="text-accent-red flex items-center gap-0.5"><Minus className="w-3 h-3" />{pr.deletions}</span>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10.5px] leading-4 text-theme-muted">
+                      <span className="inline-flex items-center gap-1">
+                        <Clock className="h-3 w-3" /> updated {timeAgo(pr.updatedAt)}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <FileDiff className="h-3 w-3" /> {pr.changedFiles} files
+                      </span>
+                      <span className="inline-flex items-center gap-0.5 text-accent-green">
+                        <Plus className="h-3 w-3" />{pr.additions}
+                      </span>
+                      <span className="inline-flex items-center gap-0.5 text-accent-red">
+                        <Minus className="h-3 w-3" />{pr.deletions}
+                      </span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="ml-auto flex shrink-0 items-center gap-2" onClick={event => event.stopPropagation()}>
                     {pr.status === 'open' && (
-                      <button onClick={() => handleCreateWorkspace(pr._id)} className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1">
-                        <FolderGit2 className="w-3.5 h-3.5" /> Open Workspace
+                      <button
+                        onClick={() => handleCreateWorkspace(pr._id)}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-app bg-app px-2.5 text-[12px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
+                        type="button"
+                      >
+                        <FolderGit2 className="h-3.5 w-3.5" /> Workspace
                       </button>
                     )}
                     {pr.status === 'open' && pr.url && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); handleTriggerResolve(pr.url, true); }}
-                        className="btn-ghost text-[11px] py-1 px-2 flex items-center gap-1"
-                        title="Trigger the resolve-pr-reviews workflow for this PR"
+                        onClick={() => handleTriggerResolve(pr.url, true)}
+                        disabled={resolveBusy}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-app bg-app px-2.5 text-[12px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-50"
+                        type="button"
                       >
-                        <Wrench className="w-3.5 h-3.5" /> Resolve CodeRabbit
+                        <ListChecks className="h-3.5 w-3.5" /> Resolve
                       </button>
                     )}
                     {pr.url && (
-                      <a href={pr.url} target="_blank" rel="noopener noreferrer" className="btn-ghost p-1.5" title="View on GitHub">
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
+                      <IconTooltipButton
+                        label="Open on GitHub"
+                        onClick={() => window.open(pr.url, '_blank', 'noopener,noreferrer')}
+                        className="h-8 w-8 border border-app bg-app hover:border-app-strong"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </IconTooltipButton>
                     )}
                   </div>
                 </div>
@@ -202,71 +265,15 @@ export default function PullRequestListPage() {
             ))}
           </div>
         )}
-      </div>
-      {pendingWsId && (
-        <SetupProgressDialog
-          workspaceId={pendingWsId}
-          onComplete={(ws) => { setPendingWsId(null); navigate(`/workspaces/${ws._id}`); }}
-          onFailed={() => setPendingWsId(null)}
-        />
-      )}
 
-      {resolveOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
-          <div className="card w-full max-w-lg overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200">
-            <div className="px-6 py-5 border-b border-app flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-sm bg-accent-yellow/10 border border-accent-yellow/30 flex items-center justify-center">
-                  <Wrench className="w-5 h-5 text-accent-yellow" />
-                </div>
-                <div>
-                  <h2 className="text-[14px] font-semibold text-theme-primary tracking-tight">Resolve CodeRabbit Comments</h2>
-                  <p className="text-[11px] text-theme-muted font-mono">Paste any GitHub PR URL — external PRs create a fresh workspace automatically.</p>
-                </div>
-              </div>
-              <button onClick={() => setResolveOpen(false)} className="p-2 rounded-sm hover:bg-surface-200 text-theme-muted hover:text-theme-secondary">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="px-6 py-5 space-y-3">
-              {resolveError && (
-                <div className="text-xs text-accent-red bg-accent-red/10 border border-accent-red/20 rounded-sm px-3 py-2">{resolveError}</div>
-              )}
-              <label className="flex items-center gap-1 text-xs font-label font-semibold text-theme-secondary uppercase tracking-widest">
-                PR URL <span className="text-accent-red normal-case text-[10px]">*</span>
-              </label>
-              <input
-                type="text"
-                value={resolveUrl}
-                onChange={e => setResolveUrl(e.target.value)}
-                placeholder="https://github.com/owner/repo/pull/123"
-                className="input w-full font-mono text-sm"
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && resolveUrl.trim() && !resolveBusy) {
-                    handleTriggerResolve(resolveUrl, true);
-                  }
-                }}
-              />
-              <p className="text-[10px] text-theme-muted">
-                <strong>Flow A:</strong> if this PR was created by an Allen workflow, the original workspace will be reused. <br />
-                <strong>Flow B:</strong> otherwise, the repo must be registered at /repos — a fresh workspace will be created and archived after the fix lands.
-              </p>
-            </div>
-            <div className="flex items-center gap-3 px-6 py-5 border-t border-app bg-app-card/50">
-              <button onClick={() => setResolveOpen(false)} className="flex-1 btn-ghost">Cancel</button>
-              <button
-                onClick={() => handleTriggerResolve(resolveUrl, true)}
-                disabled={resolveBusy || !resolveUrl.trim()}
-                className="flex-1 btn-primary inline-flex items-center justify-center gap-2"
-              >
-                {resolveBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
-                {resolveBusy ? 'Starting…' : 'Run Workflow'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+        {pendingWsId && (
+          <SetupProgressDialog
+            workspaceId={pendingWsId}
+            onComplete={(ws) => { setPendingWsId(null); navigate(`/workspaces/${ws._id}`); }}
+            onFailed={() => setPendingWsId(null)}
+          />
+        )}
+      </div>
     </div>
   );
 }

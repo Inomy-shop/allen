@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import type { AgentOption, TeamOption } from '../agents/AgentAssignDropdown';
 import { workflows as wfApi } from '../../services/api';
+import Select from '../common/Select';
 
 interface Repo {
   _id: string;
@@ -271,6 +272,14 @@ export default function DispatchModal({
   if (!open) return null;
 
   const selectedRepo = repos.find(r => String(r._id) === repoId);
+  const repoOptions = [
+    { value: '', label: reposLoading ? 'Loading repos...' : 'Pick a repository' },
+    ...repos.map(repo => ({
+      value: String(repo._id),
+      label: repo.name,
+      sublabel: repo.path,
+    })),
+  ];
   const targetKind = targetKey ? targetKey.split(':')[0] : 'auto';
 
   function decodeTarget(): DispatchTarget | null {
@@ -436,21 +445,14 @@ export default function DispatchModal({
                 <label className="overline mb-1.5 block">
                   <FolderGit2 className="inline w-3 h-3 text-accent-purple mr-1" /> Repository
                 </label>
-                <select
+                <Select
                   value={repoId}
-                  onChange={e => setRepoId(e.target.value)}
+                  onChange={setRepoId}
                   disabled={reposLoading}
-                  className="input py-2 text-[13px] w-full disabled:opacity-50"
-                >
-                  <option value="">
-                    {reposLoading ? 'Loading repos…' : '— Pick a repository —'}
-                  </option>
-                  {repos.map(r => (
-                    <option key={String(r._id)} value={String(r._id)}>
-                      {r.name}{r.path ? ` · ${r.path}` : ''}
-                    </option>
-                  ))}
-                </select>
+                  options={repoOptions}
+                  placeholder={reposLoading ? 'Loading repos...' : 'Pick a repository'}
+                  searchPlaceholder="Search repositories..."
+                />
                 {selectedRepo?.path && (
                   <div className="mt-1.5 text-[10px] font-mono text-theme-subtle">
                     A fresh workspace will be created from <span className="text-theme-muted">{selectedRepo.path}</span>. The agent works on its own branch; original repo isn't touched.
@@ -838,6 +840,18 @@ function WorkflowInputs({
         const placeholder = s?.placeholder ?? `Enter ${key.replace(/_/g, ' ')}…`;
         const value = values[key] ?? '';
         const selectedRepo = repoPicker ? findRepoByPath(repos, value) : null;
+        const workflowRepoOptions = [
+          { value: '', label: 'Pick a repository' },
+          ...repos.map(repo => ({
+            value: repo.path ?? '',
+            label: repo.name,
+            sublabel: repo.path || 'Missing path',
+            disabled: !repo.path,
+          })),
+        ];
+        const enumOptions = Array.isArray(s.enum)
+          ? [{ value: '', label: 'Pick' }, ...s.enum.map((opt: string) => ({ value: opt, label: opt }))]
+          : [];
 
         return (
           <div key={key}>
@@ -851,22 +865,13 @@ function WorkflowInputs({
 
             {repoPicker && (
               <>
-                <select
+                <Select
                   value={value}
-                  onChange={(e) => onChange(key, e.target.value)}
-                  className="input py-2 text-[13px] w-full"
-                >
-                  <option value="">— Pick a repository —</option>
-                  {repos.map(repo => {
-                    const optionValue = repo.path ?? '';
-                    const disabled = !repo.path;
-                    return (
-                      <option key={String(repo._id)} value={optionValue} disabled={disabled}>
-                        {repo.name}{repo.path ? ` · ${repo.path}` : ''}{disabled ? ' · missing path' : ''}
-                      </option>
-                    );
-                  })}
-                </select>
+                  onChange={(nextValue) => onChange(key, nextValue)}
+                  options={workflowRepoOptions}
+                  placeholder="Pick a repository"
+                  searchPlaceholder="Search repositories..."
+                />
                 {selectedRepo?.path && (
                   <div className="mt-1.5 text-[10px] font-mono text-theme-subtle">
                     Selected repo path: <span className="text-theme-muted">{selectedRepo.path}</span>
@@ -925,16 +930,13 @@ function WorkflowInputs({
             )}
 
             {!repoPicker && w === 'select' && Array.isArray(s.enum) && (
-              <select
+              <Select
                 value={value}
-                onChange={(e) => onChange(key, e.target.value)}
-                className="input py-2 text-[13px] w-full"
-              >
-                <option value="">— Pick —</option>
-                {s.enum.map((opt: string) => (
-                  <option key={opt} value={opt}>{opt}</option>
-                ))}
-              </select>
+                onChange={(nextValue) => onChange(key, nextValue)}
+                options={enumOptions}
+                placeholder="Pick"
+                searchPlaceholder={`Search ${label}...`}
+              />
             )}
           </div>
         );

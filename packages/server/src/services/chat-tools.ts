@@ -21,7 +21,12 @@ import { ContextEvaluationService } from './context/evaluation/context-evaluatio
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
-import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload } from '@allen/engine';
+import {
+  getRuntimeApiBaseUrl,
+  getRuntimeJwtAccessSecret,
+  getRuntimePublicBaseUrl,
+} from '../runtime/config.js';
 
 /**
  * Claude-spawn-only system-prompt notice. Appended (via appendSystemPrompt
@@ -48,6 +53,63 @@ interactive Claude Code harness. Therefore:
 - If you're unsure a tool exists, just attempt the call — an
   unknown-tool error surfaces in seconds, whereas \`ToolSearch\` hangs.
 `.trim();
+
+function toHumanInterventionPayload(doc: {
+  stage: string;
+  kind?: string;
+  widget?: string;
+  severity?: string;
+  title?: string;
+  summary?: string;
+  question?: string;
+  fields?: Array<any>;
+  actions?: Array<any>;
+  evidence?: Array<any>;
+  retry_exhaustion?: Record<string, unknown>;
+}): HumanInterventionPayload {
+  return {
+    kind: doc.kind === 'clarify' || doc.kind === 'review' || doc.kind === 'recover'
+      ? doc.kind
+      : doc.severity === 'approval'
+        ? 'review'
+        : doc.severity === 'escalation'
+          ? 'recover'
+        : 'clarify',
+    widget: doc.widget === 'dynamic_form' || doc.widget === 'approval_gate' || doc.widget === 'retry_exhausted_gate' || doc.widget === 'escalation_gate'
+      ? doc.widget
+      : undefined,
+    node: doc.stage,
+    title: doc.title ?? doc.stage,
+    summary: doc.summary,
+    question: doc.question ?? '',
+    severity: doc.severity === 'approval' || doc.severity === 'escalation' || doc.severity === 'question'
+      ? doc.severity
+      : 'question',
+    fields: (doc.fields ?? []).map((field) => ({
+      name: String(field.name ?? ''),
+      type: (field.type === 'string' || field.type === 'text' || field.type === 'textarea' || field.type === 'boolean' || field.type === 'number' || field.type === 'select'
+        ? field.type
+        : 'text') as 'string' | 'text' | 'textarea' | 'boolean' | 'number' | 'select',
+      label: typeof field.label === 'string' ? field.label : undefined,
+      required: typeof field.required === 'boolean' ? field.required : undefined,
+      options: Array.isArray(field.options) ? field.options.filter((item: unknown): item is string => typeof item === 'string') : undefined,
+      default: field.default,
+    })).filter((field) => field.name),
+    actions: (doc.actions ?? []).map((action) => ({
+      id: String(action.id ?? ''),
+      label: typeof action.label === 'string' ? action.label : undefined,
+      intent: typeof action.intent === 'string' ? action.intent as any : undefined,
+      feedbackRequired: typeof action.feedbackRequired === 'boolean' ? action.feedbackRequired : undefined,
+      feedbackOptional: typeof action.feedbackOptional === 'boolean' ? action.feedbackOptional : undefined,
+      warning: typeof action.warning === 'string' ? action.warning : undefined,
+      route: action.route && typeof action.route === 'object' && !Array.isArray(action.route)
+        ? action.route as any
+        : undefined,
+    })).filter((action) => action.id),
+    evidence: doc.evidence as HumanInterventionPayload['evidence'],
+    retryExhaustion: doc.retry_exhaustion as HumanInterventionPayload['retryExhaustion'],
+  };
+}
 
 const ALWAYS_ON_ALLEN_CONTEXT_TOOLS = [
   `mcp__${MCP_SERVER_NAME}__get_repo_context_body`,
@@ -1089,6 +1151,40 @@ interface SpawnTreeContext {
   repoKnowledgeFreshness?: string | null;
 }
 
+async function markSpawnCompletedUnlessTerminal(
+  db: Db,
+  executionId: string,
+  agentName: string,
+  costUsd: number,
+  durationMs: number,
+  sessionId?: string,
+): Promise<boolean> {
+  const completionFields: Record<string, unknown> = {
+    status: 'completed',
+    completedNodes: [agentName],
+    currentNodes: [],
+    cost: { actual: costUsd, estimated: costUsd },
+    durationMs,
+    completedAt: new Date(),
+  };
+  if (sessionId) completionFields[`sessions.${agentName}`] = sessionId;
+
+  const result = await db.collection('executions').updateOne(
+    { id: executionId, status: { $nin: ['completed', 'cancelled', 'canceled', 'failed'] } },
+    { $set: completionFields },
+  );
+
+  if (result.matchedCount > 0) return true;
+
+  if (sessionId) {
+    await db.collection('executions').updateOne(
+      { id: executionId },
+      { $set: { [`sessions.${agentName}`]: sessionId, durationMs } },
+    );
+  }
+  return false;
+}
+
 /** Run spawn_agent in background — supports both Claude and Codex with MCP + tracing */
 async function runSpawnInBackground(
   db: Db, role: Record<string, unknown>, agentName: string, prompt: string,
@@ -1142,7 +1238,17 @@ async function runSpawnInBackground(
   };
 
   // Broadcast spawn started + persist log
-  if (onEvent) onEvent('spawn_started', { executionId, agent: agentName, prompt: prompt.slice(0, 200), provider, model });
+  if (onEvent) onEvent('spawn_started', {
+    executionId,
+    agent: agentName,
+    prompt: prompt.slice(0, 200),
+    provider,
+    model,
+    parentExecutionId: spawnTree?.parentExecutionId ?? null,
+    parentCaller: spawnTree?.parentCaller ?? null,
+    rootExecutionId: spawnTree?.rootExecutionId ?? executionId,
+    spawnDepth: spawnTree?.spawnDepth ?? 0,
+  });
 
   // ── Phase 3 log fan-out setup ──
   //
@@ -1370,9 +1476,9 @@ async function runSpawnInBackground(
         mcpEnvOverrides.push('-c', `mcp_servers.${MCP_SERVER_NAME}.env.${k}="${v.replace(/"/g, '\\"')}"`);
       }
       mcpEnvOverrides.push(
-        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
-        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
-        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}"`,
+        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="${getRuntimeApiBaseUrl()}"`,
+        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${getRuntimeJwtAccessSecret()}"`,
+        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${getRuntimePublicBaseUrl()}"`,
       );
 
       const args: string[] = ['exec'];
@@ -1855,14 +1961,19 @@ async function runSpawnInBackground(
     // Clean up process registry
     runningProcesses.delete(executionId);
 
-    await db.collection('executions').updateOne(
-      { id: executionId },
-      { $set: {
-        status: 'completed', completedNodes: [agentName], currentNodes: [],
-        cost: { actual: costUsd, estimated: costUsd }, durationMs, completedAt: new Date(),
-        ...(sessionId ? { [`sessions.${agentName}`]: sessionId } : {}),
-      } },
+    const markedCompleted = await markSpawnCompletedUnlessTerminal(
+      db,
+      executionId,
+      agentName,
+      costUsd,
+      durationMs,
+      sessionId,
     );
+    if (!markedCompleted) {
+      logger.info('[spawn] completion skipped because execution is already terminal', { executionId, agentName });
+      if (activeCtx) activeCtx.pendingBackgroundTasks--;
+      return;
+    }
 
     // Broadcast completion + log
     if (onEvent) onEvent('spawn_completed', { executionId, agent: agentName, durationMs, toolCount: toolCalls.length, response: response.slice(0, 300) });
@@ -2004,6 +2115,7 @@ async function runSpawnInBackground(
 export const __internalsForTest = {
   runSpawnInBackground: (...args: Parameters<typeof runSpawnInBackground>) =>
     runSpawnInBackground(...args),
+  markSpawnCompletedUnlessTerminal,
 };
 
 /**
@@ -2481,21 +2593,15 @@ const submitExecutionInput: ChatTool = {
       // Dispatch by decision — mirrors the POST /api/interventions/:id/respond handler
       if (decision === 'approve' || decision === 'answer') {
         const nodeName = intervention.stage;
-        const originalFields = (intervention as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
-        const payload: Record<string, unknown> = {};
-        if (Object.keys(fieldValues).length > 0) {
-          Object.assign(payload, fieldValues);
-        } else if (originalFields.some(f => f.name === 'approval_decision')) {
-          payload.approval_decision = 'approve';
-          if (args.feedback != null) payload.approval_feedback = args.feedback;
-        } else if (originalFields.some(f => f.name === 'decision')) {
-          payload.decision = 'approve';
-          if (args.feedback != null) payload.feedback = args.feedback;
-        } else if (originalFields.length > 0) {
-          // Fallback — single-field case where the caller only sent `data`
-          // with a free-form response.
-          payload[originalFields[0].name] = (args.data as Record<string, unknown>)?.response ?? '';
+        if (Object.keys(fieldValues).length === 0) {
+          return { error: 'field_values is required for HITL responses.' };
         }
+        const payload = {
+          human_input: buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+            ...fieldValues,
+            __human_meta: { actionId: decision, decision, feedback },
+          }),
+        };
         try {
           await executionService.submitInput(intervention.workflow_run_id, nodeName, payload);
         } catch (err) {
@@ -2508,21 +2614,43 @@ const submitExecutionInput: ChatTool = {
       } else if (decision === 'request_changes') {
         const nodeName = intervention.stage;
         const originalFields = (intervention as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
-        const payload: Record<string, unknown> = { ...fieldValues };
-        const hasDecisionField = originalFields.some(f => f.name === 'approval_decision' || f.name === 'decision');
+        if (Object.keys(fieldValues).length === 0) {
+          return { error: 'field_values is required for HITL responses.' };
+        }
+        const values: Record<string, unknown> = { ...fieldValues };
+        const isEscalation = intervention.severity === 'escalation'
+          || String(intervention.stage ?? '').toLowerCase().includes('escalation');
+        const hasDecisionField = originalFields.some(f => f.name === 'approval_decision' || f.name === 'decision' || f.name === 'escalation_decision');
         if (hasDecisionField) {
-          if (originalFields.some(f => f.name === 'approval_decision') && payload.approval_decision == null) {
-            payload.approval_decision = 'request_changes';
+          if (originalFields.some(f => f.name === 'approval_decision') && values.approval_decision == null) {
+            values.approval_decision = 'request_changes';
           }
-          if (originalFields.some(f => f.name === 'decision') && payload.decision == null) {
-            payload.decision = 'request_changes';
+          if (originalFields.some(f => f.name === 'decision') && values.decision == null) {
+            values.decision = isEscalation ? 'retry_with_feedback' : 'request_changes';
           }
-          if (originalFields.some(f => f.name === 'approval_feedback') && payload.approval_feedback == null) {
-            payload.approval_feedback = feedback ?? '';
+          if (originalFields.some(f => f.name === 'escalation_decision') && values.escalation_decision == null) {
+            values.escalation_decision = 'retry_with_feedback';
           }
-          if (originalFields.some(f => f.name === 'feedback') && payload.feedback == null) {
-            payload.feedback = feedback ?? '';
+          if (originalFields.some(f => f.name === 'approval_feedback') && values.approval_feedback == null) {
+            values.approval_feedback = feedback ?? '';
           }
+          if (originalFields.some(f => f.name === 'feedback') && values.feedback == null) {
+            values.feedback = feedback ?? '';
+          }
+          if (originalFields.some(f => f.name === 'escalation_feedback') && values.escalation_feedback == null) {
+            values.escalation_feedback = feedback ?? '';
+          }
+          const humanDecision = String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? decision);
+          const payload = {
+            human_input: buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+              ...values,
+              __human_meta: {
+                actionId: humanDecision,
+                decision: humanDecision,
+                feedback: feedback ?? String(values.feedback ?? values.approval_feedback ?? values.escalation_feedback ?? ''),
+              },
+            }),
+          };
           const delivered = await executionService.submitInput(intervention.workflow_run_id, nodeName, payload);
           if (delivered) {
             await db.collection('executions').updateOne(
@@ -2534,27 +2662,41 @@ const submitExecutionInput: ChatTool = {
             await db.collection('executions').updateOne(
               { id: intervention.workflow_run_id },
               {
-                $set: {
-                  'state.__retry_target': [targetNode],
-                  'state.__retry_source': 'human_feedback',
-                  'state.__retry_attempt': 1,
-                  'state.retry_context': feedback ?? '',
-                },
+	                $set: {
+	                  'state.__retry_target': [targetNode],
+	                  'state.__retry_source': 'human_feedback',
+	                  'state.__retry_attempt': 1,
+	                  'state.human_input': buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+	                    ...values,
+	                    __human_meta: {
+                        actionId: humanDecision,
+                        decision: humanDecision,
+                        feedback: feedback ?? String(values.feedback ?? values.approval_feedback ?? values.escalation_feedback ?? ''),
+                      },
+	                  }),
+	                },
               },
             );
             await executionService.retryFromNode(intervention.workflow_run_id, targetNode);
           }
         } else {
         const targetNode = retryTargetForStage(intervention.stage, scope);
-        await db.collection('executions').updateOne(
-          { id: intervention.workflow_run_id },
-          {
-            $set: {
-              'state.__retry_target': [targetNode],
-              'state.__retry_source': 'human_feedback',
-              'state.__retry_attempt': 1,
-              'state.retry_context': feedback ?? '',
-            },
+	        await db.collection('executions').updateOne(
+	          { id: intervention.workflow_run_id },
+	          {
+	            $set: {
+	              'state.__retry_target': [targetNode],
+	              'state.__retry_source': 'human_feedback',
+	              'state.__retry_attempt': 1,
+	              'state.human_input': buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+	                ...values,
+	                __human_meta: {
+                    actionId: String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? decision),
+                    decision: String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? decision),
+                    feedback: feedback ?? String(values.feedback ?? values.approval_feedback ?? values.escalation_feedback ?? ''),
+                  },
+	              }),
+	            },
           },
         );
         try {
@@ -2564,9 +2706,43 @@ const submitExecutionInput: ChatTool = {
         }
         }
       } else if (decision === 'reject') {
+        const nodeName = intervention.stage;
+        const originalFields = (intervention as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
+        const values: Record<string, unknown> = { ...fieldValues };
+        const actionValue = String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? 'reject');
+        if (originalFields.some(f => f.name === 'approval_decision') && values.approval_decision == null) {
+          values.approval_decision = actionValue;
+        }
+        if (originalFields.some(f => f.name === 'decision') && values.decision == null) {
+          values.decision = actionValue;
+        }
+        if (originalFields.some(f => f.name === 'escalation_decision') && values.escalation_decision == null) {
+          values.escalation_decision = actionValue;
+        }
+        if (feedback != null) {
+          if (originalFields.some(f => f.name === 'approval_feedback') && values.approval_feedback == null) {
+            values.approval_feedback = feedback;
+          } else if (originalFields.some(f => f.name === 'feedback') && values.feedback == null) {
+            values.feedback = feedback;
+          } else if (originalFields.some(f => f.name === 'escalation_feedback') && values.escalation_feedback == null) {
+            values.escalation_feedback = feedback;
+          } else {
+            values.feedback = feedback;
+          }
+        }
+        let delivered = false;
+        if (originalFields.length > 0) {
+          const payload = {
+            human_input: buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+              ...values,
+              __human_meta: { actionId: actionValue, decision: actionValue, feedback },
+            }),
+          };
+          delivered = await executionService.submitInput(intervention.workflow_run_id, nodeName, payload);
+        }
         await db.collection('executions').updateOne(
           { id: intervention.workflow_run_id },
-          { $set: { status: 'cancelled' } },
+          { $set: { status: delivered ? 'running' : 'cancelled' } },
         );
       }
 
@@ -3353,9 +3529,9 @@ async function runAgentTurn(
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_AGENT_NAME="${targetName}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_PARENT_ID="${convId}"`,
           '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_CHAT_SESSION_ID="${chatSessionId}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="${getRuntimeApiBaseUrl()}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${getRuntimeJwtAccessSecret()}"`,
+          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${getRuntimePublicBaseUrl()}"`,
         );
       }
 

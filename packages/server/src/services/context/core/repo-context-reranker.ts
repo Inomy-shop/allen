@@ -410,8 +410,10 @@ function legacyTaskText(input: ContextRerankInput): string {
 
 function resolveRerankerScript(): string {
   if (process.env.ALLEN_CONTEXT_RERANKER_SCRIPT) return process.env.ALLEN_CONTEXT_RERANKER_SCRIPT;
+  const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    join(dirname(fileURLToPath(import.meta.url)), '../scripts/context-reranker.py'),
+    join(here, '../../../scripts/context-reranker.py'),
+    ...(process.env.ALLEN_DESKTOP === '1' ? [join(here, '../../../../src/scripts/context-reranker.py')] : []),
     join(process.cwd(), 'packages/server/src/scripts/context-reranker.py'),
     join(process.cwd(), 'src/scripts/context-reranker.py'),
   ];

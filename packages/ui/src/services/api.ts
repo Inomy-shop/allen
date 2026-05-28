@@ -2,6 +2,10 @@ import { useAuthStore } from '../stores/authStore';
 
 const BASE = '/api';
 
+function encodeFilePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
 /**
  * Returns the Authorization header for authenticated API calls.
  * Used by places that need to bypass the `request()` helper — SSE streams,
@@ -96,7 +100,13 @@ async function request<T>(path: string, options: RequestInit = {}, signal?: Abor
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? `Request failed: ${res.status}`);
+    const error = new Error(body.error ?? `Request failed: ${res.status}`) as Error & {
+      status?: number;
+      body?: unknown;
+    };
+    error.status = res.status;
+    error.body = body;
+    throw error;
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -217,6 +227,9 @@ export interface RunStatus {
     failedNode?: string | null;
     errorMessage?: string | null;
     isAgentExecution?: boolean;
+    parentExecutionId?: string | null;
+    rootExecutionId?: string | null;
+    spawnDepth?: number | null;
     contextWorkflowEvaluation?: {
       jobId?: string;
       provider?: string;
@@ -415,6 +428,7 @@ export const executions = {
     limit?: number;
     offset?: number;
     includeTotal?: boolean;
+    enrich?: boolean;
   } = {}) => {
     const qs = new URLSearchParams();
     if (params.status) qs.set('status', params.status);
@@ -423,6 +437,7 @@ export const executions = {
     if (params.type) qs.set('type', params.type);
     if (params.search) qs.set('search', params.search);
     if (params.includeTotal) qs.set('includeTotal', 'true');
+    if (params.enrich) qs.set('enrich', 'true');
     qs.set('limit', String(params.limit ?? 50));
     qs.set('offset', String(params.offset ?? 0));
     return request<{ items: any[]; total?: number }>(`/executions?${qs.toString()}`);
@@ -658,6 +673,7 @@ export const interventions = {
     request<any[]>(`/interventions/by-workflow-run/${workflowRunId}`),
   respond: (id: string, body: {
     decision: 'approve' | 'request_changes' | 'reject' | 'answer';
+    action_id?: string;
     field_values?: Record<string, unknown>;
     feedback?: string;
     scope?: 'requirements' | 'architecture' | 'technical_design' | 'all' | null;
@@ -741,11 +757,13 @@ export const repos = {
   updateMandatoryContext: (id: string, mappingId: string, body: Record<string, unknown>) =>
     request<any>(`/repos/${id}/context-management/mandatory/${encodeURIComponent(mappingId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   getAllFiles: (id: string) => request<any[]>(`/repos/${id}/all-files`),
-  getFile: (id: string, path: string) => request<any>(`/repos/${id}/file/${path}`),
+  getFile: (id: string, path: string) => request<any>(`/repos/${id}/file/${encodeFilePath(path)}`),
   context: (id: string) =>
     request<any>(`/repos/${id}/context`),
   rescanContext: (id: string) =>
     request<any>(`/repos/${id}/rescan-context`, { method: 'POST' }),
+  cancelScan: (id: string) =>
+    request<any>(`/repos/${id}/scan/cancel`, { method: 'POST' }),
 };
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
@@ -786,6 +804,14 @@ export interface ChatSession {
   repoPath?: string;
   repoName?: string;
   workspaceId?: string;
+  workspaceName?: string;
+  workspaceRepoId?: string;
+  workspaceRepoName?: string;
+  workspaceBranch?: string;
+  workspaceBaseBranch?: string;
+  workspacePrNumber?: number;
+  workspacePrUrl?: string;
+  streaming?: boolean;
   archivedWorkspace?: {
     id: string;
     name?: string;
@@ -900,9 +926,10 @@ export const alerts = {
 
 // ── MCP Servers ──────────────────────────────────────────────────────────
 // MCP records come from either a hardcoded preset or a registered repo.
-// Env/args never carry credentials — users put `ALLEN_<KEY>` vars in Allen's
-// root .env and the server strips the prefix at spawn. `create()` returns
-// 400 with `{ missing: string[] }` if any required ALLEN_* var is absent.
+// Env/args never carry literal credentials. Users provide `ALLEN_<KEY>` values
+// through the desktop secret store (or env in web/dev mode); MCP subprocesses
+// receive only bare `<KEY>` via an allowlist. Creates return 400 with
+// `{ missing: string[] }` if any required credential is absent.
 export type McpServerSource =
   | { kind: 'preset'; presetName: string }
   | { kind: 'repo'; repoId: string; entryPath: string; installPath?: string };
@@ -938,9 +965,11 @@ export interface McpServer {
 export interface McpPreset {
   name: string;
   description: string;
-  type: 'stdio' | 'sse';
+  type: 'stdio' | 'sse' | 'http';
   command?: string;
   args?: string[];
+  url?: string;
+  headers?: Record<string, string>;
   envKeys: string[];
   argKeys?: string[];
   docsUrl: string;
@@ -969,9 +998,9 @@ export const mcp = {
   tools: (options?: { refresh?: boolean }) =>
     request<McpToolGroup[]>(`/mcp/tools${options?.refresh === false ? '?refresh=0' : ''}`),
   /**
-   * Create an MCP server. Preset flow: send `{ name, type, source: { kind: 'preset', presetName } }`
-   * — backend copies command/args/envKeys from the preset and validates ALLEN_* env.
-   * Repo flow: send `{ name, type, source: { kind: 'repo', repoId, entryPath, installPath? }, envKeys }`.
+   * Create an MCP server. Preset flow: send `{ name, type, source: { kind: 'preset', presetName }, credentials? }`
+   * — backend copies command/args/envKeys from the preset and validates app-managed credentials.
+   * Repo flow: send `{ name, type, source: { kind: 'repo', repoId, entryPath, installPath? }, envKeys, credentials? }`.
    */
   create: (body: {
     name: string;
@@ -983,6 +1012,7 @@ export const mcp = {
     argKeys?: string[];
     command?: string;
     args?: string[];
+    credentials?: Record<string, string>;
     url?: string;
     headers?: Record<string, string>;
     /** Python venv config — sent only for .py entries without a manual command override. */
@@ -1107,6 +1137,47 @@ export const auth = {
 };
 
 // ── System ────────────────────────────────────────────────────────────────
+export type DesktopRuntimeSettingsResponse = {
+  desktop: boolean;
+  editable: boolean;
+  configPath: string | null;
+  contextSetup: {
+    selected: boolean;
+    configuredPython: string | null;
+    pythonPath: string;
+    venvPython: string;
+    cogneeImportOk: boolean;
+    setupRecommended: boolean;
+    detail: string;
+  };
+  groups: Array<{
+    id: string;
+    title: string;
+    description: string;
+    fields: Array<{
+      key: string;
+      label: string;
+      description?: string;
+      kind: 'boolean' | 'number' | 'path' | 'select' | 'string';
+      defaultValue: string;
+      currentValue: string;
+      configuredValue: string | null;
+      source: 'desktop_config' | 'env' | 'default';
+      placeholder?: string;
+      options?: Array<{ label: string; value: string }>;
+      restartRequired: boolean;
+      readOnly: boolean;
+      advanced: boolean;
+      showWhen?: {
+        key: string;
+        equals?: string;
+        notEquals?: string;
+        in?: string[];
+      };
+    }>;
+  }>;
+};
+
 export const system = {
   onboardingStatus: () =>
     request<{
@@ -1143,6 +1214,49 @@ export const system = {
         cogneeEnabled: boolean;
       };
     }>('/system/runtime-config'),
+  desktopRuntime: () =>
+    request<{
+      desktop: boolean;
+      paths: {
+        allenHome: string | null;
+        workspaceBaseDir: string | null;
+      };
+      runtime: {
+        terminalWsPort: string | null;
+        mongoUriConfigured: boolean;
+        managedMongo: boolean;
+      };
+      secrets: Array<{
+        key: string;
+        label: string;
+        group: string;
+        configured: boolean;
+        source: 'secret' | 'config' | 'missing';
+      }>;
+    }>('/system/desktop-runtime'),
+  desktopRuntimeSettings: () =>
+    request<DesktopRuntimeSettingsResponse>('/system/desktop-runtime/settings'),
+  updateDesktopRuntimeSettings: (values: Record<string, string | boolean | number | null>) =>
+    request<DesktopRuntimeSettingsResponse>(
+      '/system/desktop-runtime/settings',
+      { method: 'PATCH', body: JSON.stringify({ values }) },
+    ),
+  setupDesktopCogneeContext: (provider: 'cognee' | 'cognee_memory' = 'cognee') =>
+    request<{
+      setup: DesktopRuntimeSettingsResponse['contextSetup'];
+      output: string[];
+      settings: DesktopRuntimeSettingsResponse;
+    }>('/system/desktop-runtime/context/cognee/setup', {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
+    }),
+  setDesktopSecret: (key: string, value: string) =>
+    request<{ key: string; configured: boolean; source: 'secret' }>(
+      '/system/desktop-runtime/secrets',
+      { method: 'PUT', body: JSON.stringify({ key, value }) },
+    ),
+  deleteDesktopSecret: (key: string) =>
+    request<void>(`/system/desktop-runtime/secrets/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   verifySsh: (host = 'github.com') =>
     request<{
       ok: boolean;

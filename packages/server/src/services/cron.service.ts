@@ -20,8 +20,7 @@ import { CronExpressionParser } from 'cron-parser';
 import { signAccessToken } from '../auth/jwt.js';
 import type { CronJob, CronRun, CronRunStatus, SystemAction } from './cron.types.js';
 import { isSelfHealingWorkflowName, missingSelfHealingLinearEnv } from './self-healing-env.js';
-
-const PORT = parseInt(process.env.PORT ?? '4023', 10);
+import { getRuntimeApiBaseUrl } from '../runtime/config.js';
 
 export function buildInternalApiHeaders(): Record<string, string> {
   const token = signAccessToken({
@@ -328,7 +327,7 @@ export class CronService {
         role: 'admin',
         mustResetPassword: false,
       }, '5m');
-      const messageUrl = `http://localhost:${PORT}/api/chat/sessions/${sessionId}/automation-message`;
+      const messageUrl = `${getRuntimeApiBaseUrl()}/api/chat/sessions/${sessionId}/automation-message`;
       const automationContextBlock = [
         '',
         '---',
@@ -341,7 +340,7 @@ export class CronService {
       prompt = prompt + automationContextBlock;
     }
 
-    const url = `http://localhost:${PORT}/api/chat/spawn-agent`;
+    const url = `${getRuntimeApiBaseUrl()}/api/chat/spawn-agent`;
     const res = await fetch(url, {
       method: 'POST',
       headers: buildInternalApiHeaders(),
@@ -379,7 +378,7 @@ export class CronService {
     const wfDoc = await this.db.collection('workflows').findOne({ 'parsed.name': target.workflowName });
     if (!wfDoc) throw new Error(`Workflow "${target.workflowName}" not found`);
 
-    const url = `http://localhost:${PORT}/api/executions`;
+    const url = `${getRuntimeApiBaseUrl()}/api/executions`;
     const res = await fetch(url, {
       method: 'POST',
       headers: buildInternalApiHeaders(),

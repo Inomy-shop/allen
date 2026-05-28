@@ -839,17 +839,18 @@ export class WorkspaceManager {
   async listFiles(id: string): Promise<{ path: string; isDir: boolean; status?: string }[]> {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
+    const execOptions = { cwd: ws.worktreePath, timeout: 10_000 };
 
     // Get all tracked + untracked files (including gitignored .env files)
-    const { stdout: tracked } = await exec('git', ['ls-files'], { cwd: ws.worktreePath });
-    const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: ws.worktreePath });
+    const { stdout: tracked } = await exec('git', ['ls-files'], execOptions).catch(() => ({ stdout: '' }));
+    const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], execOptions).catch(() => ({ stdout: '' }));
     // Also include .env files even if gitignored — they're important for workspace config
-    const { stdout: envFiles } = await exec('sh', ['-c', 'find . -name ".env*" -not -path "*/node_modules/*" -not -path "*/.git/*" | sed "s|^\\./||"'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+    const { stdout: envFiles } = await exec('sh', ['-c', 'find . \\( -path "*/node_modules/*" -o -path "*/.git/*" -o -path "*/dist/*" -o -path "*/.next/*" -o -path "*/.turbo/*" \\) -prune -o -name ".env*" -print | sed "s|^\\./||"'], execOptions).catch(() => ({ stdout: '' }));
 
     // Get changed files for status highlighting
     const changedMap = new Map<string, string>();
     try {
-      const { stdout: diff } = await exec('git', ['status', '--porcelain'], { cwd: ws.worktreePath });
+      const { stdout: diff } = await exec('git', ['status', '--porcelain'], execOptions);
       for (const line of diff.trim().split('\n').filter(Boolean)) {
         const status = line.substring(0, 2).trim();
         const filePath = line.substring(3);

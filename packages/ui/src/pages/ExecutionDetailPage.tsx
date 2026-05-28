@@ -1,15 +1,16 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, type MouseEvent } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, X, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
   Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
   ArrowRight, AlertTriangle, Save, Activity,
-  MessageSquare, FileText, FolderGit2, GitPullRequest, ExternalLink,
+  MessageSquare, FileText, FolderGit2, GitPullRequest, ExternalLink, Cpu,
+  Copy, Check,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent, type NodeState } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
-import { executions as api, authHeaders, interventions as interventionsApi, system as systemApi, type RunStatus } from '../services/api';
+import { executions as api, authHeaders, interventions as interventionsApi, repos as reposApi, system as systemApi, type RunStatus } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
 import Select from '../components/common/Select';
@@ -17,15 +18,18 @@ import { renderMarkdown } from '../components/chat/ChatMessageList';
 import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
 import NodeDetail from '../components/execution/NodeDetail';
-import ArtifactsDrawer from '../components/artifacts/ArtifactsDrawer';
-import { artifacts as artifactsApi } from '../services/api';
+import ArtifactsPanel from '../components/artifacts/ArtifactsPanel';
+import ArtifactViewer from '../components/artifacts/ArtifactViewer';
+import { artifacts as artifactsApi, type ArtifactDoc } from '../services/api';
 import GanttTimeline from '../components/execution/GanttTimeline';
-import StateChangesDrawer from '../components/execution/StateChangesDrawer';
+import StateTimeline from '../components/execution/StateTimeline';
 import HumanInputDialog from '../components/execution/HumanInputDialog';
-import RunControlsDrawer from '../components/execution/RunControlsDrawer';
+import CheckpointsPanel from '../components/execution/CheckpointsPanel';
 import { WorkflowInterventionDialog, type WorkflowInterventionSubmit } from '../components/execution/WorkflowInterventionAction';
 import { ToolCallRow, type ToolCall } from '../components/common/ToolCallLog';
 import { buildTracesForTimeline } from '../utils/executionState';
+
+type ExecutionRightPanelView = 'node' | 'logs' | 'state' | 'rerun' | 'artifacts';
 
 /**
  * Human-friendly duration format:
@@ -99,6 +103,34 @@ function workflowFindingForTrace(findingsByIdentity: Map<string, any>, trace: an
   return undefined;
 }
 
+type ExecutionRepoSummary = {
+  _id?: string;
+  id?: string;
+  name?: string;
+  path?: string;
+  detected?: {
+    defaultBranch?: string;
+    remoteUrl?: string;
+  };
+  status?: string;
+};
+
+function normalizeFsPath(path?: string | null): string {
+  return (path ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function repoForExecutionPath(path: string, repos: ExecutionRepoSummary[]): ExecutionRepoSummary | null {
+  const normalizedPath = normalizeFsPath(path);
+  if (!normalizedPath) return null;
+  const matches = repos
+    .filter((repo) => {
+      const repoPath = normalizeFsPath(repo.path);
+      return repoPath && (normalizedPath === repoPath || normalizedPath.startsWith(`${repoPath}/`));
+    })
+    .sort((a, b) => normalizeFsPath(b.path).length - normalizeFsPath(a.path).length);
+  return matches[0] ?? null;
+}
+
 function ExecutionApprovalModal({
   executionId,
   intervention,
@@ -119,6 +151,7 @@ function ExecutionApprovalModal({
         if (!answer.interventionId) throw new Error('Missing intervention id for execution approval.');
         await interventionsApi.respond(answer.interventionId, {
           decision: answer.decision,
+          action_id: answer.actionId,
           field_values: answer.fieldValues,
           feedback: answer.feedback,
           answer: answer.answer,
@@ -174,10 +207,10 @@ function WorkflowTraceTable({
   onSelectNode: (node: string) => void;
 }) {
   return (
-    <div className="h-full overflow-auto bg-app-card">
+    <div className="min-h-0 flex-1 overflow-auto bg-app-card">
       <table className="w-full text-xs font-body">
         <thead className="sticky top-0 z-10">
-          <tr className="bg-app-muted overline border-b border-app">
+          <tr className="bg-app-muted overline border-b border-[rgb(var(--color-border)/0.45)]">
             <th className="text-left px-4 py-2 font-medium">Node</th>
             <th className="text-left px-4 py-2 font-medium">Status</th>
             <th className="text-left px-4 py-2 font-medium">Attempt</th>
@@ -213,7 +246,7 @@ function WorkflowTraceTable({
               <tr
                 key={name}
                 onClick={() => onSelectNode(name)}
-                className={`cursor-pointer border-b border-app/60 transition-colors hover:bg-accent-blue/5 ${
+                className={`cursor-pointer border-b border-[rgb(var(--color-border)/0.35)] transition-colors hover:bg-accent-blue/5 ${
                   selectedNode === name ? 'bg-accent-blue/10' : ''
                 }`}
               >
@@ -421,6 +454,230 @@ function ExecutionLogsOverlay({
   );
 }
 
+function ExecutionLogsPanel({
+  executionId,
+  logs,
+  logFilter,
+  workflowNodes,
+  traces,
+  onNodeFilterChange,
+}: {
+  executionId: string;
+  logs: any[];
+  logFilter: string | null;
+  workflowNodes: string[];
+  traces: any[];
+  onNodeFilterChange: (node: string | null) => void;
+}) {
+  const [pageSize, setPageSize] = useState(100);
+  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState<{ items: any[]; limit: number; offset: number; hasMore: boolean } | null>(null);
+  const [loadingPage, setLoadingPage] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setOffset(0);
+    setPage(null);
+    setPageError(null);
+  }, [executionId, pageSize]);
+
+  useEffect(() => {
+    if (!executionId) return;
+    let cancelled = false;
+    setLoadingPage(true);
+    setPageError(null);
+    api.logsPage(executionId, {
+      limit: pageSize,
+      offset,
+      include_descendants: true,
+    })
+      .then((result) => {
+        if (cancelled) return;
+        setPage({
+          ...result,
+          items: result.items.map((log: any) => ({
+            ...log,
+            timestamp: new Date(log.timestamp),
+          })),
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) setPageError(err instanceof Error ? err.message : 'Failed to load logs');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPage(false);
+      });
+    return () => { cancelled = true; };
+  }, [executionId, offset, pageSize]);
+
+  const isLatestPage = (page?.offset ?? offset) === 0;
+  const visibleLogs = useMemo(() => {
+    const history = page?.items ?? [];
+    const liveLogs = isLatestPage ? logs : [];
+    const seen = new Set<string>();
+    const merged: any[] = [];
+    const key = (log: any) => {
+      const ts = log.timestamp instanceof Date ? log.timestamp.getTime() : new Date(log.timestamp).getTime();
+      const rowId = log._id ? String(log._id) : '';
+      return rowId || `${log.executionId ?? executionId}|${ts}|${log.category ?? ''}|${log.node ?? ''}|${log.message ?? ''}`;
+    };
+    for (const log of [...history, ...liveLogs]) {
+      const k = key(log);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      merged.push({
+        ...log,
+        timestamp: log.timestamp instanceof Date ? log.timestamp : new Date(log.timestamp),
+      });
+    }
+    merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    return merged;
+  }, [executionId, isLatestPage, logs, page]);
+
+  const pageOffset = page?.offset ?? offset;
+  const currentPage = Math.floor(pageOffset / pageSize) + 1;
+  const pageStart = visibleLogs.length === 0 ? 0 : pageOffset + 1;
+  const pageEnd = pageOffset + (page?.items.length ?? visibleLogs.length);
+  const canPrevPage = pageOffset > 0 && !loadingPage;
+  const canNextPage = Boolean(page?.hasMore) && !loadingPage;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-app-card">
+      <div className="shrink-0 border-b border-app px-3 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[12px] font-semibold text-theme-primary">Logs</div>
+            <div className="truncate font-mono text-[10px] text-theme-muted">
+              {loadingPage && !page ? 'Loading history...' : `Page ${currentPage} · rows ${pageStart}-${pageEnd}`}
+              {isLatestPage && logs.length > 0 ? ' · live tail' : ''}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Select
+              value={String(pageSize)}
+              onChange={(value) => setPageSize(Number(value))}
+              options={[
+                { value: '50', label: '50' },
+                { value: '100', label: '100' },
+                { value: '250', label: '250' },
+                { value: '500', label: '500' },
+              ]}
+              className="w-20"
+            />
+            <button
+              type="button"
+              disabled={!canPrevPage}
+              onClick={() => setOffset(Math.max(offset - pageSize, 0))}
+              className="btn-ghost px-2 py-1 text-[10px] disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              disabled={!canNextPage}
+              onClick={() => setOffset(offset + pageSize)}
+              className="btn-ghost px-2 py-1 text-[10px] disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+      {pageError && (
+        <div className="shrink-0 border-b border-accent-red/30 bg-accent-red/10 px-3 py-2 font-mono text-[11px] text-accent-red">
+          {pageError}
+        </div>
+      )}
+      <div className="min-h-0 flex-1">
+        <Timeline
+          logs={visibleLogs}
+          nodeFilter={logFilter}
+          onNodeFilterChange={onNodeFilterChange}
+          workflowNodes={workflowNodes}
+          traces={traces}
+        />
+      </div>
+    </div>
+  );
+}
+
+function WorkflowArtifactsPanel({
+  rootId,
+}: {
+  rootId: string;
+}) {
+  const [selected, setSelected] = useState<ArtifactDoc | null>(null);
+  const [panelKey, setPanelKey] = useState(0);
+  const { size: listWidth, handleMouseDown: listResizeStart } = useResizable({
+    direction: 'horizontal',
+    initialSize: 260,
+    minSize: 220,
+    maxSize: 420,
+    side: 'start',
+  });
+
+  function syncSelection(artifacts: ArtifactDoc[]) {
+    if (artifacts.length === 0) {
+      setSelected(null);
+      return;
+    }
+    setSelected(current => {
+      if (current && artifacts.some(item => item.artifactId === current.artifactId)) return current;
+      return artifacts[0];
+    });
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm('Delete this artifact? The file is removed from disk.')) return;
+    try {
+      await artifactsApi.delete(id);
+      setSelected(null);
+      setPanelKey(value => value + 1);
+    } catch (err) {
+      alert(`Failed to delete: ${(err as Error).message}`);
+    }
+  }
+
+  return (
+    <div className="flex h-full min-h-0 overflow-hidden bg-app-card">
+      <div className="relative flex h-full shrink-0 flex-col border-r border-app" style={{ width: listWidth }}>
+        <ArtifactsPanel
+          key={panelKey}
+          rootType="workflow"
+          rootId={rootId}
+          selectedId={selected?.artifactId}
+          onSelect={setSelected}
+          onItemsChange={syncSelection}
+        />
+        <div
+          className="group absolute bottom-0 right-0 top-0 z-20 w-2 cursor-col-resize"
+          onMouseDown={listResizeStart}
+          title="Drag to resize list"
+        >
+          <div className="absolute bottom-0 left-1/2 top-0 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-accent-blue/60" />
+        </div>
+      </div>
+      <div className="min-w-0 flex-1 bg-app-card">
+        {selected ? (
+          <ArtifactViewer
+            artifact={selected}
+            onClose={() => setSelected(null)}
+            onDelete={() => handleDelete(selected.artifactId)}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center p-6 text-center">
+            <div>
+              <FileText className="mx-auto mb-2 h-5 w-5 text-theme-subtle" />
+              <div className="text-xs font-semibold text-theme-primary">No artifact selected</div>
+              <div className="mt-1 text-[11px] text-theme-muted">Select an artifact to preview it here.</div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 // ── Single log row in the Activity Log ──
 // Tool entries are expandable — click to see full input/output pulled
@@ -614,26 +871,9 @@ function AgentLogsDrawer({
   toolCalls: ToolCall[];
   executionStatus: string;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      document.body.style.overflow = prev;
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [open, onClose]);
-
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 bg-black/30 p-6" role="dialog" aria-modal="true" aria-label="Agent logs">
-      <button className="absolute inset-0" type="button" onClick={onClose} aria-label="Close logs" />
-      <aside
-        className="relative ml-auto flex h-full w-[min(860px,calc(100vw-48px))] flex-col overflow-hidden rounded-lg border border-app-strong bg-app-card shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <aside className="fixed bottom-0 right-0 top-0 z-50 flex w-[34rem] max-w-[calc(100vw-2rem)] flex-col border-l border-app bg-app-card shadow-[-24px_0_60px_rgba(0,0,0,0.28)]" aria-label="Agent logs">
         <div className="flex items-center justify-between gap-3 border-b border-app px-4 py-3">
           <div>
             <div className="text-[13px] font-semibold text-theme-primary">Logs</div>
@@ -658,7 +898,91 @@ function AgentLogsDrawer({
           ))}
         </div>
       </aside>
-    </div>
+  );
+}
+
+function AgentResumeDrawer({
+  open,
+  onClose,
+  agentName,
+  prompt,
+  busy,
+  onPromptChange,
+  onSubmit,
+}: {
+  open: boolean;
+  onClose: () => void;
+  agentName: string;
+  prompt: string;
+  busy: boolean;
+  onPromptChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  if (!open) return null;
+
+  const ready = prompt.trim().length > 0 && !busy;
+
+  return (
+      <aside className="fixed bottom-0 right-0 top-0 z-50 flex w-[34rem] max-w-[calc(100vw-2rem)] flex-col border-l border-app bg-app-card shadow-[-24px_0_60px_rgba(0,0,0,0.28)]" aria-label="Resume execution">
+        <div className="flex items-start justify-between gap-4 border-b border-app px-5 py-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-md border border-app bg-app text-accent">
+                <Play className="h-4 w-4" />
+              </span>
+              <div>
+                <div className="text-[14px] font-semibold text-theme-primary">Resume run</div>
+                <div className="mt-0.5 text-[12px] text-theme-muted">
+                  Continue <span className="font-medium text-theme-secondary">{agentName}</span> from the saved session.
+                </div>
+              </div>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="rounded p-1.5 text-theme-muted hover:bg-app-muted hover:text-theme-primary" aria-label="Close resume panel">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <label className="block">
+            <span className="text-[12px] font-semibold text-theme-primary">Follow-up prompt</span>
+            <textarea
+              autoFocus
+              value={prompt}
+              onChange={e => onPromptChange(e.target.value)}
+              onKeyDown={e => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && ready) onSubmit();
+              }}
+              rows={8}
+              placeholder="Tell Allen exactly what to continue, retry, or change in this execution."
+              className="mt-2 min-h-[180px] w-full resize-none rounded-md border border-app bg-app px-3 py-2.5 text-[13px] leading-relaxed text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+            />
+          </label>
+
+          <div className="mt-4 rounded-md border border-app bg-app px-3 py-3 text-[12px] leading-relaxed text-theme-muted">
+            Allen keeps the prior agent session when available. Use this for a focused continuation, not a fresh unrelated task.
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-app bg-app-card px-5 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 items-center rounded-md border border-app bg-app px-3 text-[12px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={!ready}
+            className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-4 text-[12px] font-semibold text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Play className="h-3.5 w-3.5" />
+            {busy ? 'Resuming...' : 'Resume execution'}
+          </button>
+        </div>
+      </aside>
   );
 }
 
@@ -999,32 +1323,64 @@ function AuditDisclosure({ title, content }: { title: string; content?: string }
 
 function AgentResourceCard({
   icon,
-  label,
   title,
   subtitle,
   href,
   external,
+  copyText,
 }: {
   icon: React.ReactNode;
-  label: string;
   title: React.ReactNode;
   subtitle?: React.ReactNode;
   href?: string;
   external?: boolean;
+  copyText?: string;
 }) {
+  const [copied, setCopied] = useState(false);
+  const copyValue = copyText?.trim();
+  const handleCopy = async (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!copyValue) return;
+    try {
+      if (window.allenDesktop?.writeClipboardText) {
+        await window.allenDesktop.writeClipboardText(copyValue);
+      } else {
+        await navigator.clipboard.writeText(copyValue);
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
   const content = (
-    <div className="inline-flex max-w-full items-center gap-2 rounded-md px-2 py-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary">
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-app bg-app-card">
+    <div className="flex min-w-0 items-center gap-3 rounded-md px-2 py-2 text-theme-muted transition-colors hover:bg-app-muted/45 hover:text-theme-primary">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-app bg-app">
         {icon}
       </span>
-      <div className="min-w-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-theme-subtle">{label}</span>
-          <span className="truncate text-[12px] font-medium text-theme-primary">{title}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-[12.5px] font-medium text-theme-primary">{title}</span>
         </div>
-        {subtitle && <div className="truncate font-mono text-[10px] text-theme-muted">{subtitle}</div>}
+        {subtitle && <div className="truncate text-[11px] text-theme-muted">{subtitle}</div>}
       </div>
-      {href && <ExternalLink className="h-3 w-3 shrink-0 text-theme-subtle" />}
+      {copyValue && (
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-card hover:text-theme-primary"
+          title={copied ? 'Copied' : 'Copy location'}
+          aria-label={copied ? 'Copied' : 'Copy location'}
+        >
+          {copied ? <Check className="h-3.5 w-3.5 text-accent-green" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      )}
+      {!copyValue && href && (
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-theme-subtle">
+          <ExternalLink className="h-3.5 w-3.5" />
+        </span>
+      )}
     </div>
   );
   if (!href) return content;
@@ -1032,6 +1388,187 @@ function AgentResourceCard({
     <a href={href} target={external ? '_blank' : undefined} rel={external ? 'noopener noreferrer' : undefined}>
       {content}
     </a>
+  );
+}
+
+function AgentMetric({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-2 rounded-md border border-app bg-app-card px-3 py-2">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-app text-theme-muted">{icon}</span>
+      <div className="min-w-0">
+        <div className="font-mono text-[9.5px] uppercase tracking-[0.12em] text-theme-subtle">{label}</div>
+        <div className="truncate text-[12px] text-theme-primary">{value}</div>
+      </div>
+    </div>
+  );
+}
+
+function CopyValueRow({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      if (window.allenDesktop?.writeClipboardText) {
+        await window.allenDesktop.writeClipboardText(value);
+      } else {
+        await navigator.clipboard.writeText(value);
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="flex min-w-0 items-center gap-2 rounded-md border border-app bg-app-card px-3 py-2">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-app text-theme-muted">{icon}</span>
+      <div className="min-w-0 flex-1">
+        <div className="font-mono text-[9.5px] uppercase tracking-[0.12em] text-theme-subtle">{label}</div>
+        <div className="truncate font-mono text-[12px] text-theme-primary">{value}</div>
+      </div>
+      <button
+        type="button"
+        onClick={handleCopy}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app hover:text-theme-primary"
+        title={copied ? 'Copied' : `Copy ${label.toLowerCase()}`}
+        aria-label={copied ? 'Copied' : `Copy ${label.toLowerCase()}`}
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-accent-green" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+    </div>
+  );
+}
+
+function compactArtifactSize(bytes?: number | null): string {
+  if (bytes == null || !Number.isFinite(bytes)) return 'file';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function artifactContentType(value?: string | null): ArtifactDoc['contentType'] {
+  const normalized = (value ?? '').toLowerCase();
+  if (normalized.includes('markdown') || normalized === 'md') return 'markdown';
+  if (normalized.includes('json')) return 'json';
+  if (normalized.includes('csv')) return 'csv';
+  if (normalized.includes('javascript') || normalized.includes('typescript') || normalized.includes('python') || normalized.includes('code')) return 'code';
+  if (normalized.includes('octet-stream') || normalized.includes('binary')) return 'binary';
+  return 'text';
+}
+
+function runtimeArtifactBelongsToAgent(
+  artifact: RunStatus['artifacts'][number],
+  executionId: string,
+): boolean {
+  if (artifact.rootId === executionId) return true;
+  if (artifact.spawnContext?.agentExecutionId === executionId) return true;
+  if (artifact.spawnContext?.parentId === executionId) return true;
+  return false;
+}
+
+function runtimeArtifactDoc(
+  artifact: RunStatus['artifacts'][number],
+  executionId: string,
+  agentName: string,
+): ArtifactDoc {
+  const filename = artifact.filename ?? artifact.relativePath ?? 'artifact';
+  return {
+    artifactId: artifact.artifactId,
+    rootType: artifact.rootType === 'chat' || artifact.rootType === 'workflow' || artifact.rootType === 'agent'
+      ? artifact.rootType
+      : 'agent',
+    rootId: artifact.rootId ?? executionId,
+    spawnContext: {
+      originType: 'spawn_agent',
+      parentId: artifact.spawnContext?.parentId ?? executionId,
+      nodeName: artifact.spawnContext?.nodeName ?? undefined,
+      agentName: artifact.spawnContext?.agentName ?? agentName,
+      agentExecutionId: artifact.spawnContext?.agentExecutionId ?? executionId,
+    },
+    filename,
+    relativePath: artifact.relativePath ?? filename,
+    contentType: artifactContentType(artifact.contentType),
+    sizeBytes: 0,
+    description: artifact.description ?? undefined,
+    createdAt: artifact.createdAt ?? new Date().toISOString(),
+    createdByAgent: artifact.spawnContext?.agentName ?? agentName,
+  };
+}
+
+function AgentArtifactRow({
+  artifact,
+  onOpen,
+}: {
+  artifact: ArtifactDoc;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex w-full min-w-0 items-center gap-2 rounded-md border border-app bg-app px-2.5 py-2 text-left transition-colors hover:border-app-strong hover:bg-app-muted/35"
+      title={artifact.relativePath || artifact.filename}
+    >
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-app-card text-theme-muted">
+        <FileText className="h-3.5 w-3.5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[12px] font-medium text-theme-primary">{artifact.filename}</span>
+        <span className="block truncate font-mono text-[10px] text-theme-muted">
+          {artifact.contentType} · {compactArtifactSize(artifact.sizeBytes)}
+        </span>
+      </span>
+      <ExternalLink className="h-3 w-3 shrink-0 text-theme-subtle" />
+    </button>
+  );
+}
+
+function AgentPanel({
+  title,
+  icon,
+  meta,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  meta?: React.ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-md border border-app bg-app-card">
+      <button
+        type="button"
+        title={`Toggle ${title.toLowerCase()}`}
+        onClick={onToggle}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left transition-colors hover:bg-app-muted/35"
+      >
+        {open ? <ChevronDown className="h-4 w-4 text-theme-muted" /> : <ChevronRight className="h-4 w-4 text-theme-muted" />}
+        <span className="text-theme-muted">{icon}</span>
+        <span className="text-[13px] font-semibold text-theme-primary">{title}</span>
+        {meta && <span className="ml-auto font-mono text-[10.5px] text-theme-subtle">{meta}</span>}
+      </button>
+      {open && <div className="border-t border-app px-4 py-3">{children}</div>}
+    </section>
   );
 }
 
@@ -1058,11 +1595,14 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const [showResponse, setShowResponse] = useState(true);
   const [showToolCalls, setShowToolCalls] = useState(false);
   const [liveLogs, setLiveLogs] = useState<any[]>([]);
+  const [logsOpen, setLogsOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumePrompt, setResumePrompt] = useState('');
   const [resumeBusy, setResumeBusy] = useState(false);
-  const [agentArtifactsOpen, setAgentArtifactsOpen] = useState(false);
-  const [agentLogsOpen, setAgentLogsOpen] = useState(false);
+  const [agentArtifacts, setAgentArtifacts] = useState<ArtifactDoc[]>([]);
+  const [agentArtifactsLoading, setAgentArtifactsLoading] = useState(true);
+  const [agentArtifactPreview, setAgentArtifactPreview] = useState<ArtifactDoc | null>(null);
+  const [registeredRepos, setRegisteredRepos] = useState<ExecutionRepoSummary[]>([]);
 
   const prompt = trace?.renderedPrompt ?? execution.input?.prompt ?? '';
   const response = trace?.rawResponse ?? '';
@@ -1092,8 +1632,14 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   }, [execution.status]);
   const activeStartedMs = activeStartedAt ? new Date(activeStartedAt).getTime() : NaN;
   const liveDurationMs = Number.isFinite(activeStartedMs) ? Math.max(0, durationNowMs - activeStartedMs) : 0;
-  const durationMs = trace?.durationMs ?? execution.durationMs ?? liveDurationMs;
+  const isLiveAgentExecution = execution.status === 'running' || execution.status === 'waiting_for_input';
+  const durationMs = isLiveAgentExecution ? liveDurationMs : (trace?.durationMs ?? execution.durationMs ?? liveDurationMs);
   const meta = execution.meta ?? {};
+  const executionLocation = meta.cwd ?? execution.input?.repo_path ?? '/tmp';
+  const matchedRepo = useMemo(
+    () => repoForExecutionPath(executionLocation, registeredRepos),
+    [executionLocation, registeredRepos],
+  );
 
   // Session ID for resume — stored on the execution row at sessions.<agentName>
   // and also in trace.output.session_id. Either source works.
@@ -1110,6 +1656,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const canResume =
     (execution.status === 'failed' || execution.status === 'cancelled')
     || (!!sessionId && execution.status === 'completed');
+  const canShowLogsDrawer = ['completed', 'failed', 'cancelled', 'canceled'].includes(String(execution.status));
 
   const handleResume = async () => {
     const trimmed = resumePrompt.trim();
@@ -1173,6 +1720,54 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
     return () => { alive = false; };
   }, [id, execution.status]);
 
+  useEffect(() => {
+    let alive = true;
+    reposApi.list()
+      .then((repos) => {
+        if (alive) setRegisteredRepos(repos ?? []);
+      })
+      .catch(() => {
+        if (alive) setRegisteredRepos([]);
+      });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!id) return;
+    let alive = true;
+    setAgentArtifactsLoading(true);
+    const runtimeDocs = (runContext?.artifacts ?? [])
+      .filter((artifact) => runtimeArtifactBelongsToAgent(artifact, id))
+      .map((artifact) => runtimeArtifactDoc(artifact, id, agentName));
+    artifactsApi.list({ rootType: 'agent', rootId: id, limit: 6 })
+      .then((items) => {
+        if (!alive) return;
+        const byId = new Map<string, ArtifactDoc>();
+        for (const artifact of runtimeDocs) byId.set(artifact.artifactId, artifact);
+        for (const artifact of items ?? []) byId.set(artifact.artifactId, artifact);
+        setAgentArtifacts([...byId.values()].sort((a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        ));
+      })
+      .catch(() => {
+        if (alive) setAgentArtifacts(runtimeDocs);
+      })
+      .finally(() => {
+        if (alive) setAgentArtifactsLoading(false);
+      });
+    return () => { alive = false; };
+  }, [id, execution.status, runContext?.artifacts, agentName]);
+
+  const openAgentArtifact = async (artifact: ArtifactDoc) => {
+    setAgentArtifactPreview(artifact);
+    try {
+      const full = await artifactsApi.get(artifact.artifactId);
+      setAgentArtifactPreview(full);
+    } catch {
+      // Runtime context already gives enough metadata for the viewer URL.
+    }
+  };
+
   // Build the Activity Log stream. Order of precedence:
   //   1. persisted execution_logs rows (liveLogs)
   //   2. live SSE tool-call records (liveToolCalls) — injected as
@@ -1232,284 +1827,346 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const showLogsInMain = execution.status === 'running';
   const primaryPanelTitle = showLogsInMain ? 'Logs' : 'Response';
   const primaryPanelCount = showLogsInMain ? `${allLogs.length} entries` : `${response.length} chars`;
+  const modelLabel = [meta.provider ?? 'claude', meta.model ?? cost.model ?? 'sonnet'].filter(Boolean).join(' / ');
+  const startedLabel = execution.startedAt ? new Date(execution.startedAt).toLocaleString() : 'n/a';
+  const completedLabel = execution.completedAt ? new Date(execution.completedAt).toLocaleString() : 'n/a';
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header — agent execution variant */}
-      <header className="px-6 pt-4 pb-3 border-b border-app shrink-0">
-        <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
-          <Link to="/executions" className="hover:text-theme-primary transition-colors flex items-center gap-1">
-            <ArrowLeft className="w-3 h-3" /> Activity
-          </Link>
-          <span className="text-theme-subtle">/</span>
-          <span className="font-mono">{id?.slice(0, 8)}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-8 h-8 rounded-md bg-accent-purple/10 flex items-center justify-center shrink-0">
-              <Bot className="w-4 h-4 text-accent-purple" />
-            </div>
-            <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight truncate">{agentName}</h1>
-            <StatusBadge status={execution.status} />
-            {meta.spawnedBy && <span className="text-[11px] text-theme-muted font-mono">by {meta.spawnedBy}</span>}
-            {execution.status === 'running' && <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />}
-            {durationMs > 0 && (
-              <span className="flex items-center gap-1 text-[12px] text-theme-muted font-mono">
-                <Clock className="w-3 h-3" /> {formatDuration(durationMs)}
-              </span>
-            )}
-            <CostDisplay cost={cost} />
-            <span className="hidden md:inline text-[12px] text-theme-muted font-mono">
-              {meta.model ?? cost.model ?? 'sonnet'} · {meta.provider ?? 'claude'}
+    <div className="h-full overflow-y-auto bg-app">
+      <header className="border-b border-app bg-app">
+        <div className="flex w-full flex-wrap items-center gap-4 px-8 py-4">
+          <div className="flex min-w-[320px] flex-1 items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app bg-app-card text-accent-purple shadow-sm">
+              <Cpu className="h-5 w-5" />
             </span>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="truncate text-[22px] font-semibold leading-tight text-theme-primary">{agentName}</h1>
+                <StatusBadge status={execution.status} />
+                {execution.status === 'running' && <span className="h-2 w-2 rounded-full bg-accent-green animate-pulse" />}
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-theme-muted">
+                <span>Agent execution</span>
+                {meta.spawnedBy && (
+                  <>
+                    <span className="text-theme-subtle">·</span>
+                    <span>Spawned by <span className="font-mono text-theme-secondary">{meta.spawnedBy}</span></span>
+                  </>
+                )}
+                {meta.chatSessionId && (
+                  <>
+                    <span className="text-theme-subtle">·</span>
+                    <Link
+                      to={`/chat/${meta.chatSessionId}`}
+                      className="inline-flex items-center gap-1 rounded-sm text-accent transition-colors hover:text-accent-hover"
+                    >
+                      <MessageSquare className="h-3 w-3" />
+                      Open chat
+                    </Link>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setAgentLogsOpen(true)}
-              className="btn btn-secondary btn-sm"
-              title="View execution logs"
-            >
-              <Activity className="w-3.5 h-3.5" />
-              Logs
-              {allLogs.length > 0 && <span className="ml-0.5 text-[10px] font-mono opacity-70">{allLogs.length}</span>}
-            </button>
-            <button
-              onClick={() => setAgentArtifactsOpen(true)}
-              className="btn btn-secondary btn-sm"
-              title="View artifacts saved by this agent run"
-            >
-              <FileText className="w-3.5 h-3.5" />
-              Artifacts
-            </button>
+
+          <div className="ml-auto flex items-center gap-2">
             {execution.status === 'running' && (
               <button
+                type="button"
                 onClick={async () => { await api.cancel(id); window.location.reload(); }}
-                className="btn btn-danger btn-sm"
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-accent-red/35 bg-accent-red/10 px-3 text-[12px] font-medium text-accent-red transition-colors hover:bg-accent-red/15"
               >
-                <XCircle className="w-3.5 h-3.5" /> Cancel
+                <XCircle className="h-3.5 w-3.5" />
+                Cancel
+              </button>
+            )}
+            {canShowLogsDrawer && (
+              <button
+                type="button"
+                onClick={() => {
+                  setResumeOpen(false);
+                  setLogsOpen(true);
+                }}
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app-card px-3 text-[12px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:bg-app-muted hover:text-theme-primary"
+              >
+                <Activity className="h-3.5 w-3.5" />
+                Logs
+                {allLogs.length > 0 && (
+                  <span className="rounded-sm bg-app-muted px-1.5 py-0.5 font-mono text-[10px] text-theme-muted tabular-nums">
+                    {allLogs.length}
+                  </span>
+                )}
               </button>
             )}
             {canResume && (
               <button
-                onClick={() => setResumeOpen(v => !v)}
-                className="btn btn-primary btn-sm"
+                type="button"
+                onClick={() => {
+                  setLogsOpen(false);
+                  setResumeOpen(true);
+                }}
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3.5 text-[12px] font-semibold text-white shadow-sm transition-colors hover:bg-accent-hover"
               >
-                <Play className="w-3.5 h-3.5" /> Resume
+                <Play className="h-3.5 w-3.5" />
+                Resume
               </button>
             )}
           </div>
         </div>
       </header>
 
-      {/* Resume prompt bar — shown below header when the user clicks Resume.
-          Sends a follow-up prompt to the same agent, resuming the prior
-          claude-cli session so the agent has full context from this run. */}
-      {resumeOpen && canResume && (
-        <div className="flex items-center gap-3 px-6 py-3 border-b border-accent/30 bg-accent-soft shrink-0">
-          <div className="flex-1 min-w-0">
-            <textarea
-              autoFocus
-              value={resumePrompt}
-              onChange={e => setResumePrompt(e.target.value)}
-              onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') handleResume(); }}
-              rows={2}
-              placeholder="Follow-up prompt — the agent will resume its prior session with full context from this run…"
-              className="w-full px-3 py-2 rounded-lg bg-app-muted border border-app text-sm text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:border-accent font-mono resize-none"
+      <main className="grid w-full grid-cols-1 gap-4 px-8 py-5 xl:grid-cols-[minmax(0,1fr)_330px]">
+        <div className="min-w-0 space-y-4">
+          {sortedTraces.length > 1 && (
+            <div className="overflow-x-auto rounded-md border border-app bg-app-card p-1">
+              <div className="flex items-center gap-1">
+                {sortedTraces.map(t => {
+                  const n = t.attempt ?? 1;
+                  const failed = t.status === 'failed';
+                  const active = n === selectedAttempt;
+                  return (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setSelectedAttempt(n)}
+                      className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-md px-3 text-[12px] font-medium transition-colors ${
+                        active
+                          ? 'bg-app-muted text-theme-primary'
+                          : 'text-theme-muted hover:text-theme-primary'
+                      }`}
+                      title={`${failed ? 'Failed' : 'Completed'} · ${new Date(t.startedAt).toLocaleString()}`}
+                    >
+                      {failed ? <AlertCircle className="h-3.5 w-3.5 text-accent-red" /> : <CheckCircle className="h-3.5 w-3.5 text-accent-green" />}
+                      Attempt {n}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <AgentPanel
+            title="Prompt"
+            icon={<Terminal className="h-4 w-4 text-accent-blue" />}
+            meta={`${prompt.length} chars`}
+            open={showPrompt}
+            onToggle={() => setShowPrompt(!showPrompt)}
+          >
+            <pre className="max-h-[42vh] overflow-y-auto whitespace-pre-wrap rounded-md bg-[rgb(var(--color-editor-background))] p-3 font-mono text-[12px] leading-relaxed text-theme-secondary">{prompt}</pre>
+          </AgentPanel>
+
+          <AgentPanel
+            title={primaryPanelTitle}
+            icon={showLogsInMain ? <Activity className="h-4 w-4 text-accent-blue animate-pulse" /> : execution.status === 'completed' ? <CheckCircle className="h-4 w-4 text-accent-green" /> : <AlertCircle className="h-4 w-4 text-accent-red" />}
+            meta={primaryPanelCount}
+            open={showResponse}
+            onToggle={() => setShowResponse(!showResponse)}
+          >
+            {showLogsInMain ? (
+              <div className="max-h-[58vh] overflow-y-auto rounded-md bg-[rgb(var(--color-editor-background))] p-3">
+                {allLogs.length === 0 ? (
+                  <div className="px-2 py-3 font-mono text-xs text-theme-subtle animate-pulse">Waiting for activity...</div>
+                ) : (
+                  allLogs.map((log: any, index: number) => (
+                    <LogRow key={index} log={log} toolCall={resolveToolCallForLog(log, toolCalls as ToolCall[])} />
+                  ))
+                )}
+              </div>
+            ) : (
+              <div className="prose-allen max-h-[58vh] overflow-y-auto text-sm leading-relaxed text-theme-secondary">
+                {response
+                  ? renderMarkdown(response)
+                  : <span className="text-theme-muted">{execution.errorMessage || '(no response)'}</span>
+                }
+              </div>
+            )}
+          </AgentPanel>
+
+          {toolCalls.length > 0 && (
+            <AgentPanel
+              title="Tool calls"
+              icon={<Wrench className="h-4 w-4 text-accent-yellow" />}
+              meta={toolCalls.length}
+              open={showToolCalls}
+              onToggle={() => setShowToolCalls(v => !v)}
+            >
+              <div className="max-h-[54vh] overflow-y-auto">
+                {(toolCalls as ToolCall[]).map((tc: ToolCall, i: number) => <ToolCallRow key={i} tc={tc} index={i} />)}
+              </div>
+            </AgentPanel>
+          )}
+        </div>
+
+        <aside className="space-y-4">
+          <section className="rounded-md border border-app bg-app-card">
+            <div className="border-b border-app px-4 py-3">
+              <div className="text-[13px] font-semibold text-theme-primary">Run summary</div>
+              <div className="mt-1 text-[12px] text-theme-muted">Operational details and saved files.</div>
+            </div>
+            <div className="space-y-2 p-3">
+              <AgentMetric icon={<Clock className="h-3.5 w-3.5" />} label="Duration" value={durationMs > 0 ? formatDuration(durationMs) : '—'} />
+              <AgentMetric icon={<Terminal className="h-3.5 w-3.5" />} label="Model" value={modelLabel} />
+              <AgentMetric icon={<DollarSign className="h-3.5 w-3.5" />} label="Cost" value={<CostDisplay cost={cost} />} />
+              <div className="border-t border-app px-2.5 pt-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="inline-flex items-center gap-2 text-[12px] font-semibold text-theme-primary">
+                    <FileText className="h-3.5 w-3.5 text-theme-muted" />
+                    Artifacts
+                  </div>
+                  {agentArtifacts.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => void openAgentArtifact(agentArtifacts[0])}
+                      className="text-[11px] font-medium text-accent transition-colors hover:text-accent-hover"
+                    >
+                      Open latest
+                    </button>
+                  )}
+                </div>
+                {agentArtifactsLoading ? (
+                  <div className="space-y-2">
+                    {[0, 1].map((index) => (
+                      <div key={index} className="h-11 rounded-md bg-app-muted/45 animate-pulse" />
+                    ))}
+                  </div>
+                ) : agentArtifacts.length > 0 ? (
+                  <div className="space-y-2">
+                    {agentArtifacts.slice(0, 3).map((artifact) => (
+                      <AgentArtifactRow
+                        key={artifact.artifactId}
+                        artifact={artifact}
+                        onOpen={() => void openAgentArtifact(artifact)}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed border-app bg-app px-3 py-3 text-[12px] text-theme-muted">
+                    No files saved for this run yet.
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-md border border-app bg-app-card">
+            <div className="border-b border-app px-4 py-3">
+              <div className="text-[13px] font-semibold text-theme-primary">Run context</div>
+              <div className="mt-1 text-[12px] text-theme-muted">
+                {runContext?.progress?.currentStep ?? phaseLabel(runContext?.progress?.phase ?? execution.status)}
+              </div>
+            </div>
+            <div className="space-y-1 p-2">
+              {runContext?.humanInput?.required && (
+                <div className="mb-2 flex items-center gap-2 rounded-md border border-accent-yellow/30 bg-accent-yellow/10 px-3 py-2 text-[12px] text-accent-yellow">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  Input required
+                </div>
+              )}
+              <CopyValueRow icon={<Cpu className="h-3.5 w-3.5" />} label="Execution id" value={id} />
+              {sessionId && <CopyValueRow icon={<Terminal className="h-3.5 w-3.5" />} label="Session id" value={sessionId} />}
+              {runContext?.pullRequest && (
+                <AgentResourceCard
+                  icon={<GitPullRequest className="h-3.5 w-3.5" />}
+                  title={runContext.pullRequest.title ?? (runContext.pullRequest.number ? `#${runContext.pullRequest.number}` : 'Pull request')}
+                  subtitle={[
+                    runContext.pullRequest.number ? `#${runContext.pullRequest.number}` : null,
+                    runContext.pullRequest.status ?? null,
+                  ].filter(Boolean).join(' · ') || undefined}
+                  href={runContext.pullRequest.url ?? undefined}
+                  external
+                />
+              )}
+              {runContext?.workspace && (
+                <AgentResourceCard
+                  icon={<FolderGit2 className="h-3.5 w-3.5" />}
+                  title={runContext.workspace.name ?? runContext.workspace.branch ?? 'workspace'}
+                  subtitle={runContext.workspace.repoName ?? undefined}
+                  href={runContext.workspace.id ? `/workspaces/${runContext.workspace.id}` : undefined}
+                />
+              )}
+              {matchedRepo ? (
+                <AgentResourceCard
+                  icon={<FolderGit2 className="h-3.5 w-3.5" />}
+                  title={matchedRepo.name ?? 'Repository'}
+                  subtitle={matchedRepo.detected?.defaultBranch ? `default ${matchedRepo.detected.defaultBranch}` : undefined}
+                  href={(matchedRepo._id ?? matchedRepo.id) ? `/repos/${matchedRepo._id ?? matchedRepo.id}/context-management` : undefined}
+                  copyText={matchedRepo.path}
+                />
+              ) : (
+                <AgentResourceCard
+                  icon={<Terminal className="h-3.5 w-3.5" />}
+                  title={executionLocation}
+                  copyText={executionLocation}
+                />
+              )}
+              {meta.chatSessionId && (
+                <AgentResourceCard
+                  icon={<MessageSquare className="h-3.5 w-3.5" />}
+                  title="Open conversation"
+                  href={`/chat/${meta.chatSessionId}`}
+                />
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-md border border-app bg-app-card">
+            <div className="border-b border-app px-4 py-3">
+              <div className="text-[13px] font-semibold text-theme-primary">Activity</div>
+              <div className="mt-1 font-mono text-[11px] text-theme-muted">{allLogs.length} logs · {toolCalls.length} tools</div>
+            </div>
+            <div className="grid grid-cols-2 gap-px bg-app-muted">
+              <div className="bg-app-card px-4 py-3">
+                <div className="font-mono text-[9.5px] uppercase tracking-[0.12em] text-theme-subtle">Started</div>
+                <div className="mt-1 text-[12px] text-theme-secondary">{startedLabel}</div>
+              </div>
+              <div className="bg-app-card px-4 py-3">
+                <div className="font-mono text-[9.5px] uppercase tracking-[0.12em] text-theme-subtle">Completed</div>
+                <div className="mt-1 text-[12px] text-theme-secondary">{completedLabel}</div>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </main>
+
+      {agentArtifactPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Artifact preview">
+          <button
+            type="button"
+            className="absolute inset-0"
+            onClick={() => setAgentArtifactPreview(null)}
+            aria-label="Close artifact preview"
+          />
+          <div className="relative flex h-[min(760px,calc(100vh-48px))] w-[min(980px,calc(100vw-48px))] overflow-hidden rounded-md border border-app-strong bg-app-card shadow-2xl">
+            <ArtifactViewer
+              artifact={agentArtifactPreview}
+              onClose={() => setAgentArtifactPreview(null)}
+              showExternalLink={false}
             />
-          </div>
-          <div className="flex flex-col gap-1.5 shrink-0">
-            <button
-              onClick={handleResume}
-              disabled={resumeBusy || !resumePrompt.trim()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-mono btn btn-primary btn-sm disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
-            >
-              <Play className="w-3 h-3" />
-              {resumeBusy ? 'Resuming…' : 'Send'}
-            </button>
-            <button
-              onClick={() => { setResumeOpen(false); setResumePrompt(''); }}
-              className="text-[10px] font-mono text-theme-muted hover:text-theme-primary transition-colors"
-            >
-              Cancel
-            </button>
           </div>
         </div>
       )}
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        <section className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-app pb-3">
-          {runContext?.progress?.phase && (
-            <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-theme-muted">
-              <span className="overline">Phase</span>
-              <span className="text-theme-primary">{phaseLabel(runContext.progress.phase)}</span>
-            </span>
-          )}
-          {runContext?.humanInput?.required && (
-            <span className="inline-flex items-center gap-1.5 rounded bg-accent-yellow/10 px-2 py-1 font-mono text-[11px] text-accent-yellow">
-              <AlertTriangle className="h-3 w-3" />
-              input required
-            </span>
-          )}
-          {runContext?.pullRequest && (
-            <AgentResourceCard
-              icon={<GitPullRequest className="w-3.5 h-3.5" />}
-              label="PR"
-              title={runContext.pullRequest.number ? `#${runContext.pullRequest.number}` : runContext.pullRequest.title ?? 'pull request'}
-              subtitle={runContext.pullRequest.status ?? undefined}
-              href={runContext.pullRequest.url ?? undefined}
-              external
-            />
-          )}
-          {runContext?.workspace && (
-            <AgentResourceCard
-              icon={<FolderGit2 className="w-3.5 h-3.5" />}
-              label="Workspace"
-              title={runContext.workspace.branch ?? runContext.workspace.name ?? 'workspace'}
-              subtitle={runContext.workspace.repoName ?? undefined}
-              href={runContext.workspace.id ? `/workspaces/${runContext.workspace.id}` : undefined}
-            />
-          )}
-          <AgentResourceCard
-            icon={<Terminal className="w-3.5 h-3.5" />}
-            label="CWD"
-            title={meta.cwd ?? execution.input?.repo_path ?? '/tmp'}
-          />
-          {meta.chatSessionId && (
-            <AgentResourceCard
-              icon={<MessageSquare className="w-3.5 h-3.5" />}
-              label="Chat"
-              title="open conversation"
-              href={`/chat/${meta.chatSessionId}`}
-            />
-          )}
-        </section>
-
-        {/* Attempt tabs — shown when the agent has been resumed at least once.
-            Each tab switches which trace (rawResponse / toolCalls / cost /
-            duration) the rest of the page reflects. */}
-        {sortedTraces.length > 1 && (
-          <div className="flex items-center gap-1 border-b border-app -mx-1 px-1 overflow-x-auto">
-            {sortedTraces.map(t => {
-              const n = t.attempt ?? 1;
-              const failed = t.status === 'failed';
-              const active = n === selectedAttempt;
-              return (
-                <button
-                  key={n}
-                  onClick={() => setSelectedAttempt(n)}
-                  className={`flex items-center gap-1.5 px-3 py-2 text-[12px] border-b-2 transition-colors shrink-0 ${
-                    active
-                      ? 'border-accent-blue text-theme-primary'
-                      : 'border-transparent text-theme-muted hover:text-theme-secondary'
-                  }`}
-                  title={`${failed ? 'Failed' : 'Completed'} · ${new Date(t.startedAt).toLocaleString()}`}
-                >
-                  {failed ? <AlertCircle className="w-3 h-3 text-accent-red" /> : <CheckCircle className="w-3 h-3 text-accent-green/70" />}
-                  Attempt {n}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Prompt */}
-        <div className="card overflow-hidden">
-          <button title="Toggle prompt" onClick={() => setShowPrompt(!showPrompt)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left">
-            {showPrompt ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
-            <Terminal className="w-4 h-4 text-accent-blue" />
-            <span className="overline text-[12px]">Prompt</span>
-            <span className="text-[10px] text-theme-subtle font-mono ml-auto">{prompt.length} chars</span>
-          </button>
-          {showPrompt && (
-            <div className="px-4 pb-4 border-t border-app">
-              <pre className="text-xs text-theme-secondary font-mono whitespace-pre-wrap mt-2 max-h-[40vh] overflow-y-auto">{prompt}</pre>
-            </div>
-          )}
-        </div>
-
-        {/* Response / live logs */}
-        <div className="card overflow-hidden">
-          <button title={`Toggle ${primaryPanelTitle.toLowerCase()}`} onClick={() => setShowResponse(!showResponse)} className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left">
-            {showResponse ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
-            {showLogsInMain ? <Activity className="w-4 h-4 text-accent-blue animate-pulse" /> : execution.status === 'completed' ? <CheckCircle className="w-4 h-4 text-accent-green" /> : <AlertCircle className="w-4 h-4 text-accent-red" />}
-            <span className="overline text-[12px]">{primaryPanelTitle}</span>
-            <span className="text-[10px] text-theme-subtle font-mono ml-auto">{primaryPanelCount}</span>
-          </button>
-          {showResponse && (
-            <div className="px-4 pb-4 border-t border-app">
-              {showLogsInMain ? (
-                <div className="mt-2 max-h-[60vh] overflow-y-auto rounded-md bg-[rgb(var(--color-editor-background))]">
-                  {allLogs.length === 0 ? (
-                    <div className="px-4 py-4 text-xs text-theme-subtle font-mono animate-pulse">Waiting for activity...</div>
-                  ) : (
-                    allLogs.map((log: any, index: number) => (
-                      <LogRow key={index} log={log} toolCall={resolveToolCallForLog(log, toolCalls as ToolCall[])} />
-                    ))
-                  )}
-                </div>
-              ) : (
-                <div className="text-sm text-theme-secondary font-body mt-2 leading-relaxed max-h-[60vh] overflow-y-auto prose-allen">
-                  {response
-                    ? renderMarkdown(response)
-                    : <span className="text-theme-muted">{execution.errorMessage || '(no response)'}</span>
-                  }
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Tool Calls */}
-        {toolCalls.length > 0 && (
-          <div className="card overflow-hidden">
-            <button
-              type="button"
-              title="Toggle tool calls"
-              onClick={() => setShowToolCalls(v => !v)}
-              className="w-full flex items-center gap-2 px-4 py-3 hover:bg-app-muted/50 transition-colors text-left"
-            >
-              {showToolCalls ? <ChevronDown className="w-4 h-4 text-theme-muted" /> : <ChevronRight className="w-4 h-4 text-theme-muted" />}
-              <Wrench className="w-4 h-4 text-accent-yellow" />
-              <span className="overline text-theme-secondary">Tool Calls</span>
-              <span className="text-[10px] text-theme-subtle font-mono ml-auto">{toolCalls.length}</span>
-            </button>
-            {showToolCalls && (
-              <div className="border-t border-app max-h-[60vh] overflow-y-auto">
-                {(toolCalls as ToolCall[]).map((tc: ToolCall, i: number) => <ToolCallRow key={i} tc={tc} index={i} />)}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Timestamps */}
-        <div className="text-[10px] text-theme-subtle font-mono flex gap-4 flex-wrap">
-          <span>Started: {execution.startedAt ? new Date(execution.startedAt).toLocaleString() : 'n/a'}</span>
-          <span>Completed: {execution.completedAt ? new Date(execution.completedAt).toLocaleString() : 'n/a'}</span>
-          {meta.chatSessionId && <a href={`/chat/${meta.chatSessionId}`} className="text-accent hover:underline">Open Chat →</a>}
-        </div>
-      </div>
-
       <AgentLogsDrawer
-        open={agentLogsOpen}
-        onClose={() => setAgentLogsOpen(false)}
+        open={logsOpen}
+        onClose={() => setLogsOpen(false)}
         logs={allLogs}
         toolCalls={toolCalls as ToolCall[]}
         executionStatus={execution.status}
       />
 
-      {/* Artifacts drawer — standalone agent runs are their OWN root. If
-          this run was spawned by a chat or workflow, its artifacts are
-          filed under that parent instead and would show up empty here. */}
-      <ArtifactsDrawer
-        rootType="agent"
-        rootId={id}
-        open={agentArtifactsOpen}
-        onClose={() => setAgentArtifactsOpen(false)}
+      <AgentResumeDrawer
+        open={resumeOpen && canResume}
+        onClose={() => { setResumeOpen(false); setResumePrompt(''); }}
+        agentName={agentName}
+        prompt={resumePrompt}
+        busy={resumeBusy}
+        onPromptChange={setResumePrompt}
+        onSubmit={handleResume}
       />
     </div>
   );
 }
+
 
 // ── Main Execution Detail Page ──
 
@@ -1523,6 +2180,7 @@ export default function ExecutionDetailPage() {
     liveToolCallsByNode,
   } = useExecution(id);
 
+  const [rightPanelView, setRightPanelView] = useState<ExecutionRightPanelView>('node');
   // Deep-link node selection via ?node=X query param. Keeps the URL as the
   // source of truth so selections survive reload + can be shared.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1533,17 +2191,18 @@ export default function ExecutionDetailPage() {
     else next.delete('node');
     setSearchParams(next, { replace: true });
   };
+  const inspectNode = (n: string | null) => {
+    setSelectedNode(n);
+    setRightPanelView('node');
+  };
   // Interventions for this workflow run — drives the pending approval action
   // in the header while keeping the execution canvas focused.
   const [runInterventions, setRunInterventions] = useState<any[]>([]);
-  const [runControlsOpen, setRunControlsOpen] = useState(false);
-  const [stateChangesOpen, setStateChangesOpen] = useState(false);
-  const [logsOpen, setLogsOpen] = useState(false);
   const [mainView, setMainView] = useState<'graph' | 'trace'>('trace');
   const [traceTimelineOpen, setTraceTimelineOpen] = useState(false);
   const [checkpointCount, setCheckpointCount] = useState<number | null>(null);
-  const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [artifactCount, setArtifactCount] = useState<number | null>(null);
+  const [workflowArtifacts, setWorkflowArtifacts] = useState<ArtifactDoc[]>([]);
   const [runContext, setRunContext] = useState<RunStatus | null>(null);
   const [contextEvaluationBusy, setContextEvaluationBusy] = useState(false);
   const [contextEngineEnabled, setContextEngineEnabled] = useState(false);
@@ -1569,9 +2228,28 @@ export default function ExecutionDetailPage() {
     api.checkpoints.list(id)
       .then((list) => { if (!cancelled) setCheckpointCount((list ?? []).length); })
       .catch(() => {});
-    artifactsApi.list({ rootType: 'workflow', rootId: id, limit: 500 })
-      .then((list) => { if (!cancelled) setArtifactCount((list ?? []).length); })
-      .catch(() => {});
+    const loadArtifacts = () => {
+      artifactsApi.list({ rootType: 'workflow', rootId: id, limit: 500 })
+        .then((list) => {
+          if (cancelled) return;
+          const next = list ?? [];
+          setWorkflowArtifacts(next);
+          setArtifactCount(next.length);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setWorkflowArtifacts([]);
+          setArtifactCount(0);
+        });
+    };
+    loadArtifacts();
+    if (execution?.status === 'running' || execution?.status === 'waiting_for_input' || execution?.status === 'queued') {
+      const timer = window.setInterval(loadArtifacts, 3000);
+      return () => {
+        cancelled = true;
+        window.clearInterval(timer);
+      };
+    }
     return () => { cancelled = true; };
   }, [id, execution?.status, execution?.completedNodes?.length]);
 
@@ -1725,6 +2403,7 @@ export default function ExecutionDetailPage() {
   }, [execution?.status, execution?.failedNode, execution?.completedNodes, execution?.currentNodes, latestInputEvent, nodeStates, selectedNode]);
 
   const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 40, minSize: 20, maxSize: 60, unit: 'percent' });
+  const { size: artifactRightWidth, handleMouseDown: artifactRightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 56, minSize: 28, maxSize: 78, unit: 'percent' });
 
   const handleCancel = useCallback(async () => {
     if (id) await api.cancel(id);
@@ -1922,14 +2601,7 @@ export default function ExecutionDetailPage() {
   const agentNodeNames = Object.entries((workflow?.parsed?.nodes ?? workflow?.nodes ?? {}) as Record<string, any>)
     .filter(([, nodeDef]) => ((nodeDef as any)?.type ?? 'agent') === 'agent')
     .map(([name]) => name);
-  const pullRequestUrl = runContext?.pullRequest?.url ?? runContext?.workspace?.prUrl ?? null;
-  const pullRequestLabel = runContext?.pullRequest?.number
-    ? `#${runContext.pullRequest.number}`
-    : (runContext?.pullRequest?.title ?? 'Pull request');
-  const pullRequestMeta = [
-    runContext?.pullRequest?.status,
-    runContext?.pullRequest?.branch,
-  ].filter(Boolean).join(' · ');
+  const workflowNodeNames = workflow?.parsed?.nodes ? Object.keys(workflow.parsed.nodes) : [];
 
   return (
     <div className="flex flex-col h-full">
@@ -2011,9 +2683,9 @@ export default function ExecutionDetailPage() {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setLogsOpen(true)}
-            className="btn-ghost text-xs inline-flex items-center gap-1"
-            title="Open execution logs"
+            onClick={() => setRightPanelView('logs')}
+            className={`btn-ghost text-xs inline-flex items-center gap-1 ${rightPanelView === 'logs' ? 'text-theme-primary bg-app-muted' : ''}`}
+            title="Show execution logs"
           >
             <Terminal className="w-3.5 h-3.5" />
             <span>Logs</span>
@@ -2024,17 +2696,17 @@ export default function ExecutionDetailPage() {
             )}
           </button>
           <button
-            onClick={() => setStateChangesOpen(true)}
-            className="btn-ghost text-xs inline-flex items-center gap-1"
-            title="View chronological state changes across checkpoints"
+            onClick={() => setRightPanelView('state')}
+            className={`btn-ghost text-xs inline-flex items-center gap-1 ${rightPanelView === 'state' ? 'text-theme-primary bg-app-muted' : ''}`}
+            title="Show chronological state changes across checkpoints"
           >
             <Activity className="w-3.5 h-3.5" />
             <span>State Changes</span>
           </button>
           <button
-            onClick={() => setRunControlsOpen(true)}
-            className="btn-ghost text-xs inline-flex items-center gap-1"
-            title="Rerun from saved state, edit state, and add feedback"
+            onClick={() => setRightPanelView('rerun')}
+            className={`btn-ghost text-xs inline-flex items-center gap-1 ${rightPanelView === 'rerun' ? 'text-theme-primary bg-app-muted' : ''}`}
+            title="Show saved states, rerun controls, and feedback"
           >
             <Save className="w-3.5 h-3.5" />
             <span>Rerun from State</span>
@@ -2050,9 +2722,9 @@ export default function ExecutionDetailPage() {
             )}
           </button>
           <button
-            onClick={() => setArtifactsOpen(true)}
-            className="btn-ghost text-xs inline-flex items-center gap-1"
-            title="View artifacts saved by agents during this run"
+            onClick={() => setRightPanelView('artifacts')}
+            className={`btn-ghost text-xs inline-flex items-center gap-1 ${rightPanelView === 'artifacts' ? 'text-theme-primary bg-app-muted' : ''}`}
+            title="Show artifacts saved by agents during this run"
           >
             <FileText className="w-3.5 h-3.5" />
             <span>Artifacts</span>
@@ -2122,7 +2794,7 @@ export default function ExecutionDetailPage() {
                 );
               })()}
               <button
-                onClick={() => { setSelectedNode(execution.failedNode); }}
+                onClick={() => { inspectNode(execution.failedNode); }}
                 className="ml-3 text-[10px] font-mono underline text-theme-muted hover:text-theme-primary"
                 title="Jump to failed node + Inspector tab for state-at-failure"
               >
@@ -2235,14 +2907,14 @@ export default function ExecutionDetailPage() {
                   workflow={workflow}
                   nodeStates={nodeStates}
                   selectedNode={selectedNode}
-                  onSelectNode={setSelectedNode}
+                  onSelectNode={inspectNode}
                   spawnCounts={(children ?? []).reduce((acc: Record<string, number>, c) => {
                     if (c.parentCaller) acc[c.parentCaller] = (acc[c.parentCaller] ?? 0) + 1;
                     return acc;
                   }, {})}
                 />
               ) : (
-                <div className="h-full min-h-0 overflow-auto bg-app-card">
+                <div className="flex h-full min-h-0 flex-col overflow-hidden bg-app-card">
                   <div className="border-b border-app px-4 py-2 flex items-center justify-between gap-3 bg-surface-50">
                     <div>
                       <div className="text-[12px] font-semibold text-theme-primary">Trace</div>
@@ -2268,7 +2940,7 @@ export default function ExecutionDetailPage() {
                     <div className="border-b border-app p-4">
                       <GanttTimeline
                         traces={tracesForTimeline as any}
-                        onNodeClick={(node) => setSelectedNode(node)}
+                        onNodeClick={(node) => inspectNode(node)}
                       />
                     </div>
                   )}
@@ -2276,7 +2948,7 @@ export default function ExecutionDetailPage() {
                     nodeStates={nodeStates}
                     traces={traces}
                     selectedNode={selectedNode}
-                    onSelectNode={setSelectedNode}
+                    onSelectNode={inspectNode}
                   />
                 </div>
               )}
@@ -2286,106 +2958,72 @@ export default function ExecutionDetailPage() {
           {/* Right: Run context + Node detail — resizable */}
           <div
             className="min-h-0 overflow-hidden shrink-0 bg-surface border-l-2 border-app hover:border-accent-blue/50 transition-colors relative flex flex-col"
-            style={{ width: `${rightWidth}%` }}
+            style={{ width: `${rightPanelView === 'artifacts' ? artifactRightWidth : rightWidth}%` }}
           >
             {/* Invisible resize grab zone on the left edge */}
             <div
               className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10"
-              onMouseDown={rightResizeStart}
+              onMouseDown={rightPanelView === 'artifacts' ? artifactRightResizeStart : rightResizeStart}
             />
-            {pullRequestUrl && (
-              <div className="shrink-0 border-b border-app bg-app-card px-4 py-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-[10px] font-mono uppercase tracking-wide text-theme-subtle">Pull Request</div>
-                  <div className="mt-0.5 flex items-center gap-2 min-w-0">
-                    <GitPullRequest className="w-3.5 h-3.5 text-accent-green shrink-0" />
-                    <span className="text-[12px] font-mono text-theme-primary truncate">{pullRequestLabel}</span>
-                    {pullRequestMeta && <span className="text-[10px] font-mono text-theme-muted truncate">{pullRequestMeta}</span>}
-                  </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {rightPanelView === 'logs' ? (
+                <ExecutionLogsPanel
+                  executionId={id!}
+                  logs={logs}
+                  logFilter={logFilter}
+                  onNodeFilterChange={setLogFilter}
+                  workflowNodes={workflowNodeNames}
+                  traces={traces}
+                />
+              ) : rightPanelView === 'state' ? (
+                <div className="h-full overflow-auto bg-app-card p-4">
+                  <StateTimeline executionId={id!} />
                 </div>
-                <a
-                  href={pullRequestUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn-primary text-xs shrink-0 inline-flex items-center gap-1"
-                >
-                  Open PR
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-              </div>
-            )}
-            <RunContextPanel
-              runContext={runContext}
-              execution={execution}
-              pendingIntervention={pendingIntervention}
-              artifactCount={artifactCount}
-              onRerunContextEvaluation={contextEngineEnabled ? handleRerunContextEvaluation : undefined}
-              contextEvaluationBusy={contextEvaluationBusy}
-              contextEngineEnabled={contextEngineEnabled}
-            />
-            <div className="flex-1 min-h-0 overflow-y-auto">
-              {/*
-                The inline human-input form is intentionally DISABLED here.
-                Human interventions now surface on the dedicated Interventions
-                page (/interventions/:id) — we pass `waitingInput={null}` so
-                NodeDetail never renders its inline form. The pending-intervention
-                banner at the top of this page is the awareness surface; the
-                Interventions page is the action surface. See §9.7 of
-                docs/plans/feature-and-bug-workflows.md.
-              */}
-              <NodeDetail
-                nodeName={selectedNode ?? ''}
-                nodeState={selectedState}
-                trace={selectedTraceWithContextFinding}
-                allTraces={selectedTraces}
-                waitingInput={null}
-                onSubmitInput={handleSubmitInput}
-                spawnedChildren={(children ?? []).filter(c => c.parentCaller === selectedNode)}
-                allChildren={children ?? []}
-                descendantsMode={descendantsMode}
-                onToggleDescendants={toggleDescendants}
-                contextEngineEnabled={contextEngineEnabled}
-              />
+              ) : rightPanelView === 'rerun' ? (
+                <div className="h-full overflow-auto bg-app-card p-4">
+                  <CheckpointsPanel
+                    executionId={id!}
+                    executionStatus={execution.status}
+                    feedbackEntries={feedbackEntries}
+                    canAppendFeedback={canAppendFeedback}
+                    agentNodeNames={agentNodeNames}
+                    onFeedbackCreated={(entries) => setFeedbackEntries((prev) => [...prev, ...entries])}
+                    onRefreshExecution={refresh}
+                  />
+                </div>
+              ) : rightPanelView === 'artifacts' ? (
+                <WorkflowArtifactsPanel rootId={id!} />
+              ) : (
+                <div className="h-full overflow-y-auto">
+                  {/*
+                    The inline human-input form is intentionally DISABLED here.
+                    Human interventions now surface on the dedicated Interventions
+                    page (/interventions/:id) — we pass `waitingInput={null}` so
+                    NodeDetail never renders its inline form. The pending-intervention
+                    banner at the top of this page is the awareness surface; the
+                    Interventions page is the action surface. See §9.7 of
+                    docs/plans/feature-and-bug-workflows.md.
+                  */}
+                  <NodeDetail
+                    nodeName={selectedNode ?? ''}
+                    nodeState={selectedState}
+                    trace={selectedTraceWithContextFinding}
+                    allTraces={selectedTraces}
+                    waitingInput={null}
+                    onSubmitInput={handleSubmitInput}
+                    spawnedChildren={(children ?? []).filter(c => c.parentCaller === selectedNode)}
+                    allChildren={children ?? []}
+                    descendantsMode={descendantsMode}
+                    onToggleDescendants={toggleDescendants}
+                    contextEngineEnabled={contextEngineEnabled}
+                    artifacts={workflowArtifacts}
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
-
-      {/* Right-side drawers — mounted at page root, portal to body so
-          ancestor backdrop-filter can't trap them. */}
-      <RunControlsDrawer
-        open={runControlsOpen}
-        onClose={() => setRunControlsOpen(false)}
-        executionId={id!}
-        executionStatus={execution.status}
-        checkpointCount={checkpointCount}
-        feedbackEntries={feedbackEntries}
-        canAppendFeedback={canAppendFeedback}
-        agentNodeNames={agentNodeNames}
-        onFeedbackCreated={(entries) => setFeedbackEntries((prev) => [...prev, ...entries])}
-        onRefreshExecution={refresh}
-      />
-      <ArtifactsDrawer
-        rootType="workflow"
-        rootId={id!}
-        open={artifactsOpen}
-        onClose={() => setArtifactsOpen(false)}
-      />
-      <StateChangesDrawer
-        executionId={id!}
-        open={stateChangesOpen}
-        onClose={() => setStateChangesOpen(false)}
-      />
-      <ExecutionLogsOverlay
-        open={logsOpen}
-        executionId={id!}
-        logs={logs}
-        logFilter={logFilter}
-        onNodeFilterChange={setLogFilter}
-        workflowNodes={workflow?.parsed?.nodes ? Object.keys(workflow.parsed.nodes) : []}
-        traces={traces}
-        onClose={() => setLogsOpen(false)}
-      />
 
       {/* Inline human-input dialog — brought back for clarification flows
           that carry reviewable content. The legacy /interventions/:id page
@@ -2501,6 +3139,7 @@ export default function ExecutionDetailPage() {
                 if (answer.interventionId) {
                   await interventionsApi.respond(answer.interventionId, {
                     decision: answer.decision,
+                    action_id: answer.actionId,
                     field_values: answer.fieldValues,
                     feedback: answer.feedback,
                     answer: answer.answer,

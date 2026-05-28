@@ -9,9 +9,9 @@
  *   source.kind === 'repo'   → resolve entry file under registered repo,
  *                              run `npm install` gate, spawn with narrow env
  *
- * Bare bundle records (no `source`) spawn with the env/args verbatim. There is
- * no encrypted-secret-store resolution: all credentials come from `.env` via
- * the ALLEN_-prefix allowlist below.
+ * Bare bundle records (no `source`) spawn with the env/args verbatim. Source
+ * records resolve credentials from a caller-supplied source env map, falling
+ * back to process.env for local/server mode.
  */
 
 import { type Db, ObjectId } from 'mongodb';
@@ -21,9 +21,18 @@ import { fileURLToPath } from 'node:url';
 
 import { ensureInstalled, ensurePythonVenv, resolvePythonInterpreter } from './mcp-install.js';
 
-// ── env allowlist from process.env (ALLEN_<key> → <key>) ───────────────────
+// ── env allowlist from source env (ALLEN_<key> → <key>) ────────────────────
 
 const BASE_ENV_KEYS = ['PATH', 'HOME', 'USER', 'SHELL'] as const;
+
+export type McpSourceEnv = NodeJS.ProcessEnv | Record<string, string | undefined>;
+
+export interface BuildMcpConfigOptions {
+  /** Extra env vars merged into each MCP's env after allowlist resolution. */
+  extraEnv?: Record<string, string>;
+  /** Source used to resolve ALLEN_<KEY> values. Defaults to process.env. */
+  sourceEnv?: McpSourceEnv;
+}
 
 /**
  * Build the subprocess env from an allowlist. For each bare name `X` in
@@ -35,26 +44,27 @@ const BASE_ENV_KEYS = ['PATH', 'HOME', 'USER', 'SHELL'] as const;
  */
 function buildEnvFromAllowlist(
   envKeys: string[] | undefined,
-  extraEnv?: Record<string, string>,
+  options: BuildMcpConfigOptions = {},
 ): Record<string, string> {
+  const sourceEnv = options.sourceEnv ?? process.env;
   const env: Record<string, string> = {
     // Silence dotenv's startup banner — corrupts strict MCP clients.
     DOTENV_CONFIG_QUIET: 'true',
   };
   for (const base of BASE_ENV_KEYS) {
-    const v = process.env[base];
+    const v = sourceEnv[base] ?? process.env[base];
     if (v !== undefined) env[base] = v;
   }
   for (const key of envKeys ?? []) {
     const allenKey = `ALLEN_${key}`;
-    const val = process.env[allenKey];
+    const val = sourceEnv[allenKey];
     if (val === undefined) {
-      console.warn(`[mcp-loader] envKey "${key}" referenced but ${allenKey} is not set in Allen's .env`);
+      console.warn(`[mcp-loader] envKey "${key}" referenced but ${allenKey} is not configured`);
       continue;
     }
     env[key] = val;
   }
-  if (extraEnv) Object.assign(env, extraEnv);
+  if (options.extraEnv) Object.assign(env, options.extraEnv);
   return env;
 }
 
@@ -63,13 +73,13 @@ function buildEnvFromAllowlist(
  * postgres connection string). For each bare name `X`, returns
  * `process.env.ALLEN_X` — empty string when missing.
  */
-function resolveArgKeys(argKeys: string[] | undefined): string[] {
+function resolveArgKeys(argKeys: string[] | undefined, sourceEnv: McpSourceEnv = process.env): string[] {
   if (!argKeys || argKeys.length === 0) return [];
   return argKeys.map((key) => {
     const allenKey = `ALLEN_${key}`;
-    const val = process.env[allenKey];
+    const val = sourceEnv[allenKey];
     if (val === undefined) {
-      console.warn(`[mcp-loader] argKey "${key}" referenced but ${allenKey} is not set in Allen's .env`);
+      console.warn(`[mcp-loader] argKey "${key}" referenced but ${allenKey} is not configured`);
       return '';
     }
     return val;
@@ -99,8 +109,9 @@ async function resolveRepoPath(db: Db, repoId: string): Promise<string | null> {
 async function resolveSourcedStdio(
   s: Record<string, unknown>,
   db: Db,
-  extraEnv?: Record<string, string>,
+  options: BuildMcpConfigOptions = {},
 ): Promise<Record<string, unknown> | null> {
+  const sourceEnv = options.sourceEnv ?? process.env;
   const source = s.source as Record<string, unknown> | undefined;
   if (!source) return null;
   const envKeys = (s.envKeys as string[] | undefined) ?? [];
@@ -110,12 +121,12 @@ async function resolveSourcedStdio(
   if (source.kind === 'preset') {
     // The record stored the command+args at create time (copied from the
     // hardcoded preset). Trust them verbatim; append argKeys expansion.
-    const args = [...extraArgs, ...resolveArgKeys(argKeys)];
+    const args = [...extraArgs, ...resolveArgKeys(argKeys, sourceEnv)];
     return {
       type: 'stdio',
       command: (s.command as string) ?? 'npx',
       args,
-      env: buildEnvFromAllowlist(envKeys, extraEnv),
+      env: buildEnvFromAllowlist(envKeys, options),
     };
   }
 
@@ -207,12 +218,12 @@ async function resolveSourcedStdio(
         return null;
       }
 
-      const args = [entryAbs, ...extraArgs, ...resolveArgKeys(argKeys)];
+      const args = [entryAbs, ...extraArgs, ...resolveArgKeys(argKeys, sourceEnv)];
       return {
         type: 'stdio',
         command: pythonBin,
         args,
-        env: buildEnvFromAllowlist(envKeys, extraEnv),
+        env: buildEnvFromAllowlist(envKeys, options),
         cwd: installDir,
       };
     }
@@ -231,13 +242,13 @@ async function resolveSourcedStdio(
     // Auto-infer command unless the record overrides it explicitly.
     const { command: autoCmd, leadingArgs } = inferCommand(entryAbs);
     const command = (s.command as string) ?? autoCmd;
-    const args = [...leadingArgs, entryAbs, ...extraArgs, ...resolveArgKeys(argKeys)];
+    const args = [...leadingArgs, entryAbs, ...extraArgs, ...resolveArgKeys(argKeys, sourceEnv)];
 
     return {
       type: 'stdio',
       command,
       args,
-      env: buildEnvFromAllowlist(envKeys, extraEnv),
+      env: buildEnvFromAllowlist(envKeys, options),
       cwd: installDir,
     };
   }
@@ -255,6 +266,8 @@ export type LoadMcpOptions = {
   ownerId?: ObjectId | string | null;
   /** Extra env vars merged into each MCP's env. */
   extraEnv?: Record<string, string>;
+  /** Source used to resolve ALLEN_<KEY> values. Defaults to process.env. */
+  sourceEnv?: McpSourceEnv;
   /**
    * External MCP server allowlist. Allen's built-in MCP is handled by
    * loadAllMcpServers and is never filtered here. undefined = all external
@@ -293,7 +306,10 @@ export async function loadMcpServers(
   for (const s of servers) {
     if (allowedExternal && !allowedExternal.has(String(s.name))) continue;
     try {
-      const cfg = await buildSingleServerConfig(s, db, options?.extraEnv);
+      const cfg = await buildSingleServerConfig(s, db, {
+        extraEnv: options?.extraEnv,
+        sourceEnv: options?.sourceEnv,
+      });
       if (cfg) config[s.name as string] = cfg;
     } catch (err) {
       console.error(`[mcp-loader] Failed to resolve MCP "${s.name}":`, (err as Error).message);
@@ -313,11 +329,14 @@ export async function loadMcpServers(
 export async function buildSingleServerConfig(
   s: Record<string, unknown>,
   db: Db,
-  extraEnv?: Record<string, string>,
+  optionsOrExtraEnv?: Record<string, string> | BuildMcpConfigOptions,
 ): Promise<Record<string, unknown> | null> {
+  const options: BuildMcpConfigOptions = isBuildOptions(optionsOrExtraEnv)
+    ? optionsOrExtraEnv
+    : { extraEnv: optionsOrExtraEnv };
   // Preferred path: source-based record (preset or repo).
   if (s.source) {
-    return resolveSourcedStdio(s, db, extraEnv);
+    return resolveSourcedStdio(s, db, options);
   }
 
   // Bare bundle path: env/args used verbatim. Credentials are expected to
@@ -326,7 +345,7 @@ export async function buildSingleServerConfig(
     DOTENV_CONFIG_QUIET: 'true',
     ...(s.env ?? {}) as Record<string, string>,
   };
-  if (extraEnv) Object.assign(resolvedEnv, extraEnv);
+  if (options.extraEnv) Object.assign(resolvedEnv, options.extraEnv);
   const stdioConfig: Record<string, unknown> = {
     type: 'stdio',
     command: s.command,
@@ -443,13 +462,14 @@ export function getAllenMcpConfig(
 
   const serverPath = resolution.path;
   const apiUrl = process.env.ALLEN_API_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`;
-  // .ts source runs via `npx tsx`; .js built file runs via `node`. Picking
-  // the wrong runner here is what made the chat-tools.ts delegation path
-  // fail in prod (hardcoded `npx tsx <serverPath.ts>` against a file that
-  // only exists as .js after the build step).
+  // .ts source runs via `npx tsx`; unpacked .js runs via `node`; packaged
+  // ASAR paths must run through Electron's Node runtime because plain Node
+  // cannot read files inside app.asar.
   const runner = serverPath.endsWith('.ts')
-    ? { command: 'npx', args: ['tsx', serverPath] }
-    : { command: 'node', args: [serverPath] };
+    ? { command: 'npx', args: ['tsx', serverPath], env: {} as Record<string, string> }
+    : serverPath.includes('.asar/')
+      ? { command: process.execPath, args: [serverPath], env: { ELECTRON_RUN_AS_NODE: '1' } }
+      : { command: 'node', args: [serverPath], env: {} as Record<string, string> };
 
   const env: Record<string, string> = {
     ALLEN_API_URL: apiUrl,
@@ -457,6 +477,7 @@ export function getAllenMcpConfig(
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
     ...(process.env.JWT_ACCESS_SECRET ? { JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET } : {}),
+    ...runner.env,
     ...(extraEnv ?? {}),
   };
 
@@ -494,5 +515,10 @@ export async function loadAllMcpServers(
 
 function isLoadOptions(v: unknown): v is LoadMcpOptions {
   if (!v || typeof v !== 'object') return false;
-  return 'ownerId' in v || 'extraEnv' in v || 'externalServerNames' in v;
+  return 'ownerId' in v || 'extraEnv' in v || 'sourceEnv' in v || 'externalServerNames' in v;
+}
+
+function isBuildOptions(v: unknown): v is BuildMcpConfigOptions {
+  if (!v || typeof v !== 'object') return false;
+  return 'extraEnv' in v || 'sourceEnv' in v;
 }

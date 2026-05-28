@@ -33,6 +33,7 @@ import {
 } from '../components/context-management/ContextGraphFlow';
 import { repos as repoApi } from '../services/api';
 import { useToast } from '../components/common/Toast';
+import Select from '../components/common/Select';
 
 type Repo = {
   _id: string;
@@ -657,32 +658,44 @@ function ContextGraphSection({
             className="input text-xs max-w-xs"
             placeholder="Filter nodes..."
           />
-          <select
+          <Select
             value={graphFilters.nodeType}
-            onChange={(e) => {
-              const nextNodeType = e.target.value;
+            onChange={(nextNodeType) => {
               const nextFilters = { ...graphFilters, nodeType: nextNodeType };
               onGraphFiltersChanged(nextFilters);
               void onLoadGraph({ nodeType: nextNodeType });
             }}
-            className="input text-xs max-w-[180px]"
-          >
-            <option value="">All node types</option>
-            {nodeTypes.map((item) => <option key={String(item.type)} value={String(item.type)}>{String(item.type)} ({Number(item.count ?? 0)})</option>)}
-          </select>
-          <select
+            className="w-[180px]"
+            placeholder="All node types"
+            searchPlaceholder="Search node types..."
+            options={[
+              { value: '', label: 'All node types' },
+              ...nodeTypes.map((item) => ({
+                value: String(item.type),
+                label: String(item.type),
+                sublabel: `${Number(item.count ?? 0)} nodes`,
+              })),
+            ]}
+          />
+          <Select
             value={graphFilters.relationship}
-            onChange={(e) => {
-              const nextRelationship = e.target.value;
+            onChange={(nextRelationship) => {
               const nextFilters = { ...graphFilters, relationship: nextRelationship };
               onGraphFiltersChanged(nextFilters);
               void onLoadGraph({ relationship: nextRelationship });
             }}
-            className="input text-xs max-w-[220px]"
-          >
-            <option value="">All relationships</option>
-            {relationships.map((item) => <option key={String(item.relationship)} value={String(item.relationship)}>{String(item.relationship)} ({Number(item.count ?? 0)})</option>)}
-          </select>
+            className="w-[220px]"
+            placeholder="All relationships"
+            searchPlaceholder="Search relationships..."
+            options={[
+              { value: '', label: 'All relationships' },
+              ...relationships.map((item) => ({
+                value: String(item.relationship),
+                label: String(item.relationship),
+                sublabel: `${Number(item.count ?? 0)} edges`,
+              })),
+            ]}
+          />
           <button type="button" onClick={() => void onLoadGraph()} className="btn btn-secondary btn-sm">
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Apply
           </button>
@@ -1140,19 +1153,29 @@ function CuratedContextSection({ repoId, entries, onChanged }: { repoId: string;
                 <LabeledInput label="Category" value={draft.category} onChange={(value) => setDraft((prev) => ({ ...prev, category: value }))} />
                 <label className="space-y-1">
                   <span className="text-[10px] uppercase tracking-wide text-theme-muted">Inclusion</span>
-                  <select value={draft.inclusion} onChange={(e) => setDraft((prev) => ({ ...prev, inclusion: e.target.value }))} className="input text-xs">
-                    <option value="include">include</option>
-                    <option value="exclude">exclude</option>
-                    <option value="stale">stale</option>
-                  </select>
+                  <Select
+                    value={draft.inclusion}
+                    onChange={(value) => setDraft((prev) => ({ ...prev, inclusion: value }))}
+                    searchable={false}
+                    options={[
+                      { value: 'include', label: 'include' },
+                      { value: 'exclude', label: 'exclude' },
+                      { value: 'stale', label: 'stale' },
+                    ]}
+                  />
                 </label>
                 <label className="space-y-1">
                   <span className="text-[10px] uppercase tracking-wide text-theme-muted">Injection policy</span>
-                  <select value={draft.injectionPolicy} onChange={(e) => setDraft((prev) => ({ ...prev, injectionPolicy: e.target.value }))} className="input text-xs">
-                    <option value="snippet">snippet</option>
-                    <option value="manifest_only">manifest_only</option>
-                    <option value="never_full_auto">never_full_auto</option>
-                  </select>
+                  <Select
+                    value={draft.injectionPolicy}
+                    onChange={(value) => setDraft((prev) => ({ ...prev, injectionPolicy: value }))}
+                    searchable={false}
+                    options={[
+                      { value: 'snippet', label: 'snippet' },
+                      { value: 'manifest_only', label: 'manifest_only' },
+                      { value: 'never_full_auto', label: 'never_full_auto' },
+                    ]}
+                  />
                 </label>
                 <LabeledInput label="Summary" value={draft.summary} onChange={(value) => setDraft((prev) => ({ ...prev, summary: value }))} />
               </div>

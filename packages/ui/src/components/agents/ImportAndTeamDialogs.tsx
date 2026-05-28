@@ -17,9 +17,11 @@
  */
 
 import { useEffect, useState } from 'react';
-import { X, Loader2, AlertTriangle, Check, FolderGit2, Plus } from 'lucide-react';
+import { X, Loader2, AlertTriangle, Check, FolderGit2, Plus, Users } from 'lucide-react';
 import { agents as agentsApi, teams as teamsApi, repos as reposApi } from '../../services/api';
 import { useToast } from '../common/Toast';
+import IconTooltipButton from '../common/IconTooltipButton';
+import Select from '../common/Select';
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -45,35 +47,45 @@ type ImportVerdict =
 
 function DialogShell({
   title,
+  description,
+  icon,
   children,
   onClose,
   footer,
   wide,
 }: {
   title: string;
+  description?: string;
+  icon?: React.ReactNode;
   children: React.ReactNode;
   onClose: () => void;
   footer?: React.ReactNode;
   wide?: boolean;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-6 backdrop-blur-sm">
       <div
-        className={`bg-surface-100 border border-app rounded-lg shadow-xl flex flex-col max-h-[85vh] ${
-          wide ? 'w-[720px] max-w-full' : 'w-[520px] max-w-full'
+        className={`flex max-h-[88vh] flex-col overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200 ${
+          wide ? 'w-[760px] max-w-full' : 'w-[540px] max-w-full'
         }`}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-app">
-          <h3 className="font-heading text-sm font-bold text-theme-primary tracking-widest uppercase">
-            {title}
-          </h3>
-          <button onClick={onClose} className="text-theme-subtle hover:text-theme-primary">
-            <X className="w-4 h-4" />
-          </button>
+        <div className="flex items-start justify-between gap-4 border-b border-app px-6 py-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app bg-app text-accent">
+              {icon ?? <Users className="h-[18px] w-[18px]" />}
+            </span>
+            <div className="min-w-0">
+              <h3 className="text-[17px] font-semibold tracking-tight text-theme-primary">{title}</h3>
+              {description && <p className="mt-1 text-[13px] text-theme-muted">{description}</p>}
+            </div>
+          </div>
+          <IconTooltipButton label="Close" onClick={onClose} className="h-9 w-9">
+            <X className="h-4 w-4" />
+          </IconTooltipButton>
         </div>
-        <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
+        <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
         {footer && (
-          <div className="px-5 py-3 border-t border-app flex items-center justify-end gap-2">
+          <div className="flex items-center justify-end gap-2 border-t border-app px-6 py-4">
             {footer}
           </div>
         )}
@@ -160,14 +172,16 @@ export function ImportAgentsFromRepoDialog({
 
   return (
     <DialogShell
-      title="Import Claude Agents from Repo"
+      title="Import agents"
+      description="Scan a registered repository for .claude/agents files and choose what to import."
+      icon={<FolderGit2 className="h-[18px] w-[18px]" />}
       onClose={onClose}
       wide
       footer={
         <>
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-full text-[11px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted"
+            className="btn btn-secondary btn-sm"
           >
             Cancel
           </button>
@@ -175,9 +189,9 @@ export function ImportAgentsFromRepoDialog({
             <button
               onClick={commit}
               disabled={selected.size === 0 || committing}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[11px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="btn btn-primary btn-sm disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {committing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+              {committing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
               Import {selected.size} agent{selected.size === 1 ? '' : 's'}
             </button>
           )}
@@ -186,38 +200,37 @@ export function ImportAgentsFromRepoDialog({
     >
       {/* Step 1: repo picker */}
       <div className="mb-4">
-        <label className="block overline mb-2">
+        <label className="mb-2 block overline">
           Source Repo
         </label>
-        <select
+        <Select
           value={selectedRepoId ?? ''}
-          onChange={e => {
-            const id = e.target.value || null;
+          onChange={(value) => {
+            const id = value || null;
             setSelectedRepoId(id);
             setVerdicts([]);
             setSelected(new Set());
             if (id) runPreview(id);
           }}
-          className="input text-xs w-full"
-        >
-          <option value="">— pick a registered repo —</option>
-          {repos.map(r => (
-            <option key={r._id} value={r._id}>
-              {r.name} — {r.path}
-            </option>
-          ))}
-        </select>
+          placeholder="Pick a registered repo"
+          searchPlaceholder="Search repositories..."
+          options={repos.map(repo => ({
+            value: repo._id,
+            label: repo.name,
+            sublabel: repo.path,
+          }))}
+        />
       </div>
 
       {/* Step 2: preview */}
       {previewing && (
-        <div className="flex items-center gap-2 text-xs text-theme-muted py-8 justify-center">
-          <Loader2 className="w-4 h-4 animate-spin" /> Scanning .claude/agents...
+        <div className="flex items-center justify-center gap-2 py-8 text-[13px] text-theme-muted">
+          <Loader2 className="h-4 w-4 animate-spin" /> Scanning .claude/agents...
         </div>
       )}
 
       {!previewing && selectedRepoId && verdicts.length === 0 && (
-        <div className="text-xs text-theme-muted py-8 text-center">
+        <div className="py-8 text-center text-[13px] text-theme-muted">
           No agents found in <span className="font-mono">.claude/agents/</span>.
         </div>
       )}
@@ -225,7 +238,7 @@ export function ImportAgentsFromRepoDialog({
       {!previewing && verdicts.length > 0 && (
         <>
           <div className="flex items-center justify-between mb-2">
-            <div className="text-[10px] font-mono text-theme-muted">
+            <div className="font-mono text-[11px] text-theme-muted">
               {createCount} importable, {skipCount} skipped
               {createCount > 0 && (
                 <> · <span className="text-accent-blue">{selected.size} selected</span></>
@@ -243,7 +256,7 @@ export function ImportAgentsFromRepoDialog({
                     setSelected(all);
                   }}
                   disabled={selected.size === createCount}
-                  className="px-2 py-0.5 rounded-full text-[9px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="rounded-md border border-app px-2 py-1 font-mono text-[10px] text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Select all
                 </button>
@@ -251,22 +264,22 @@ export function ImportAgentsFromRepoDialog({
                   type="button"
                   onClick={() => setSelected(new Set())}
                   disabled={selected.size === 0}
-                  className="px-2 py-0.5 rounded-full text-[9px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="rounded-md border border-app px-2 py-1 font-mono text-[10px] text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Deselect all
                 </button>
               </div>
             )}
           </div>
-          <div className="border border-app rounded-lg overflow-hidden">
+          <div className="overflow-hidden rounded-md border border-app">
             {verdicts.map((v, i) => {
               if (v.kind === 'skip:parse-error') {
                 return (
-                  <div key={`err-${i}`} className="flex items-start gap-3 px-3 py-2 border-b border-border/10 last:border-b-0 bg-accent-red/5">
-                    <AlertTriangle className="w-3.5 h-3.5 text-accent-red shrink-0 mt-0.5" />
+                  <div key={`err-${i}`} className="flex items-start gap-3 border-b border-app bg-accent-red/5 px-3 py-2.5 last:border-b-0">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-red" />
                     <div className="flex-1 min-w-0">
-                      <div className="font-mono text-xs text-accent-red truncate">{v.file}</div>
-                      <div className="text-[10px] text-theme-muted">{v.error}</div>
+                      <div className="truncate font-mono text-[12px] text-accent-red">{v.file}</div>
+                      <div className="text-[11px] text-theme-muted">{v.error}</div>
                     </div>
                   </div>
                 );
@@ -281,8 +294,8 @@ export function ImportAgentsFromRepoDialog({
               return (
                 <label
                   key={v.agent.name}
-                  className={`flex items-center gap-3 px-3 py-2 border-b border-border/10 last:border-b-0 ${
-                    isCreate ? 'hover:bg-surface-200/20 cursor-pointer' : 'bg-surface-200/10 cursor-not-allowed opacity-60'
+                  className={`flex items-center gap-3 border-b border-app px-3 py-2.5 last:border-b-0 ${
+                    isCreate ? 'cursor-pointer hover:bg-app-muted/40' : 'cursor-not-allowed bg-app-muted/25 opacity-60'
                   }`}
                 >
                   <input
@@ -293,24 +306,24 @@ export function ImportAgentsFromRepoDialog({
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs text-theme-primary">{v.agent.name}</span>
+                      <span className="font-mono text-[12px] text-theme-primary">{v.agent.name}</span>
                       {isCreate && 'tools' in v.agent && v.agent.tools.length > 0 && (
-                        <span className="text-[9px] font-mono text-theme-subtle">
+                        <span className="font-mono text-[10px] text-theme-subtle">
                           {v.agent.tools.join(', ')}
                         </span>
                       )}
                       {isCreate && 'model' in v.agent && (
-                        <span className="text-[9px] font-mono px-1.5 rounded bg-accent-purple/10 text-accent-purple">
+                        <span className="rounded bg-accent-purple/10 px-1.5 font-mono text-[10px] text-accent-purple">
                           {v.agent.model}
                         </span>
                       )}
                     </div>
                     {isCreate && 'description' in v.agent && (
-                      <div className="text-[10px] text-theme-muted truncate">{v.agent.description}</div>
+                      <div className="truncate text-[11px] text-theme-muted">{v.agent.description}</div>
                     )}
-                    {!isCreate && <div className="text-[10px] text-theme-muted">{reason}</div>}
+                    {!isCreate && <div className="text-[11px] text-theme-muted">{reason}</div>}
                   </div>
-                  <span className="text-[9px] font-mono uppercase tracking-widest text-theme-subtle shrink-0">
+                  <span className="shrink-0 font-mono text-[10px] text-theme-subtle">
                     {isCreate ? 'create' : 'skip'}
                   </span>
                 </label>
@@ -369,19 +382,20 @@ export function AssignToTeamDialog({
 
   return (
     <DialogShell
-      title={`Assign ${agentNames.length} Agent${agentNames.length === 1 ? '' : 's'} to Team`}
+      title="Assign to team"
+      description={`${agentNames.length} selected agent${agentNames.length === 1 ? '' : 's'} will move to the selected team.`}
       onClose={onClose}
       footer={
         <>
-          <button onClick={onClose} className="px-4 py-1.5 rounded-full text-[11px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted">
+          <button onClick={onClose} className="btn btn-secondary btn-sm">
             Cancel
           </button>
           <button
             onClick={commit}
             disabled={!teamName || working}
-            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[11px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 disabled:opacity-40"
+            className="btn btn-primary btn-sm disabled:opacity-40"
           >
-            {working ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+            {working ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
             Move
           </button>
         </>
@@ -389,27 +403,30 @@ export function AssignToTeamDialog({
     >
       <div className="space-y-4">
         <div>
-          <label className="block overline mb-2">
+          <label className="mb-2 block overline">
             Target Team
           </label>
-          <select value={teamName} onChange={e => setTeamName(e.target.value)} className="input text-xs w-full">
-            <option value="">— pick a team —</option>
-            {teams.map(t => (
-              <option key={t.name} value={t.name}>
-                {t.displayName} ({t.name})
-              </option>
-            ))}
-          </select>
+          <Select
+            value={teamName}
+            onChange={setTeamName}
+            placeholder="Pick a team"
+            searchPlaceholder="Search teams..."
+            options={teams.map(team => ({
+              value: team.name,
+              label: team.displayName,
+              sublabel: team.name,
+            }))}
+          />
         </div>
         <div>
-          <label className="block overline mb-2">
+          <label className="mb-2 block overline">
             Agents to Move
           </label>
-          <div className="text-[11px] font-mono text-theme-muted">
+          <div className="rounded-md border border-app bg-app-muted px-3 py-2 font-mono text-[12px] text-theme-muted">
             {agentNames.join(', ')}
           </div>
         </div>
-        <label className="flex items-center gap-2 text-[11px] font-mono text-theme-muted cursor-pointer">
+        <label className="flex cursor-pointer items-center gap-2 font-mono text-[12px] text-theme-muted">
           <input type="checkbox" checked={autoWire} onChange={e => setAutoWire(e.target.checked)} />
           Also allow the team lead to delegate to these agents
         </label>
@@ -498,27 +515,28 @@ export function CreateTeamFromAgentsDialog({
 
   return (
     <DialogShell
-      title="Create Team"
+      title="Create team"
+      description="Create a team lead and optionally place selected agents under it."
       onClose={onClose}
       wide
       footer={
         <>
-          <button onClick={onClose} className="px-4 py-1.5 rounded-full text-[11px] font-mono bg-app-muted/50 text-theme-muted hover:bg-app-muted">
+          <button onClick={onClose} className="btn btn-secondary btn-sm">
             Cancel
           </button>
           <button
             onClick={commit}
             disabled={!name || !displayName || working}
-            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[11px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20 disabled:opacity-40"
+            className="btn btn-primary btn-sm disabled:opacity-40"
           >
-            {working ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-            Create Team
+            {working ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            Create team
           </button>
         </>
       }
     >
       <div className="space-y-4">
-        <div className="p-3 bg-accent-blue/5 border border-accent-blue/20 rounded-lg text-[11px] text-theme-muted">
+        <div className="rounded-md border border-accent-blue/20 bg-accent-blue/5 p-3 text-[12px] text-theme-muted">
           A lead agent will be created as <span className="font-mono text-accent-blue">{leadSlug}</span>
           {memberAgentNames.length > 0
             ? <> and will delegate to {memberAgentNames.length} member{memberAgentNames.length === 1 ? '' : 's'}.</>
@@ -527,7 +545,7 @@ export function CreateTeamFromAgentsDialog({
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block overline mb-2">
+            <label className="mb-2 block overline">
               Display Name
             </label>
             <input
@@ -535,11 +553,11 @@ export function CreateTeamFromAgentsDialog({
               value={displayName}
               onChange={e => setDisplayName(e.target.value)}
               placeholder="Billing Team"
-              className="input text-xs w-full"
+              className="h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
             />
           </div>
           <div>
-            <label className="block overline mb-2">
+            <label className="mb-2 block overline">
               Slug
             </label>
             <input
@@ -547,13 +565,13 @@ export function CreateTeamFromAgentsDialog({
               value={name}
               onChange={e => setName(slugify(e.target.value))}
               placeholder="billing"
-              className="input text-xs w-full font-mono"
+              className="h-10 w-full rounded-md border border-app bg-app-muted px-3 font-mono text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
             />
           </div>
         </div>
 
         <div>
-          <label className="block overline mb-2">
+          <label className="mb-2 block overline">
             Description
           </label>
           <input
@@ -561,12 +579,12 @@ export function CreateTeamFromAgentsDialog({
             value={description}
             onChange={e => setDescription(e.target.value)}
             placeholder="One sentence describing the team"
-            className="input text-xs w-full"
+            className="h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
           />
         </div>
 
         <div>
-          <label className="block overline mb-2">
+          <label className="mb-2 block overline">
             Mission
           </label>
           <textarea
@@ -574,29 +592,36 @@ export function CreateTeamFromAgentsDialog({
             onChange={e => setMission(e.target.value)}
             rows={3}
             placeholder="2-3 sentences. Interpolated into the auto-generated lead's system prompt."
-            className="input text-xs w-full resize-none"
+            className="min-h-[92px] w-full resize-none rounded-md border border-app bg-app-muted px-3 py-2 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
           />
         </div>
 
         <div>
-          <label className="block overline mb-2">
+          <label className="mb-2 block overline">
             Parent Team
           </label>
-          <select value={parentTeamName} onChange={e => setParentTeamName(e.target.value)} className="input text-xs w-full">
-            {allTeams.map(t => (
-              <option key={t.name} value={t.name}>
-                {t.displayName}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={parentTeamName}
+            onChange={setParentTeamName}
+            placeholder="Pick a parent team"
+            searchPlaceholder="Search teams..."
+            options={[
+              { value: '', label: 'Top-level', sublabel: 'No parent team' },
+              ...allTeams.map(team => ({
+                value: team.name,
+                label: team.displayName,
+                sublabel: team.name,
+              })),
+            ]}
+          />
         </div>
 
         {memberAgentNames.length > 0 && (
           <div>
-            <label className="block overline mb-2">
+            <label className="mb-2 block overline">
               Members ({memberAgentNames.length})
             </label>
-            <div className="text-[11px] font-mono text-theme-muted">
+            <div className="rounded-md border border-app bg-app-muted px-3 py-2 font-mono text-[12px] text-theme-muted">
               {memberAgentNames.join(', ')}
             </div>
           </div>
@@ -605,33 +630,43 @@ export function CreateTeamFromAgentsDialog({
         <button
           type="button"
           onClick={() => setAdvancedOpen(o => !o)}
-          className="text-[10px] font-mono text-theme-muted hover:text-theme-primary"
+          className="font-mono text-[11px] text-theme-muted hover:text-theme-primary"
         >
           {advancedOpen ? '▾' : '▸'} Advanced — lead agent settings
         </button>
 
         {advancedOpen && (
-          <div className="grid grid-cols-2 gap-4 p-3 border border-app rounded-lg bg-surface-200/10">
+          <div className="grid grid-cols-2 gap-4 rounded-md border border-app bg-app-muted/30 p-3">
             <div>
-              <label className="block overline mb-2">
+              <label className="mb-2 block overline">
                 Lead Model
               </label>
-              <select value={leadModel} onChange={e => setLeadModel(e.target.value)} className="input text-xs w-full">
-                <option value="haiku">haiku</option>
-                <option value="sonnet">sonnet</option>
-                <option value="opus">opus</option>
-              </select>
+              <Select
+                value={leadModel}
+                onChange={setLeadModel}
+                searchable={false}
+                options={[
+                  { value: 'haiku', label: 'haiku' },
+                  { value: 'sonnet', label: 'sonnet' },
+                  { value: 'opus', label: 'opus' },
+                ]}
+              />
             </div>
             <div>
-              <label className="block overline mb-2">
+              <label className="mb-2 block overline">
                 Reasoning Effort
               </label>
-              <select value={leadEffort} onChange={e => setLeadEffort(e.target.value as any)} className="input text-xs w-full">
-                <option value="off">off</option>
-                <option value="low">low</option>
-                <option value="medium">medium</option>
-                <option value="high">high</option>
-              </select>
+              <Select
+                value={leadEffort}
+                onChange={(value) => setLeadEffort(value as 'off' | 'low' | 'medium' | 'high')}
+                searchable={false}
+                options={[
+                  { value: 'off', label: 'off' },
+                  { value: 'low', label: 'low' },
+                  { value: 'medium', label: 'medium' },
+                  { value: 'high', label: 'high' },
+                ]}
+              />
             </div>
           </div>
         )}

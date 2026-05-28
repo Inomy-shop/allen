@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><link rel="stylesheet" href="_base.css">
+<style>
+  .toast { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; border: 1px solid; font-size: 12px; }
+  .toast svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .toast .body { flex: 1; }
+  .toast .x { opacity: 0.6; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="card-frame">
+  <div class="col" style="gap: 10px;">
+    <div class="toast" style="border-color: rgb(var(--color-accent-green) / 0.4); background: rgb(var(--color-accent-green) / 0.1); color: rgb(var(--color-accent-green));">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+      <span class="body">Scan started · monitoring engineering-bug-fix-l2</span>
+      <span class="x">×</span>
+    </div>
+    <div class="toast" style="border-color: rgb(var(--color-accent-red) / 0.4); background: rgb(var(--color-accent-red) / 0.1); color: rgb(var(--color-accent-red));">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      <span class="body">Workflow execution failed · check trace EXE_29sk1x</span>
+      <span class="x">×</span>
+    </div>
+    <div class="toast" style="border-color: rgb(var(--color-accent) / 0.4); background: rgb(var(--color-accent) / 0.1); color: rgb(var(--color-accent));">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      <span class="body">Processing 3 nodes in parallel</span>
+      <span class="x">×</span>
+    </div>
+  </div>
+  <div style="margin-top: 14px; font-family: var(--font-mono); font-size: 10.5px; color: rgb(var(--color-text-muted));">
+    top-right · 200ms fade-in/slide-from-top · 3.5s auto-dismiss (6s for errors)
+  </div>
+</div>
+</body></html>

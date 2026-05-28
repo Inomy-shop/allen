@@ -74,7 +74,7 @@ export default function GanttTimeline({ traces, onNodeClick }: Props) {
           {tickPositions.map((p) => (
             <span
               key={p}
-              className="absolute top-0 transform -translate-x-1/2"
+              className={`absolute top-0 ${p === 0 ? '' : p === 100 ? '-translate-x-full' : '-translate-x-1/2'}`}
               style={{ left: `${p}%` }}
             >
               {formatTick((p / 100) * totalMs)}
@@ -177,11 +177,12 @@ function statusBg(status: string): string {
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
+  if (ms <= 0) return '0s';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   const m = Math.floor(ms / 60_000);
   const s = Math.round((ms % 60_000) / 1000);
-  return `${m}m${s.toString().padStart(2, '0')}s`;
+  return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
 function formatTick(ms: number): string {
@@ -190,5 +191,5 @@ function formatTick(ms: number): string {
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   const m = Math.floor(ms / 60_000);
   const s = Math.round((ms % 60_000) / 1000);
-  return `${m}m${s ? s + 's' : ''}`;
+  return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }

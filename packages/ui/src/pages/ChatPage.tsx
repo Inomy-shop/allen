@@ -10,7 +10,7 @@ import ChatRunSidebar, { type ChatRunPanelTab } from '../components/chat/ChatRun
 import { ToolCallLog } from '../components/common/ToolCallLog';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, type ChatQueueItem } from '../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
-import { Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Route, Terminal, X } from 'lucide-react';
+import { Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, X } from 'lucide-react';
 
 type PendingSendOptions = {
   provider?: string | null;
@@ -91,6 +91,31 @@ function diffLineCounts(diff?: string): { additions: number; deletions: number }
   }, { additions: 0, deletions: 0 });
 }
 
+type DiffSummaryFile = {
+  path?: string;
+  diff?: string;
+  modifiedContent?: string;
+  additions?: number;
+  deletions?: number;
+};
+
+function summarizeDiffFiles(files: DiffSummaryFile[]): { files: number; additions: number; deletions: number } {
+  const byKey = new Map<string, { additions: number; deletions: number }>();
+  for (const file of files) {
+    if (!file.diff?.trim() && !file.modifiedContent?.trim()) continue;
+    const counts = file.additions != null || file.deletions != null
+      ? { additions: file.additions ?? 0, deletions: file.deletions ?? 0 }
+      : diffLineCounts(file.diff);
+    const key = file.path ?? file.diff?.trim() ?? file.modifiedContent?.trim() ?? `${byKey.size}`;
+    byKey.set(key, counts);
+  }
+  return [...byKey.values()].reduce<{ files: number; additions: number; deletions: number }>((acc, item) => ({
+    files: acc.files + 1,
+    additions: acc.additions + item.additions,
+    deletions: acc.deletions + item.deletions,
+  }), { files: 0, additions: 0, deletions: 0 });
+}
+
 export default function ChatPage() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
@@ -101,7 +126,7 @@ export default function ChatPage() {
   const [toolLogOpen, setToolLogOpen] = useState(false);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [sidePanelTab, setSidePanelTab] = useState<ChatRunPanelTab>('tasks');
-  const [filesViewRequest, setFilesViewRequest] = useState<{ view: 'changes' | 'browser' | 'terminal'; nonce: number } | undefined>();
+  const [filesViewRequest, setFilesViewRequest] = useState<{ view: 'files' | 'changes'; nonce: number } | undefined>();
   const [mcpCount, setMcpCount] = useState<{ enabled: number; connected: number }>({ enabled: 0, connected: 0 });
   const [providers, setProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('codex');
@@ -226,10 +251,16 @@ export default function ChatPage() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setCmdPaletteAnchor(null);
         setCmdPaletteOpen(prev => !prev);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        setCmdPaletteOpen(false);
+        chatInputRef.current?.focus();
       }
     };
     window.addEventListener('keydown', handler);
@@ -447,12 +478,25 @@ export default function ChatPage() {
     } catch {}
   }
 
-  function openSidePanel(tab: ChatRunPanelTab, filesView?: 'changes' | 'browser' | 'terminal') {
-    if (tab === 'files' && filesView) {
+  function openSidePanel(tab: ChatRunPanelTab, filesView?: 'files' | 'changes') {
+    const nextTab = tab === 'executions' ? 'tasks' : tab;
+    if ((tab === 'files' || tab === 'changes') && filesView) {
       setFilesViewRequest(prev => ({ view: filesView, nonce: (prev?.nonce ?? 0) + 1 }));
     }
-    setSidePanelTab(tab);
+    setSidePanelTab(nextTab);
     setSidePanelOpen(true);
+  }
+
+  function handleSidePanelTabChange(tab: ChatRunPanelTab) {
+    if (tab === 'files') {
+      openSidePanel('files', 'files');
+      return;
+    }
+    if (tab === 'changes') {
+      openSidePanel('changes', 'changes');
+      return;
+    }
+    openSidePanel(tab);
   }
 
   const workspaceDiffRefs = spawnedAgents.reduce<Array<{ id: string; mode: 'workspace' }>>((acc, run) => {
@@ -496,48 +540,32 @@ export default function ChatPage() {
           .then(result => {
             const files = (result.snapshots ?? []).flatMap((snapshot: any) => snapshot.files ?? [])
               .filter((file: any) => file.diff?.trim() || file.modifiedContent?.trim());
-            return {
-              files: files.length,
-              additions: files.reduce((sum: number, file: any) => sum + (file.additions ?? 0), 0),
-              deletions: files.reduce((sum: number, file: any) => sum + (file.deletions ?? 0), 0),
-            };
+            return summarizeDiffFiles(files);
           })
           .catch(() => ({ files: 0, additions: 0, deletions: 0 }))
         : { files: 0, additions: 0, deletions: 0 };
       const parts = await Promise.all(workspaceRefs.map(async ref => {
         try {
           const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode });
-          const files = ((result.files ?? []) as Array<{ additions?: number; deletions?: number; diff?: string; modifiedContent?: string }>)
+          const files = ((result.files ?? []) as Array<{ path?: string; additions?: number; deletions?: number; diff?: string; modifiedContent?: string }>)
             .filter(file => file.diff?.trim() || file.modifiedContent?.trim());
-          return {
-            files: files.length,
-            additions: files.reduce((sum, file) => sum + (file.additions ?? 0), 0),
-            deletions: files.reduce((sum, file) => sum + (file.deletions ?? 0), 0),
-          };
+          return files;
         } catch {
-          return { files: 0, additions: 0, deletions: 0 };
+          return [];
         }
       }));
       const prParts = await Promise.all(pullRequestRefs.map(async ref => {
         try {
           const result = await pullRequestsApi.getDiff(ref.id);
-          const files = ((result.files ?? []) as Array<{ diff?: string; modifiedContent?: string }>)
+          const files = ((result.files ?? []) as Array<{ path?: string; diff?: string; modifiedContent?: string }>)
             .filter(file => file.diff?.trim() || file.modifiedContent?.trim());
-          return {
-            files: files.length,
-            additions: files.reduce((sum, file) => sum + diffLineCounts(file.diff).additions, 0),
-            deletions: files.reduce((sum, file) => sum + diffLineCounts(file.diff).deletions, 0),
-          };
+          return files;
         } catch {
-          return { files: 0, additions: 0, deletions: 0 };
+          return [];
         }
       }));
       if (cancelled) return;
-      const liveSummary = [...parts, ...prParts].reduce((acc, item) => ({
-        files: acc.files + item.files,
-        additions: acc.additions + item.additions,
-        deletions: acc.deletions + item.deletions,
-      }), { files: 0, additions: 0, deletions: 0 });
+      const liveSummary = summarizeDiffFiles([...parts.flat(), ...prParts.flat()]);
       const summary = liveSummary.files > 0 ? liveSummary : snapshotPart;
       const next = summary.files > 0 ? summary : null;
       const nextSignature = next ? `${next.files}:${next.additions}:${next.deletions}` : '';
@@ -571,7 +599,7 @@ export default function ChatPage() {
       ) : messages.length === 0 && !activeSessionId && !streaming ? (
         <div className="chat-empty-stream" aria-label="New conversation" />
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('executions')} onOpenFilesPanel={() => openSidePanel('files', 'changes')} />
+        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} />
       )}
       {floatingPullRequest && <FloatingPullRequestCard pullRequest={floatingPullRequest} />}
 
@@ -600,7 +628,7 @@ export default function ChatPage() {
             <button
               type="button"
               className="chat-code-summary-pill"
-              onClick={() => openSidePanel('files', 'changes')}
+              onClick={() => openSidePanel('changes', 'changes')}
               title="Open all code changes in this chat"
             >
               <Code2 className="h-3 w-3" />
@@ -810,17 +838,11 @@ export default function ChatPage() {
           <button type="button" className={sidePanelOpen && sidePanelTab === 'tasks' ? 'active' : ''} onClick={() => openSidePanel('tasks')} title="Task sequence" data-tooltip="Task sequence">
             <ListTree className="h-4 w-4" />
           </button>
-          <button type="button" className={sidePanelOpen && sidePanelTab === 'executions' ? 'active' : ''} onClick={() => openSidePanel('executions')} title="Agent executions" data-tooltip="Agent executions">
-            <Route className="h-4 w-4" />
-          </button>
-          <button type="button" className={sidePanelOpen && sidePanelTab === 'artifacts' ? 'active' : ''} onClick={() => openSidePanel('artifacts')} title="Artifacts" data-tooltip="Artifacts">
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'files' ? 'active' : ''} onClick={() => openSidePanel('files', 'files')} title="Files" data-tooltip="Files">
             <FileText className="h-4 w-4" />
           </button>
-          <button type="button" className={sidePanelOpen && sidePanelTab === 'files' ? 'active' : ''} onClick={() => openSidePanel('files', 'changes')} title="File changes" data-tooltip="File changes">
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'changes' ? 'active' : ''} onClick={() => openSidePanel('changes', 'changes')} title="Code changes" data-tooltip="Code changes">
             <Code2 className="h-4 w-4" />
-          </button>
-          <button type="button" onClick={() => openSidePanel('files', 'terminal')} title="Terminal" data-tooltip="Terminal">
-            <Terminal className="h-4 w-4" />
           </button>
         </nav>
       )}
@@ -831,7 +853,7 @@ export default function ChatPage() {
         repoBrowseSource={repoBrowseSource}
         open={sidePanelOpen}
         activeTab={sidePanelTab}
-        onTabChange={setSidePanelTab}
+        onTabChange={handleSidePanelTabChange}
         filesViewRequest={filesViewRequest}
         onAnswerWorkflowIntervention={answerWorkflowIntervention}
         onClose={() => setSidePanelOpen(false)}

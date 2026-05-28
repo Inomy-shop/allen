@@ -88,17 +88,30 @@ export function workspaceRoutes(db: Db): Router {
   });
 
   router.get('/:id/all-files', async (req: Request, res: Response) => {
-    try { res.json(await manager.listFiles(p(req, 'id'))); }
-    catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+    const workspaceId = p(req, 'id');
+    const started = Date.now();
+    console.info('[chat-files-api] workspace all-files:start', { workspaceId });
+    try {
+      const files = await manager.listFiles(workspaceId);
+      console.info('[chat-files-api] workspace all-files:success', { workspaceId, count: files.length, ms: Date.now() - started });
+      res.json(files);
+    }
+    catch (err: unknown) {
+      console.error('[chat-files-api] workspace all-files:failed', { workspaceId, ms: Date.now() - started, error: (err as Error).message });
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   router.get('/:id/file/*', async (req: Request, res: Response) => {
+    const workspaceId = p(req, 'id');
+    const started = Date.now();
+    const rawFilePath = (req.params as any)[0] ?? '';
+    console.info('[chat-files-api] workspace file:start', { workspaceId, path: rawFilePath });
     try {
-      const ws = await manager.get(p(req, 'id'));
+      const ws = await manager.get(workspaceId);
       if (!ws) return res.status(404).json({ error: 'Workspace not found' });
 
       // Decode and normalize path to prevent URL-encoded traversal attacks
-      const rawFilePath = (req.params as any)[0] ?? '';
       const decodedPath = decodeURIComponent(rawFilePath);
       const normalizedPath = normalize(decodedPath);
 
@@ -153,9 +166,13 @@ export function workspaceRoutes(db: Db): Router {
         }
 
         const content = readFileSync(fullPath, 'utf-8');
+        console.info('[chat-files-api] workspace file:success', { workspaceId, path: rawFilePath, bytes: stats.size, ms: Date.now() - started });
         res.json({ path: rawFilePath, content, isImage: false });
       }
-    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+    } catch (err: unknown) {
+      console.error('[chat-files-api] workspace file:failed', { workspaceId, path: rawFilePath, ms: Date.now() - started, error: (err as Error).message });
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // Write / save file

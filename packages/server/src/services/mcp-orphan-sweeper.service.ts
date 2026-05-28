@@ -214,7 +214,11 @@ async function sweepOnce(): Promise<void> {
   }
 }
 
-export function startMcpOrphanSweeper(): NodeJS.Timeout {
+export interface McpOrphanSweeperHandle {
+  stop(): void;
+}
+
+export function startMcpOrphanSweeper(): McpOrphanSweeperHandle {
   const tick = (): void => {
     sweepOnce().catch((err) => {
       console.error('[mcp-orphan-sweeper] tick failed:', (err as Error).message);
@@ -222,8 +226,14 @@ export function startMcpOrphanSweeper(): NodeJS.Timeout {
   };
   // Fire once at boot (after a short delay so allen has time to spawn its
   // own first-load MCPs without us reaping them as "orphans").
-  setTimeout(tick, 2 * 60_000);
+  const startupHandle = setTimeout(tick, 2 * 60_000);
+  startupHandle.unref();
   const handle = setInterval(tick, SWEEP_INTERVAL_MS);
   handle.unref();
-  return handle;
+  return {
+    stop: () => {
+      clearTimeout(startupHandle);
+      clearInterval(handle);
+    },
+  };
 }

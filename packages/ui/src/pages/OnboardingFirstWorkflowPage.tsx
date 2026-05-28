@@ -1,19 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Activity,
   AlertTriangle,
   ArrowRight,
+  Blocks,
+  Bug,
+  Check,
   CheckCircle2,
+  ChevronDown,
+  Circle,
+  CircleDot,
   ExternalLink,
+  FolderGit2,
   GitBranch,
   Loader2,
-  Sparkles,
-  Wrench,
 } from 'lucide-react';
 import { executions, repos, system, workflows } from '../services/api';
-import { BRAND_NAME } from '../lib/brand';
 import { useOnboardingGate } from '../hooks/useOnboardingGate';
+import { OnboardingShell } from '../components/onboarding/OnboardingShell';
 import {
   DEFAULT_ONBOARDING_BUG_REPORT,
   DEFAULT_ONBOARDING_FEATURE_REQUEST,
@@ -134,6 +138,7 @@ export default function OnboardingFirstWorkflowPage() {
   const [defaultRepoLoading, setDefaultRepoLoading] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [repoMenuOpen, setRepoMenuOpen] = useState(false);
 
   useEffect(() => {
     if (checkingOnboarding) return;
@@ -196,6 +201,15 @@ export default function OnboardingFirstWorkflowPage() {
     });
   }, [selectedRepoIsDefault, taskType]);
 
+  useEffect(() => {
+    if (!repoMenuOpen) return undefined;
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setRepoMenuOpen(false);
+    }
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [repoMenuOpen]);
+
   const selectedWorkflow = useMemo(
     () => workflowList.find(workflow => workflow.name === ONBOARDING_WORKFLOWS[taskType].name) ?? null,
     [taskType, workflowList],
@@ -210,6 +224,20 @@ export default function OnboardingFirstWorkflowPage() {
     && !promptLooksLikeRepoPath
     && providersHealthy
     && !launching;
+  const isDesktop = typeof window !== 'undefined' && Boolean(window.allenDesktop);
+  const runtimeLabel = isDesktop ? 'desktop runtime' : 'web setup';
+  const runtimeCopy = 'Allen will create a managed workspace, stream execution progress, and preserve artifacts from the first run.';
+  const bootstrapSteps: Array<{
+    number: string;
+    title: string;
+    copy: string;
+    state: 'done' | 'active' | 'next';
+  }> = [
+    { number: '01', title: 'Create admin', copy: 'Admin account is ready for this instance.', state: 'done' },
+    { number: '02', title: 'Verify runtime', copy: 'Required machine checks passed.', state: 'done' },
+    { number: '03', title: 'Connect repo', copy: 'Repository is available for workspaces.', state: 'done' },
+    { number: '04', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'active' },
+  ];
 
   async function launch() {
     if (!selectedRepo || !selectedWorkflow) return;
@@ -241,198 +269,329 @@ export default function OnboardingFirstWorkflowPage() {
 
   if (checkingOnboarding) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-surface-50 text-sm text-theme-muted">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin text-accent-blue" />
+      <div className="flex min-h-screen items-center justify-center bg-app text-[13px] text-theme-muted">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin text-accent" />
         Loading onboarding
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-surface-50 p-4">
-      <div className="mx-auto flex min-h-screen w-full max-w-6xl items-center py-8">
-        <div className="grid w-full gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
-          <section className="space-y-5">
-            <div className="space-y-3">
-              <div className="flex items-center gap-2.5">
-                <Activity className="h-6 w-6 text-accent-blue" />
-                <span className="font-heading text-lg font-bold uppercase tracking-widest text-theme-primary">
-                  {BRAND_NAME}
-                </span>
-              </div>
-              <div>
-                <p className="overline text-theme-muted">First workflow</p>
-                <h1 className="mt-2 font-heading text-3xl text-theme-primary">Ask Allen to change a repo</h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-theme-secondary">
-                  Pick a task type and describe the change. Allen will pass the selected repo internally, create a workspace, and take you to the live execution trace.
-                </p>
-              </div>
+    <OnboardingShell
+      step="first_workflow"
+      eyebrow="First workflow"
+      title="Start your first workflow"
+      description="Pick a focused task and describe the change. Allen will create a workspace, run the workflow, and take you to the live execution trace."
+      runtimeLabel={runtimeLabel}
+      runtimeCopy={runtimeCopy}
+      side={(
+        <div className="mt-5 space-y-2.5">
+          <div className="onboarding-card rounded-md border border-app bg-app-card p-3">
+            <div className="mb-3">
+              <div className="font-mono text-[10.5px] text-theme-subtle">bootstrap path</div>
+              <div className="mt-1 text-[13px] font-semibold text-theme-primary">Ready to run</div>
             </div>
-
-            {loading ? (
-              <div className="card flex min-h-[22rem] items-center justify-center p-6 text-theme-muted">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {defaultRepoLoading ? 'Preparing default test repository...' : 'Loading starter workflows...'}
-              </div>
-            ) : repoList.length === 0 ? (
-              <div className="card p-6">
-                <GitBranch className="h-6 w-6 text-accent-yellow" />
-                <h2 className="mt-3 font-heading text-xl text-theme-primary">Connect a repository first</h2>
-                <p className="mt-2 text-sm leading-6 text-theme-secondary">
-                  A workflow needs a registered repo path before it can create workspaces or scan code.
-                </p>
-                {error && (
-                  <div className="mt-4 rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-xs text-accent-red">
-                    {error}
-                  </div>
-                )}
-                <button type="button" onClick={() => navigate('/onboarding/repository', { replace: true })} className="btn-primary mt-5 inline-flex items-center gap-2">
-                  <ArrowRight className="h-4 w-4" />
-                  Connect repository
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-5">
-                <div className="rounded-md border border-accent-blue bg-accent-blue/10 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 gap-3">
-                      <Wrench className="mt-0.5 h-5 w-5 text-accent-blue" />
-                      <div>
-                        <h2 className="text-sm font-semibold text-theme-primary">{taskConfig.title}</h2>
-                        <p className="mt-1 text-xs leading-5 text-theme-secondary">
-                          {taskConfig.description}
-                        </p>
-                      </div>
+            <div className="space-y-0">
+              {bootstrapSteps.map(({ number, title: stepTitle, copy, state }) => (
+                <div
+                  key={number}
+                  className="onboarding-step grid grid-cols-[24px_minmax(0,1fr)] gap-3"
+                  style={{ animationDelay: `${Number(number) * 45}ms` }}
+                >
+                  <div className="relative flex justify-center">
+                    <div className={`onboarding-step-icon mt-0.5 grid h-5 w-5 place-items-center rounded-full ${
+                      state === 'active'
+                        ? 'text-accent'
+                        : state === 'done'
+                          ? 'text-accent-green'
+                          : 'text-theme-subtle'
+                    }`}>
+                      {state === 'done'
+                        ? <CheckCircle2 className="h-5 w-5" />
+                        : state === 'active'
+                          ? <CircleDot className="h-5 w-5" />
+                          : <Circle className="h-5 w-5" />}
                     </div>
-                    <span className={selectedWorkflow ? 'badge badge-ok' : 'badge badge-err'}>
-                      {selectedWorkflow ? 'available' : 'missing'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="card p-5">
-                  <div className="mb-4 grid grid-cols-2 gap-2 rounded-md bg-surface-50 p-1">
-                    {(['bug', 'feature'] as TaskType[]).map(type => {
-                      const active = taskType === type;
-                      const Icon = type === 'bug' ? Wrench : Sparkles;
-                      return (
-                        <button
-                          key={type}
-                          type="button"
-                          onClick={() => setTaskType(type)}
-                          className={`rounded px-3 py-2 text-sm ${active ? 'bg-surface-100 text-theme-primary shadow-sm' : 'text-theme-muted'}`}
-                        >
-                          <span className="inline-flex items-center gap-2">
-                            <Icon className="h-4 w-4" />
-                            {ONBOARDING_WORKFLOWS[type].label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="block overline text-theme-muted">Repository</label>
-                    <select value={selectedRepoPath} onChange={event => setSelectedRepoPath(event.target.value)} className="input w-full">
-                      {repoList.map(repo => (
-                        <option key={repo._id ?? repo.path} value={repo.path}>
-                          {repo.name ?? repo.path}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  {!providersHealthy && (
-                    <div className="mt-4 rounded-md border border-accent-yellow/30 bg-accent-yellow/10 px-3 py-2 text-xs text-accent-yellow">
-                      No LLM provider is ready. Authenticate Claude Code or Codex (whichever you picked at setup) and refresh.
-                    </div>
-                  )}
-
-                  <div className="mt-4 space-y-2">
-                    <label className="block overline text-theme-muted">{taskConfig.inputLabel}</label>
-                    <textarea
-                      value={prompt}
-                      onChange={event => setPrompt(event.target.value)}
-                      placeholder={taskConfig.placeholder}
-                      rows={7}
-                      className="input w-full resize-y leading-6"
-                    />
-                    {promptLooksLikeRepoPath && (
-                      <p className="text-xs leading-5 text-accent-yellow">
-                        Enter the {taskType === 'bug' ? 'bug description' : 'feature request'} here, not the repository path. The selected repo is already passed separately.
-                      </p>
+                    {number !== '04' && (
+                      <div className={`onboarding-step-line absolute bottom-0 top-6 w-px ${
+                        state === 'done' ? 'bg-accent-green/35' : 'bg-border'
+                      }`} />
                     )}
                   </div>
-
-                  {error && (
-                    <div className="mt-4 rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-xs text-accent-red">
-                      {error}
+                  <div className="pb-3">
+                    <div className={`text-[13px] font-semibold ${
+                      state === 'active' ? 'text-accent' : 'text-theme-primary'
+                    }`}>
+                      {stepTitle}
                     </div>
-                  )}
-
-                  <div className="mt-5 flex flex-wrap items-center gap-3">
-                    <button type="button" onClick={launch} disabled={!canLaunch} className="btn-primary inline-flex items-center gap-2">
-                      {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                      {launching ? 'Starting...' : taskConfig.startLabel}
-                    </button>
-                    <button type="button" onClick={skipOnboarding} className="btn-ghost">
-                      Skip for now
-                    </button>
+                    <p className="mt-0.5 text-[12px] leading-5 text-theme-muted">{copy}</p>
                   </div>
                 </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            <div className="onboarding-card rounded-md border border-app bg-app-card p-3">
+              <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-theme-primary">
+                <CheckCircle2 className="h-4 w-4 text-accent-green" />
+                What happens next
+              </div>
+              <p className="text-[12px] leading-5 text-theme-muted">
+                Progress streams to the execution page with logs and artifacts.
+              </p>
+            </div>
+
+            <div className="onboarding-card rounded-md border border-app bg-app-card p-3">
+              <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-theme-primary">
+                <AlertTriangle className="h-4 w-4 text-accent-yellow" />
+                Keep it scoped
+              </div>
+              <p className="text-[12px] leading-5 text-theme-muted">
+                Pick one concrete {taskType === 'bug' ? 'bug' : 'feature'} for the first run.
+              </p>
+            </div>
+          </div>
+
+          {selectedRepo && (
+            <div className="onboarding-card onboarding-soft-enter rounded-md border border-app bg-app-card p-3">
+              <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-theme-primary">
+                <GitBranch className="h-4 w-4 text-accent" />
+                {selectedRepo.name ?? 'Repository'}
+              </div>
+              <p className="line-clamp-2 font-mono text-[11.5px] leading-5 text-theme-muted [overflow-wrap:anywhere]">{selectedRepo.path}</p>
+              {selectedRepoIsDefault && (
+                <div className="mt-2 rounded-md border border-app bg-app-muted p-2.5">
+                  <a
+                    href={DEFAULT_ONBOARDING_REPO.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-accent hover:underline"
+                  >
+                    View test repo
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                </div>
+              )}
+              {selectedRepo.detected && (
+                <p className="mt-3 text-[12px] leading-5 text-theme-muted">
+                  {[...(selectedRepo.detected.language ?? []), ...(selectedRepo.detected.framework ?? [])]
+                    .filter(Boolean)
+                    .join(', ') || selectedRepo.detected.packageManager || 'Metadata detected'}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    >
+      <div className="space-y-4">
+        {loading ? (
+          <div className="onboarding-card onboarding-panel-enter rounded-md border border-app bg-app-card p-6 shadow-sm">
+            <div className="flex min-h-[16rem] items-center justify-center text-[13px] text-theme-muted">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin text-accent" />
+              {defaultRepoLoading ? 'Preparing default test repository...' : 'Loading starter workflows...'}
+            </div>
+          </div>
+        ) : repoList.length === 0 ? (
+          <div className="onboarding-card onboarding-panel-enter rounded-md border border-app bg-app-card p-4 shadow-sm sm:p-5">
+            <div className="grid h-9 w-9 place-items-center rounded-full border border-accent-yellow/25 bg-accent-yellow/10 text-accent-yellow">
+              <GitBranch className="h-4 w-4" />
+            </div>
+            <h2 className="mt-4 text-[22px] font-semibold text-theme-primary">Connect a repository first</h2>
+            <p className="mt-1 text-[13px] leading-5 text-theme-muted">
+              A workflow needs a registered repo before it can create workspaces or scan code.
+            </p>
+            {error && (
+              <div className="mt-4 rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">
+                {error}
               </div>
             )}
-          </section>
-
-          <aside className="space-y-4">
-            <div className="card p-5">
-              <CheckCircle2 className="mb-3 h-5 w-5 text-accent-green" />
-              <h2 className="font-heading text-base text-theme-primary">What happens next</h2>
-              <p className="mt-2 text-xs leading-5 text-theme-secondary">
-                Allen starts the selected workflow, streams progress to the execution page, and stores artifacts from agent work under the run.
+            <button type="button" onClick={() => navigate('/onboarding/repository', { replace: true })} className="onboarding-control btn-primary mt-5 w-full justify-center sm:w-auto">
+              <ArrowRight className="h-4 w-4" />
+              Connect repository
+            </button>
+          </div>
+        ) : (
+          <div className="onboarding-card onboarding-panel-enter rounded-md border border-app bg-app-card p-4 shadow-sm sm:p-5">
+            <div className="mb-4">
+              <h2 className="text-[21px] font-semibold text-theme-primary">Launch workflow</h2>
+              <p className="mt-1 text-[13px] leading-5 text-theme-muted">
+                Choose a small task and tell Allen what to change.
               </p>
             </div>
 
-            <div className="card p-5">
-              <AlertTriangle className="mb-3 h-5 w-5 text-accent-yellow" />
-              <h2 className="font-heading text-base text-theme-primary">Keep it scoped</h2>
-              <p className="mt-2 text-xs leading-5 text-theme-secondary">
-                Pick a small, concrete {taskType === 'bug' ? 'bug with an observable symptom' : 'feature with clear expected behavior'}. Avoid broad rewrites or multi-feature requests during onboarding.
-              </p>
-            </div>
-
-            {selectedRepo && (
-              <div className="card p-5">
-                <GitBranch className="mb-3 h-5 w-5 text-accent-blue" />
-                <h2 className="font-heading text-base text-theme-primary">{selectedRepo.name ?? 'Repository'}</h2>
-                <p className="mt-2 break-all font-mono text-xs leading-5 text-theme-muted">{selectedRepo.path}</p>
-                {selectedRepoIsDefault && (
-                  <div className="mt-4 rounded-md border border-accent-blue/30 bg-accent-blue/10 p-3">
-                    <p className="text-xs leading-5 text-theme-secondary">
-                      This is Allen's default test repo for users who do not want to connect their own code. It is a small static website with a readiness widget and fast tests.
-                    </p>
-                    <a
-                      href={DEFAULT_ONBOARDING_REPO.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-accent-blue hover:underline"
-                    >
-                      View test repo
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
+            <div className="onboarding-card mb-4 rounded-md border border-app bg-app-muted p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 gap-3">
+                  <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-accent/25 bg-accent-soft text-accent">
+                    {taskType === 'bug' ? <Bug className="h-4 w-4" /> : <Blocks className="h-4 w-4" />}
                   </div>
-                )}
-                {selectedRepo.detected && (
-                  <p className="mt-3 text-xs leading-5 text-theme-secondary">
-                    {[...(selectedRepo.detected.language ?? []), ...(selectedRepo.detected.framework ?? [])]
-                      .filter(Boolean)
-                      .join(', ') || selectedRepo.detected.packageManager || 'Metadata detected'}
+                  <div className="min-w-0">
+                    <h3 className="text-[13px] font-semibold text-theme-primary">{taskConfig.title}</h3>
+                    <p className="mt-1 text-[12px] leading-5 text-theme-muted">{taskConfig.description}</p>
+                  </div>
+                </div>
+                <span className={selectedWorkflow ? 'badge badge-ok' : 'badge badge-err'}>
+                  {selectedWorkflow ? 'available' : 'missing'}
+                </span>
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <div className="mb-1.5 font-mono text-[11px] font-medium lowercase text-theme-muted">task type</div>
+              <div className="grid grid-cols-2 gap-2">
+                {(['bug', 'feature'] as TaskType[]).map(type => {
+                  const active = taskType === type;
+                  const Icon = type === 'bug' ? Bug : Blocks;
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setTaskType(type)}
+                      className={`onboarding-control flex h-[52px] items-center justify-between rounded-md border px-3 text-left ${
+                        active
+                          ? 'border-accent/30 bg-accent-soft text-theme-primary'
+                          : 'border-app bg-app-muted text-theme-muted hover:border-accent/20 hover:text-theme-primary'
+                      }`}
+                    >
+                      <span className="inline-flex min-w-0 items-center gap-2">
+                        <Icon className={active ? 'h-4 w-4 text-accent' : 'h-4 w-4 text-theme-subtle'} />
+                        <span className="truncate text-[13px] font-medium">{ONBOARDING_WORKFLOWS[type].label}</span>
+                      </span>
+                      {active && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label id="workflow-repo-label" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">
+                  repository
+                </label>
+                <div
+                  className="relative"
+                  onBlur={event => {
+                    const nextTarget = event.relatedTarget;
+                    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+                    setRepoMenuOpen(false);
+                  }}
+                >
+                  <button
+                    type="button"
+                    aria-labelledby="workflow-repo-label"
+                    aria-haspopup="listbox"
+                    aria-expanded={repoMenuOpen}
+                    onClick={() => setRepoMenuOpen(open => !open)}
+                    className="onboarding-control flex min-h-12 w-full items-center justify-between gap-3 rounded-md border border-app bg-app-muted px-3 py-2 text-left text-theme-primary outline-none hover:border-accent/20 focus:border-accent focus:shadow-[var(--focus-ring)]"
+                  >
+                    <span className="flex min-w-0 items-center gap-3">
+                      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-app bg-app-card text-accent">
+                        <FolderGit2 className="h-3.5 w-3.5" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-[13px] font-medium text-theme-primary">
+                          {selectedRepo?.name ?? 'Select repository'}
+                        </span>
+                        {selectedRepo && (
+                          <span className="block truncate font-mono text-[10.5px] text-theme-subtle">
+                            {selectedRepo.path}
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                    <ChevronDown className={`h-4 w-4 shrink-0 text-theme-subtle transition-transform ${repoMenuOpen ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {repoMenuOpen && (
+                    <div
+                      role="listbox"
+                      aria-labelledby="workflow-repo-label"
+                      className="onboarding-popover shadow-popover absolute left-0 right-0 top-[calc(100%+6px)] z-20 overflow-hidden rounded-md border border-app bg-app-card"
+                    >
+                      <div className="max-h-56 overflow-y-auto p-1.5">
+                        {repoList.map(repo => {
+                          const selected = repo.path === selectedRepoPath;
+                          return (
+                            <button
+                              key={repo._id ?? repo.path}
+                              type="button"
+                              role="option"
+                              aria-selected={selected}
+                              onClick={() => {
+                                setSelectedRepoPath(repo.path);
+                                setRepoMenuOpen(false);
+                              }}
+                              className={`onboarding-control flex w-full items-center gap-3 rounded-md px-2 py-2 text-left ${
+                                selected ? 'bg-accent-soft text-accent' : 'text-theme-secondary hover:bg-app-muted hover:text-theme-primary'
+                              }`}
+                            >
+                              <FolderGit2 className="h-4 w-4 shrink-0" />
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[12.5px] font-medium">{repo.name ?? repo.path}</span>
+                                <span className="block truncate font-mono text-[10.5px] opacity-75">{repo.path}</span>
+                              </span>
+                              {selected && <Check className="h-4 w-4 shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {!providersHealthy && (
+                <div className="onboarding-soft-enter rounded-md border border-accent-yellow/30 bg-accent-yellow/10 px-3 py-2 text-[12px] leading-5 text-accent-yellow">
+                  No LLM provider is ready. Authenticate Claude Code or Codex, then refresh.
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label htmlFor="workflow-prompt" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">
+                  {taskConfig.inputLabel.toLowerCase()}
+                </label>
+                <textarea
+                  id="workflow-prompt"
+                  value={prompt}
+                  onChange={event => setPrompt(event.target.value)}
+                  placeholder={taskConfig.placeholder}
+                  rows={7}
+                  className="onboarding-control min-h-[128px] w-full resize-y rounded-md border border-app bg-app-muted px-3 py-2 text-[13px] leading-5 text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+                />
+                {promptLooksLikeRepoPath && (
+                  <p className="onboarding-soft-enter text-[12px] leading-5 text-accent-yellow">
+                    Enter the {taskType === 'bug' ? 'bug description' : 'feature request'} here, not the repository path.
                   </p>
                 )}
               </div>
-            )}
-          </aside>
-        </div>
+
+              {error && (
+                <div className="onboarding-soft-enter rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">
+                  {error}
+                </div>
+              )}
+
+              <div className="flex flex-col-reverse gap-3 border-t border-app pt-4 sm:flex-row sm:items-center sm:justify-end">
+                <button type="button" onClick={launch} disabled={!canLaunch} className="onboarding-control btn-primary justify-center">
+                  {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                  {launching ? 'Starting...' : taskConfig.startLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!loading && (
+          <div className="onboarding-soft-enter border-t border-app pt-4">
+            <button type="button" onClick={skipOnboarding} className="onboarding-control btn-ghost w-full justify-center">
+              Skip for now
+            </button>
+          </div>
+        )}
       </div>
-    </div>
+    </OnboardingShell>
   );
 }

@@ -2,6 +2,10 @@ import { authHeaders } from './api';
 
 const BASE = '/api';
 
+function encodeFilePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...options,
@@ -27,10 +31,10 @@ export const workspaces = {
   },
   getFiles: (id: string) => request<any[]>(`/workspaces/${id}/files`),
   getAllFiles: (id: string) => request<any[]>(`/workspaces/${id}/all-files`),
-  getFile: (id: string, path: string) => request<any>(`/workspaces/${id}/file/${path}`),
-  saveFile: (id: string, path: string, content: string) => request<any>(`/workspaces/${id}/file/${path}`, { method: 'PUT', body: JSON.stringify({ content }) }),
+  getFile: (id: string, path: string) => request<any>(`/workspaces/${id}/file/${encodeFilePath(path)}`),
+  saveFile: (id: string, path: string, content: string) => request<any>(`/workspaces/${id}/file/${encodeFilePath(path)}`, { method: 'PUT', body: JSON.stringify({ content }) }),
   createFile: (id: string, path: string, content?: string) => request<any>(`/workspaces/${id}/create-file`, { method: 'POST', body: JSON.stringify({ path, content: content ?? '' }) }),
-  deleteFile: (id: string, path: string) => request<any>(`/workspaces/${id}/file/${path}`, { method: 'DELETE' }),
+  deleteFile: (id: string, path: string) => request<any>(`/workspaces/${id}/file/${encodeFilePath(path)}`, { method: 'DELETE' }),
   commit: (id: string, message: string) => request<any>(`/workspaces/${id}/commit`, { method: 'POST', body: JSON.stringify({ message }) }),
   push: (id: string) => request<any>(`/workspaces/${id}/push`, { method: 'POST' }),
   pull: (id: string) => request<any>(`/workspaces/${id}/pull`, { method: 'POST' }),

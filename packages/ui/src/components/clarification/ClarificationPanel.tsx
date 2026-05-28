@@ -21,12 +21,14 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   HelpCircle, CheckCircle2, AlertTriangle, Info,
   Check, X as XIcon, MessageSquareQuote, RotateCcw, SendHorizontal,
-  ChevronDown, FileText, BookOpen,
+  FileText, BookOpen, Copy, Download,
   Calendar, Link as LinkIcon, Mail, Lock, Hash, Type, List, Code2,
   AlertCircle, CheckSquare, Square,
 } from 'lucide-react';
 import { renderMarkdown } from '../chat/ChatMessageList';
 import { CopyButton } from '../common/CopyDownload';
+import Select from '../common/Select';
+import { authHeaders } from '../../services/api';
 
 // ── Public types ───────────────────────────────────────────────────────
 
@@ -126,16 +128,18 @@ export default function ClarificationPanel({
   const [decision, setDecision] = useState<ClarificationDecision | null>(defaultDecision(mode));
   const [feedback, setFeedback] = useState('');
   const [scope, setScope] = useState<string>(scopeOptions?.[0]?.value ?? '');
+  const [previewDoc, setPreviewDoc] = useState<{ label: string; url: string } | null>(null);
 
   // Seed again if fields prop identity changes (rare but possible in streaming).
   useEffect(() => { setValues(seedValues(fields)); }, [fields.map(f => f.name).join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasReview = !!reviewContent && reviewContent.trim().length > 0;
-  // Two-column split when there's review content — regardless of layout.
-  // Inline pages benefit the same way modals do: content on the left, form
-  // on the right. Single column when there's nothing to review.
-  const isTwoCol = hasReview;
+  const hasDocs = !!docs && docs.length > 0;
   const severityTheme = themeForSeverity(severity);
+  const renderedFields = useMemo(
+    () => fields.filter(field => shouldRenderField(field, mode)),
+    [fields, mode],
+  );
 
   function setValue(name: string, v: unknown) {
     setValues(prev => ({ ...prev, [name]: v }));
@@ -148,7 +152,7 @@ export default function ClarificationPanel({
     // user is rejecting or requesting changes (feedback is the payload).
     const needsFields = decision === null || decision === 'approve' || decision === 'answer';
     if (needsFields) {
-      for (const f of fields) {
+      for (const f of renderedFields) {
         const v = values[f.name];
         if (f.required && (v === '' || v === null || v === undefined)) {
           errs[f.name] = 'Required';
@@ -178,7 +182,7 @@ export default function ClarificationPanel({
     if (Object.keys(errs).length > 0) return;
 
     const final: Record<string, unknown> = {};
-    for (const f of fields) {
+    for (const f of renderedFields) {
       const raw = values[f.name];
       if (f.type === 'json' && typeof raw === 'string' && raw.trim()) {
         try { final[f.name] = JSON.parse(raw); } catch { final[f.name] = raw; }
@@ -203,7 +207,7 @@ export default function ClarificationPanel({
   // overflow-auto, which only worked when the card had a bounded height
   // and silently clipped tall content otherwise.
   return (
-    <div className="flex flex-col min-h-0">
+    <div className="relative flex flex-col min-h-0">
       {/* Header — icon + title + subtitle. Only renders when a title is
           supplied; callers that provide their own outer header (e.g. the
           intervention detail hero card) pass only `prompt` and skip this. */}
@@ -214,12 +218,13 @@ export default function ClarificationPanel({
           severity={severity}
           roundInfo={roundInfo}
           theme={severityTheme}
+          compact={layout === 'modal'}
         />
       )}
 
       {/* Prompt / question text */}
       {prompt && (
-        <div className={`px-6 py-4 border-b border-app ${severityTheme.bgSoft}`}>
+        <div className={`${layout === 'modal' ? 'px-5 py-3' : 'px-6 py-4'} border-b border-app ${severityTheme.bgSoft}`}>
           <div className="flex items-start gap-3">
             <MessageSquareQuote className={`w-4 h-4 shrink-0 mt-0.5 ${severityTheme.iconClass}`} />
             <div className="flex-1 min-w-0">
@@ -249,31 +254,20 @@ export default function ClarificationPanel({
       )}
 
       {/* Docs — pill row */}
-      {docs && docs.length > 0 && (
-        <div className="px-6 pt-4 flex flex-wrap gap-2">
-          {docs.map((d, i) => (
-            <a
-              key={i}
-              href={d.url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono bg-app-muted hover:bg-surface-200/70 text-theme-secondary hover:text-theme-primary border border-app transition-colors"
-            >
-              <BookOpen className="w-3 h-3" />
-              {d.label}
-            </a>
-          ))}
+      {hasDocs && !hasReview && (
+        <div className={`${layout === 'modal' ? 'px-5 pt-4' : 'px-6 pt-4'}`}>
+          <ArtifactButtons docs={docs ?? []} onOpen={setPreviewDoc} />
         </div>
       )}
 
-      {/* Two-column body (review + form) OR single-column. Both columns
-          flow naturally — the outer modal overlay (or the page) handles
-          scroll. Internal scroll caps live on ReviewContent so a giant
-          PRD doesn't push the form off-screen. */}
-      <div className={isTwoCol ? 'grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] divide-x divide-border/15' : ''}>
-        {/* Review content */}
+      <div className={`${layout === 'modal' ? 'px-5 py-4' : 'px-6 py-5'} flex flex-col gap-5`}>
         {hasReview && (
-          <div className={`p-6 ${isTwoCol ? 'bg-app-muted/40' : ''}`}>
+          <div>
+            {hasDocs && (
+              <div className="mb-5">
+                <ArtifactButtons docs={docs ?? []} onOpen={setPreviewDoc} />
+              </div>
+            )}
             <SectionLabel icon={<FileText className="w-3 h-3" />} text={reviewLabel} />
             <ReviewContent
               content={reviewContent!}
@@ -283,18 +277,17 @@ export default function ClarificationPanel({
           </div>
         )}
 
-        {/* Form */}
         <form
           onSubmit={handleSubmit}
-          className="p-6 flex flex-col gap-5"
+          className="flex flex-col gap-5 border-t border-app pt-5"
         >
-          {fields.length > 0 && (
+          {renderedFields.length > 0 && (
             <div className="space-y-5">
               <SectionLabel
                 icon={<CheckSquare className="w-3 h-3" />}
-                text={fields.length === 1 ? 'Your response' : `Your response · ${fields.length} fields`}
+                text={renderedFields.length === 1 ? 'Your response' : `Your response · ${renderedFields.length} fields`}
               />
-              {fields.map(field => (
+              {renderedFields.map(field => (
                 <FieldRenderer
                   key={field.name}
                   field={field}
@@ -307,7 +300,7 @@ export default function ClarificationPanel({
             </div>
           )}
 
-          {fields.length === 0 && mode === 'simple' && (
+          {renderedFields.length === 0 && mode === 'simple' && (
             <div className="text-[12px] text-theme-muted italic">
               No fields to fill — submit to continue.
             </div>
@@ -318,7 +311,7 @@ export default function ClarificationPanel({
               into a single primary Submit + a secondary Reject link below
               the action bar to avoid the redundant "Choose an action" card.
               Escalation review intentionally keeps only the feedback box. */}
-          {mode === 'approval' && (
+          {(mode === 'approval' || mode === 'escalation') && (
             <DecisionButtons
               mode={mode}
               decision={decision}
@@ -333,16 +326,16 @@ export default function ClarificationPanel({
               {scopeOptions && scopeOptions.length > 0 && (
                 <div>
                   <FieldLabel label="Which section needs changes?" required />
-                  <select
+                  <Select
                     value={scope}
-                    onChange={e => setScope(e.target.value)}
+                    onChange={setScope}
                     disabled={locked || submitting}
-                    className="w-full px-3 py-2 rounded-md border border-app bg-app-card text-theme-primary text-sm font-body focus:outline-none focus:border-accent-blue/60 focus:ring-1 focus:ring-accent-blue/30 transition-colors disabled:opacity-50"
-                  >
-                    {scopeOptions.map(o => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
+                    searchable={scopeOptions.length > 6}
+                    options={scopeOptions.map(option => ({
+                      value: option.value,
+                      label: option.label,
+                    }))}
+                  />
                 </div>
               )}
               <div>
@@ -355,7 +348,7 @@ export default function ClarificationPanel({
                   rows={5}
                   disabled={locked || submitting}
                   autoFocus
-                  className="w-full px-3 py-2 rounded-md border border-app bg-app-card text-theme-primary text-sm font-body leading-relaxed focus:outline-none focus:border-accent-blue/60 focus:ring-1 focus:ring-accent-blue/30 transition-colors resize-y disabled:opacity-50"
+                  className="w-full px-3 py-2 rounded border border-app bg-app-card text-theme-primary text-sm font-body leading-relaxed focus:outline-none focus:border-accent-blue/60 focus:ring-1 focus:ring-accent-blue/30 transition-colors resize-y disabled:opacity-50"
                 />
                 {errors.__feedback && (
                   <FieldError text={errors.__feedback} />
@@ -391,15 +384,15 @@ export default function ClarificationPanel({
                   type="button"
                   onClick={onCancel}
                   disabled={submitting}
-                  className="px-3.5 py-2 rounded-md border border-app text-theme-secondary hover:bg-app-muted text-sm font-body transition-colors disabled:opacity-50"
+                  className="px-3.5 py-2 rounded border border-app text-theme-secondary hover:bg-app-muted text-sm font-body transition-colors disabled:opacity-50"
                 >
                   Cancel
                 </button>
               )}
               <button
                 type="submit"
-                disabled={locked || submitting || (mode === 'approval' && !decision)}
-                className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${submitButtonClass(decision, severity)}`}
+                disabled={locked || submitting || ((mode === 'approval' || mode === 'escalation') && !decision)}
+                className={`px-4 py-2 rounded text-sm font-medium flex items-center gap-2 transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${submitButtonClass(decision, severity)}`}
               >
                 {submitting
                   ? <span className="w-3.5 h-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />
@@ -410,6 +403,39 @@ export default function ClarificationPanel({
           </div>
         </form>
       </div>
+      {previewDoc && (
+        <ArtifactPreviewSidebar
+          doc={previewDoc}
+          onClose={() => setPreviewDoc(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ArtifactButtons({
+  docs,
+  onOpen,
+}: {
+  docs: Array<{ label: string; url: string }>;
+  onOpen: (doc: { label: string; url: string }) => void;
+}) {
+  return (
+    <div>
+      <SectionLabel icon={<BookOpen className="w-3 h-3" />} text="Artifacts" />
+      <div className="flex flex-wrap gap-2">
+        {docs.map((d, i) => (
+          <button
+            key={`${d.url}-${i}`}
+            type="button"
+            onClick={() => onOpen(d)}
+            className="inline-flex max-w-[280px] items-center gap-2 rounded border border-app bg-app-card px-3 py-2 text-[11px] font-mono text-theme-secondary transition-colors hover:border-accent-blue/40 hover:bg-accent-blue/10 hover:text-theme-primary"
+          >
+            <BookOpen className="w-3.5 h-3.5 shrink-0 text-accent-blue" />
+            <span className="truncate">{d.label}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -417,22 +443,23 @@ export default function ClarificationPanel({
 // ── Header ─────────────────────────────────────────────────────────────
 
 function ClarificationHeader({
-  title, subtitle, severity, roundInfo, theme,
+  title, subtitle, severity, roundInfo, theme, compact = false,
 }: {
   title?: string;
   subtitle?: string;
   severity: ClarificationSeverity;
   roundInfo?: { current: number; max: number };
   theme: SeverityTheme;
+  compact?: boolean;
 }) {
   const Icon = theme.Icon;
   return (
-    <div className="px-6 pt-5 pb-4 border-b border-app shrink-0">
-      <div className="flex items-start gap-3.5">
+    <div className={`${compact ? 'px-5 py-4' : 'px-6 pt-5 pb-4'} border-b border-app shrink-0`}>
+      <div className={`flex items-start ${compact ? 'gap-3' : 'gap-3.5'}`}>
         {/* Icon tile with soft gradient ring — replaces the old emoji circle. */}
-        <div className={`relative shrink-0 w-11 h-11 rounded-xl ${theme.iconTileBg} ${theme.iconTileBorder} border flex items-center justify-center shadow-sm`}>
-          <Icon className={`w-5 h-5 ${theme.iconClass}`} />
-          <span className={`absolute -inset-px rounded-xl ${theme.glow} pointer-events-none`} aria-hidden />
+        <div className={`relative shrink-0 ${compact ? 'w-9 h-9 rounded-lg' : 'w-11 h-11 rounded-xl'} ${theme.iconTileBg} ${theme.iconTileBorder} border flex items-center justify-center shadow-sm`}>
+          <Icon className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} ${theme.iconClass}`} />
+          <span className={`absolute -inset-px ${compact ? 'rounded-lg' : 'rounded-xl'} ${theme.glow} pointer-events-none`} aria-hidden />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1">
@@ -447,7 +474,7 @@ function ClarificationHeader({
             )}
           </div>
           {title && (
-            <h2 className="text-base font-heading font-semibold text-theme-primary tracking-tight leading-snug">
+            <h2 className={`${compact ? 'text-sm' : 'text-base'} font-heading font-semibold text-theme-primary tracking-tight leading-snug`}>
               {title}
             </h2>
           )}
@@ -518,6 +545,160 @@ function ReviewContent({
   );
 }
 
+function ArtifactPreviewSidebar({
+  doc,
+  onClose,
+}: {
+  doc: { label: string; url: string };
+  onClose: () => void;
+}) {
+  const [content, setContent] = useState('');
+  const [contentType, setContentType] = useState('text/plain');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setContent('');
+    fetch(doc.url, { headers: authHeaders() })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const type = response.headers.get('content-type') ?? '';
+        const text = await response.text();
+        if (!cancelled) {
+          setContentType(type || inferContentType(doc.url));
+          setContent(text);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load artifact');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [doc.url]);
+
+  async function handleCopy() {
+    if (!content) return;
+    await navigator.clipboard.writeText(content);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  }
+
+  function handleDownload() {
+    const blob = new Blob([content], { type: contentType || 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = downloadName(doc);
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="absolute inset-y-0 right-0 z-[35] flex w-full justify-end bg-black/25 backdrop-blur-[2px]">
+      <aside className="flex h-full w-full max-w-3xl flex-col border-l border-app-strong bg-app-card shadow-2xl">
+        <div className="flex shrink-0 items-center justify-between border-b border-app px-4 py-3">
+          <div className="min-w-0">
+            <div className="overline mb-1 flex items-center gap-1.5">
+              <BookOpen className="h-3 w-3" />
+              Artifact preview
+            </div>
+            <div className="truncate text-sm font-heading font-semibold text-theme-primary">{doc.label}</div>
+            {copied && <div className="mt-0.5 text-[10px] font-mono text-accent-green">Copied</div>}
+          </div>
+          <div className="ml-3 flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              onClick={handleCopy}
+              disabled={!content || loading}
+              className="rounded-sm p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
+              title="Copy artifact"
+            >
+              <Copy className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={!content || loading}
+              className="rounded-sm p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
+              title="Download artifact"
+            >
+              <Download className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-sm p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
+              aria-label="Close artifact preview"
+            >
+              <XIcon className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-4">
+          {loading && <div className="text-xs font-mono text-theme-muted">Loading artifact...</div>}
+          {error && (
+            <div className="rounded-lg border border-accent-red/30 bg-accent-red/10 p-3 text-xs text-accent-red">
+              Failed to load artifact: {error}
+            </div>
+          )}
+          {!loading && !error && renderArtifactContent(content, contentType, doc.url)}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function renderArtifactContent(content: string, contentType: string, url: string): React.ReactNode {
+  const lower = `${contentType} ${url}`.toLowerCase();
+  if (lower.includes('markdown') || lower.endsWith('.md') || lower.includes('.md?')) {
+    return (
+      <div className="prose prose-sm prose-invert max-w-none">
+        {renderMarkdown(content) as React.ReactNode}
+      </div>
+    );
+  }
+  if (lower.includes('json') || lower.endsWith('.json') || lower.includes('.json?')) {
+    return (
+      <pre className="rounded-lg border border-app bg-[rgb(var(--color-editor-background))] p-3 text-[12px] font-mono leading-relaxed text-theme-primary whitespace-pre-wrap break-words">
+        {formatJson(content)}
+      </pre>
+    );
+  }
+  return (
+    <pre className="rounded-lg border border-app bg-surface-100/50 p-3 text-[12px] font-body leading-relaxed text-theme-secondary whitespace-pre-wrap break-words">
+      {content}
+    </pre>
+  );
+}
+
+function inferContentType(url: string): string {
+  if (/\.md(?:[?#]|$)/i.test(url)) return 'text/markdown';
+  if (/\.json(?:[?#]|$)/i.test(url)) return 'application/json';
+  return 'text/plain';
+}
+
+function formatJson(content: string): string {
+  try {
+    return JSON.stringify(JSON.parse(content), null, 2);
+  } catch {
+    return content;
+  }
+}
+
+function downloadName(doc: { label: string; url: string }): string {
+  const fromUrl = doc.url.split(/[?#]/)[0].split('/').filter(Boolean).pop();
+  if (fromUrl && fromUrl.includes('.')) return fromUrl;
+  return `${doc.label.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'artifact'}.txt`;
+}
+
 // ── Field renderer ─────────────────────────────────────────────────────
 
 function FieldRenderer({
@@ -533,11 +714,11 @@ function FieldRenderer({
   const label = field.label ?? prettifyName(field.name);
 
   const inputBase =
-    'w-full px-3 py-2 rounded-md border bg-app-card text-theme-primary text-sm font-body transition-colors focus:outline-none focus:ring-1 focus:ring-accent-blue/30 disabled:opacity-50 '
+    'w-full px-3 py-2 rounded border bg-app-card text-theme-primary text-sm font-body transition-colors focus:outline-none focus:ring-1 focus:ring-accent-blue/30 disabled:opacity-50 '
     + (error ? 'border-accent-red/60 focus:border-accent-red' : 'border-app focus:border-accent-blue/60');
 
   const monoInputBase =
-    'w-full px-3 py-2 rounded-md border bg-[rgb(var(--color-editor-background))] text-theme-primary text-[12px] font-mono transition-colors focus:outline-none focus:ring-1 focus:ring-accent-blue/30 disabled:opacity-50 resize-y '
+    'w-full px-3 py-2 rounded border bg-[rgb(var(--color-editor-background))] text-theme-primary text-[12px] font-mono transition-colors focus:outline-none focus:ring-1 focus:ring-accent-blue/30 disabled:opacity-50 resize-y '
     + (error ? 'border-accent-red/60 focus:border-accent-red' : 'border-app focus:border-accent-blue/60');
 
   return (
@@ -703,7 +884,7 @@ function BooleanToggle({ checked, onChange, disabled }: { checked: boolean; onCh
       aria-checked={checked}
       onClick={() => !disabled && onChange(!checked)}
       disabled={disabled}
-      className={`relative inline-flex items-center gap-2.5 h-9 px-3 rounded-md border transition-all disabled:opacity-50 ${
+      className={`relative inline-flex items-center gap-2.5 h-9 px-3 rounded border transition-all disabled:opacity-50 ${
         checked
           ? 'border-accent-green/40 bg-accent-green/10 text-accent-green'
           : 'border-app bg-app-card text-theme-secondary'
@@ -729,20 +910,19 @@ function SelectField({
 }) {
   return (
     <div className="relative">
-      <select
+      <Select
         value={value}
-        onChange={e => onChange(e.target.value)}
+        onChange={onChange}
         disabled={disabled}
-        className={`w-full px-3 py-2 pr-9 rounded-md border bg-app-card text-theme-primary text-sm font-body focus:outline-none focus:ring-1 focus:ring-accent-blue/30 appearance-none disabled:opacity-50 ${
-          error ? 'border-accent-red/60 focus:border-accent-red' : 'border-app focus:border-accent-blue/60'
-        }`}
-      >
-        {placeholder && !value && <option value="">{placeholder}</option>}
-        {options.map(o => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
-      </select>
-      <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-subtle pointer-events-none" />
+        searchable={options.length > 6}
+        placeholder={placeholder}
+        className={error ? '[&_button]:border-accent-red/60' : ''}
+        options={options.map(option => ({
+          value: option.value,
+          label: option.label,
+          sublabel: option.description,
+        }))}
+      />
     </div>
   );
 }
@@ -763,7 +943,7 @@ function RadioGroup({
         return (
           <label
             key={o.value}
-            className={`flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-all ${
+            className={`flex items-start gap-3 p-3 rounded border cursor-pointer transition-all ${
               selected
                 ? 'border-accent-blue/50 bg-accent-blue/5'
                 : 'border-app bg-app-muted/50 hover:border-app'
@@ -815,7 +995,7 @@ function MultiSelect({
         return (
           <label
             key={o.value}
-            className={`flex items-start gap-3 px-3 py-2 rounded-md border cursor-pointer transition-colors ${
+            className={`flex items-start gap-3 px-3 py-2 rounded border cursor-pointer transition-colors ${
               checked
                 ? 'border-accent-blue/50 bg-accent-blue/5'
                 : 'border-app bg-app-muted/50 hover:border-app'
@@ -860,9 +1040,9 @@ function DecisionButtons({
       ]
       : mode === 'escalation'
         ? [
-          { key: 'approve',         label: 'Accept deviations', icon: <Check className="w-3.5 h-3.5" />,      tone: 'green' },
-          { key: 'request_changes', label: 'Request changes',   icon: <RotateCcw className="w-3.5 h-3.5" />, tone: 'yellow' },
-          { key: 'reject',          label: 'Abandon',           icon: <XIcon className="w-3.5 h-3.5" />,     tone: 'red' },
+          { key: 'approve',         label: 'Override and continue', icon: <Check className="w-3.5 h-3.5" />,      tone: 'green' },
+          { key: 'request_changes', label: 'Retry with feedback',   icon: <RotateCcw className="w-3.5 h-3.5" />, tone: 'yellow' },
+          { key: 'reject',          label: 'Abandon',               icon: <XIcon className="w-3.5 h-3.5" />,     tone: 'red' },
         ]
         : [
           { key: 'approve',         label: 'Approve',         icon: <Check className="w-3.5 h-3.5" />,      tone: 'green' },
@@ -871,8 +1051,10 @@ function DecisionButtons({
         ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-      {buttons.map(b => {
+    <div>
+      <SectionLabel icon={<CheckSquare className="w-3 h-3" />} text="Decision" />
+      <div className="flex flex-wrap gap-2">
+        {buttons.map(b => {
           const selected = decision === b.key;
           return (
             <button
@@ -880,7 +1062,7 @@ function DecisionButtons({
               type="button"
               onClick={() => onChange(b.key)}
               disabled={disabled}
-              className={`group flex items-center gap-2 px-3.5 py-2.5 rounded-md border text-[13px] font-body transition-all disabled:opacity-50 ${decisionButtonClass(b.tone, selected)}`}
+              className={`group flex min-w-[170px] items-center gap-2 px-3.5 py-2.5 rounded border text-[13px] font-body transition-all disabled:opacity-50 ${decisionButtonClass(b.tone, selected)}`}
             >
               <span className="shrink-0">{b.icon}</span>
               <span className="text-left">{b.label}</span>
@@ -888,6 +1070,7 @@ function DecisionButtons({
             </button>
           );
         })}
+      </div>
     </div>
   );
 }
@@ -1011,6 +1194,7 @@ function decisionButtonClass(tone: 'green' | 'yellow' | 'red' | 'blue', selected
 function submitButtonClass(decision: ClarificationDecision | null, severity: ClarificationSeverity): string {
   // Color the submit button to match the current decision so users get
   // visual confirmation of what they're about to do.
+  if (!decision) return 'border border-app bg-app-muted text-theme-muted hover:bg-app-muted';
   if (decision === 'reject')          return 'bg-accent-red text-white hover:bg-accent-red/90';
   if (decision === 'request_changes') return 'bg-accent-yellow text-black hover:bg-accent-yellow/90';
   if (decision === 'approve')         return 'bg-accent-green text-black hover:bg-accent-green/90';
@@ -1051,10 +1235,9 @@ function submitButtonLabel(
   mode: ClarificationPanelProps['mode'],
   decision: ClarificationDecision | null,
 ): string {
-  if (mode === 'escalation')          return 'Submit';
   if (decision === 'reject')          return 'Reject';
-  if (decision === 'request_changes') return 'Request changes';
-  if (decision === 'approve')         return 'Approve';
+  if (decision === 'request_changes') return mode === 'escalation' ? 'Retry with feedback' : 'Request changes';
+  if (decision === 'approve')         return mode === 'escalation' ? 'Override and continue' : 'Approve';
   if (decision === 'answer')          return 'Submit answer';
   if (mode === 'approval')            return 'Choose an action';
   return 'Submit';
@@ -1099,6 +1282,29 @@ function normalizeOptions(
       ? { label: o, value: o }
       : o,
   );
+}
+
+function shouldRenderField(field: ClarificationField, mode: ClarificationPanelProps['mode']): boolean {
+  if (mode !== 'approval' && mode !== 'escalation') return true;
+  const name = field.name.toLowerCase();
+  const type = String(field.type || '').toLowerCase();
+  if (name.includes('feedback') || name.includes('reason') || name.includes('comment') || type === 'textarea') {
+    return false;
+  }
+  if (name.includes('decision') || name.includes('approval') || name.includes('escalation') || name === 'action') {
+    return false;
+  }
+  const optionValues = normalizeOptions(field.options).map(option => option.value.toLowerCase());
+  return !((type === 'select' || type === 'radio') && optionValues.some(value => (
+    value === 'approve'
+    || value === 'request_changes'
+    || value === 'reject'
+    || value === 'cancel'
+    || value === 'retry_with_feedback'
+    || value === 'override_and_continue'
+    || value === 'force_continue'
+    || value === 'abandon'
+  )));
 }
 
 function prettifyName(name: string): string {

@@ -33,6 +33,7 @@ Options:
                     Context LLM provider to write when no context LLM provider is configured.
   --llm-model MODEL Context LLM model to write when no context LLM model is configured.
   --python PATH      Python executable to use for creating the context venv.
+  --no-env           Prepare Python packages only; do not write context defaults to .env.
   --skip-warmup      Install packages but skip model warmup downloads.
   -h, --help         Show this help.
 EOF
@@ -42,6 +43,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 EXTERNAL_DB=0
 WITH_RERANKER=1
+WRITE_ENV=1
 SKIP_WARMUP=0
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV_DIR="${ALLEN_CONTEXT_VENV_DIR:-$HOME/.allen/python/context-eval}"
@@ -88,6 +90,10 @@ while [ "$#" -gt 0 ]; do
       fi
       PYTHON_BIN="$2"
       shift 2
+      ;;
+    --no-env)
+      WRITE_ENV=0
+      shift
       ;;
     --skip-warmup)
       SKIP_WARMUP=1
@@ -190,12 +196,16 @@ PY
   fi
 fi
 
-step "Preparing .env"
-if [ ! -f .env ]; then
-  touch .env
-  ok "Created .env"
+if [ "$WRITE_ENV" -eq 1 ]; then
+  step "Preparing .env"
+  if [ ! -f .env ]; then
+    touch .env
+    ok "Created .env"
+  else
+    ok ".env already exists"
+  fi
 else
-  ok ".env already exists"
+  warn "Skipping .env preparation because --no-env was set"
 fi
 
 ensure_context_env_section() {
@@ -302,19 +312,23 @@ resolve_context_llm_defaults() {
 
 resolve_context_llm_defaults
 
-set_env_default "ALLEN_CONTEXT_PROVIDER" "cognee"
-set_env_default "ALLEN_PYTHON" "$ALLEN_PYTHON_PATH"
-set_env_default "ALLEN_COGNEE_DATA_DIR" "$COGNEE_DATA_DIR_DEFAULT"
-set_env_default "ALLEN_COGNEE_EMBEDDING_PROVIDER" "local"
-set_env_default "ALLEN_COGNEE_EMBEDDING_MODEL" "$EMBEDDING_MODEL_DEFAULT"
-set_env_default "ALLEN_CONTEXT_LLM_PROVIDER" "$CONTEXT_LLM_PROVIDER_DEFAULT"
-set_env_default "ALLEN_CONTEXT_LLM_MODEL" "$CONTEXT_LLM_MODEL_DEFAULT"
+if [ "$WRITE_ENV" -eq 1 ]; then
+  set_env_default "ALLEN_CONTEXT_PROVIDER" "cognee"
+  set_env_default "ALLEN_PYTHON" "$ALLEN_PYTHON_PATH"
+  set_env_default "ALLEN_COGNEE_DATA_DIR" "$COGNEE_DATA_DIR_DEFAULT"
+  set_env_default "ALLEN_COGNEE_EMBEDDING_PROVIDER" "local"
+  set_env_default "ALLEN_COGNEE_EMBEDDING_MODEL" "$EMBEDDING_MODEL_DEFAULT"
+  set_env_default "ALLEN_CONTEXT_LLM_PROVIDER" "$CONTEXT_LLM_PROVIDER_DEFAULT"
+  set_env_default "ALLEN_CONTEXT_LLM_MODEL" "$CONTEXT_LLM_MODEL_DEFAULT"
 
-if [ "$WITH_RERANKER" -eq 1 ]; then
-  set_env_default "ALLEN_CONTEXT_RERANKER" "bge"
-  set_env_default "ALLEN_CONTEXT_RERANKER_MODEL" "$RERANKER_MODEL_DEFAULT"
-  set_env_default "ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS" "1800000"
-  set_env_default "ALLEN_CONTEXT_RERANKER_QUEUE_LIMIT" "100"
+  if [ "$WITH_RERANKER" -eq 1 ]; then
+    set_env_default "ALLEN_CONTEXT_RERANKER" "bge"
+    set_env_default "ALLEN_CONTEXT_RERANKER_MODEL" "$RERANKER_MODEL_DEFAULT"
+    set_env_default "ALLEN_CONTEXT_RERANKER_IDLE_TIMEOUT_MS" "1800000"
+    set_env_default "ALLEN_CONTEXT_RERANKER_QUEUE_LIMIT" "100"
+  fi
+else
+  warn "Skipping .env updates because --no-env was set"
 fi
 
 if [ "$EXTERNAL_DB" -eq 1 ]; then

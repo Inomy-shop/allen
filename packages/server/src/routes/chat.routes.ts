@@ -11,6 +11,7 @@ import { ObjectId, type Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { listSlashCommands, type SlashCommandProvider } from '../services/slash-commands.js';
+import { buildHumanResumeInput, type HumanInterventionPayload } from '@allen/engine';
 
 // Simple in-memory rate limiter for the automation-message endpoint.
 // Limits each authenticated caller (by sub) to 60 requests per minute.
@@ -97,7 +98,13 @@ export function chatRoutes(db: Db): Router {
       const fields = ((intervention as unknown as { fields?: Array<{ name?: string }> }).fields ?? [])
         .filter((field): field is { name: string } => typeof field.name === 'string' && field.name.length > 0);
       const fieldName = fields[0]?.name ?? 'answer';
-      const payload = { [fieldName]: answer };
+      const fieldValues = { [fieldName]: answer };
+      const payload = {
+        human_input: buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+          ...fieldValues,
+          __human_meta: { actionId: 'answer', decision: 'answer' },
+        }),
+      };
       const delivered = await executionService.submitInput(executionId, intervention.stage, payload);
       if (!delivered) {
         return {
@@ -111,7 +118,7 @@ export function chatRoutes(db: Db): Router {
 
       await interventionService.recordResponse(intervention.intervention_id, {
         decision: 'answer',
-        answer: JSON.stringify(payload),
+        answer: JSON.stringify(fieldValues),
         answered_by_user_id: answeredBy,
       });
       await db.collection('executions').updateOne(
@@ -903,4 +910,61 @@ export function chatRoutes(db: Db): Router {
   });
 
   return router;
+}
+
+function toHumanInterventionPayload(doc: {
+  stage: string;
+  kind?: string;
+  widget?: string;
+  severity?: string;
+  title?: string;
+  summary?: string;
+  question?: string;
+  fields?: Array<any>;
+  actions?: Array<any>;
+  evidence?: Array<any>;
+  retry_exhaustion?: Record<string, unknown>;
+}): HumanInterventionPayload {
+  return {
+    kind: doc.kind === 'clarify' || doc.kind === 'review' || doc.kind === 'recover'
+      ? doc.kind
+      : doc.severity === 'approval'
+        ? 'review'
+        : doc.severity === 'escalation'
+          ? 'recover'
+        : 'clarify',
+    widget: doc.widget === 'dynamic_form' || doc.widget === 'approval_gate' || doc.widget === 'retry_exhausted_gate' || doc.widget === 'escalation_gate'
+      ? doc.widget
+      : undefined,
+    node: doc.stage,
+    title: doc.title ?? doc.stage,
+    summary: doc.summary,
+    question: doc.question ?? '',
+    severity: doc.severity === 'approval' || doc.severity === 'escalation' || doc.severity === 'question'
+      ? doc.severity
+      : 'question',
+    fields: (doc.fields ?? []).map((field) => ({
+      name: String(field.name ?? ''),
+      type: (field.type === 'string' || field.type === 'text' || field.type === 'textarea' || field.type === 'boolean' || field.type === 'number' || field.type === 'select'
+        ? field.type
+        : 'text') as 'string' | 'text' | 'textarea' | 'boolean' | 'number' | 'select',
+      label: typeof field.label === 'string' ? field.label : undefined,
+      required: typeof field.required === 'boolean' ? field.required : undefined,
+      options: Array.isArray(field.options) ? field.options.filter((item: unknown): item is string => typeof item === 'string') : undefined,
+      default: field.default,
+    })).filter((field) => field.name),
+    actions: (doc.actions ?? []).map((action) => ({
+      id: String(action.id ?? ''),
+      label: typeof action.label === 'string' ? action.label : undefined,
+      intent: typeof action.intent === 'string' ? action.intent as any : undefined,
+      feedbackRequired: typeof action.feedbackRequired === 'boolean' ? action.feedbackRequired : undefined,
+      feedbackOptional: typeof action.feedbackOptional === 'boolean' ? action.feedbackOptional : undefined,
+      warning: typeof action.warning === 'string' ? action.warning : undefined,
+      route: action.route && typeof action.route === 'object' && !Array.isArray(action.route)
+        ? action.route as any
+        : undefined,
+    })).filter((action) => action.id),
+    evidence: doc.evidence as HumanInterventionPayload['evidence'],
+    retryExhaustion: doc.retry_exhaustion as HumanInterventionPayload['retryExhaustion'],
+  };
 }

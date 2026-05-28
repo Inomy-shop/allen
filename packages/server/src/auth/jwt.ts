@@ -1,19 +1,21 @@
 import jwt, { type SignOptions } from 'jsonwebtoken';
 import { randomBytes, createHash } from 'node:crypto';
+import { getRuntimeConfigProvider } from '../runtime/config.js';
 
-const ACCESS_TTL = process.env.ACCESS_TOKEN_TTL ?? '1d';
-const REFRESH_TTL = process.env.REFRESH_TOKEN_TTL ?? '7d';
+function accessTtl(): string {
+  return getRuntimeConfigProvider().get('ACCESS_TOKEN_TTL') ?? '1d';
+}
+
+function refreshTtl(): string {
+  return getRuntimeConfigProvider().get('REFRESH_TOKEN_TTL') ?? '7d';
+}
 
 function accessSecret(): string {
-  const s = process.env.JWT_ACCESS_SECRET;
-  if (!s) throw new Error('JWT_ACCESS_SECRET is not set');
-  return s;
+  return getRuntimeConfigProvider().require('JWT_ACCESS_SECRET');
 }
 
 function refreshSecret(): string {
-  const s = process.env.JWT_REFRESH_SECRET;
-  if (!s) throw new Error('JWT_REFRESH_SECRET is not set');
-  return s;
+  return getRuntimeConfigProvider().require('JWT_REFRESH_SECRET');
 }
 
 export interface AccessTokenPayload {
@@ -29,7 +31,7 @@ export interface RefreshTokenPayload {
 }
 
 export function signAccessToken(payload: AccessTokenPayload, expiresIn?: string): string {
-  return jwt.sign(payload, accessSecret(), { expiresIn: expiresIn ?? ACCESS_TTL } as SignOptions);
+  return jwt.sign(payload, accessSecret(), { expiresIn: expiresIn ?? accessTtl() } as SignOptions);
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload {
@@ -44,7 +46,7 @@ export function createRefreshToken(userId: string): {
 } {
   const jti = randomBytes(16).toString('hex');
   const payload: RefreshTokenPayload = { sub: userId, jti };
-  const token = jwt.sign(payload, refreshSecret(), { expiresIn: REFRESH_TTL } as SignOptions);
+  const token = jwt.sign(payload, refreshSecret(), { expiresIn: refreshTtl() } as SignOptions);
   const decoded = jwt.decode(token) as { exp: number };
   return {
     token,

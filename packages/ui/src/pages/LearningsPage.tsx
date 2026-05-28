@@ -410,15 +410,21 @@ export default function LearningsPage() {
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-[11px] text-theme-muted font-label uppercase tracking-wider mb-1">Type</label>
-                  <select value={addType} onChange={e => setAddType(e.target.value)} className="input text-xs w-full">
-                    {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
+                  <Select
+                    value={addType}
+                    onChange={setAddType}
+                    searchable={false}
+                    options={TYPES.map(type => ({ value: type, label: type }))}
+                  />
                 </div>
                 <div>
                   <label className="block text-[11px] text-theme-muted font-label uppercase tracking-wider mb-1">Scope</label>
-                  <select value={addScope} onChange={e => setAddScope(e.target.value)} className="input text-xs w-full">
-                    {SCOPES.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                  <Select
+                    value={addScope}
+                    onChange={setAddScope}
+                    searchable={false}
+                    options={SCOPES.map(scope => ({ value: scope, label: scope }))}
+                  />
                 </div>
                 <div>
                   <label className="block text-[11px] text-theme-muted font-label uppercase tracking-wider mb-1">Tags</label>
@@ -581,9 +587,13 @@ function LearningCard({ item, isEditing, editContent, editType, editTags, onEdit
             rows={2}
           />
           <div className="flex gap-2">
-            <select value={editType} onChange={e => onEditType(e.target.value)} className="input text-xs">
-              {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
+            <Select
+              value={editType}
+              onChange={onEditType}
+              searchable={false}
+              className="w-[140px]"
+              options={TYPES.map(type => ({ value: type, label: type }))}
+            />
             <input
               value={editTags}
               onChange={e => onEditTags(e.target.value)}

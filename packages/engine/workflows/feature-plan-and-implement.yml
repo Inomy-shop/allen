@@ -165,16 +165,18 @@ nodes:
 
   plan_approval_gate:
     type: human
-    fields:
-      - name: decision
-        label: "Decision"
-        type: select
-        options: [approve, request_changes, reject]
-        required: true
-      - name: feedback
-        label: "Feedback (required for request_changes)"
-        type: textarea
-        required: false
+    human:
+      kind: review
+      widget: approval_gate
+      title: "Approve technical plan"
+      summary: "The TDD passed audit. Review the plan before implementation starts."
+      question: "Approve the TDD to start implementation, request changes with feedback, or reject the workflow."
+      highlights:
+        - "TDD audit verdict: {{tdd_audit_verdict}}"
+        - "TDD audit rationale: {{tdd_audit_rationale}}"
+      evidence:
+        - label: "Technical design"
+          url: "{{tdd_artifact_url}}"
     prompt: |
       ✅ TDD is produced and audited. The PRD was supplied as input.
       Review and approve to start implementation.
@@ -547,16 +549,18 @@ nodes:
   # full artifact context, and picks retry / override / abandon.
   escalation_review:
     type: human
-    fields:
-      - name: decision
-        label: "What should happen?"
-        type: select
-        options: [retry_with_feedback, override_and_continue, abandon]
-        required: true
-      - name: feedback
-        label: "Feedback for the agent (required for retry)"
-        type: textarea
-        required: false
+    human:
+      kind: recover
+      widget: escalation_gate
+      title: "Recover blocked feature workflow"
+      summary: "An agent escalated or a retry budget was exhausted."
+      question: "Choose whether to retry with feedback, override and continue, or abandon the run."
+      highlights:
+        - "Exhausted from: {{default __retry_exhausted_from \"direct escalate\"}}"
+        - "TDD audit: {{default tdd_audit_verdict \"not run\"}}"
+        - "Implementation: {{default implement_verdict \"not run\"}}"
+        - "QA: {{default qa_verdict \"not run\"}}"
+        - "Code review: {{default review_verdict \"not run\"}}"
     prompt: |
       🔴 The workflow paused because an agent escalated or a retry budget
       ran out. It's handing the decision to you.
@@ -602,9 +606,9 @@ edges:
   - { from: audit_tdd, to: produce_tdd,        condition: "tdd_audit_verdict == 'revise'", max_retries: 2, retry_context: "TDD audit feedback:\n{{tdd_audit_rationale}}" }
   - { from: audit_tdd, to: escalation_review,  condition: "tdd_audit_verdict == 'escalate'" }
 
-  - { from: plan_approval_gate, to: create_workspace, condition: "decision == 'approve'" }
-  - { from: plan_approval_gate, to: END,              condition: "decision == 'reject'" }
-  - { from: plan_approval_gate, to: produce_tdd,      condition: "decision == 'request_changes'", max_retries: 2, retry_context: "Human feedback on TDD:\n{{feedback}}" }
+  - { from: plan_approval_gate, to: create_workspace, condition: "human.plan_approval_gate.latest.decision == 'approve'" }
+  - { from: plan_approval_gate, to: END,              condition: "human.plan_approval_gate.latest.decision == 'reject'" }
+  - { from: plan_approval_gate, to: produce_tdd,      condition: "human.plan_approval_gate.latest.decision == 'request_changes'", max_retries: 2, retry_context: "Human feedback on TDD:\n{{human.plan_approval_gate.latest.feedback.value}}" }
 
   # ──────────────────────────────────────────────────────────────────────
   # Implementation phase
@@ -637,7 +641,7 @@ edges:
   # fan out in parallel with an active retry.
   # ──────────────────────────────────────────────────────────────────────
   - { from: audit_tdd,                to: escalation_review, condition: "tdd_audit_verdict == 'revise' AND __retry_exhausted_from == 'audit_tdd'" }
-  - { from: plan_approval_gate,       to: escalation_review, condition: "decision == 'request_changes' AND __retry_exhausted_from == 'plan_approval_gate'" }
+  - { from: plan_approval_gate,       to: escalation_review, condition: "human.plan_approval_gate.latest.decision == 'request_changes' AND __retry_exhausted_from == 'plan_approval_gate'" }
   - { from: implement,                to: escalation_review, condition: "implement_verdict == 'fail' AND __retry_exhausted_from == 'implement'" }
   - { from: qa,                       to: escalation_review, condition: "qa_verdict == 'fail' AND __retry_exhausted_from == 'qa'" }
   - { from: implementation_validator, to: escalation_review, condition: "prd_satisfied != true AND __retry_exhausted_from == 'implementation_validator'" }
@@ -649,24 +653,24 @@ edges:
   # case so the same edge handles both failure modes per stage.
   # No max_retries — the human is the retry controller.
   # ──────────────────────────────────────────────────────────────────────
-  - { from: escalation_review, to: END, condition: "decision == 'abandon'" }
+  - { from: escalation_review, to: END, condition: "human.escalation_review.latest.decision == 'abandon'" }
 
   # retry_with_feedback — route back to the failing stage with feedback.
-  - { from: escalation_review, to: produce_tdd, condition: "decision == 'retry_with_feedback' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise')", retry_context: "Human intervened on TDD audit failure. Feedback:\n{{feedback}}" }
-  - { from: escalation_review, to: produce_tdd, condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate'", retry_context: "Human intervened on plan-approval exhaustion. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: produce_tdd, condition: "human.escalation_review.latest.decision == 'retry_with_feedback' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise')", retry_context: "Human intervened on TDD audit failure. Feedback:\n{{human.escalation_review.latest.feedback.value}}" }
+  - { from: escalation_review, to: produce_tdd, condition: "human.escalation_review.latest.decision == 'retry_with_feedback' AND __retry_exhausted_from == 'plan_approval_gate'", retry_context: "Human intervened on plan-approval exhaustion. Feedback:\n{{human.escalation_review.latest.feedback.value}}" }
 
   # Implementation-side retries. The condition-parser maps undefined
   # identifiers to false, so guard the validator branch with the
   # exhaustion flag instead of relying on prd_satisfied != true.
-  - { from: escalation_review, to: implement, condition: "decision == 'retry_with_feedback' AND (implement_verdict == 'escalate' OR implement_verdict == 'fail' OR qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')", retry_context: "Human intervened on implementation/qa/validation/review failure. Feedback:\n{{feedback}}" }
+  - { from: escalation_review, to: implement, condition: "human.escalation_review.latest.decision == 'retry_with_feedback' AND (implement_verdict == 'escalate' OR implement_verdict == 'fail' OR qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')", retry_context: "Human intervened on implementation/qa/validation/review failure. Feedback:\n{{human.escalation_review.latest.feedback.value}}" }
 
   # override_and_continue — advance past the failing stage. Paths that
   # reach implementation for the FIRST time go through create_workspace.
   # Paths that have already implemented skip to the next downstream node.
-  - { from: escalation_review, to: create_workspace,         condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode == true" }
-  - { from: escalation_review, to: plan_approval_gate,       condition: "decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode != true" }
-  - { from: escalation_review, to: qa,                       condition: "decision == 'override_and_continue' AND (implement_verdict == 'escalate' OR implement_verdict == 'fail')" }
-  - { from: escalation_review, to: implementation_validator, condition: "decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')" }
-  - { from: escalation_review, to: update_docs,              condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'" }
-  - { from: escalation_review, to: open_pr,                  condition: "decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'" }
-  - { from: escalation_review, to: create_workspace,         condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'plan_approval_gate'" }
+  - { from: escalation_review, to: create_workspace,         condition: "human.escalation_review.latest.decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode == true" }
+  - { from: escalation_review, to: plan_approval_gate,       condition: "human.escalation_review.latest.decision == 'override_and_continue' AND (tdd_audit_verdict == 'escalate' OR tdd_audit_verdict == 'revise') AND trusted_mode != true" }
+  - { from: escalation_review, to: qa,                       condition: "human.escalation_review.latest.decision == 'override_and_continue' AND (implement_verdict == 'escalate' OR implement_verdict == 'fail')" }
+  - { from: escalation_review, to: implementation_validator, condition: "human.escalation_review.latest.decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')" }
+  - { from: escalation_review, to: update_docs,              condition: "human.escalation_review.latest.decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'" }
+  - { from: escalation_review, to: open_pr,                  condition: "human.escalation_review.latest.decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'" }
+  - { from: escalation_review, to: create_workspace,         condition: "human.escalation_review.latest.decision == 'override_and_continue' AND __retry_exhausted_from == 'plan_approval_gate'" }

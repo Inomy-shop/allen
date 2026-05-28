@@ -133,6 +133,8 @@ export function useExecution(id: string | undefined) {
             cost: t.cost,
             streamText: t.rawResponse ?? '',
             activity: t.activity ?? [],
+            renderedPrompt: t.renderedPrompt,
+            inputState: t.inputState,
           });
         }
         // Fill in currently running nodes from the authoritative
@@ -652,6 +654,8 @@ export function useExecution(id: string | undefined) {
         cost: t.cost,
         streamText: t.rawResponse ?? '',
         activity: t.activity ?? [],
+        renderedPrompt: t.renderedPrompt,
+        inputState: t.inputState,
       });
     }
     // Backfill currently-running nodes from exec.currentNodes. This fixes

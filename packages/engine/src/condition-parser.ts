@@ -13,7 +13,7 @@ function extractIdentifiers(expression: string): string[] {
   const ids = new Set<string>();
   // Strip string literals first
   const stripped = expression.replace(/"[^"]*"/g, '""').replace(/'[^']*'/g, "''");
-  const matches = stripped.matchAll(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g);
+  const matches = stripped.matchAll(/\b([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\b/g);
   for (const m of matches) {
     const token = m[1];
     if (!keywords.has(token.toLowerCase()) && isNaN(Number(token))) {
@@ -51,7 +51,7 @@ export function evaluateCondition(expression: string, state: Record<string, unkn
   // an UnknownPropertyError object (not throws), and `!!errorObject === true`
   // makes BOTH `x` and `NOT x` evaluate to `true` when x is undefined.
   const ids = extractIdentifiers(expression);
-  const safeState: Record<string, unknown> = { ...state };
+  const safeState: Record<string, unknown> = { ...state, ...flattenStatePaths(state) };
 
   // CRITICAL: filtrex does NOT have built-in `true`, `false`, `null`, or
   // `undefined` literals. It treats them as variable names that resolve to
@@ -81,6 +81,21 @@ export function evaluateCondition(expression: string, state: Record<string, unkn
   // Defensive: if filtrex still returned an error object, coerce to false
   if (result instanceof Error) return false;
   return !!result;
+}
+
+function flattenStatePaths(
+  state: Record<string, unknown>,
+  prefix = '',
+  out: Record<string, unknown> = {},
+): Record<string, unknown> {
+  for (const [key, value] of Object.entries(state)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    out[path] = value;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      flattenStatePaths(value as Record<string, unknown>, path, out);
+    }
+  }
+  return out;
 }
 
 /**

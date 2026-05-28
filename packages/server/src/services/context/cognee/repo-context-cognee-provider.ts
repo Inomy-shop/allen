@@ -320,7 +320,12 @@ export function cogneeDatasetName(repoId: string, repoName?: string): string {
 }
 
 export function cogneeDataDir(): string {
-  return process.env.ALLEN_COGNEE_DATA_DIR ?? join(process.cwd(), '.allen', 'cognee');
+  const configured = process.env.ALLEN_COGNEE_DATA_DIR?.trim();
+  if (configured) return configured;
+  if (process.env.ALLEN_DESKTOP === '1' && process.env.HOME) {
+    return join(process.env.HOME, '.allen', 'cognee');
+  }
+  return join(process.cwd(), '.allen', 'cognee');
 }
 
 export function isCogneeCorruptWalError(error: unknown): boolean {
@@ -726,8 +731,10 @@ function normalizeKind(value: unknown): KnowledgeNodeKind {
 
 function resolveCogneeScript(): string {
   if (process.env.ALLEN_COGNEE_SIDECAR_SCRIPT) return process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
+  const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    join(dirname(fileURLToPath(import.meta.url)), '../../scripts/cognee-context-provider.py'),
+    join(here, '../../../scripts/cognee-context-provider.py'),
+    ...(process.env.ALLEN_DESKTOP === '1' ? [join(here, '../../../../src/scripts/cognee-context-provider.py')] : []),
     join(process.cwd(), 'packages/server/src/scripts/cognee-context-provider.py'),
     join(process.cwd(), 'src/scripts/cognee-context-provider.py'),
   ];

@@ -155,6 +155,8 @@ export interface AgentThread {
 export interface SpawnedAgent {
   executionId: string;
   sourceMessageId?: string;
+  parentExecutionId?: string | null;
+  spawnDepth?: number | null;
   agent: string;
   prompt: string;
   status: 'queued' | 'running' | 'waiting_for_input' | 'completed' | 'failed' | 'cancelled';
@@ -225,6 +227,8 @@ function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>,
     return [...prev, {
       executionId: run.executionId,
       sourceMessageId: run.sourceMessageId,
+      parentExecutionId: run.parentExecutionId,
+      spawnDepth: run.spawnDepth,
       agent: run.agent ?? 'Routed run',
       prompt: run.prompt ?? '',
       status: run.status ?? 'running',
@@ -238,7 +242,13 @@ function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>,
   }
   return prev.map(s =>
     s.executionId === run.executionId
-      ? { ...s, ...run, activity: run.activity ?? s.activity }
+      ? {
+          ...s,
+          ...run,
+          parentExecutionId: run.parentExecutionId ?? s.parentExecutionId,
+          spawnDepth: run.spawnDepth ?? s.spawnDepth,
+          activity: run.activity ?? s.activity,
+        }
       : s,
   );
 }
@@ -382,6 +392,8 @@ function runsFromPersistedExecutions(items: Array<{
     .map(item => ({
       executionId: item.executionId,
       sourceMessageId: item.sourceMessageId ?? item.runContext?.chat?.parentMessageId ?? undefined,
+      parentExecutionId: item.runContext?.execution.parentExecutionId ?? undefined,
+      spawnDepth: item.runContext?.execution.spawnDepth ?? undefined,
       agent: item.agent ?? item.runContext?.title ?? 'Routed run',
       prompt: item.prompt ?? item.runContext?.io?.input ?? '',
       status: (item.runContext?.status ?? item.status ?? 'running') as SpawnedAgent['status'],
@@ -439,6 +451,8 @@ export function useChat() {
             status: update.context.status as SpawnedAgent['status'],
             runContext: update.context,
             sourceMessageId: update.context.chat?.parentMessageId ?? run.sourceMessageId,
+            parentExecutionId: update.context.execution.parentExecutionId ?? run.parentExecutionId,
+            spawnDepth: update.context.execution.spawnDepth ?? run.spawnDepth,
           };
         });
         return changed ? next : prev;
@@ -839,6 +853,8 @@ export function useChat() {
         setSpawnedAgents(prev => upsertSpawnedRun(prev, {
           executionId: data.executionId as string,
           sourceMessageId: data.messageId as string | undefined,
+          parentExecutionId: data.parentExecutionId as string | null | undefined,
+          spawnDepth: data.spawnDepth as number | null | undefined,
           agent: data.agent as string,
           prompt: (data.prompt as string) ?? '',
           status: 'running',
@@ -851,6 +867,8 @@ export function useChat() {
         setSpawnedAgents(prev => upsertSpawnedRun(prev, {
           executionId: data.executionId as string,
           sourceMessageId: data.messageId as string | undefined,
+          parentExecutionId: data.parentExecutionId as string | null | undefined,
+          spawnDepth: data.spawnDepth as number | null | undefined,
           agent: (data.name as string) ?? (data.agent as string) ?? (data.workflowName as string) ?? 'Routed run',
           prompt: (data.reason as string) ?? '',
           status: 'running',
@@ -1239,6 +1257,8 @@ export function useChat() {
                   setSpawnedAgents(prev => upsertSpawnedRun(prev, {
                     executionId: data.executionId as string,
                     sourceMessageId: (data.messageId || assistantMsgId) as string | undefined,
+                    parentExecutionId: data.parentExecutionId as string | null | undefined,
+                    spawnDepth: data.spawnDepth as number | null | undefined,
                     agent: data.agent as string,
                     prompt: (data.prompt as string) ?? '',
                     status: 'running',
@@ -1251,6 +1271,8 @@ export function useChat() {
                   setSpawnedAgents(prev => upsertSpawnedRun(prev, {
                     executionId: data.executionId as string,
                     sourceMessageId: (data.messageId || assistantMsgId) as string | undefined,
+                    parentExecutionId: data.parentExecutionId as string | null | undefined,
+                    spawnDepth: data.spawnDepth as number | null | undefined,
                     agent: (data.name as string) ?? (data.agent as string) ?? (data.workflowName as string) ?? 'Routed run',
                     prompt: (data.reason as string) ?? '',
                     status: 'running',

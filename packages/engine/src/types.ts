@@ -96,6 +96,8 @@ export interface NodeDef {
 
   // human nodes
   fields?: HumanField[];
+  /** Human-facing presentation contract for HITL. Legacy prompt/fields remain supported. */
+  human?: HumanPresentation;
   timeout_action?: 'cancel' | 'default';
 
   // workflow nodes
@@ -117,11 +119,136 @@ export interface NodeDef {
 
 export interface HumanField {
   name: string;
-  type: 'string' | 'text' | 'boolean' | 'number' | 'select';
+  type: 'string' | 'text' | 'textarea' | 'boolean' | 'number' | 'select';
   label?: string;
   required?: boolean;
   options?: string[];
   default?: unknown;
+}
+
+export type HumanInterventionKind = 'clarify' | 'review' | 'recover';
+export type HumanInterventionSeverity = 'question' | 'approval' | 'escalation';
+export type HumanWidget = 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate';
+
+export interface HumanEvidence {
+  label: string;
+  type?: 'text' | 'artifact' | 'url' | 'diff' | 'log';
+  value?: string;
+  url?: string;
+}
+
+export interface HumanActionRoute {
+  type: 'continue' | 'retry' | 'end';
+  targetNode?: string;
+}
+
+export interface HumanAction {
+  id: string;
+  label?: string;
+  intent?: 'submit' | 'approve' | 'request_changes' | 'reject' | 'retry' | 'override' | 'abandon';
+  feedbackRequired?: boolean;
+  feedbackOptional?: boolean;
+  warning?: string;
+  route?: HumanActionRoute;
+}
+
+export interface HumanPresentation {
+  kind: HumanInterventionKind;
+  widget?: HumanWidget;
+  title?: string;
+  summary?: string;
+  question?: string;
+  highlights?: string[];
+  evidence?: HumanEvidence[];
+  actions?: HumanAction[] | Record<string, Omit<HumanAction, 'id'> | string>;
+  fields?: HumanField[];
+}
+
+export interface RetryExhaustionContext {
+  exhaustedFrom: string;
+  retryEdgeKey?: string;
+  attemptsUsed: number;
+  maxRetries?: number;
+  lastFailureSummary?: string;
+  retryTarget?: string;
+  availableFailureFields?: Record<string, unknown>;
+}
+
+export interface HumanInputFieldValue {
+  name: string;
+  label: string;
+  value: unknown;
+}
+
+export interface HumanInputFeedback {
+  label: string;
+  value: string;
+}
+
+export interface HumanResumeInput {
+  kind: HumanInterventionKind;
+  sourceNode: string;
+  actionId?: string;
+  decision?: string;
+  route?: HumanActionRoute;
+  summary: string;
+  fields: HumanInputFieldValue[];
+  fieldsByName: Record<string, HumanInputFieldValue>;
+  feedback?: HumanInputFeedback;
+  retryExhaustion?: RetryExhaustionContext;
+  createdAt: string;
+}
+
+export interface NodeFeedbackField {
+  name: string;
+  label: string;
+  value: unknown;
+}
+
+export interface NodeFeedbackContext {
+  summary?: string;
+  fields: NodeFeedbackField[];
+}
+
+export interface ResumeContext {
+  type: 'human_input' | 'human_review_feedback' | 'node_feedback' | 'retry_exhausted' | 'upstream_changed';
+  sourceNode: string;
+  targetNode?: string;
+  attempt?: number;
+  nodeFeedback?: NodeFeedbackContext;
+  humanInput?: HumanResumeInput;
+  retryExhaustion?: RetryExhaustionContext;
+  history?: HumanResumeInput[];
+  createdAt: string;
+}
+
+export interface HumanInterventionPayload {
+  kind: HumanInterventionKind;
+  widget?: HumanWidget;
+  node: string;
+  title: string;
+  summary?: string;
+  question: string;
+  severity: HumanInterventionSeverity;
+  highlights?: string[];
+  evidence?: HumanEvidence[];
+  fields: HumanField[];
+  actions: HumanAction[];
+  retryExhaustion?: RetryExhaustionContext;
+}
+
+export interface HumanEvent {
+  kind: HumanInterventionKind;
+  node: string;
+  actionId?: string;
+  decision?: string;
+  humanInput?: HumanResumeInput;
+  values?: Record<string, unknown>;
+  feedback?: string;
+  route?: HumanActionRoute;
+  evidence?: HumanEvidence[];
+  retryExhaustion?: RetryExhaustionContext;
+  createdAt: string;
 }
 
 export interface ConditionDef {

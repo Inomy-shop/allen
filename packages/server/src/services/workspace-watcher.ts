@@ -20,6 +20,21 @@ export function startFileWatchServer(): void {
   console.log('[file-watch] File watcher ready (shared WS on terminal port)');
 }
 
+export function stopFileWatchServer(): void {
+  for (const [workspaceId, watcher] of watchers) {
+    try { watcher.close(); } catch { /* ignore */ }
+    watchers.delete(workspaceId);
+  }
+
+  const clients = getClients();
+  for (const [workspaceId, wsClients] of clients) {
+    for (const client of wsClients) {
+      try { client.close(); } catch { /* ignore */ }
+    }
+    clients.delete(workspaceId);
+  }
+}
+
 export function watchWorkspace(workspaceId: string, worktreePath: string): void {
   if (watchers.has(workspaceId)) return;
 

@@ -12,6 +12,12 @@ describe('renderTemplate', () => {
     expect(out).toContain('"b": "two"');
   });
 
+  it('supports nested object paths while preserving direct JSON rendering', () => {
+    const context = { human_input: { feedback: { value: 'Use the design token.' } } };
+    expect(renderTemplate('{{human_input.feedback.value}}', context)).toBe('Use the design token.');
+    expect(renderTemplate('{{human_input}}', context)).toContain('"feedback"');
+  });
+
   it('renders an array as pretty JSON', () => {
     const out = renderTemplate('{{items}}', { items: ['a', 'b', 'c'] });
     expect(out).toContain('"a"');

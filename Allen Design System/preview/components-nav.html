@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><link rel="stylesheet" href="_base.css">
+<style>
+  .nav-group-title { padding: 8px 10px 6px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: rgb(var(--color-text-subtle)); }
+  .nav-item { display:flex; align-items: center; gap: 10px; border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; color: rgb(var(--color-text-secondary)); font-size: 14px; font-weight: 500; }
+  .nav-item.hover { background: rgb(var(--color-surface-200)); color: rgb(var(--color-text-primary)); }
+  .nav-item.active { border-color: rgb(var(--color-accent) / 0.18); background: rgb(var(--color-accent-soft)); color: rgb(var(--color-accent)); }
+  .nav-item .lbl { flex: 1; }
+  .nav-item .b-count { border: 1px solid rgb(var(--color-border)); border-radius: 4px; background: rgb(var(--color-surface-200)); color: rgb(var(--color-text-muted)); padding: 1px 5px; font-family: var(--font-mono); font-size: 10px; }
+  svg.ico { width: 16px; height: 16px; opacity: 0.85; }
+</style>
+</head>
+<body>
+<div class="card-frame">
+  <div style="width: 240px; background: rgb(var(--color-surface-100)); border: 1px solid rgb(var(--color-border)); border-radius: 12px; padding: 8px;">
+    <div class="nav-group-title" style="padding-top: 14px;">Sources</div>
+    <div class="nav-item">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 7 5l-2 14 14 0-2-14Z"/><path d="M9 9h6"/></svg>
+      <span class="lbl">tickets</span>
+      <span class="b-count">12</span>
+    </div>
+    <div class="nav-item hover">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
+      <span class="lbl">pull requests</span>
+      <span class="b-count">3</span>
+    </div>
+    <div class="nav-item active">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7"/><circle cx="17" cy="17" r="3"/><path d="M21 21v-3.3"/></svg>
+      <span class="lbl">workspaces</span>
+      <span class="b-count" style="background: rgb(var(--color-accent) / 0.1); color: rgb(var(--color-accent)); border-color: rgb(var(--color-accent) / 0.25);">4</span>
+    </div>
+  </div>
+</div>
+</body></html>

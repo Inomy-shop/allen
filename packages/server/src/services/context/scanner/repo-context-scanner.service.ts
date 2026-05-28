@@ -19,6 +19,12 @@
 
 import type { Collection, Db, ObjectId } from 'mongodb';
 import { MCP_SERVER_NAME, withArtifactsGuidance, withNonInteractiveGuidance } from '@allen/engine';
+import {
+  getRuntimeApiBaseUrl,
+  getRuntimeJwtAccessSecret,
+  getRuntimePublicBaseUrl,
+} from '../../../runtime/config.js';
+import { ArtifactService, type ArtifactDoc } from '../../artifact.service.js';
 
 /** Bump when scanner prompt or storage shape changes meaningfully. */
 export const SCAN_VERSION = 1;
@@ -58,6 +64,8 @@ export interface RepoContextRecord {
   scanCostUsd: number;
   scanError?: string;
   scanAgentExecutionId?: string;
+  scanArtifactId?: string;
+  scanArtifactPath?: string;
   branchNotes?: string[];
 }
 
@@ -131,6 +139,7 @@ export class RepoContextScannerService {
     let provider: 'claude-cli' | 'codex' = 'claude-cli';
     let toolCalls: { tool: string; args: Record<string, unknown> }[] = [];
     const branchNotes: string[] = [];
+    let contextArtifact: { artifactId: string; relativePath: string; content: string } | null = null;
 
     try {
       // Switch to the repo's base branch before scanning so the context reflects
@@ -205,6 +214,7 @@ export class RepoContextScannerService {
         if (provider === 'codex') {
           const result = await runCodexRepoScanner({
             agentName: 'repo-scanner',
+            artifactRootId: executionId,
             system: withNonInteractiveGuidance(withArtifactsGuidance(agent.system as string)),
             prompt,
             cwd: repoPath,
@@ -220,6 +230,7 @@ export class RepoContextScannerService {
           // can force SDK mode with ALLEN_AGENT_EXECUTION_MODE=sdk.
           const { query } = await import('@anthropic-ai/claude-code');
           const { queryViaCli } = await import('@allen/engine');
+          const artifactEnv = scannerArtifactEnv(executionId);
           const sdkOptions: Record<string, unknown> = {
             model,
             permissionMode: 'bypassPermissions',
@@ -241,6 +252,7 @@ export class RepoContextScannerService {
                 cwd: repoPath,
                 model,
                 permissionMode: 'bypassPermissions',
+                env: { ...process.env, ...artifactEnv },
                 abortSignal: abortController.signal,
                 stderr: (chunk) => liveLog({ type: 'tool_start', tool: 'claude-cli stderr', content: chunk.slice(0, 4000) }),
               })
@@ -286,13 +298,23 @@ export class RepoContextScannerService {
 
       liveLog({ type: 'completed', content: `Done: ${toolCalls.length} tools, ${(finalText?.length ?? 0)} chars output` });
 
-      // The agent's final text is the context. No parsing, no fence stripping —
-      // it's prompt-injected as-is into downstream agents.
-      contextMarkdown = (finalText ?? '').trim();
+      const scanArtifact = await this.findScanArtifactContent(executionId, startMs).catch((artifactErr) => {
+        liveLog({ type: 'tool_done', tool: 'artifact_capture', content: `Artifact capture skipped: ${(artifactErr as Error).message}` });
+        return null;
+      });
+      if (scanArtifact) {
+        liveLog({ type: 'text', content: `Using saved artifact ${scanArtifact.relativePath} as repo context.` });
+      }
+
+      // Prefer the saved artifact when the scanner produced one. The artifact
+      // is the durable deliverable agents are instructed to save; the final
+      // text is still a fallback for older scanner runs.
+      contextMarkdown = (scanArtifact?.content ?? finalText ?? '').trim();
       if (!contextMarkdown) {
         throw new Error('Scanner agent returned empty output');
       }
       contextMarkdown = redactSecrets(contextMarkdown);
+      contextArtifact = scanArtifact;
     } catch (err) {
       error = (err as Error).message ?? String(err);
       console.error(`[repo-scanner] scan failed for ${repoPath}:`, error);
@@ -373,9 +395,14 @@ export class RepoContextScannerService {
           scanDurationMs,
           scanCostUsd: costUsd,
           scanAgentExecutionId: executionId,
+          scanArtifactId: contextArtifact?.artifactId,
+          scanArtifactPath: contextArtifact?.relativePath,
           branchNotes: branchNotes.length ? branchNotes : undefined,
         },
-        $unset: { scanError: '' },
+        $unset: {
+          scanError: '',
+          ...(contextArtifact ? {} : { scanArtifactId: '', scanArtifactPath: '' }),
+        },
       },
       { upsert: true },
     );
@@ -420,6 +447,33 @@ export class RepoContextScannerService {
       if (c === 0) return candidate;
     }
     return undefined;
+  }
+
+  private async findScanArtifactContent(
+    executionId: string,
+    startMs: number,
+  ): Promise<{ artifactId: string; relativePath: string; content: string } | null> {
+    const createdAfter = new Date(startMs - 5000);
+    const docs = await this.db.collection<ArtifactDoc>('artifacts').find({
+      rootType: 'agent',
+      rootId: { $in: [executionId, 'repo-scanner'] },
+      createdAt: { $gte: createdAfter },
+      contentType: { $in: ['markdown', 'text', 'code'] },
+    }).sort({ createdAt: -1 }).limit(20).toArray();
+
+    const likely = docs.sort((a, b) => artifactScore(b) - artifactScore(a))[0];
+    if (!likely?.artifactId) return null;
+
+    const artifactService = new ArtifactService(this.db);
+    const loaded = await artifactService.readContent(likely.artifactId);
+    if (!loaded) return null;
+    const content = loaded.content.toString('utf8').trim();
+    if (!content) return null;
+    return {
+      artifactId: likely.artifactId,
+      relativePath: likely.relativePath,
+      content,
+    };
   }
 
   /**
@@ -553,6 +607,7 @@ function normalizeAgentProvider(provider?: string): 'claude-cli' | 'codex' {
 
 async function runCodexRepoScanner(opts: {
   agentName: string;
+  artifactRootId: string;
   system: string;
   prompt: string;
   cwd: string;
@@ -573,11 +628,12 @@ async function runCodexRepoScanner(opts: {
 
   const mcpEnv = {
     ALLEN_ARTIFACT_ROOT_TYPE: 'agent',
-    ALLEN_ARTIFACT_ROOT_ID: opts.agentName,
+    ALLEN_ARTIFACT_ROOT_ID: opts.artifactRootId,
     ALLEN_ARTIFACT_AGENT_NAME: opts.agentName,
-    ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
-    ALLEN_PUBLIC_URL: process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`,
-    JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
+    ALLEN_ARTIFACT_AGENT_EXECUTION_ID: opts.artifactRootId,
+    ALLEN_API_URL: getRuntimeApiBaseUrl(),
+    ALLEN_PUBLIC_URL: getRuntimePublicBaseUrl(),
+    JWT_ACCESS_SECRET: getRuntimeJwtAccessSecret(),
   };
   for (const [key, value] of Object.entries(mcpEnv)) {
     args.push('-c', `mcp_servers.${MCP_SERVER_NAME}.env.${key}="${value.replace(/"/g, '\\"')}"`);
@@ -676,6 +732,30 @@ async function runCodexRepoScanner(opts: {
       settle(() => resolveP({ text, toolCalls }));
     });
   });
+}
+
+function scannerArtifactEnv(executionId: string): NodeJS.ProcessEnv {
+  return {
+    ALLEN_ARTIFACT_ROOT_TYPE: 'agent',
+    ALLEN_ARTIFACT_ROOT_ID: executionId,
+    ALLEN_ARTIFACT_AGENT_NAME: 'repo-scanner',
+    ALLEN_ARTIFACT_AGENT_EXECUTION_ID: executionId,
+    ALLEN_API_URL: getRuntimeApiBaseUrl(),
+    ALLEN_PUBLIC_URL: getRuntimePublicBaseUrl(),
+    JWT_ACCESS_SECRET: getRuntimeJwtAccessSecret(),
+  };
+}
+
+function artifactScore(doc: ArtifactDoc): number {
+  const path = `${doc.relativePath ?? ''} ${doc.filename ?? ''}`.toLowerCase();
+  let score = 0;
+  if (doc.rootId !== 'repo-scanner') score += 20;
+  if (doc.contentType === 'markdown') score += 10;
+  if (path.includes('context')) score += 6;
+  if (path.includes('scan')) score += 4;
+  if (path.includes('repo')) score += 2;
+  score += Math.min(5, Math.floor((doc.sizeBytes ?? 0) / 10_000));
+  return score;
 }
 
 function codexToolName(item: any): string {

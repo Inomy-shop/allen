@@ -6,6 +6,7 @@ import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { hasRepoContextLoadingGuidance, withArtifactsGuidance, withMandatoryRepoContext, withNonInteractiveGuidance, withRepoContextLoadingGuidance } from './agent-file-writer.js';
 import { MCP_SERVER_NAME } from './brand.js';
+import { renderClarificationResumePrompt, renderHumanResumePrompt, renderResumeContextPrompt, renderReviewFeedbackRetryPrompt } from './human-intervention.js';
 
 /** Scratch dir when no worktree/repo is in scope. Never fall back to
  * process.cwd() — that's the engine's own source tree. */
@@ -160,29 +161,32 @@ export async function executeCodexNode(
 
   let prompt: string;
   if (promptShape === 'retry') {
-    // Gate-feedback retry — a downstream reviewer rejected this node's
-    // previous output and fired the retry edge. The resumed codex thread
-    // carries the original task and the agent's prior turns; we only hand
-    // back the reviewer's feedback. __retry_source is the REVIEWING node
-    // (qa, code_review, validator, etc.), not the current node.
-    const attempt = (state.__retry_attempt as number) ?? 2;
-    const source = (state.__retry_source as string) ?? 'downstream step';
-    const context = (state.retry_context as string) ?? '';
-    prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-REVIEW FEEDBACK — ATTEMPT ${attempt}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Your previous output was rejected by the ${source} step's review. Their
-feedback is below. Apply the fixes and re-emit your JSON output block.
-
-Do NOT redo analysis that is still valid — apply the feedback as a
-targeted fix. You decide what tool calls that requires: re-read the
-files you're about to change, re-run tests after editing, whatever
-your role's contract needs. Do not skip verification to save turns.
-
-━━━ FEEDBACK FROM ${source} ━━━
-${context}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    const clarificationContext = renderClarificationResumePrompt(state.resume_context)
+      || renderClarificationResumePrompt(state.human_input);
+    if (clarificationContext) {
+      prompt = clarificationContext;
+    } else {
+      prompt = renderReviewFeedbackRetryPrompt({
+        resumeContext: state.resume_context,
+        humanInput: state.human_input,
+        retryContext: state.retry_context,
+      });
+    }
   } else if (promptShape === 'forward') {
+    const resumeContext = renderResumeContextPrompt(state.resume_context);
+    const humanContext = renderHumanResumePrompt(state.human_input);
+    const focusedContext = resumeContext || humanContext;
+    if (focusedContext) {
+      prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HUMAN INPUT — RESUME WORKFLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Your role, task, tools, and output schema are UNCHANGED. A human responded
+to a workflow pause. Continue using only the focused human input below and
+the relevant artifacts/outputs already available to this node.
+
+${focusedContext}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    } else {
     // Forward-path re-entry after an upstream re-ran. Agent's role and task
     // are unchanged but its prior outputs are stale; dump the current state.
     prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -207,6 +211,7 @@ the current inputs, even if they happen to match your prior values.
 ━━━ CURRENT WORKFLOW STATE ━━━
 ${renderCurrentState()}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    }
   } else {
     // Full prompt — fresh run (first attempt) or resume disabled.
     prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
@@ -232,18 +237,30 @@ ${renderCurrentState()}
     // didn't persist) — can't rely on prior turns, so append the feedback
     // block after the full re-rendered prompt.
     if (isRetryTarget) {
-      const attempt = (state.__retry_attempt as number) ?? 2;
       const source = (state.__retry_source as string) ?? 'previous step';
-      const context = (state.retry_context as string) ?? '';
-      prompt += `
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RETRY FEEDBACK — ATTEMPT ${attempt}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-You are being re-run because the previous attempt of ${source} produced a
+      const clarificationContext = renderClarificationResumePrompt(state.resume_context)
+        || renderClarificationResumePrompt(state.human_input);
+      const resumeContext = clarificationContext ? '' : renderResumeContextPrompt(state.resume_context);
+      const humanContext = clarificationContext || resumeContext ? '' : renderHumanResumePrompt(state.human_input);
+      const retryContext = (state.retry_context as string) ?? '';
+      const context = clarificationContext || [resumeContext || humanContext, retryContext && retryContext !== humanContext && retryContext !== resumeContext ? retryContext : '']
+          .filter((part) => part.trim().length > 0)
+          .join('\n\n');
+      const title = clarificationContext ? '' : 'RETRY FEEDBACK';
+      const intro = clarificationContext
+        ? ''
+        : `You are being re-run because the previous output from ${source} produced a
 result that failed a downstream gate. Address the feedback below in this
 run. Do NOT redo work that is already correct — focus on the issues called
-out here.
+out here.`;
+      prompt += clarificationContext ? `
+
+${context}` : `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${title}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${intro}
 
 ${context}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;

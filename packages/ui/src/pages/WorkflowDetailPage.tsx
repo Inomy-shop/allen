@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, FileText, GitBranch, Layers, Pencil, Play, RefreshCw, Shield,
+  ArrowLeft, ExternalLink, FileText, GitBranch, Layers, MessageSquare, Pencil, Play, RefreshCw, Shield,
 } from 'lucide-react';
 import { executions as executionsApi, users as usersApi, workflows as workflowsApi } from '../services/api';
 import type { AuthUser } from '../stores/authStore';
 import StatusBadge from '../components/common/StatusBadge';
+import Select from '../components/common/Select';
+import IconTooltipButton from '../components/common/IconTooltipButton';
 import WorkflowRunDialog from '../components/workflow/WorkflowRunDialog';
 import WorkflowBuilderPage from './WorkflowBuilderPage';
 import {
@@ -25,19 +27,6 @@ function shortDuration(ms: number | null | undefined): string {
   if (s < 60) return `${s.toFixed(1)}s`;
   const m = Math.floor(s / 60);
   return `${m}m ${Math.floor(s % 60)}s`;
-}
-
-function shortAge(value: string | Date | null | undefined): string {
-  if (!value) return '—';
-  const then = new Date(value).getTime();
-  if (!Number.isFinite(then)) return '—';
-  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
 }
 
 function runUserLabel(run: any): string {
@@ -65,6 +54,29 @@ function runChatSessionId(run: any): string | null {
   return run?.chat?.sessionId
     ?? run?.meta?.chatSessionId
     ?? null;
+}
+
+function runId(run: any): string {
+  return String(run?.id ?? run?._id ?? '');
+}
+
+function runTitle(run: any, fallback: string): string {
+  return run?.workflowName
+    ?? run?.name
+    ?? fallback;
+}
+
+function runStartedAt(run: any): string {
+  const value = run?.startedAt ?? run?.createdAt;
+  if (!value) return 'Not started';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return 'Not started';
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 export default function WorkflowDetailPage() {
@@ -104,6 +116,7 @@ export default function WorkflowDetailPage() {
         limit: 100,
         offset: 0,
         includeTotal: true,
+        enrich: true,
       });
 
       setRuns(result.items);
@@ -172,7 +185,7 @@ export default function WorkflowDetailPage() {
   }
 
   return (
-    <div className="page-shell">
+    <div className="w-full px-8 py-8">
       <div className="page-crumb">
         <Link to="/workflows">Workflows</Link>
         <span className="text-theme-subtle">/</span>
@@ -192,19 +205,29 @@ export default function WorkflowDetailPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button title="Refresh" className="btn btn-secondary btn-sm" onClick={() => { void loadWorkflow(); void loadRuns(); }}>
-            <RefreshCw className="w-3 h-3" />
-          </button>
-          <button className="btn btn-primary btn-sm" onClick={() => setRunDialogOpen(true)} disabled={!isValid}>
-            <Play className="w-3 h-3" /> Run
-          </button>
-          <button
-            className={`btn btn-sm ${isEditing ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setTab(isEditing ? 'runs' : 'edit')}
+          <IconTooltipButton
+            label="Refresh workflow"
+            onClick={() => { void loadWorkflow(); void loadRuns(); }}
+            className="h-9 w-9 rounded-md border border-app bg-app-card"
           >
-            {isEditing ? <ArrowLeft className="w-3 h-3" /> : <Pencil className="w-3 h-3" />}
-            {isEditing ? 'View' : 'Edit'}
-          </button>
+            <RefreshCw className="h-3.5 w-3.5" />
+          </IconTooltipButton>
+          <IconTooltipButton
+            label="Run workflow"
+            tone="accent"
+            onClick={() => setRunDialogOpen(true)}
+            disabled={!isValid}
+            className="h-9 w-9 rounded-md border border-app bg-app-card"
+          >
+            <Play className="h-3.5 w-3.5" />
+          </IconTooltipButton>
+          <IconTooltipButton
+            label={isEditing ? 'View runs' : 'Edit workflow'}
+            onClick={() => setTab(isEditing ? 'runs' : 'edit')}
+            className="h-9 w-9 rounded-md border border-app bg-app-card"
+          >
+            {isEditing ? <ArrowLeft className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
+          </IconTooltipButton>
         </div>
       </div>
 
@@ -230,27 +253,31 @@ export default function WorkflowDetailPage() {
           </nav>
           {tab === 'runs' && (
             <div className="flex flex-wrap items-center gap-2">
-              <select
+              <Select
                 value={selectedUserId}
-                onChange={(event) => setSelectedUserId(event.target.value)}
-                className="input !h-8 !w-auto !min-w-[190px] !py-1 text-[12px]"
-                aria-label="Filter workflow runs by user"
-              >
-                <option value="all">All users</option>
-                {allUsers.map((user) => (
-                  <option key={user.id} value={user.id}>{user.name || user.email}</option>
-                ))}
-              </select>
-              <select
+                onChange={setSelectedUserId}
+                className="min-w-[190px]"
+                searchable={allUsers.length > 6}
+                options={[
+                  { value: 'all', label: 'All users' },
+                  ...allUsers.map((user) => ({
+                    value: user.id,
+                    label: user.name || user.email,
+                    sublabel: user.email,
+                  })),
+                ]}
+              />
+              <Select
                 value={chatFilter}
-                onChange={(event) => setChatFilter(event.target.value as ChatFilter)}
-                className="input !h-8 !w-auto !min-w-[150px] !py-1 text-[12px]"
-                aria-label="Filter linked chat runs"
-              >
-                <option value="all">All chat links</option>
-                <option value="linked">Linked to chat</option>
-                <option value="unlinked">Not linked to chat</option>
-              </select>
+                onChange={(value) => setChatFilter(value as ChatFilter)}
+                className="min-w-[150px]"
+                searchable={false}
+                options={[
+                  { value: 'all', label: 'All chat links' },
+                  { value: 'linked', label: 'Linked to chat' },
+                  { value: 'unlinked', label: 'Not linked to chat' },
+                ]}
+              />
               {hasRunFilters && (
                 <button
                   type="button"
@@ -270,64 +297,102 @@ export default function WorkflowDetailPage() {
 
       {tab === 'runs' && (
         <div className="mt-4">
-          <div className="card overflow-hidden">
-            <div className="grid grid-cols-[110px_1fr_220px_140px_110px_110px_180px] items-center gap-4 border-b border-app bg-app-muted px-4 py-2">
-              <span className="overline">Run</span>
-              <span className="overline">Workflow</span>
-              <span className="overline">User</span>
-              <span className="overline">Status</span>
-              <span className="overline">Duration</span>
-              <span className="overline">Started</span>
-              <span className="overline">Chat</span>
+          <div className="overflow-hidden rounded-md border border-app bg-app-card">
+            <div className="flex items-center justify-between gap-4 border-b border-app bg-app-muted/25 px-4 py-3">
+              <div>
+                <div className="text-[13px] font-semibold text-theme-primary">Workflow runs</div>
+                <div className="mt-0.5 font-mono text-[11px] text-theme-muted">
+                  {filteredRuns.length} shown{hasRunFilters ? ` · ${runsTotal} total` : ''}
+                </div>
+              </div>
+              <IconTooltipButton
+                label="Refresh workflow runs"
+                onClick={() => { void loadRuns(); }}
+                className="h-8 w-8 rounded-md border border-app"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${runsLoading ? 'animate-spin' : ''}`} />
+              </IconTooltipButton>
             </div>
             {runsLoading ? (
-              Array.from({ length: 5 }).map((_, i) => <div key={i} className="m-3 h-14 rounded-md bg-app-muted animate-pulse" />)
+              Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="border-b border-app px-4 py-3 last:border-b-0">
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 animate-pulse rounded-md bg-app-muted" />
+                    <div className="min-w-0 flex-1">
+                      <div className="h-4 w-56 animate-pulse rounded-md bg-app-muted" />
+                      <div className="mt-2 h-3 w-72 animate-pulse rounded-md bg-app-muted" />
+                    </div>
+                    <div className="h-7 w-24 animate-pulse rounded-md bg-app-muted" />
+                  </div>
+                </div>
+              ))
             ) : runs.length === 0 ? (
-              <div className="p-10 text-center text-[13px] text-theme-muted">No runs yet.</div>
+              <div className="px-5 py-12 text-center">
+                <Play className="mx-auto h-8 w-8 text-theme-subtle" />
+                <div className="mt-4 text-[15px] font-semibold text-theme-primary">No runs yet</div>
+                <p className="mt-1 text-[13px] text-theme-muted">Run this workflow to see execution history here.</p>
+              </div>
             ) : filteredRuns.length === 0 ? (
               <div className="p-10 text-center text-[13px] text-theme-muted">No runs match these filters.</div>
             ) : filteredRuns.map((run) => (
               <div
-                key={run.id ?? run._id}
+                key={runId(run)}
                 role="button"
                 tabIndex={0}
-                onClick={() => navigate(`/executions/${run.id ?? run._id}`)}
+                onClick={() => navigate(`/executions/${runId(run)}`)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
-                    navigate(`/executions/${run.id ?? run._id}`);
+                    navigate(`/executions/${runId(run)}`);
                   }
                 }}
-                className="grid w-full grid-cols-[110px_1fr_220px_140px_110px_110px_180px] items-center gap-4 border-b border-app px-4 py-3.5 text-left transition-colors last:border-b-0 hover:bg-app-muted"
+                className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_120px_132px_112px_104px] items-center gap-4 border-b border-app px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-app-muted/35"
               >
-                <span className="font-mono text-[12px] text-theme-muted truncate">{(run.id ?? run._id ?? '').slice(0, 8)}</span>
-                <span className="min-w-0">
-                  <span className="block truncate text-[13px] font-medium text-theme-primary">{run.workflowName ?? name}</span>
-                  <span className="mt-0.5 block truncate font-mono text-[10.5px] text-theme-subtle">{run.id ?? run._id}</span>
-                </span>
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-app bg-app text-theme-muted">
+                    <Play className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-[13.5px] font-semibold text-theme-primary">{runTitle(run, name)}</div>
+                    <div className="mt-1 flex min-w-0 items-center gap-2">
+                      <span className="truncate font-mono text-[11px] text-theme-muted" title={runUserLabel(run)}>{runUserLabel(run)}</span>
+                      {runChatSessionId(run) && (
+                        <>
+                          <span className="text-theme-subtle">·</span>
+                          <span className="inline-flex items-center gap-1 font-mono text-[11px] text-accent-green">
+                            <MessageSquare className="h-3 w-3" /> chat
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
                 <span
-                  className="min-w-0 truncate font-mono text-[12px] text-theme-secondary"
+                  className="min-w-0 truncate font-mono text-[11px] text-theme-secondary"
                   title={runUserId(run) ? `${runUserLabel(run)} · ${runUserId(run)}` : runUserLabel(run)}
                 >
-                  {runUserLabel(run)}
+                  {runStartedAt(run)}
                 </span>
                 <span><StatusBadge status={run.status} /></span>
-                <span className="font-mono text-[12px] text-theme-muted">{shortDuration(run.durationMs)}</span>
-                <span className="font-mono text-[12px] text-theme-muted">{shortAge(run.startedAt)}</span>
-                <span>
+                <span className="font-mono text-[11px] text-theme-muted">{shortDuration(run.durationMs)}</span>
+                <div className="flex items-center justify-end gap-1.5">
                   {runChatSessionId(run) ? (
-                    <Link
-                      to={`/chat/${runChatSessionId(run)}`}
-                      className="inline-block max-w-full truncate text-[12px] text-accent hover:underline"
-                      title={run.chat?.title ? `Open chat: ${run.chat.title}` : 'Open linked chat'}
-                      onClick={(event) => event.stopPropagation()}
+                    <IconTooltipButton
+                      label={run.chat?.title ? `Open chat: ${run.chat.title}` : 'Open linked chat'}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        const sessionId = runChatSessionId(run);
+                        if (sessionId) navigate(`/chat/${sessionId}`);
+                      }}
+                      className="h-8 w-8 rounded-md border border-app"
                     >
-                      Open
-                    </Link>
-                  ) : (
-                    <span className="text-[12px] text-theme-subtle">—</span>
-                  )}
-                </span>
+                      <MessageSquare className="h-3.5 w-3.5" />
+                    </IconTooltipButton>
+                  ) : null}
+                  <span className="flex h-8 w-8 items-center justify-center rounded-md text-theme-muted">
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </span>
+                </div>
               </div>
             ))}
           </div>

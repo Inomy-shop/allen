@@ -149,6 +149,19 @@ describe('condition-parser', () => {
         }),
       ).toBe(true);
     });
+
+    it('supports dotted paths for structured human input', () => {
+      expect(
+        evaluateCondition("human_input.decision == 'request_changes'", {
+          human_input: { decision: 'request_changes' },
+        }),
+      ).toBe(true);
+      expect(
+        evaluateCondition("human_input.feedback.value != ''", {
+          human_input: { feedback: { value: 'Use the design token.' } },
+        }),
+      ).toBe(true);
+    });
   });
 
   describe('validateCondition', () => {

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
 import App from './App';
@@ -29,6 +29,17 @@ import ResetPasswordPage from './pages/ResetPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import { ToastProvider } from './components/common/Toast';
+import { useSettingsStore } from './stores/settingsStore';
+
+if (typeof window !== 'undefined') {
+  if (window.allenDesktop) {
+    document.documentElement.dataset.runtime = 'desktop';
+    if (/Mac/i.test(navigator.platform)) {
+      document.documentElement.dataset.desktopPlatform = 'darwin';
+    }
+  }
+  useSettingsStore.getState().initFromLocalStorage();
+}
 
 const router = createBrowserRouter([
   { path: '/onboarding', element: <Navigate to="/onboarding/account" replace /> },
@@ -68,7 +79,7 @@ const router = createBrowserRouter([
           { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
           { path: 'crons', element: <Navigate to="/settings/schedules" replace /> },
           { path: 'tickets', element: <TicketsPage /> },
-          { path: 'monitoring', element: <Navigate to="/settings/analytics" replace /> },
+          { path: 'monitoring', element: <Navigate to="/settings/runtime" replace /> },
           { path: 'interventions', element: <InterventionsPage /> },
           { path: 'interventions/:id', element: <InterventionsPage /> },
           { path: 'settings', element: <SettingsPage /> },
@@ -79,10 +90,21 @@ const router = createBrowserRouter([
   },
 ]);
 
+function ThemeBootstrap() {
+  const addSystemThemeListener = useSettingsStore((s) => s.addSystemThemeListener);
+
+  useEffect(() => {
+    const cleanup = addSystemThemeListener();
+    return cleanup;
+  }, [addSystemThemeListener]);
+
+  return <RouterProvider router={router} />;
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ToastProvider>
-      <RouterProvider router={router} />
+      <ThemeBootstrap />
     </ToastProvider>
   </React.StrictMode>,
 );

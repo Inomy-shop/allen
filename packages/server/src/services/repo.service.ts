@@ -2,13 +2,64 @@ import { accessSync, constants as fsConstants, existsSync, rmSync, statSync } fr
 import { basename, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { getServers } from 'node:dns';
+import { lookup } from 'node:dns/promises';
 import type { Collection, Db } from 'mongodb';
 import { resolveRepositoriesDir } from '@allen/engine';
 import { scanRepo } from './repo-scanner.js';
 import { RepoContextScannerService } from './context/scanner/repo-context-scanner.service.js';
-import { isGraphContextEnabled } from './context/config/context-provider-config.js';
+import { ExecutionService } from './execution.service.js';
 
 const exec = promisify(execFile);
+const CLONE_TIMEOUT_MS = 10 * 60 * 1000;
+const SSH_HOST_RX = /^[a-zA-Z0-9.-]+$/;
+
+function cloneTraceId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function cloneLog(traceId: string | undefined, message: string, detail?: Record<string, unknown>): void {
+  console.info(`[repo-clone${traceId ? `:${traceId}` : ''}] ${message}`, detail ?? {});
+}
+
+function cloneWarn(traceId: string | undefined, message: string, detail?: Record<string, unknown>): void {
+  console.warn(`[repo-clone${traceId ? `:${traceId}` : ''}] ${message}`, detail ?? {});
+}
+
+function truncateLogValue(value: string, max = 2000): string {
+  return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
+function gitExecEnv(sshCommand?: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_SSH_COMMAND: sshCommand ?? process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new',
+  };
+}
+
+async function gitSshCommandForHost(host: string, traceId?: string): Promise<string> {
+  if (!SSH_HOST_RX.test(host)) {
+    throw new Error(`Invalid Git SSH host: ${host}`);
+  }
+  try {
+    cloneLog(traceId, 'resolving ssh host', { host, dnsServers: getServers() });
+    const { address } = await lookup(host, { family: 4 });
+    cloneLog(traceId, 'resolved ssh host', { host, address });
+    return `ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o HostName=${address} -o HostKeyAlias=${host}`;
+  } catch (err: any) {
+    cloneWarn(traceId, 'failed to resolve ssh host', { host, error: err.message ?? String(err), dnsServers: getServers() });
+    throw new Error(`Could not resolve Git host "${host}" from the Allen runtime: ${err.message ?? String(err)}`);
+  }
+}
+
+function gitErrorDetail(err: any): string {
+  const detail = [err.stderr, err.stdout, err.message].filter(Boolean).join('\n').trim();
+  if (err.killed || err.signal === 'SIGTERM') {
+    return `${detail || 'Git command timed out'}\nClone timed out. Check repository size, network access, and SSH credentials.`;
+  }
+  return detail || 'Git command failed';
+}
 
 export interface RepoValidationCheck {
   id: string;
@@ -46,7 +97,7 @@ export interface RepoValidationResult {
  *   github.com/owner/repo
  *   git@github.com:owner/repo.git
  */
-function parseGitHubUrl(input: string): { sshUrl: string; httpsUrl: string; repoName: string } {
+function parseGitHubUrl(input: string): { sshUrl: string; httpsUrl: string; repoName: string; host: string } {
   const trimmed = input.trim().replace(/\/$/, '');
 
   // Already SSH: git@github.com:owner/repo.git
@@ -57,6 +108,7 @@ function parseGitHubUrl(input: string): { sshUrl: string; httpsUrl: string; repo
       sshUrl: `git@${host}:${owner}/${repo}.git`,
       httpsUrl: `https://${host}/${owner}/${repo}.git`,
       repoName: repo,
+      host,
     };
   }
 
@@ -68,6 +120,7 @@ function parseGitHubUrl(input: string): { sshUrl: string; httpsUrl: string; repo
       sshUrl: `git@${host}:${owner}/${repo}.git`,
       httpsUrl: `https://${host}/${owner}/${repo}.git`,
       repoName: repo,
+      host,
     };
   }
 
@@ -79,11 +132,17 @@ async function runGit(repoPath: string, args: string[], timeout = 5000): Promise
   return stdout.trim();
 }
 
-async function canReadRepoOverHttps(httpsUrl: string): Promise<boolean> {
+async function canReadRepoOverHttps(httpsUrl: string, traceId?: string): Promise<boolean> {
+  cloneLog(traceId, 'checking https readability', { httpsUrl });
   try {
-    await exec('git', ['ls-remote', '--exit-code', httpsUrl, 'HEAD'], { timeout: 12_000 });
+    await exec('git', ['ls-remote', '--exit-code', httpsUrl, 'HEAD'], { timeout: 12_000, env: gitExecEnv() });
+    cloneLog(traceId, 'https readability passed', { httpsUrl });
     return true;
-  } catch {
+  } catch (err: any) {
+    cloneWarn(traceId, 'https readability failed', {
+      httpsUrl,
+      error: truncateLogValue(gitErrorDetail(err), 1200),
+    });
     return false;
   }
 }
@@ -152,12 +211,10 @@ export class RepoService {
 
     const result = await this.col.insertOne(doc);
 
-    if (isGraphContextEnabled()) {
-      // Fire context scans in the background — don't await, don't fail create.
-      this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
-        console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
-      });
-    }
+    // Fire context scans in the background — don't await, don't fail create.
+    this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
+      console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
+    });
     return { ...doc, _id: result.insertedId };
   }
 
@@ -275,9 +332,17 @@ export class RepoService {
     branch?: string;
     name?: string;
   }): Promise<RepoValidationResult> {
+    const traceId = cloneTraceId();
     const checks: RepoValidationCheck[] = [];
     const url = String(body.url ?? '').trim();
+    cloneLog(traceId, 'validation requested', {
+      url,
+      branch: body.branch?.trim() || 'main',
+      requestedName: body.name?.trim() || null,
+      repositoriesDir: resolveRepositoriesDir(),
+    });
     if (!url) {
+      cloneWarn(traceId, 'validation failed: missing url');
       return {
         ok: false,
         source: 'clone',
@@ -285,17 +350,20 @@ export class RepoService {
       };
     }
 
-    let parsed: { sshUrl: string; httpsUrl: string; repoName: string };
+    let parsed: { sshUrl: string; httpsUrl: string; repoName: string; host: string };
     try {
       parsed = parseGitHubUrl(url);
+      cloneLog(traceId, 'parsed repository url', parsed);
     } catch (err) {
+      cloneWarn(traceId, 'validation failed: invalid url', { error: (err as Error).message });
       checks.push({ id: 'url', label: 'Repository URL', status: 'fail', detail: (err as Error).message });
       return { ok: false, source: 'clone', checks };
     }
 
-    const httpsReadable = await canReadRepoOverHttps(parsed.httpsUrl);
+    const httpsReadable = await canReadRepoOverHttps(parsed.httpsUrl, traceId);
     const cloneUrl = httpsReadable ? parsed.httpsUrl : parsed.sshUrl;
     const requiresSsh = !httpsReadable;
+    cloneLog(traceId, 'selected clone transport during validation', { cloneUrl, requiresSsh });
     checks.push({
       id: 'url',
       label: 'Repository URL',
@@ -317,6 +385,7 @@ export class RepoService {
     const clonePath = join(resolveRepositoriesDir(), repoName);
 
     const existingByName = await this.col.findOne({ name: repoName });
+    cloneLog(traceId, 'checked registered repository name', { repoName, exists: Boolean(existingByName) });
     checks.push({
       id: 'name',
       label: 'Repository name',
@@ -325,6 +394,11 @@ export class RepoService {
     });
 
     const existingByPath = await this.col.findOne({ path: clonePath });
+    cloneLog(traceId, 'checked clone path', {
+      clonePath,
+      registered: Boolean(existingByPath),
+      existsOnDisk: existsSync(clonePath),
+    });
     checks.push({
       id: 'path',
       label: 'Clone path',
@@ -342,7 +416,7 @@ export class RepoService {
       detail: `Allen will check out ${branch} after cloning.`,
     });
 
-    return {
+    const result = {
       ok: checks.every(check => check.status !== 'fail'),
       source: 'clone',
       name: repoName,
@@ -353,7 +427,12 @@ export class RepoService {
       clonePath,
       branch,
       checks,
-    };
+    } satisfies RepoValidationResult;
+    cloneLog(traceId, 'validation completed', {
+      ok: result.ok,
+      checks: checks.map(check => ({ id: check.id, status: check.status })),
+    });
+    return result;
   }
 
   /**
@@ -372,46 +451,91 @@ export class RepoService {
     description?: string;
     tags?: string[];
   }): Promise<Record<string, unknown>> {
-    const { sshUrl, httpsUrl, repoName: parsedName } = parseGitHubUrl(body.url);
+    const traceId = cloneTraceId();
+    cloneLog(traceId, 'clone requested', {
+      url: body.url,
+      branch: body.branch?.trim() || 'main',
+      requestedName: body.name?.trim() || null,
+      repositoriesDir: resolveRepositoriesDir(),
+      cwd: process.cwd(),
+      path: process.env.PATH,
+      home: process.env.HOME,
+      inheritedGitSshCommand: process.env.GIT_SSH_COMMAND ? 'set' : 'not set',
+      dnsServers: getServers(),
+    });
+    const { sshUrl, httpsUrl, repoName: parsedName, host } = parseGitHubUrl(body.url);
     const repoName = body.name?.trim() || parsedName;
     const branch = body.branch?.trim() || 'main';
     const clonePath = join(resolveRepositoriesDir(), repoName);
-    const httpsReadable = await canReadRepoOverHttps(httpsUrl);
+    cloneLog(traceId, 'parsed clone request', { host, sshUrl, httpsUrl, repoName, branch, clonePath });
+    const httpsReadable = await canReadRepoOverHttps(httpsUrl, traceId);
     const cloneUrl = httpsReadable ? httpsUrl : sshUrl;
+    cloneLog(traceId, 'selected clone transport', { cloneUrl, transport: httpsReadable ? 'https' : 'ssh' });
 
     // Check if repo with same name already exists in DB
     const existingByName = await this.col.findOne({ name: repoName });
     if (existingByName) {
+      cloneWarn(traceId, 'clone blocked: repository name already registered', { repoName });
       throw new Error(`A repo named "${repoName}" already exists`);
     }
+    cloneLog(traceId, 'repository name is available', { repoName });
 
     // Check if path already exists in DB
     const existingByPath = await this.col.findOne({ path: clonePath });
     if (existingByPath) {
+      cloneWarn(traceId, 'clone blocked: clone path already registered', { clonePath });
       throw new Error(`A repo is already registered at path: ${clonePath}`);
     }
+    cloneLog(traceId, 'clone path is not registered', { clonePath });
 
     // Check if directory already exists on disk
     if (existsSync(clonePath)) {
+      cloneWarn(traceId, 'clone blocked: clone path exists on disk', { clonePath });
       throw new Error(`Directory already exists at ${clonePath}. Delete it first or use a different name.`);
     }
+    cloneLog(traceId, 'clone path is available on disk', { clonePath });
 
     // Clone
     try {
-      await exec('git', ['clone', cloneUrl, clonePath], { timeout: 120_000 });
+      const sshCommand = cloneUrl === sshUrl ? await gitSshCommandForHost(host, traceId) : undefined;
+      cloneLog(traceId, 'starting git clone', {
+        cloneUrl,
+        clonePath,
+        timeoutMs: CLONE_TIMEOUT_MS,
+        sshCommand: sshCommand ? sshCommand.replace(/-o HostName=[^\s]+/, '-o HostName=[resolved-ip]') : null,
+      });
+      await exec('git', ['clone', '--progress', cloneUrl, clonePath], { timeout: CLONE_TIMEOUT_MS, env: gitExecEnv(sshCommand) });
+      cloneLog(traceId, 'git clone completed', { clonePath });
     } catch (err: any) {
-      throw new Error(`Failed to clone ${cloneUrl}: ${err.stderr || err.message}`);
+      cloneWarn(traceId, 'git clone failed', {
+        cloneUrl,
+        clonePath,
+        error: truncateLogValue(gitErrorDetail(err)),
+      });
+      throw new Error(`Failed to clone ${cloneUrl}: ${gitErrorDetail(err)}`);
     }
 
     // Checkout the specified branch
     try {
+      cloneLog(traceId, 'checking out branch', { branch, clonePath });
       await exec('git', ['checkout', branch], { cwd: clonePath, timeout: 30_000 });
+      cloneLog(traceId, 'branch checkout completed', { branch, clonePath });
     } catch (err: any) {
+      cloneWarn(traceId, 'branch checkout failed', { branch, clonePath, error: truncateLogValue(gitErrorDetail(err)) });
       throw new Error(`Failed to checkout branch "${branch}": ${err.stderr || err.message}`);
     }
 
     // Scan
+    cloneLog(traceId, 'scanning cloned repository', { clonePath });
     const scanResult = await scanRepo(clonePath);
+    cloneLog(traceId, 'repository scan completed', {
+      clonePath,
+      language: scanResult.language,
+      framework: scanResult.framework,
+      packageManager: scanResult.packageManager,
+      defaultBranch: scanResult.defaultBranch,
+      remoteUrl: scanResult.remoteUrl,
+    });
 
     const doc = {
       name: repoName,
@@ -437,32 +561,70 @@ export class RepoService {
     };
 
     const result = await this.col.insertOne(doc);
+    cloneLog(traceId, 'repository registered', { repoName, clonePath, insertedId: String(result.insertedId) });
 
-    if (isGraphContextEnabled()) {
-      // Fire deep context scan in the background.
-      this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
-        console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
-      });
-    }
+    // Fire deep context scan in the background.
+    cloneLog(traceId, 'scheduling background context scan', { repoName, clonePath, insertedId: String(result.insertedId) });
+    this.contextScanner.scheduleScan(String(result.insertedId)).catch((err) => {
+      console.error(`[repos] failed to schedule deep scan for ${result.insertedId}:`, err);
+    });
     return { ...doc, _id: result.insertedId };
   }
 
   /** Trigger a fresh deep context scan for a repo. Async — returns immediately. */
   async rescanContext(id: string): Promise<{ scheduled: boolean; reason?: string }> {
-    if (!isGraphContextEnabled()) return { scheduled: false, reason: 'Allen context provider is disabled' };
     return this.contextScanner.scheduleScan(id);
+  }
+
+  /** Cancel/clear the current repo scan so the user can start a fresh scan. */
+  async cancelScan(id: string): Promise<{ cancelled: boolean; executionId?: string | null }> {
+    const { ObjectId } = await import('mongodb');
+    const repo = await this.col.findOne({ _id: new ObjectId(id) });
+    if (!repo) throw new Error('Repo not found');
+
+    const scan = repo.contextScan as { executionId?: string; status?: string } | undefined;
+    const execution = scan?.executionId
+      ? await this.db.collection('executions').findOne({ id: scan.executionId })
+      : await this.db.collection('executions').findOne(
+          {
+            workflowName: 'chat:spawn_agent/repo-scanner',
+            'input.repo_path': repo.path,
+            status: { $in: ['running', 'paused', 'waiting'] },
+          },
+          { sort: { startedAt: -1 } },
+        );
+
+    const executionId = execution?.id as string | undefined;
+    if (executionId) {
+      await new ExecutionService(this.db).cancel(executionId).catch(() => undefined);
+    }
+
+    await this.col.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          contextScan: {
+            status: 'cancelled',
+            scannedAt: new Date(),
+            error: 'Scan cancelled',
+            ...(executionId ? { executionId } : {}),
+          },
+          updatedAt: new Date(),
+        },
+      },
+    );
+
+    return { cancelled: true, executionId: executionId ?? null };
   }
 
   /** Fetch the stored detailed context document for a repo. */
   async getContext(id: string): Promise<Record<string, unknown> | null> {
-    if (!isGraphContextEnabled()) return null;
     const ctx = await this.contextScanner.getByRepoId(id);
     return ctx as unknown as Record<string, unknown> | null;
   }
 
   /** Fetch context by repo path (used by MCP get_repo_context tool). */
   async getContextByPath(repoPath: string): Promise<Record<string, unknown> | null> {
-    if (!isGraphContextEnabled()) return null;
     const repo = await this.col.findOne({ path: repoPath });
     if (!repo) return null;
     const ctx = await this.contextScanner.getByRepoId(String(repo._id));
@@ -587,9 +749,7 @@ export class RepoService {
     };
     await this.col.updateOne({ _id: new ObjectId(id) }, { $set: updates });
 
-    const deepResult = isGraphContextEnabled()
-      ? await this.contextScanner.scheduleScan(id)
-      : { scheduled: false, reason: 'Allen context provider is disabled' };
+    const deepResult = await this.contextScanner.scheduleScan(id);
 
     return { ...existing, ...updates, deepScan: deepResult };
   }

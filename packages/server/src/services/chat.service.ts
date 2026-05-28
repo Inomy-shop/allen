@@ -62,6 +62,14 @@ export interface ChatSession {
   repoPath?: string;   // Snapshot of repo.path at session creation time
   repoName?: string;   // Snapshot of repo.name for UI display
   workspaceId?: string;
+  workspaceName?: string;
+  workspaceRepoId?: string;
+  workspaceRepoName?: string;
+  workspaceBranch?: string;
+  workspaceBaseBranch?: string;
+  workspacePrNumber?: number;
+  workspacePrUrl?: string;
+  streaming?: boolean;
   archivedWorkspace?: ArchivedWorkspaceSnapshot;
   ownerUserId?: string | null;
   ownerName?: string | null;
@@ -890,7 +898,11 @@ export class ChatService {
       .sort({ lastMessageAt: -1 })
       .limit(100)
       .toArray() as unknown as ChatSession[];
-    return this.hydrateArchivedWorkspaceSnapshots(sessions);
+    const hydrated = await this.hydrateArchivedWorkspaceSnapshots(sessions);
+    return hydrated.map(session => ({
+      ...session,
+      streaming: this.isStreaming(session._id?.toString() ?? ''),
+    }));
   }
 
   async getSession(id: string): Promise<(ChatSession & { messages: ChatMessage[] }) | null> {
@@ -899,7 +911,7 @@ export class ChatService {
     const msgs = await this.messages.find({ sessionId: id }).sort({ createdAt: -1 }).limit(50).toArray() as ChatMessage[];
     msgs.reverse();
     const [hydrated] = await this.hydrateArchivedWorkspaceSnapshots([session as unknown as ChatSession]);
-    return { ...hydrated, messages: msgs };
+    return { ...hydrated, streaming: this.isStreaming(id), messages: msgs };
   }
 
   private async hydrateArchivedWorkspaceSnapshots<T extends ChatSession>(sessions: T[]): Promise<T[]> {
@@ -922,6 +934,12 @@ export class ChatService {
       .toArray();
 
     const workspaceIdBySession = new Map<string, string>();
+    for (const session of missing) {
+      const sessionId = session._id?.toString() ?? '';
+      if (sessionId && typeof session.workspaceId === 'string' && ObjectId.isValid(session.workspaceId)) {
+        workspaceIdBySession.set(sessionId, session.workspaceId);
+      }
+    }
     for (const link of executionLinks) {
       const chatSessionId = typeof link.meta?.chatSessionId === 'string' ? link.meta.chatSessionId : '';
       const workspaceId = typeof link.meta?.workspaceId === 'string' ? link.meta.workspaceId : '';
@@ -935,17 +953,21 @@ export class ChatService {
       .map(id => new ObjectId(id));
     if (workspaceIds.length === 0) return sessions;
 
-    const archivedWorkspaces = await this.db.collection('workspaces')
-      .find({ _id: { $in: workspaceIds }, status: 'archived' })
+    const workspaces = await this.db.collection('workspaces')
+      .find({ _id: { $in: workspaceIds } })
       .toArray();
-    const snapshotByWorkspaceId = new Map(
-      archivedWorkspaces.map(workspace => [workspace._id.toString(), archivedWorkspaceSnapshot(workspace)]),
+    const workspaceById = new Map(
+      workspaces.map(workspace => [workspace._id.toString(), workspace]),
     );
-    if (snapshotByWorkspaceId.size === 0) return sessions;
+    const archivedSnapshotByWorkspaceId = new Map(
+      workspaces
+        .filter(workspace => workspace.status === 'archived')
+        .map(workspace => [workspace._id.toString(), archivedWorkspaceSnapshot(workspace)]),
+    );
 
     await Promise.all(sessionIds.map(async sessionId => {
       const workspaceId = workspaceIdBySession.get(sessionId);
-      const snapshot = workspaceId ? snapshotByWorkspaceId.get(workspaceId) : undefined;
+      const snapshot = workspaceId ? archivedSnapshotByWorkspaceId.get(workspaceId) : undefined;
       if (!snapshot || !ObjectId.isValid(sessionId)) return;
       await this.sessions.updateOne(
         { _id: new ObjectId(sessionId), archivedWorkspace: { $exists: false } },
@@ -959,8 +981,21 @@ export class ChatService {
     return sessions.map(session => {
       const sessionId = session._id?.toString() ?? '';
       const workspaceId = workspaceIdBySession.get(sessionId);
-      const snapshot = workspaceId ? snapshotByWorkspaceId.get(workspaceId) : undefined;
-      return snapshot ? { ...session, archivedWorkspace: snapshot, workspaceId: undefined } : session;
+      const snapshot = workspaceId ? archivedSnapshotByWorkspaceId.get(workspaceId) : undefined;
+      if (snapshot) return { ...session, archivedWorkspace: snapshot, workspaceId: undefined };
+      const workspace = workspaceId ? workspaceById.get(workspaceId) : undefined;
+      if (!workspace) return session;
+      return {
+        ...session,
+        workspaceId,
+        workspaceName: typeof workspace.name === 'string' ? workspace.name : undefined,
+        workspaceRepoId: typeof workspace.repoId === 'string' ? workspace.repoId : undefined,
+        workspaceRepoName: typeof workspace.repoName === 'string' ? workspace.repoName : undefined,
+        workspaceBranch: typeof workspace.branch === 'string' ? workspace.branch : undefined,
+        workspaceBaseBranch: typeof workspace.baseBranch === 'string' ? workspace.baseBranch : undefined,
+        workspacePrNumber: typeof workspace.prNumber === 'number' ? workspace.prNumber : undefined,
+        workspacePrUrl: typeof workspace.prUrl === 'string' ? workspace.prUrl : undefined,
+      };
     }) as T[];
   }
 

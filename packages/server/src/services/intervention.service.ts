@@ -51,6 +51,7 @@ export interface InterventionOption {
   value: string;
   primary?: boolean;
   destructive?: boolean;
+  description?: string;
 }
 
 export interface InterventionDocLink {
@@ -83,12 +84,19 @@ export interface InterventionDoc {
   started_by_user_id?: string;
   started_by_user_email?: string;
   stage: string;
+  kind?: 'clarify' | 'review' | 'recover';
+  widget?: 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate';
   severity: InterventionSeverity;
   title: string;
+  summary?: string;
   context_summary: string;
   question: string;
   options: InterventionOption[];
   fields: InterventionField[];
+  actions?: Array<Record<string, unknown>>;
+  highlights?: string[];
+  evidence?: Array<Record<string, unknown>>;
+  retry_exhaustion?: Record<string, unknown>;
   docs: InterventionDocLink[];
   round_info?: { current: number; max: number };
   user_request?: string;
@@ -122,12 +130,19 @@ export interface CreateInterventionInput {
   started_by_user_id?: string;
   started_by_user_email?: string;
   stage: string;
+  kind?: 'clarify' | 'review' | 'recover';
+  widget?: 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate';
   severity: InterventionSeverity;
   title: string;
+  summary?: string;
   context_summary: string;
   question: string;
   options: InterventionOption[];
   fields?: InterventionField[];
+  actions?: Array<Record<string, unknown>>;
+  highlights?: string[];
+  evidence?: Array<Record<string, unknown>>;
+  retry_exhaustion?: Record<string, unknown>;
   docs?: InterventionDocLink[];
   round_info?: { current: number; max: number };
   user_request?: string;
@@ -161,12 +176,19 @@ export class InterventionService {
       started_by_user_id: input.started_by_user_id,
       started_by_user_email: input.started_by_user_email,
       stage: input.stage,
+      kind: input.kind,
+      widget: input.widget,
       severity: input.severity,
       title: input.title,
+      summary: input.summary,
       context_summary: input.context_summary,
       question: input.question,
       options: input.options,
       fields: input.fields ?? [],
+      actions: input.actions,
+      highlights: input.highlights,
+      evidence: input.evidence,
+      retry_exhaustion: input.retry_exhaustion,
       docs: input.docs ?? [],
       round_info: input.round_info,
       user_request: input.user_request,

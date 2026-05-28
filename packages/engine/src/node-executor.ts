@@ -16,6 +16,7 @@ import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { normalizeModelAlias } from './model-alias.js';
 import { hasRepoContextLoadingGuidance, withArtifactsGuidance, withMandatoryRepoContext, withNonInteractiveGuidance, withRepoContextLoadingGuidance } from './agent-file-writer.js';
 import { withRepoContextUsageOutput } from './repo-context-usage.js';
+import { renderClarificationResumePrompt, renderHumanIntervention, renderHumanResumePrompt, renderResumeContextPrompt, renderReviewFeedbackRetryPrompt } from './human-intervention.js';
 import type { MaterializedAgentFileMetadata } from './cli-runner.js';
 import { statSync, mkdirSync } from 'node:fs';
 
@@ -462,32 +463,32 @@ async function executeAgentNode(
 
   let prompt: string;
   if (promptShape === 'retry') {
-    // Gate-feedback retry — a downstream reviewer rejected this node's
-    // previous output and fired the retry edge. The resumed session carries
-    // the original task and the agent's prior turns; we only hand back the
-    // reviewer's feedback. The agent decides what re-work that requires.
-    //
-    // NOTE on `__retry_source`: this is the REVIEWING node (qa, code_review,
-    // validator, etc.) — the one that decided the retry — NOT the current
-    // node being re-run. The prompt is worded accordingly.
-    const attempt = (state.__retry_attempt as number) ?? 2;
-    const source = (state.__retry_source as string) ?? 'downstream step';
-    const context = (state.retry_context as string) ?? '';
-    prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-REVIEW FEEDBACK — ATTEMPT ${attempt}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Your previous output was rejected by the ${source} step's review. Their
-feedback is below. Apply the fixes and re-emit your JSON output block.
-
-Do NOT redo analysis that is still valid — apply the feedback as a
-targeted fix. You decide what tool calls that requires: re-read the
-files you're about to change, re-run tests after editing, whatever
-your role's contract needs. Do not skip verification to save turns.
-
-━━━ FEEDBACK FROM ${source} ━━━
-${context}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    const clarificationContext = renderClarificationResumePrompt(state.resume_context)
+      || renderClarificationResumePrompt(state.human_input);
+    if (clarificationContext) {
+      prompt = clarificationContext;
+    } else {
+      prompt = renderReviewFeedbackRetryPrompt({
+        resumeContext: state.resume_context,
+        humanInput: state.human_input,
+        retryContext: state.retry_context,
+      });
+    }
   } else if (promptShape === 'forward') {
+    const resumeContext = renderResumeContextPrompt(state.resume_context);
+    const humanContext = renderHumanResumePrompt(state.human_input);
+    const focusedContext = resumeContext || humanContext;
+    if (focusedContext) {
+      prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HUMAN INPUT — RESUME WORKFLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Your role, task, tools, and output schema are UNCHANGED. A human responded
+to a workflow pause. Continue using only the focused human input below and
+the relevant artifacts/outputs already available to this node.
+
+${focusedContext}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    } else {
     // Upstream re-ran. Your task is unchanged, but your inputs changed and
     // your prior outputs are stale.
     //
@@ -532,6 +533,7 @@ the current inputs, even if they happen to match your prior values.
 ━━━ CURRENT WORKFLOW STATE ━━━
 ${renderCurrentState()}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    }
   } else {
     // Full prompt — fresh run (first attempt) or retry with a reset session.
     const renderedTaskPrompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
@@ -541,18 +543,30 @@ ${renderCurrentState()}
     // Retry with no session resume — we can't rely on prior context, so
     // still append the feedback block after the full re-rendered prompt.
     if (isRetryTarget) {
-      const attempt = (state.__retry_attempt as number) ?? 2;
       const source = (state.__retry_source as string) ?? 'previous step';
-      const context = (state.retry_context as string) ?? '';
-      prompt += `
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RETRY FEEDBACK — ATTEMPT ${attempt}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-You are being re-run because the previous attempt of ${source} produced a
+      const clarificationContext = renderClarificationResumePrompt(state.resume_context)
+        || renderClarificationResumePrompt(state.human_input);
+      const resumeContext = clarificationContext ? '' : renderResumeContextPrompt(state.resume_context);
+      const humanContext = clarificationContext || resumeContext ? '' : renderHumanResumePrompt(state.human_input);
+      const retryContext = (state.retry_context as string) ?? '';
+      const context = clarificationContext || [resumeContext || humanContext, retryContext && retryContext !== resumeContext && retryContext !== humanContext ? retryContext : '']
+          .filter((part) => part.trim().length > 0)
+          .join('\n\n');
+      const title = clarificationContext ? '' : 'RETRY FEEDBACK';
+      const intro = clarificationContext
+        ? ''
+        : `You are being re-run because the previous output from ${source} produced a
 result that failed a downstream gate. Address the feedback below in this
 run. Do NOT redo work that is already correct — focus on the issues called
-out here.
+out here.`;
+      prompt += clarificationContext ? `
+
+${context}` : `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${title}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${intro}
 
 ${context}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
@@ -1438,10 +1452,16 @@ async function executeHumanNode(
 ): Promise<NodeResult> {
   const start = Date.now();
   const prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
+  const intervention = renderHumanIntervention(nodeName, nodeDef, state);
 
   deps.emitter.emit({
     event: 'input_required',
-    data: { node: nodeName, prompt, fields: nodeDef.fields ?? [] },
+    data: {
+      node: nodeName,
+      prompt: intervention.question || prompt,
+      fields: intervention.fields,
+      intervention,
+    },
   });
 
   return {

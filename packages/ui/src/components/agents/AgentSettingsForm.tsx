@@ -14,6 +14,7 @@
  * decides where they get written.
  */
 import { ShieldCheck, Sparkles } from 'lucide-react';
+import Select from '../common/Select';
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
 export type Provider = 'claude-cli' | 'codex';
@@ -91,20 +92,20 @@ export default function AgentSettingsForm({
         <label className="block overline mb-1.5">
           Model
         </label>
-        <select
+        <Select
           value={modelValue}
-          onChange={(e) => setField('model', e.target.value || null)}
-          className="w-full px-3 py-2 bg-surface-50 border border-app rounded-sm text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue"
-        >
-          {isOverrideMode && (
-            <option value="">Inherit — {modelInherited}</option>
-          )}
-          {modelOptions.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+          onChange={(next) => setField('model', next || null)}
+          searchPlaceholder="Search models..."
+          options={[
+            ...(isOverrideMode
+              ? [{ value: '', label: 'Inherit', sublabel: modelInherited }]
+              : []),
+            ...modelOptions.map((option) => ({
+              value: option.value,
+              label: option.label,
+            })),
+          ]}
+        />
       </div>
 
       {/* ── Reasoning Effort ─────────────────────────────────────── */}
@@ -113,25 +114,22 @@ export default function AgentSettingsForm({
           <Sparkles className="w-3 h-3" />
           Reasoning Effort
         </label>
-        <select
+        <Select
           value={effortValue}
-          onChange={(e) => setField('reasoningEffort', (e.target.value as ReasoningEffort) || null)}
-          className="w-full px-3 py-2 bg-surface-50 border border-app rounded-sm text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue"
-        >
-          {isOverrideMode && (
-            <option value="">Inherit — {effortInherited}</option>
-          )}
-          {EFFORT_OPTIONS.map((opt) => (
-            <option
-              key={opt.value}
-              value={opt.value}
-              disabled={opt.value === 'max' && !opusLike}
-            >
-              {opt.label} — {opt.description}
-              {opt.value === 'max' && !opusLike ? ' (Opus only)' : ''}
-            </option>
-          ))}
-        </select>
+          onChange={(next) => setField('reasoningEffort', (next as ReasoningEffort) || null)}
+          searchable={false}
+          options={[
+            ...(isOverrideMode
+              ? [{ value: '', label: 'Inherit', sublabel: effortInherited }]
+              : []),
+            ...EFFORT_OPTIONS.map((option) => ({
+              value: option.value,
+              label: option.label,
+              sublabel: `${option.description}${option.value === 'max' && !opusLike ? ' · Opus only' : ''}`,
+              disabled: option.value === 'max' && !opusLike,
+            })),
+          ]}
+        />
       </div>
 
       {/* ── Plan Mode (Claude only) ──────────────────────────────── */}
@@ -141,21 +139,21 @@ export default function AgentSettingsForm({
             <ShieldCheck className="w-3 h-3" />
             Plan Mode
           </label>
-          <select
+          <Select
             value={planSelect}
-            onChange={(e) => {
-              const next = e.target.value;
+            onChange={(next) => {
               if (next === '') setField('planMode', null);
               else setField('planMode', next === 'on');
             }}
-            className="w-full px-3 py-2 bg-surface-50 border border-app rounded-sm text-sm text-theme-primary font-mono focus:outline-none focus:border-accent-blue"
-          >
-            {isOverrideMode && (
-              <option value="">Inherit — {planInherited}</option>
-            )}
-            <option value="off">Off — agent may edit files</option>
-            <option value="on">On — read &amp; plan only, no edits</option>
-          </select>
+            searchable={false}
+            options={[
+              ...(isOverrideMode
+                ? [{ value: '', label: 'Inherit', sublabel: planInherited }]
+                : []),
+              { value: 'off', label: 'Off', sublabel: 'Agent may edit files' },
+              { value: 'on', label: 'On', sublabel: 'Read and plan only, no edits' },
+            ]}
+          />
           <p className="text-[10px] text-theme-subtle mt-1">
             Forces <code className="font-mono">--permission-mode plan</code>. The agent can read,
             explore, and propose changes but cannot write files or run destructive commands.
