@@ -25,6 +25,11 @@ import {
   registerRepoContextCurationAssignments,
   saveRepoContextCurationStage,
 } from './repo-context-curation-runner.js';
+import {
+  agentAdjacentDiagnosticReason,
+  hasProductionLearningSignals,
+  shouldBlockAgentAdjacentInjection,
+} from './repo-context-agent-adjacent.js';
 
 type CurationStatus = 'running' | 'completed' | 'failed' | 'stopped';
 type Inclusion = 'include' | 'exclude' | 'stale';
@@ -676,10 +681,43 @@ function normalizeCuratorEntries(input: {
     const path = stringValue(rec.path);
     const candidate = path ? byPath.get(path) : undefined;
     if (!candidate) continue;
-    const chunks = normalizeChunks(rec.chunks);
-    const curatedContext = stringValue(rec.curatedContext);
-    const retrievalText = stringValue(rec.retrievalText) ?? curatedContext ?? chunks.map((chunk) => chunk.text).join('\n\n').trim();
-    const inclusion = normalizeInclusion(rec.inclusion);
+    let chunks = normalizeChunks(rec.chunks);
+    let curatedContext = stringValue(rec.curatedContext);
+    let retrievalText: string | undefined = stringValue(rec.retrievalText) ?? curatedContext ?? chunks.map((chunk) => chunk.text).join('\n\n').trim();
+    let category = normalizeCategory(rec.category);
+    let inclusion = normalizeInclusion(rec.inclusion);
+    let injectionPolicy = normalizePolicy(rec.injectionPolicy);
+    let summary = stringValue(rec.summary) ?? previewText(curatedContext ?? retrievalText ?? chunks[0]?.text ?? '');
+    let reasoning = stringValue(rec.reasoning) ?? '';
+    const classificationText = [
+      rec.title,
+      summary,
+      curatedContext,
+      retrievalText,
+      ...chunks.map((chunk) => chunk.text),
+      reasoning,
+    ].map((value) => String(value ?? '')).join('\n');
+    if (category === 'agent_persona' && hasProductionLearningSignals(classificationText)) {
+      category = 'production_note';
+      reasoning = appendReason(reasoning, 'agent_persona category normalized to production_note because the staged context contains source-grounded production learnings.');
+    }
+    const block = shouldBlockAgentAdjacentInjection({
+      path: candidate.path,
+      category,
+      inclusion,
+      injectionPolicy,
+      text: classificationText,
+    });
+    if (block) {
+      inclusion = 'exclude';
+      injectionPolicy = 'never_full_auto';
+      category = category === 'agent_persona' ? 'agent_persona' : 'excluded_noise';
+      curatedContext = undefined;
+      retrievalText = undefined;
+      chunks = [];
+      summary = block.message;
+      reasoning = appendReason(reasoning, agentAdjacentDiagnosticReason(block.code));
+    }
     if (inclusion === 'include' && !curatedContext && !retrievalText && chunks.length === 0) continue;
     out.push({
       entryId: stableEntryId(input.repoId, candidate.path),
@@ -687,19 +725,19 @@ function normalizeCuratorEntries(input: {
       path: candidate.path,
       sourceHash: candidate.sourceHash,
       title: stringValue(rec.title) ?? candidate.title,
-      category: normalizeCategory(rec.category),
+      category,
       inclusion,
       authority: normalizeAuthority(rec.authority),
       freshness: rec.freshness === 'stale' || rec.freshness === 'unknown' ? rec.freshness : 'current',
-      injectionPolicy: normalizePolicy(rec.injectionPolicy),
-      summary: stringValue(rec.summary) ?? previewText(curatedContext ?? retrievalText ?? chunks[0]?.text ?? ''),
+      injectionPolicy,
+      summary,
       curatedContext,
       retrievalText,
       chunks,
       aliases: stringArray(rec.aliases).slice(0, 20),
       appliesToGlobs: stringArray(rec.appliesToGlobs).slice(0, 20),
       sourceAnchors: stringArray(rec.sourceAnchors).slice(0, 20),
-      reasoning: stringValue(rec.reasoning) ?? '',
+      reasoning,
       curationVersion: CURATION_VERSION,
       promptVersion: PROMPT_VERSION,
       configHash: input.configHash,
@@ -830,11 +868,7 @@ function normalizeScope(value: unknown): CurationScopeInput {
 }
 
 function filterCandidatesByScope(candidates: CandidateContextFile[], scope: CurationScopeInput): CandidateContextFile[] {
-  const explicitSubagentScope = scopeExplicitlyTargetsSubagentFiles(scope);
-  return candidates.filter((candidate) => {
-    if (!explicitSubagentScope && isSubagentPersonaPath(candidate.path)) return false;
-    return pathMatchesScope(candidate.path, scope);
-  });
+  return candidates.filter((candidate) => pathMatchesScope(candidate.path, scope));
 }
 
 function pathMatchesScope(rawPath: string, scope: CurationScopeInput): boolean {
@@ -847,26 +881,6 @@ function pathMatchesScope(rawPath: string, scope: CurationScopeInput): boolean {
     return path.endsWith('.md') || path.endsWith('.mdx') || path.startsWith('docs/') || path.includes('/docs/') || path.includes('readme');
   }
   return path.includes(mode);
-}
-
-function scopeExplicitlyTargetsSubagentFiles(scope: CurationScopeInput): boolean {
-  const haystack = `${scope.mode ?? ''} ${scope.pattern ?? ''}`.toLowerCase();
-  return Boolean(haystack.match(/(\.claude\/agents|\.agents\/|subagent|sub-agent|agent persona|agent_persona|persona)/));
-}
-
-function isSubagentPersonaPath(rawPath: string): boolean {
-  const path = rawPath.toLowerCase();
-  if (isAgentMemoryOrLearningPath(path)) return false;
-  return /^\.claude\/agents\/[^/]+\.md$/.test(path)
-    || /^\.claude\/agents\/[^/]+\/[^/]+\.md$/.test(path)
-    || /^\.claude\/agents\/[^/]+\/agents\/[^/]+\.md$/.test(path)
-    || /^\.agents\/.+\.md$/.test(path);
-}
-
-function isAgentMemoryOrLearningPath(path: string): boolean {
-  const basename = path.split('/').pop() ?? path;
-  return /(^|\/)(memory|memories)(\/|$)/.test(path)
-    || /(learning|learnings|memory|memories)/.test(basename);
 }
 
 function normalizeCategory(value: unknown): string {
@@ -902,6 +916,9 @@ function normalizeChunks(value: unknown): CurationChunk[] {
 }
 function previewText(value: string): string {
   return value.replace(/\s+/g, ' ').trim().slice(0, 240);
+}
+function appendReason(reasoning: string, addition: string): string {
+  return [reasoning, addition].filter(Boolean).join(' ');
 }
 function stringValue(value: unknown): string | undefined { return typeof value === 'string' && value.trim() ? value.trim() : undefined; }
 function isStaleDate(value: unknown): boolean {

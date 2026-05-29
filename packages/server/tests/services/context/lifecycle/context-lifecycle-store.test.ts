@@ -66,6 +66,8 @@ describe('ContextLifecycleStore', () => {
       }),
     ]));
 
+    const directPacket = await store.getAttemptPacketView('attempt-1');
+    const directUsage = await store.getUsageView('attempt-1');
     const report = await store.getExecutionContextUsageReport('exec-1');
     expect(report.nodeAttempts).toEqual([
       expect.objectContaining({
@@ -98,9 +100,40 @@ describe('ContextLifecycleStore', () => {
         ]),
       }),
     ]);
+    expect(report.packets).toEqual([
+      expect.objectContaining({
+        contextAttemptId: directPacket?.contextAttemptId,
+        contextQuery: directPacket?.contextQuery,
+        selectedRefs: directPacket?.selectedRefs,
+        filteredRefs: directPacket?.filteredRefs,
+        rejectedRefs: directPacket?.rejectedRefs,
+        candidateRefs: directPacket?.candidateRefs,
+        lifecycle: directPacket?.lifecycle,
+        contextInjection: expect.objectContaining({
+          injectedRefs: directPacket?.contextInjection?.injectedRefs,
+          skippedRefs: directPacket?.contextInjection?.skippedRefs,
+          providerNativeRefs: directPacket?.contextInjection?.providerNativeRefs,
+        }),
+      }),
+    ]);
+    expect(report.usage).toEqual([
+      expect.objectContaining({
+        contextAttemptId: directUsage?.contextAttemptId,
+        contextPreselected: directUsage?.contextPreselected,
+        loaded: directUsage?.loaded,
+        claimedUsed: directUsage?.claimedUsed,
+        reportedLoaded: directUsage?.reportedLoaded,
+        reportedApplied: directUsage?.reportedApplied,
+        sourceDiscovery: directUsage?.sourceDiscovery,
+        sourceDiscoveryEvidence: directUsage?.sourceDiscoveryEvidence,
+        skipped: directUsage?.skipped,
+        contextBodyLoads: directUsage?.contextBodyLoads,
+        skillBodyLoads: directUsage?.skillBodyLoads,
+      }),
+    ]);
     const query = await store.getAttemptQueryContent('attempt-1', 'query');
     const intent = await store.getAttemptQueryContent('attempt-1', 'intent');
-    expect(query).toEqual(expect.objectContaining({ content: expect.stringContaining('Task signal: Fix payment writes') }));
+    expect(query).toEqual(expect.objectContaining({ content: expect.stringContaining('Retrieval signals: Fix payment writes') }));
     expect(intent?.content).toContain('"role":"backend-developer"');
   });
 
@@ -334,7 +367,7 @@ function sampleAttempt() {
         moduleHints: [],
         externalContextEligible: false,
       },
-      renderedContextQuery: 'Workflow: workflow\nNode: implement\nRole: backend-developer\nTask signal: Fix payment writes',
+      renderedContextQuery: 'Workflow: workflow\nNode: implement\nRole: backend-developer\nRetrieval signals: Fix payment writes',
       contextQueryIntentHash: 'intent-hash',
       renderedContextQueryHash: 'query-hash',
       renderedContextQueryLength: 87,
@@ -387,6 +420,7 @@ function scorePersistenceAttempt() {
     reason: 'Cognee recalled this context.',
     score: 0.76,
     providerMetadata: {
+      cogneeRawScore: 0.76,
       retrievalScore: 0.76,
       retrievalPolicyScore: 0.76,
       injectionPolicy: 'injectable',

@@ -52,7 +52,12 @@ export function collectCurrentFiles(state: Record<string, unknown>, prompt?: str
 function addRepoPathIfLikely(files: Set<string>, value: string): void {
   const trimmed = value.trim().replace(/^["'`]+|["'`,.:;]+$/g, '');
   if (!trimmed || trimmed.startsWith('/') || trimmed.startsWith('..') || !trimmed.includes('/')) return;
+  if (isGeneratedOrOutputArtifactPath(trimmed)) return;
   files.add(trimmed);
+}
+
+function isGeneratedOrOutputArtifactPath(path: string): boolean {
+  return /^(analysis|investigation|implementation|qa|reports|plans|summary)\//.test(path.replace(/\\/g, '/'));
 }
 
 export function normalizeRepoContextProvider(provider?: RepoContextProvider): RepoContextProvider {

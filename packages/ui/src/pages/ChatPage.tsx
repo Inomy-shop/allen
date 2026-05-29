@@ -10,7 +10,7 @@ import ChatRunSidebar, { type ChatRunPanelTab } from '../components/chat/ChatRun
 import { ToolCallLog } from '../components/common/ToolCallLog';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, type ChatQueueItem } from '../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
-import { Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, X } from 'lucide-react';
+import { BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, X } from 'lucide-react';
 
 type PendingSendOptions = {
   provider?: string | null;
@@ -844,6 +844,9 @@ export default function ChatPage() {
           </button>
           <button type="button" className={sidePanelOpen && sidePanelTab === 'changes' ? 'active' : ''} onClick={() => openSidePanel('changes', 'changes')} title="Code changes" data-tooltip="Code changes">
             <Code2 className="h-4 w-4" />
+          </button>
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'context' ? 'active' : ''} onClick={() => openSidePanel('context')} title="Context" data-tooltip="Context">
+            <BookOpen className="h-4 w-4" />
           </button>
         </nav>
       )}

@@ -12,6 +12,7 @@ import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { listSlashCommands, type SlashCommandProvider } from '../services/slash-commands.js';
 import { buildHumanResumeInput, type HumanInterventionPayload } from '@allen/engine';
+import { ChatContextPacketService } from '../services/context/core/chat-context-packet.service.js';
 
 // Simple in-memory rate limiter for the automation-message endpoint.
 // Limits each authenticated caller (by sub) to 60 requests per minute.
@@ -170,7 +171,7 @@ export function chatRoutes(db: Db): Router {
   router.post('/spawn-agent', async (req: Request, res: Response) => {
     try {
       const {
-        agent_name, prompt, repo_path, session_id,
+        agent_name, prompt, context_query, repo_path, session_id,
         // Spawn-tree linkage forwarded from the Allen MCP server's env.
         // The MCP server reads ALLEN_PARENT_EXECUTION_ID / _CALLER /
         // _ROOT_EXECUTION_ID from its subprocess env and puts them here so
@@ -183,7 +184,7 @@ export function chatRoutes(db: Db): Router {
       } = req.body;
       if (!agent_name || !prompt) return res.status(400).json({ error: 'agent_name and prompt are required' });
       const result = await executeChatTool('spawn_agent', {
-        agent_name, prompt, repo_path, session_id,
+        agent_name, prompt, context_query, repo_path, session_id,
         parent_execution_id, parent_caller, root_execution_id,
         artifact_root_type, artifact_root_id,
         repo_knowledge_packet_id, repo_knowledge_repo_id, repo_knowledge_index_id,
@@ -667,6 +668,16 @@ export function chatRoutes(db: Db): Router {
         .toArray();
       logs.reverse();
       res.json(logs);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/chat/sessions/:id/context-usage — repo context attempts captured
+  // for top-level chat-agent turns, grouped by assistant message id.
+  router.get('/sessions/:id/context-usage', async (req: Request, res: Response) => {
+    try {
+      res.json(await new ChatContextPacketService(db).getChatContextUsageReport(param(req, 'id')));
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

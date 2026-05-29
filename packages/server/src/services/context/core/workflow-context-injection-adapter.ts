@@ -17,7 +17,7 @@ export interface ContextInjectionRef extends KnowledgeCandidateRef {
   originalCharCount?: number;
   finalCharCount?: number;
   content?: string;
-  skipReason?: 'provider_native' | 'unsupported' | 'missing' | 'untracked' | 'oversize' | 'budget' | 'duplicate' | 'provider_error';
+  skipReason?: 'provider_native' | 'unsupported' | 'missing' | 'untracked' | 'oversize' | 'budget' | 'duplicate' | 'provider_error' | 'previously_injected';
   packingDecision?: 'injected' | 'provider_native' | 'skipped';
   packingTransformation?: ContextPackingTransformation;
   compressorProviderId?: string;
@@ -27,11 +27,20 @@ export interface ContextInjectionRef extends KnowledgeCandidateRef {
   packingWarnings?: string[];
 }
 
+export interface PreviouslyInjectedContextRef {
+  refId?: string;
+  contentSha256?: string;
+  curatedContextHash?: string;
+  curationEntryId?: string;
+  contextAttemptId?: string;
+  messageId?: string;
+}
+
 export interface WorkflowContextInjection {
   injectionId: string;
   graphVersion: string;
   provider: RepoContextProvider;
-  targetLayer: 'system_prompt';
+  targetLayer: 'system_prompt' | 'user_prompt';
   maxFileChars: number;
   maxTotalChars: number;
   maxInjectedRefs: number;
@@ -52,6 +61,8 @@ export class WorkflowContextInjectionAdapter {
     provider: RepoContextProvider;
     repoPath: string;
     worktreePath?: string;
+    targetLayer?: 'system_prompt' | 'user_prompt';
+    previouslyInjectedRefs?: PreviouslyInjectedContextRef[];
   }): Promise<WorkflowContextInjection> {
     const basePath = input.worktreePath && existsSync(input.worktreePath) ? input.worktreePath : input.repoPath;
     const limits = contextInjectionLimits();
@@ -66,13 +77,24 @@ export class WorkflowContextInjectionAdapter {
     const compressor = new DeterministicContextCompressor();
     const hash = createHash('sha256');
     const seenContentHashes = new Set<string>();
+    const previousInjectedIndex = previousInjectedRefIndex(input.previouslyInjectedRefs);
     let totalChars = 0;
 
     for (const ref of consideredRefs) {
+      const previousInjection = previousInjectionFor(ref, previousInjectedIndex);
+      if (previousInjection && isCuratedSnippetRef(ref)) {
+        skippedRefs.push(previouslyInjected(ref, previousInjection));
+        continue;
+      }
       const queryContext = compressionQueryContext(input.packet, ref);
       if (typeof ref.content === 'string' && ref.content.trim()) {
         const content = redactPotentialSecrets(ref.content);
         const originalContentSha256 = sha256(content);
+        const previousContentInjection = previousInjectedIndex.get(`content:${originalContentSha256}`);
+        if (previousContentInjection && isCuratedSnippetRef(ref)) {
+          skippedRefs.push(previouslyInjected(ref, previousContentInjection, originalContentSha256));
+          continue;
+        }
         if (seenContentHashes.has(originalContentSha256)) {
           skippedRefs.push({ ...ref, originalCharCount: content.length, originalContentSha256, skipReason: 'duplicate', packingDecision: 'skipped' });
           continue;
@@ -109,7 +131,7 @@ export class WorkflowContextInjectionAdapter {
           contentSha256,
           charCount: packed.content.length,
           source: 'allen_system_injection',
-          targetLayer: 'system_prompt',
+          targetLayer: input.targetLayer ?? 'system_prompt',
           packingDecision: 'injected',
           content: packed.content,
         });
@@ -189,7 +211,7 @@ export class WorkflowContextInjectionAdapter {
         contentSha256,
         charCount: packed.content.length,
         source: 'allen_system_injection',
-        targetLayer: 'system_prompt',
+        targetLayer: input.targetLayer ?? 'system_prompt',
         packingDecision: 'injected',
         content: packed.content,
       });
@@ -200,7 +222,7 @@ export class WorkflowContextInjectionAdapter {
       injectionId: randomUUID(),
       graphVersion: input.packet.indexId,
       provider: input.provider,
-      targetLayer: 'system_prompt',
+      targetLayer: input.targetLayer ?? 'system_prompt',
       maxFileChars: limits.maxFileChars,
       maxTotalChars: limits.maxTotalChars,
       maxInjectedRefs: limits.maxInjectedRefs,
@@ -273,6 +295,60 @@ ${refs('production_knowledge', 'production_knowledge', production)}
   </repo_context_usage_reminder>
 </repo_knowledge_packet>\n`;
   }
+}
+
+function previousInjectedRefIndex(values: PreviouslyInjectedContextRef[] | undefined): Map<string, PreviouslyInjectedContextRef> {
+  const index = new Map<string, PreviouslyInjectedContextRef>();
+  for (const value of values ?? []) {
+    if (value.contentSha256) index.set(`content:${value.contentSha256}`, value);
+    if (value.curatedContextHash) index.set(`content:${value.curatedContextHash}`, value);
+    if (value.curationEntryId) index.set(`curation:${value.curationEntryId}`, value);
+    if (value.refId) index.set(`ref:${value.refId}`, value);
+  }
+  return index;
+}
+
+function previousInjectionFor(ref: KnowledgeCandidateRef, index: Map<string, PreviouslyInjectedContextRef>): PreviouslyInjectedContextRef | undefined {
+  const metadata = ref.providerMetadata ?? {};
+  const curationEntryId = stringValue(metadata.curationEntryId);
+  const curatedContextHash = stringValue(metadata.curatedContextHash);
+  const candidates = [
+    ref.contentSha256 ? `content:${ref.contentSha256}` : undefined,
+    curatedContextHash ? `content:${curatedContextHash}` : undefined,
+    curationEntryId ? `curation:${curationEntryId}` : undefined,
+    `ref:${ref.refId}`,
+  ].filter((value): value is string => Boolean(value));
+  for (const key of candidates) {
+    const match = index.get(key);
+    if (match) return match;
+  }
+  return undefined;
+}
+
+function isCuratedSnippetRef(ref: KnowledgeCandidateRef): boolean {
+  const metadata = ref.providerMetadata ?? {};
+  return metadata.curatedInjectionPolicy === 'snippet'
+    || (metadata.injectionDecision === 'snippet' && typeof metadata.curationEntryId === 'string');
+}
+
+function previouslyInjected(
+  ref: KnowledgeCandidateRef,
+  previous: PreviouslyInjectedContextRef,
+  originalContentSha256?: string,
+): ContextInjectionRef {
+  return {
+    ...ref,
+    originalContentSha256,
+    skipReason: 'previously_injected',
+    packingDecision: 'skipped',
+    providerMetadata: {
+      ...ref.providerMetadata,
+      previouslyInjected: true,
+      previousContextAttemptId: previous.contextAttemptId,
+      previousMessageId: previous.messageId,
+      previousRefId: previous.refId,
+    },
+  };
 }
 
 function contextInjectionLimits(): { maxFileChars: number; maxTotalChars: number; maxInjectedRefs: number } {
@@ -358,6 +434,7 @@ export function summarizeInjection(injection: WorkflowContextInjection): Record<
     skippedUntrackedCount: skippedByReason('untracked').length,
     skippedUnsupportedCount: skippedByReason('unsupported').length,
     skippedDuplicateCount: skippedByReason('duplicate').length,
+    skippedPreviouslyInjectedCount: skippedByReason('previously_injected').length,
     totalChars: injection.totalChars,
     contentHash: injection.contentHash,
     injectedRefs: stripInjectedContent(injection.injectedRefs),
@@ -369,6 +446,7 @@ export function summarizeInjection(injection: WorkflowContextInjection): Record<
     skippedUntrackedRefs: stripInjectedContent(skippedByReason('untracked')),
     skippedUnsupportedRefs: stripInjectedContent(skippedByReason('unsupported')),
     skippedDuplicateRefs: stripInjectedContent(skippedByReason('duplicate')),
+    skippedPreviouslyInjectedRefs: stripInjectedContent(skippedByReason('previously_injected')),
     providerNativeRefs: stripInjectedContent(injection.providerNativeRefs),
     packingDecisions: stripInjectedContent(injection.packingDecisions),
     packingDiagnostics: injection.packingDiagnostics,
@@ -406,7 +484,10 @@ function isInjectablePolicy(ref: KnowledgeCandidateRef): boolean {
 }
 
 function injectionDecisionFor(ref: KnowledgeCandidateRef): string {
-  const decision = ref.providerMetadata?.injectionDecision ?? ref.providerMetadata?.injectionPolicy;
+  const decision = ref.providerMetadata?.curatedInjectionPolicy
+    ?? ref.providerMetadata?.finalInjectionDecision
+    ?? ref.providerMetadata?.injectionDecision
+    ?? ref.providerMetadata?.injectionPolicy;
   if (decision === 'injectable') return 'snippet';
   if (typeof decision === 'string' && decision) return decision;
   return ref.mandatory || ref.targetLayer === 'system_prompt' ? 'mandatory_full' : 'manifest_only';
@@ -499,6 +580,10 @@ async function isGitTracked(repoPath: string, relativePath: string): Promise<boo
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function redactPotentialSecrets(value: string): string {

@@ -93,6 +93,8 @@ class SidecarContextReranker implements ContextReranker {
             candidateCount: input.candidates.length,
             scoredCandidateCount: scores.size,
             contentCandidateCount: input.candidates.filter((candidate) => typeof candidate.content === 'string' && candidate.content.trim()).length,
+            semanticContextQueryHash: input.semanticContextQueryHash,
+            semanticContextQueryLength: input.semanticContextQueryLength ?? input.semanticContextQuery?.length,
             renderedContextQueryHash: input.renderedContextQueryHash,
             renderedContextQueryLength: input.renderedContextQueryLength ?? input.renderedContextQuery?.length,
             contentUsed: true,
@@ -199,7 +201,7 @@ function rankDeterministically(candidates: KnowledgeCandidateRef[], providerId: 
       const baseScore = deterministicPriority(ref, input);
       const retrievalScore = retrievalRelevanceScore(ref);
       const policy = contextPolicyAdjustment(ref, input);
-      const finalRelevanceScore = ref.mandatory ? 1 : retrievalScore;
+      const finalRelevanceScore = ref.mandatory ? 1 : clampScore(retrievalScore + policy.adjustment);
       return { ref, originalRank, score: baseScore + policy.adjustment, baseScore, retrievalScore, finalRelevanceScore, policy };
     })
     .sort((a, b) => b.score - a.score)
@@ -301,15 +303,19 @@ async function runRerankerSidecar(providerId: string, input: ContextRerankInput)
   const script = resolveRerankerScript();
   const python = resolveAllenPython();
   const modelName = process.env.ALLEN_CONTEXT_RERANKER_MODEL;
-  const task = input.renderedContextQuery ?? legacyTaskText(input);
+  const task = input.semanticContextQuery ?? input.renderedContextQuery ?? legacyTaskText(input);
   const payload = {
     providerId,
     task,
-    contextQuery: input.renderedContextQuery,
+    contextQuery: task,
+    semanticContextQuery: input.semanticContextQuery,
     contextQueryIntent: input.contextQueryIntent,
     contextQueryIntentHash: input.contextQueryIntentHash,
+    semanticContextQueryHash: input.semanticContextQueryHash,
+    semanticContextQueryLength: input.semanticContextQueryLength ?? input.semanticContextQuery?.length,
+    auditContextQuery: input.renderedContextQuery,
     renderedContextQueryHash: input.renderedContextQueryHash,
-    renderedContextQueryLength: input.renderedContextQueryLength ?? task.length,
+    renderedContextQueryLength: input.renderedContextQueryLength ?? input.renderedContextQuery?.length ?? task.length,
     currentFiles: input.currentFiles,
     candidates: input.candidates.map((candidate) => ({
       refId: candidate.refId,
@@ -401,7 +407,7 @@ function isProductOrRequirementsTask(input: ContextRerankInput): boolean {
 }
 
 function taskProfileText(input: ContextRerankInput): string {
-  return (input.renderedContextQuery ?? legacyTaskText(input)).toLowerCase();
+  return (input.semanticContextQuery ?? input.renderedContextQuery ?? legacyTaskText(input)).toLowerCase();
 }
 
 function legacyTaskText(input: ContextRerankInput): string {

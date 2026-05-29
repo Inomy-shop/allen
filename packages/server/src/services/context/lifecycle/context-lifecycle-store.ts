@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Collection, Db } from 'mongodb';
 import type { KnowledgeCandidateRef, RepoContextPacket } from '../core/repo-context-engine.js';
-import type { WorkflowContextInjection } from '../core/workflow-context-injection-adapter.js';
+import type { PreviouslyInjectedContextRef, WorkflowContextInjection } from '../core/workflow-context-injection-adapter.js';
 import { firstString, isRecord } from '../common/context-utils.js';
 import { normalizeUsageArray } from '../common/context-usage-utils.js';
 
@@ -29,6 +29,7 @@ type ContextArtifactKind =
   | 'diagnostics'
   | 'context_query_intent'
   | 'context_query'
+  | 'semantic_context_query'
   | 'deepeval_evidence'
   | 'deepeval_prompt'
   | 'raw_judge_response'
@@ -63,6 +64,96 @@ export class ContextLifecycleStore {
     this.evaluations = db.collection('context_evaluations');
     this.traces = db.collection('execution_traces');
     this.executions = db.collection('executions');
+  }
+
+  async recordAttemptBuildStarted(input: {
+    contextAttemptId: string;
+    executionId: string;
+    executionTraceId?: string;
+    workflowName: string;
+    nodeName: string;
+    nodeRole?: string;
+    executionKind?: string;
+    targetRole?: string;
+    callerRole?: string;
+    attempt: number;
+    repoId: string;
+    repoName?: string;
+    repoPath?: string;
+    worktreePath?: unknown;
+    parentContextAttemptId?: string;
+    parentExecutionId?: string | null;
+    rootExecutionId?: string;
+    indexId?: string;
+    indexFreshness?: string;
+    taskPrompt?: string;
+    currentFiles?: string[];
+    contextProvider?: string | null;
+    contextRetrievalMode?: string;
+  }): Promise<void> {
+    const now = new Date();
+    await this.attempts.updateOne(
+      { contextAttemptId: input.contextAttemptId },
+      {
+        $setOnInsert: {
+          contextAttemptId: input.contextAttemptId,
+          createdAt: now,
+          startedAt: now,
+        },
+        $set: {
+          executionId: input.executionId,
+          executionTraceId: input.executionTraceId,
+          workflowName: input.workflowName,
+          nodeName: input.nodeName,
+          nodeRole: input.nodeRole,
+          executionKind: input.executionKind,
+          targetRole: input.targetRole,
+          callerRole: input.callerRole,
+          attempt: input.attempt,
+          repoId: input.repoId,
+          repoName: input.repoName,
+          repoPath: input.repoPath,
+          worktreePath: input.worktreePath,
+          parentContextAttemptId: input.parentContextAttemptId,
+          parentExecutionId: input.parentExecutionId,
+          rootExecutionId: input.rootExecutionId,
+          indexId: input.indexId,
+          indexFreshness: input.indexFreshness,
+          taskPrompt: input.taskPrompt,
+          currentFiles: input.currentFiles,
+          contextProvider: input.contextProvider,
+          contextRetrievalMode: input.contextRetrievalMode,
+          status: 'building',
+          error: null,
+          completedAt: null,
+          updatedAt: now,
+        },
+      },
+      { upsert: true },
+    );
+  }
+
+  async markAttemptBuildStatus(
+    contextAttemptId: string,
+    status: 'ready' | 'skipped' | 'failed' | 'timed_out',
+    extra: Record<string, unknown> = {},
+  ): Promise<void> {
+    const now = new Date();
+    const attempt = await this.attempts.findOne({ contextAttemptId }, { projection: { startedAt: 1, createdAt: 1 } });
+    const startedMs = dateMs(attempt?.startedAt) ?? dateMs(attempt?.createdAt);
+    const update: Record<string, unknown> = {
+      status,
+      completedAt: now,
+      updatedAt: now,
+      ...extra,
+    };
+    if (startedMs != null) update.durationMs = Math.max(0, now.getTime() - startedMs);
+    await this.attempts.updateOne(
+      { contextAttemptId },
+      {
+        $set: update,
+      },
+    );
   }
 
   async saveAttemptFromPacket(input: {
@@ -123,13 +214,26 @@ export class ContextLifecycleStore {
         attempt: packet.attempt,
       })
       : undefined;
+    const semanticContextQueryArtifactHash = packet.semanticContextQuery
+      ? await this.putTextArtifact('semantic_context_query', packet.semanticContextQuery, {
+        contextAttemptId,
+        executionId: packet.executionId,
+        nodeName: packet.nodeName,
+        attempt: packet.attempt,
+      })
+      : undefined;
 
     await this.attempts.updateOne(
       { contextAttemptId },
       {
         $setOnInsert: {
           contextAttemptId,
+          createdAt: packet.createdAt ?? now,
+          startedAt: packet.createdAt ?? now,
+        },
+        $set: {
           executionId: packet.executionId,
+          executionTraceId: packet.executionTraceId,
           workflowName: packet.workflowName,
           nodeName: packet.nodeName,
           nodeRole: packet.nodeRole,
@@ -167,11 +271,17 @@ export class ContextLifecycleStore {
           systemPromptBlockArtifactHash,
           contextQueryIntentArtifactHash,
           renderedContextQueryArtifactHash,
+          semanticContextQueryArtifactHash,
           contextQueryIntentHash: packet.contextQueryIntentHash,
           renderedContextQueryHash: packet.renderedContextQueryHash,
           renderedContextQueryLength: packet.renderedContextQueryLength,
+          semanticContextQueryHash: packet.semanticContextQueryHash,
+          semanticContextQueryLength: packet.semanticContextQueryLength,
           contextQuerySummary: contextQuerySummary(packet.contextQueryIntent),
-          createdAt: packet.createdAt ?? now,
+          status: 'ready',
+          error: null,
+          completedAt: now,
+          updatedAt: now,
         },
       },
       { upsert: true },
@@ -551,6 +661,7 @@ export class ContextLifecycleStore {
       this.traces.find({ executionId: { $in: executionIds }, type: 'agent' }).sort({ startedAt: 1 }).toArray(),
       this.getWorkflowEvaluation(executionId),
     ]);
+    const artifactsByHash = await this.loadArtifactsByHash(contentArtifactHashes(refs, events));
     const refsByAttempt = groupBy(refs, (row) => String(row.contextAttemptId));
     const eventsByAttempt = groupBy(events, (row) => String(row.contextAttemptId));
     const evaluationsByAttempt = new Map(evaluations.filter((row) => row.scope !== 'workflow').map((row) => [String(row.contextAttemptId), row]));
@@ -564,6 +675,7 @@ export class ContextLifecycleStore {
         contextAttemptId,
         packetId: contextAttemptId,
         executionId: attempt.executionId,
+        executionTraceId: attempt.executionTraceId,
         workflowName: attempt.workflowName,
         nodeName: attempt.nodeName,
         nodeRole: attempt.nodeRole,
@@ -572,6 +684,11 @@ export class ContextLifecycleStore {
         repoName: attempt.repoName,
         indexId: attempt.indexId,
         indexFreshness: attempt.indexFreshness,
+        status: attempt.status,
+        error: attempt.error,
+        startedAt: attempt.startedAt,
+        completedAt: attempt.completedAt,
+        durationMs: attempt.durationMs,
         retrievalProviders: attempt.retrievalProviders,
         contextInjection: attempt.contextInjection,
         contextQuery: contextQueryReadModel(attempt),
@@ -588,11 +705,21 @@ export class ContextLifecycleStore {
       refs,
       events,
       evaluations,
-      packets: await Promise.all(attempts.map((attempt) => this.getAttemptPacketView(String(attempt.contextAttemptId)))),
-      usage: await Promise.all(attempts.map((attempt) => this.getUsageView(String(attempt.contextAttemptId)))),
+      packets: attempts.map((attempt) => this.packetViewFromRows(
+        attempt,
+        refsByAttempt.get(String(attempt.contextAttemptId)) ?? [],
+        eventsByAttempt.get(String(attempt.contextAttemptId)) ?? [],
+        artifactsByHash,
+      )),
+      usage: attempts.map((attempt) => this.usageViewFromRows(
+        attempt,
+        refsByAttempt.get(String(attempt.contextAttemptId)) ?? [],
+        eventsByAttempt.get(String(attempt.contextAttemptId)) ?? [],
+      )),
       nodeAttempts,
       nodeSummaries: nodeAttempts.map((attempt) => ({
         executionId: attempt.executionId,
+        executionTraceId: attempt.executionTraceId,
         nodeName: attempt.nodeName,
         nodeRole: attempt.nodeRole,
         attempt: attempt.attempt,
@@ -602,6 +729,11 @@ export class ContextLifecycleStore {
         contextInjection: attempt.contextInjection,
         contextQuery: attempt.contextQuery,
         contextEvaluation: attempt.contextEvaluation,
+        status: attempt.status,
+        error: attempt.error,
+        startedAt: attempt.startedAt,
+        completedAt: attempt.completedAt,
+        durationMs: attempt.durationMs,
         preselectedCount: attempt.refs.filter((ref) => ref.lifecycleStatus === 'selected' || ref.isInjected).length,
         loadedCount: attempt.refs.filter((ref) => ref.lifecycleStatus === 'loaded').length,
         appliedCount: attempt.refs.filter((ref) => ref.lifecycleStatus === 'applied').length,
@@ -631,6 +763,94 @@ export class ContextLifecycleStore {
     };
   }
 
+  async getChatContextUsageReport(sessionId: string): Promise<Record<string, unknown>> {
+    const [attempts, refs, events, evaluations] = await Promise.all([
+      this.attempts.find({ executionId: sessionId, executionKind: 'chat_agent' }).sort({ createdAt: 1 }).toArray(),
+      this.refs.find({ executionId: sessionId }).sort({ rank: 1, createdAt: 1 }).toArray(),
+      this.events.find({ executionId: sessionId }).sort({ createdAt: 1 }).toArray(),
+      this.evaluations.find({ executionId: sessionId, active: true }).sort({ createdAt: 1 }).toArray(),
+    ]);
+    const attemptIds = new Set(attempts.map((attempt) => String(attempt.contextAttemptId)));
+    const scopedRefs = refs.filter((ref) => attemptIds.has(String(ref.contextAttemptId)));
+    const scopedEvents = events.filter((event) => attemptIds.has(String(event.contextAttemptId)));
+    const refsByAttempt = groupBy(scopedRefs, (row) => String(row.contextAttemptId));
+    const eventsByAttempt = groupBy(scopedEvents, (row) => String(row.contextAttemptId));
+    const evaluationsByAttempt = new Map(evaluations
+      .filter((row) => attemptIds.has(String(row.contextAttemptId)))
+      .map((row) => [String(row.contextAttemptId), row]));
+    const messageAttempts = attempts.map((attempt) => {
+      const contextAttemptId = String(attempt.contextAttemptId);
+      const attemptRefs = refsByAttempt.get(contextAttemptId) ?? [];
+      const attemptEvents = eventsByAttempt.get(contextAttemptId) ?? [];
+      const refRows = attemptRefs.map((ref) => lifecycleRefReadModel(ref, attemptEvents));
+      const evaluation = evaluationsByAttempt.get(contextAttemptId);
+      return {
+        contextAttemptId,
+        packetId: contextAttemptId,
+        executionId: attempt.executionId,
+        executionTraceId: attempt.executionTraceId,
+        messageId: attempt.executionTraceId,
+        turnText: firstString(attempt.taskPrompt),
+        turnPreview: previewText(firstString(attempt.taskPrompt)),
+        turnCreatedAt: attempt.createdAt,
+        workflowName: attempt.workflowName,
+        nodeName: attempt.nodeName,
+        nodeRole: attempt.nodeRole,
+        attempt: attempt.attempt,
+        repoId: attempt.repoId,
+        repoName: attempt.repoName,
+        indexId: attempt.indexId,
+        indexFreshness: attempt.indexFreshness,
+        retrievalProviders: attempt.retrievalProviders,
+        contextInjection: attempt.contextInjection,
+        contextQuery: contextQueryReadModel(attempt),
+        refs: refRows,
+        lifecycle: attemptEvents.map((event) => lifecycleEventReadModel(event)),
+        contextEvaluation: evaluation ? summarizeEvaluation(evaluation) : undefined,
+        diagnostics: diagnosticsForAttempt(attempt, attemptEvents, refRows)
+          .filter((diag) => diag.code !== 'mandatory_context_not_available'),
+      };
+    });
+    const attemptsByMessage = groupBy(messageAttempts, (attempt) => String(attempt.messageId ?? 'unknown'));
+    return {
+      sessionId,
+      attempts: messageAttempts,
+      attemptsByMessage: Object.fromEntries(attemptsByMessage.entries()),
+      diagnostics: messageAttempts.flatMap((attempt) => attempt.diagnostics),
+      evaluationSummary: rollup(evaluations.filter((row) => attemptIds.has(String(row.contextAttemptId)))),
+    };
+  }
+
+  async getPriorChatInjectedContextRefs(sessionId: string): Promise<PreviouslyInjectedContextRef[]> {
+    const [attempts, events] = await Promise.all([
+      this.attempts.find({ executionId: sessionId, executionKind: 'chat_agent' })
+        .project({ contextAttemptId: 1, executionTraceId: 1 })
+        .toArray(),
+      this.events.find({ executionId: sessionId, type: 'injected_full' }).toArray(),
+    ]);
+    const attemptById = new Map(attempts.map((attempt) => [String(attempt.contextAttemptId), attempt]));
+    const injectedKeys = new Set(events
+      .filter((event) => attemptById.has(String(event.contextAttemptId)))
+      .map((event) => `${String(event.contextAttemptId)}:${String(event.refId)}`));
+    if (!injectedKeys.size) return [];
+
+    const refs = await this.refs.find({ executionId: sessionId }).toArray();
+    return refs
+      .filter((ref) => injectedKeys.has(`${String(ref.contextAttemptId)}:${String(ref.refId)}`))
+      .map((ref) => {
+        const metadata = isRecord(ref.providerMetadata) ? ref.providerMetadata : {};
+        const attempt = attemptById.get(String(ref.contextAttemptId));
+        return {
+          refId: firstString(ref.refId),
+          contentSha256: firstString(ref.contentSha256),
+          curatedContextHash: firstString(metadata.curatedContextHash),
+          curationEntryId: firstString(metadata.curationEntryId),
+          contextAttemptId: firstString(ref.contextAttemptId),
+          messageId: firstString(attempt?.executionTraceId),
+        };
+      });
+  }
+
   async getRefContent(contextAttemptId: string, refId: string): Promise<Record<string, unknown> | null> {
     const [ref, events] = await Promise.all([
       this.refs.findOne({ contextAttemptId, refId }),
@@ -654,12 +874,14 @@ export class ContextLifecycleStore {
     };
   }
 
-  async getAttemptQueryContent(contextAttemptId: string, kind: 'query' | 'intent'): Promise<Record<string, unknown> | null> {
+  async getAttemptQueryContent(contextAttemptId: string, kind: 'query' | 'intent' | 'semantic'): Promise<Record<string, unknown> | null> {
     const attempt = await this.attempts.findOne({ contextAttemptId });
     if (!attempt) return null;
     const artifactHash = kind === 'query'
       ? firstString(attempt.renderedContextQueryArtifactHash)
-      : firstString(attempt.contextQueryIntentArtifactHash);
+      : kind === 'semantic'
+        ? firstString(attempt.semanticContextQueryArtifactHash)
+        : firstString(attempt.contextQueryIntentArtifactHash);
     const artifact = artifactHash ? await this.artifacts.findOne({ hash: artifactHash }) : null;
     return {
       contextAttemptId,
@@ -712,7 +934,7 @@ export class ContextLifecycleStore {
       refId,
       type,
       executionId: base.executionId,
-      executionTraceId: detail.executionTraceId,
+      executionTraceId: detail.executionTraceId ?? base.executionTraceId,
       workflowName: base.workflowName,
       nodeName: base.nodeName,
       attempt: base.attempt,
@@ -736,6 +958,113 @@ export class ContextLifecycleStore {
         charCount: numberValue(event?.charCount),
       };
     }));
+  }
+
+  private async loadArtifactsByHash(hashes: string[]): Promise<Map<string, Record<string, unknown>>> {
+    const uniqueHashes = Array.from(new Set(hashes.filter(Boolean)));
+    if (!uniqueHashes.length) return new Map();
+    const rows = await this.artifacts.find({ hash: { $in: uniqueHashes } }).toArray();
+    return new Map(rows.map((row) => [String(row.hash), row]));
+  }
+
+  private packetViewFromRows(
+    attempt: Record<string, unknown>,
+    refs: StoredRef[],
+    events: Array<Record<string, unknown>>,
+    artifactsByHash: Map<string, Record<string, unknown>>,
+  ): Record<string, unknown> {
+    const contextAttemptId = String(attempt.contextAttemptId);
+    const byType = eventsByType(events);
+    const refsById = new Map(refs.map((ref) => [ref.refId, ref]));
+    const rowsFor = (type: ContextRefEventType) => uniqueByRefId((byType.get(type) ?? [])
+      .map((event) => refFromEvent(event, refsById))
+      .filter(Boolean) as Array<Record<string, unknown>>);
+    const injectedRefs = this.withEventContentFromMap(rowsFor('injected_full'), byType.get('injected_full') ?? [], artifactsByHash);
+    const providerNativeRefs = rowsFor('provider_native');
+    const skippedRefs = rowsFor('skipped').filter((ref) => firstString(ref.stage) === 'packing');
+    const refReadModel = refs.map((ref) => lifecycleRefReadModel(ref, events));
+    return {
+      ...attempt,
+      packetId: contextAttemptId,
+      parentPacketId: attempt.parentContextAttemptId,
+      refs: refReadModel,
+      lifecycle: events.map((event) => lifecycleEventReadModel(event)),
+      selectedRefs: rowsFor('selected'),
+      injectableRefs: rowsFor('injectable'),
+      filteredRefs: rowsFor('filtered'),
+      rejectedRefs: rowsFor('rejected'),
+      candidateRefs: rowsFor('candidate'),
+      availableRefs: rowsFor('selected').filter((ref) => ref.mandatory !== true),
+      contextInjection: {
+        ...(isRecord(attempt.contextInjection) ? attempt.contextInjection : {}),
+        injectedRefs,
+        providerNativeRefs,
+        skippedProviderNativeRefs: providerNativeRefs,
+        skippedRefs,
+      },
+      contextQuery: contextQueryReadModel(attempt),
+      providerDiagnostics: [],
+      rerankerDiagnostics: [],
+    };
+  }
+
+  private usageViewFromRows(
+    attempt: Record<string, unknown>,
+    refs: StoredRef[],
+    events: Array<Record<string, unknown>>,
+    usageTraceId?: string,
+  ): Record<string, unknown> {
+    const eventRows = usageTraceId ? events.filter((event) => event.usageTraceId === usageTraceId) : events;
+    const refsById = new Map(refs.map((ref) => [ref.refId, ref]));
+    const byType = eventsByType(eventRows);
+    const rowsFor = (type: ContextRefEventType) => uniqueByRefId((byType.get(type) ?? [])
+      .map((event) => refFromEvent(event, refsById))
+      .filter(Boolean) as Array<Record<string, unknown>>);
+    return {
+      traceId: usageTraceId,
+      usageTraceId,
+      executionId: attempt.executionId,
+      executionTraceId: firstString(eventRows.find((event) => event.executionTraceId)?.executionTraceId),
+      workflowName: attempt.workflowName,
+      nodeName: attempt.nodeName,
+      nodeRole: attempt.nodeRole,
+      attempt: attempt.attempt,
+      packetId: attempt.contextAttemptId,
+      contextAttemptId: attempt.contextAttemptId,
+      contextPreselected: rowsFor('selected'),
+      loaded: rowsFor('loaded'),
+      claimedUsed: rowsFor('applied'),
+      reportedLoaded: rowsFor('reported_loaded'),
+      reportedApplied: rowsFor('reported_applied'),
+      sourceDiscovery: rowsFor('source_discovered'),
+      sourceDiscoveryEvidence: (byType.get('source_discovered') ?? [])
+        .flatMap((event) => normalizeUsageArray(event.sourceDiscoveryEvidence)),
+      skipped: rowsFor('skipped').filter((ref) => firstString(ref.stage) === 'agent_usage'),
+      contextBodyLoads: rowsFor('tool_body_loaded'),
+      skillBodyLoads: rowsFor('tool_body_loaded').filter((ref) => ref.kind === 'skill' || ref.kind === 'skill_reference'),
+      diagnostics: [],
+      sawUsageKeys: events.some((event) => event.usageTraceId === usageTraceId),
+      createdAt: events.find((event) => event.usageTraceId === usageTraceId)?.createdAt,
+    };
+  }
+
+  private withEventContentFromMap(
+    refs: Array<Record<string, unknown>>,
+    events: Array<Record<string, unknown>>,
+    artifactsByHash: Map<string, Record<string, unknown>>,
+  ): Array<Record<string, unknown>> {
+    const eventByRefId = new Map(events.map((event) => [String(event.refId), event]));
+    return refs.map((ref) => {
+      const event = eventByRefId.get(String(ref.refId));
+      const hash = firstString(event?.contentArtifactHash);
+      const artifact = hash ? artifactsByHash.get(hash) : null;
+      return {
+        ...ref,
+        content: firstString(artifact?.content),
+        contentSha256: firstString(event?.contentSha256, ref.contentSha256, hash),
+        charCount: numberValue(event?.charCount),
+      };
+    });
   }
 }
 
@@ -777,7 +1106,9 @@ function compactRefSnapshot(packet: RepoContextPacket, ref: KnowledgeCandidateRe
     source: ref.source,
     reason: ref.reason,
     score: ref.score,
-    cogneeScore: isCognee ? numberValue(metadata.retrievalScore, metadata.retrievalPolicyScore, ref.score) : undefined,
+    cogneeScore: isCognee ? numberValue(metadata.cogneeRawScore) : undefined,
+    retrievalPolicyScore: numberValue(metadata.retrievalPolicyScore, metadata.retrievalScore, ref.score),
+    finalRelevanceScore: numberValue(rerank.finalRelevanceScore),
     rerankerScore: numberValue(rerank.rerankScore, rerank.semanticScore, rerank.score),
     rank,
     injectionPolicy: firstString(metadata.injectionPolicy, metadata.injectionDecision),
@@ -869,7 +1200,13 @@ function contextQuerySummary(intent: unknown): Record<string, unknown> | undefin
     currentFiles: stringArray(intent.currentFiles),
     changedFiles: stringArray(intent.changedFiles),
     pathHints: stringArray(intent.pathHints),
+    pathScopes: stringArray(intent.pathScopes),
     moduleHints: stringArray(intent.moduleHints),
+    domainHints: stringArray(intent.domainHints),
+    groundingPreferences: stringArray(intent.groundingPreferences),
+    categoryDiagnostics: Array.isArray(intent.categoryDiagnostics) ? intent.categoryDiagnostics : undefined,
+    ignoredExecutionConstraints: stringArray(intent.ignoredExecutionConstraints),
+    agentRoleSignals: Array.isArray(intent.agentRoleSignals) ? intent.agentRoleSignals : undefined,
     externalContextEligible: intent.externalContextEligible === true,
   });
 }
@@ -877,18 +1214,23 @@ function contextQuerySummary(intent: unknown): Record<string, unknown> | undefin
 function contextQueryReadModel(attempt: Record<string, unknown>): Record<string, unknown> | undefined {
   const summary = isRecord(attempt.contextQuerySummary) ? attempt.contextQuerySummary : {};
   const renderedQueryHash = firstString(attempt.renderedContextQueryHash);
+  const semanticQueryHash = firstString(attempt.semanticContextQueryHash);
   const intentHash = firstString(attempt.contextQueryIntentHash);
-  if (!renderedQueryHash && !intentHash && Object.keys(summary).length === 0) return undefined;
+  if (!renderedQueryHash && !semanticQueryHash && !intentHash && Object.keys(summary).length === 0) return undefined;
   const contextAttemptId = String(attempt.contextAttemptId);
   return pruneUndefined({
     ...summary,
     queryIntentHash: intentHash,
     renderedQueryHash,
+    semanticQueryHash,
     renderedQueryLength: numberValue(attempt.renderedContextQueryLength),
+    semanticQueryLength: numberValue(attempt.semanticContextQueryLength),
     queryIntentAvailable: Boolean(attempt.contextQueryIntentArtifactHash),
     renderedQueryAvailable: Boolean(attempt.renderedContextQueryArtifactHash),
+    semanticQueryAvailable: Boolean(attempt.semanticContextQueryArtifactHash),
     queryIntentUrl: attempt.contextQueryIntentArtifactHash ? `/api/context/attempts/${encodeURIComponent(contextAttemptId)}/query-intent` : undefined,
     renderedQueryUrl: attempt.renderedContextQueryArtifactHash ? `/api/context/attempts/${encodeURIComponent(contextAttemptId)}/query` : undefined,
+    semanticQueryUrl: attempt.semanticContextQueryArtifactHash ? `/api/context/attempts/${encodeURIComponent(contextAttemptId)}/semantic-query` : undefined,
   });
 }
 
@@ -984,6 +1326,13 @@ function hasEvent(events: Array<Record<string, unknown>>, ref: Record<string, un
   return events.some((event) => event.contextAttemptId === ref.contextAttemptId && event.refId === ref.refId && event.type === type);
 }
 
+function contentArtifactHashes(refs: Array<Record<string, unknown>>, events: Array<Record<string, unknown>>): string[] {
+  return Array.from(new Set([
+    ...refs.map((ref) => firstString(ref.contentArtifactHash)),
+    ...events.map((event) => firstString(event.contentArtifactHash)),
+  ].filter((value): value is string => Boolean(value))));
+}
+
 function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
   const map = new Map<string, T[]>();
   for (const row of rows) {
@@ -1060,11 +1409,25 @@ function summarizeMetadata(metadata: Record<string, unknown>): Record<string, un
     retrievalStage: metadata.retrievalStage,
     retrievalScore: metadata.retrievalScore,
     retrievalPolicyScore: metadata.retrievalPolicyScore,
+    cogneeRawScore: metadata.cogneeRawScore,
+    curatedInjectionPolicy: metadata.curatedInjectionPolicy,
+    defaultInjectionPolicy: metadata.defaultInjectionPolicy,
+    finalRelevanceScore: metadata.finalRelevanceScore,
+    finalInjectionDecision: metadata.finalInjectionDecision,
     injectionDecision: metadata.injectionDecision,
     injectionPolicy: metadata.injectionPolicy,
+    previouslyInjected: metadata.previouslyInjected,
+    previousContextAttemptId: metadata.previousContextAttemptId,
+    previousMessageId: metadata.previousMessageId,
     graphExpansion: metadata.graphExpansion,
     source: metadata.source,
   });
+}
+
+function previewText(value: string | undefined, maxChars = 180): string | undefined {
+  const text = value?.replace(/\s+/g, ' ').trim();
+  if (!text) return undefined;
+  return text.length > maxChars ? `${text.slice(0, maxChars - 3)}...` : text;
 }
 
 function stripEvaluationPersistence(row: Record<string, unknown>): Record<string, unknown> {
@@ -1196,6 +1559,15 @@ function numberValue(...values: unknown[]): number | undefined {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+function dateMs(value: unknown): number | undefined {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'string' || typeof value === 'number') {
+    const ms = new Date(value).getTime();
+    return Number.isFinite(ms) ? ms : undefined;
+  }
+  return undefined;
 }
 
 function pruneUndefined<T extends Record<string, unknown>>(value: T): T {

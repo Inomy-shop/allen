@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { opendir, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Db } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import type {
   KnowledgeCandidateRef,
   KnowledgeNodeKind,
@@ -25,6 +25,7 @@ import {
   positiveIntegerEnv,
   renderedQueryHash,
   retrievalEnvelopeHash,
+  semanticQueryHash,
   selectCogneeRefs,
   type RetrievalIntentEnvelope,
   uniqueCogneeRefs,
@@ -113,7 +114,8 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
           code: 'cognee_retrieval_envelope_built',
           severity: 'info',
           retrievalEnvelopeHash: retrievalEnvelopeHash(envelope),
-          renderedQueryHash: renderedQueryHash(query),
+          semanticQueryHash: semanticQueryHash(query),
+          renderedQueryHash: input.renderedContextQueryHash ?? renderedQueryHash(input.renderedContextQuery ?? query),
           role: envelope.role,
           roleFamily: envelope.roleFamily,
           rawRole: envelope.rawRole,
@@ -123,7 +125,8 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
           querySignalSources: envelope.querySignalSources,
           querySignalSections: envelope.querySignalSections,
           querySignalLength: envelope.querySignalLength,
-          renderedQueryLength: query.length,
+          semanticQueryLength: query.length,
+          renderedQueryLength: input.renderedContextQueryLength ?? input.renderedContextQuery?.length ?? query.length,
           datasetName: status.datasetName,
           ingestFormat: status.ingestFormat,
           message: 'Allen built a deterministic Cognee retrieval envelope before semantic search.',
@@ -276,6 +279,306 @@ export class CogneeMemoryProvider implements KnowledgeRetrievalProvider {
       datasetName: firstString(status.datasetName),
       ingestFormat: firstString(status.ingestFormat),
     };
+  }
+}
+
+export class MultiDatasetCogneeProvider implements KnowledgeRetrievalProvider {
+  readonly providerId = 'cognee_multi_dataset';
+
+  constructor(private db?: Db) {}
+
+  async retrieve(input: KnowledgeRetrievalInput): Promise<KnowledgeRetrievalResult> {
+    if (!isCogneeContextEnabled()) {
+      return {
+        providerId: this.providerId,
+        candidates: [],
+        selectedRefs: [],
+        rejectedRefs: [],
+        diagnostics: [{ code: 'cognee_context_provider_disabled', severity: 'info', message: 'Cognee context provider is disabled.' }],
+        trace: [],
+      };
+    }
+    if (!this.db) {
+      return {
+        providerId: this.providerId,
+        candidates: [],
+        selectedRefs: [],
+        rejectedRefs: [],
+        diagnostics: [{ code: 'cognee_multi_dataset_db_unavailable', severity: 'warn', message: 'Multi-dataset Cognee retrieval requires a DB handle.' }],
+        trace: [],
+      };
+    }
+
+    const datasets = await this.loadActiveDatasets();
+    if (!datasets.length) {
+      return {
+        providerId: this.providerId,
+        candidates: [],
+        selectedRefs: [],
+        rejectedRefs: [],
+        diagnostics: [{ code: 'cognee_multi_dataset_none_active', severity: 'info', message: 'No active Cognee datasets are available for cross-repo chat context.' }],
+        trace: [],
+      };
+    }
+
+    const perDatasetLimit = positiveIntegerEnv('ALLEN_CHAT_CONTEXT_PER_DATASET_RESULTS', 8);
+    const maxDatasets = positiveIntegerEnv('ALLEN_CHAT_CONTEXT_MAX_DATASETS', 24);
+    const datasetConcurrency = Math.min(8, Math.max(1, positiveIntegerEnv('ALLEN_CHAT_CONTEXT_DATASET_CONCURRENCY', 4)));
+    const selectedDatasets = datasets.slice(0, maxDatasets);
+    const results = await mapWithConcurrency(
+      selectedDatasets,
+      datasetConcurrency,
+      (dataset) => this.searchDataset(input, dataset, perDatasetLimit),
+    );
+
+    const candidates = uniqueMultiDatasetRefs(results.flatMap((result) => result.candidates));
+    const selectedRefs = uniqueMultiDatasetRefs(results.flatMap((result) => result.selectedRefs));
+    const rejectedRefs = uniqueMultiDatasetRefs(results.flatMap((result) => result.rejectedRefs));
+    return {
+      providerId: this.providerId,
+      candidates,
+      selectedRefs,
+      injectableRefs: selectedRefs.filter((ref) => ref.providerMetadata?.injectionDecision === 'mandatory_full' || ref.providerMetadata?.injectionDecision === 'snippet' || ref.providerMetadata?.injectionPolicy === 'injectable'),
+      rejectedRefs,
+      diagnostics: [
+        {
+          code: 'cognee_multi_dataset_retrieval_complete',
+          severity: 'info',
+          datasetCount: selectedDatasets.length,
+          skippedDatasetCount: Math.max(0, datasets.length - selectedDatasets.length),
+          candidateCount: candidates.length,
+          selectedCount: selectedRefs.length,
+          globalDatasetCount: selectedDatasets.filter((dataset) => dataset.scope === 'global').length,
+          repoDatasetCount: selectedDatasets.filter((dataset) => dataset.scope === 'repo').length,
+          message: 'Allen searched active Cognee datasets for repo-unspecified chat context.',
+        },
+        ...results.flatMap((result) => result.diagnostics),
+      ],
+      trace: selectedRefs.map((ref) => ({
+        providerId: this.providerId,
+        refId: ref.refId,
+        kind: ref.kind,
+        title: ref.title,
+        path: ref.path,
+        itemType: ref.itemType,
+        grounding: ref.grounding,
+        score: ref.score,
+        decision: 'selected',
+        reason: ref.reason,
+        providerMetadata: ref.providerMetadata,
+      })),
+    };
+  }
+
+  private async searchDataset(
+    input: KnowledgeRetrievalInput,
+    dataset: ActiveCogneeDataset,
+    perDatasetLimit: number,
+  ): Promise<{
+    dataset: ActiveCogneeDataset;
+    candidates: KnowledgeCandidateRef[];
+    selectedRefs: KnowledgeCandidateRef[];
+    rejectedRefs: KnowledgeCandidateRef[];
+    diagnostics: Array<Record<string, unknown>>;
+  }> {
+    const scopedInput: KnowledgeRetrievalInput = {
+      ...input,
+      repoId: dataset.repoId,
+      repoName: dataset.repoName,
+      repoPath: dataset.repoPath,
+      indexId: `${dataset.scope}:${dataset.datasetName}`,
+      state: {
+        ...input.state,
+        repoId: dataset.scope === 'repo' ? dataset.repoId : undefined,
+        repoName: dataset.repoName,
+        repoPath: dataset.repoPath,
+      },
+    };
+    try {
+      const envelope = buildRetrievalIntentEnvelope(scopedInput);
+      const query = buildCogneeQuery(scopedInput);
+      const output = await runCogneeSidecar('search', {
+        datasetName: dataset.datasetName,
+        dataDir: cogneeDataDir(),
+        query,
+        retrievalEnvelope: envelope,
+        repo: {
+          repoId: dataset.repoId,
+          repoName: dataset.repoName,
+          repoPath: dataset.repoPath,
+        },
+        limits: {
+          maxResults: perDatasetLimit,
+        },
+      });
+      const rawCandidates = normalizeCogneeRefs(output.results, this.providerId);
+      const enriched = dataset.scope === 'repo'
+        ? await enrichCogneeCandidates({ db: this.db, repoId: dataset.repoId, candidates: rawCandidates })
+        : { candidates: rawCandidates, diagnostics: [] };
+      const selected = selectCogneeRefs(enriched.candidates, scopedInput, envelope, 'primary');
+      return {
+        dataset,
+        candidates: namespaceDatasetRefs(selected.candidates, dataset),
+        selectedRefs: namespaceDatasetRefs(selected.selectedRefs, dataset),
+        rejectedRefs: namespaceDatasetRefs(selected.rejectedRefs, dataset),
+        diagnostics: [
+          {
+            code: 'cognee_multi_dataset_searched',
+            severity: 'info',
+            scope: dataset.scope,
+            repoId: dataset.scope === 'repo' ? dataset.repoId : undefined,
+            repoName: dataset.repoName,
+            datasetName: dataset.datasetName,
+            candidateCount: selected.candidates.length,
+            selectedCount: selected.selectedRefs.length,
+          },
+          ...normalizeUsageArray(output.diagnostics),
+          ...enriched.diagnostics,
+          ...selected.diagnostics,
+        ],
+      };
+    } catch (err) {
+      return {
+        dataset,
+        candidates: [],
+        selectedRefs: [],
+        rejectedRefs: [],
+        diagnostics: [{
+          code: 'cognee_multi_dataset_search_failed',
+          severity: 'warn',
+          scope: dataset.scope,
+          repoId: dataset.scope === 'repo' ? dataset.repoId : undefined,
+          repoName: dataset.repoName,
+          datasetName: dataset.datasetName,
+          message: (err as Error).message,
+        }],
+      };
+    }
+  }
+
+  private async loadActiveDatasets(): Promise<ActiveCogneeDataset[]> {
+    if (!this.db) return [];
+    const rows = await this.db.collection('repo_cognee_datasets')
+      .find({
+        ingestFormat: COGNEE_INGEST_FORMAT,
+        status: { $in: ['completed', 'partial'] },
+        datasetName: { $type: 'string' },
+      }, { sort: { lastCompletedAt: -1, updatedAt: -1 } })
+      .toArray();
+    const repoIds = rows.map((row) => firstString(row.repoId)).filter((value): value is string => Boolean(value));
+    const repoObjectIds = repoIds.map((id) => safeObjectId(id)).filter((id): id is ObjectId => Boolean(id));
+    const repos = repoObjectIds.length
+      ? await this.db.collection('repos').find({ _id: { $in: repoObjectIds } }).toArray()
+      : [];
+    const repoById = new Map(repos.map((repo) => [String(repo._id), repo]));
+    const datasets: ActiveCogneeDataset[] = [];
+    for (const row of rows) {
+      const datasetName = firstString(row.datasetName);
+      if (!datasetName) continue;
+      const rowScope = firstString(row.scope);
+      const repoId = firstString(row.repoId);
+      if (!repoId || rowScope === 'global') {
+        datasets.push({
+          scope: 'global',
+          repoId: '__global__',
+          repoName: firstString(row.repoName, row.name) ?? 'Global context',
+          repoPath: '',
+          datasetName,
+        });
+        continue;
+      }
+      const repo = repoById.get(repoId);
+      if (!repo || (firstString(repo.status) && firstString(repo.status) !== 'active')) continue;
+      datasets.push({
+        scope: 'repo',
+        repoId,
+        repoName: firstString(repo.name, row.repoName) ?? repoId,
+        repoPath: firstString(repo.path, row.repoPath) ?? '',
+        datasetName,
+      });
+    }
+    const envGlobal = firstString(process.env.ALLEN_COGNEE_GLOBAL_DATASET);
+    if (envGlobal && !datasets.some((dataset) => dataset.datasetName === envGlobal)) {
+      datasets.unshift({
+        scope: 'global',
+        repoId: '__global__',
+        repoName: 'Global context',
+        repoPath: '',
+        datasetName: envGlobal,
+      });
+    }
+    return datasets;
+  }
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+type ActiveCogneeDataset = {
+  scope: 'repo' | 'global';
+  repoId: string;
+  repoName: string;
+  repoPath: string;
+  datasetName: string;
+};
+
+function namespaceDatasetRefs(refs: KnowledgeCandidateRef[], dataset: ActiveCogneeDataset): KnowledgeCandidateRef[] {
+  return refs.map((ref) => {
+    const originalRefId = ref.providerMetadata?.originalRefId ?? ref.refId;
+    const sourceMetadata = isRecord(ref.providerMetadata?.sourceMetadata) ? ref.providerMetadata.sourceMetadata : {};
+    return {
+      ...ref,
+      refId: `${dataset.scope}:${dataset.repoId}:${ref.refId}`,
+      providerId: 'cognee_multi_dataset',
+      reason: `${ref.reason} Dataset: ${dataset.repoName}.`,
+      providerMetadata: {
+        ...ref.providerMetadata,
+        originalRefId,
+        datasetScope: dataset.scope,
+        datasetName: dataset.datasetName,
+        repoId: dataset.scope === 'repo' ? dataset.repoId : undefined,
+        repoName: dataset.repoName,
+        sourceMetadata: {
+          ...sourceMetadata,
+          repoId: dataset.scope === 'repo' ? dataset.repoId : sourceMetadata.repoId,
+          repoName: dataset.repoName,
+        },
+      },
+    };
+  });
+}
+
+function uniqueMultiDatasetRefs(refs: KnowledgeCandidateRef[]): KnowledgeCandidateRef[] {
+  const seen = new Set<string>();
+  const out: KnowledgeCandidateRef[] = [];
+  for (const ref of refs) {
+    if (seen.has(ref.refId)) continue;
+    seen.add(ref.refId);
+    out.push(ref);
+  }
+  return out;
+}
+
+function safeObjectId(value: string): ObjectId | null {
+  try {
+    return new ObjectId(value);
+  } catch {
+    return null;
   }
 }
 
@@ -547,7 +850,7 @@ function timestampSuffix(): string {
   return new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
 }
 
-function normalizeCogneeRefs(value: unknown, providerId: string): KnowledgeCandidateRef[] {
+export function normalizeCogneeRefs(value: unknown, providerId: string): KnowledgeCandidateRef[] {
   return normalizeUsageArray(value).map((row, index) => {
     const normalizedRow = normalizeCogneeEnvelopeRow(row);
     const sourceMetadata = normalizeSourceMetadata(normalizedRow);

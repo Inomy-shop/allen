@@ -1,5 +1,5 @@
 export const REPO_CONTEXT_CURATOR_SCHEMA_VERSION = 2;
-export const REPO_CONTEXT_CURATOR_PROMPT_VERSION = 3;
+export const REPO_CONTEXT_CURATOR_PROMPT_VERSION = 4;
 
 export function buildRepoContextCuratorSystemPrompt(): string {
   return `You are the Repo Context Curator coordinator. Your job is to create a validated, DB-backed curated-context profile for a registered repo.
@@ -46,8 +46,11 @@ Worker output quality contract:
 - chunks[].text are section-level retrieval/cognify units. Use them for large or multi-topic documents; each chunk should retain enough local context to stand alone.
 - Treat mandatory context narrowly. Only always-load guidance, safety policy, coding/testing/process rules, or path-scoped module rules can be mandatory candidates.
 - Broad PRDs, architecture docs, historical plans, and large READMEs are usually retrievable references, not mandatory context.
-- Subagent/persona definition files such as .claude/agents/** and .agents/** are excluded from default curation by Allen's inventory service. Do not reconstruct or add them unless the user explicitly scoped the run to subagent/persona files.
-- Agent memory or learning documents are valid curation sources when source-grounded and useful, including memory folders under .claude/agents/**.
+- Treat agent-adjacent files such as .claude/agents/** and .agents/** as mixed-source files, not automatic include/exclude decisions.
+- Include only source-grounded reusable production learnings from agent-adjacent files: operational facts, module pitfalls, schema notes, incident lessons, known gotchas, DB/query/debug patterns, and durable repo behavior.
+- Exclude persona/system prompt text, role instructions, delegation rules, allowed-tool instructions, team/org design, and agent-framework architecture unless the run is explicitly scoped to agent-system documentation.
+- For mixed files, stage only the production-learning chunks and omit persona/system sections from curatedContext, retrievalText, and chunks.
+- Memory/learnings entries should use production categories such as production_note, historical_note, runbook, source_doc, or module_rule, not agent_persona.
 - Agent personas, generated docs, stale backups, duplicates, dependency docs, and secret-adjacent docs should be excluded or marked never_full_auto when explicitly scoped.
 - Active PRDs, architecture docs, runbooks, module guides, and specs should preserve workflows, decisions, constraints, acceptance criteria, APIs, schemas, commands, ownership, and failure modes.
 - If a document is large or has distinct reusable sections, emit multiple meaningful chunks. Each chunk must be independently useful and source-grounded.
@@ -206,8 +209,11 @@ Rules:
 - Treat mandatory context narrowly.
 - If an assigned file has no durable reusable context, save a file_status of excluded or omitted_with_reason with concise reasoning.
 - You MUST call save_repo_context_curation_stage before final response.
-- Subagent/persona definition files such as .claude/agents/** and .agents/** are not default curation material. If one is explicitly assigned, usually stage it as excluded or never_full_auto unless the prompt asks for reusable memory/learning extraction.
-- Agent memory or learning documents are valid context when source-grounded and useful, including memory folders under .claude/agents/**.
+- Treat agent-adjacent files such as .claude/agents/** and .agents/** as mixed-source files. Do not include or exclude them by path alone.
+- Include only source-grounded reusable production learnings from agent-adjacent files: operational facts, module pitfalls, schema notes, incident lessons, known gotchas, DB/query/debug patterns, and durable repo behavior.
+- Exclude persona/system prompt text, role instructions, delegation rules, allowed-tool instructions, team/org design, and agent-framework architecture unless the assignment explicitly asks for agent-system documentation.
+- For mixed files, stage only the production-learning chunks and omit persona/system sections from curatedContext, retrievalText, and chunks.
+- Memory/learnings entries should use production categories such as production_note, historical_note, runbook, source_doc, or module_rule, not agent_persona.
 
 Sizing targets:
 - For active multi-topic docs, curatedContext should usually be 1200-4000 chars, larger when needed within budget.
@@ -224,7 +230,7 @@ Policy semantics:
 
 Source-type guidance:
 - Active PRDs, architecture docs, runbooks, module guides, and specs should preserve workflows, decisions, constraints, acceptance criteria, APIs, schemas, commands, ownership, and failure modes.
-- Agent personas should normally be exclude or never_full_auto without reusable chunks unless the user explicitly asked to curate reusable memory or learning from those files.
+- Agent personas should be exclude or never_full_auto without reusable chunks. If the same file also contains reusable production learning, curate only those grounded learning sections under a production category and leave persona/system text out.
 - Large stale, backup, draft, or superseded docs should cite the preferred replacement source in reasoning.
 
 Stage entries with this shape:

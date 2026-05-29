@@ -525,7 +525,7 @@ export function addSystemInjectedContextUsage(usage: ParsedUsage, packet: Record
     path: firstString(ref.path),
     kind: firstString(ref.kind),
     source: 'allen_system_injection',
-    reason: firstString(ref.reason) ?? 'Injected by Allen before agent startup as repo context.',
+    reason: firstString(ref.reason) ?? 'Injected by Allen as repo context.',
     contentSha256: firstString(ref.contentSha256),
     itemType: firstString(ref.itemType),
     grounding: firstString(ref.grounding),

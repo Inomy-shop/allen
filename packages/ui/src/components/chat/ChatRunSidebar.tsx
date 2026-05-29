@@ -5,6 +5,7 @@ import {
   Activity,
   AlertTriangle,
   Bot,
+  BookOpen,
   Columns2,
   ChevronDown,
   ChevronRight,
@@ -35,13 +36,14 @@ import { WorkflowInterventionAction, type WorkflowInterventionLike } from '../ex
 import { XTerminal } from '../workspace/XTerminal';
 import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
 import { renderMarkdown } from './ChatMessageList';
+import ChatContextPanel from './ChatContextPanel';
 
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 const TERMINAL_STATUSES = new Set(['completed', 'merged', 'failed', 'failure', 'error', 'errored', 'cancelled', 'canceled', 'closed']);
 const CHAT_RUN_SIDEBAR_MIN_WIDTH = 388;
 
-export type ChatRunPanelTab = 'tasks' | 'executions' | 'files' | 'changes';
+export type ChatRunPanelTab = 'tasks' | 'executions' | 'files' | 'changes' | 'context';
 type FilePanelView = 'files' | 'changes';
 
 type RepoBrowseSource = {
@@ -1464,6 +1466,7 @@ function PanelTabs({
     { id: 'tasks', label: 'Tasks', icon: ListTree },
     { id: 'files', label: 'Files', icon: FileText },
     { id: 'changes', label: 'Changes', icon: Code2 },
+    { id: 'context', label: 'Context', icon: BookOpen },
   ];
   return (
     <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Chat resources">
@@ -2735,6 +2738,7 @@ export default function ChatRunSidebar({
             viewRequest={filesViewRequest}
           />
         )}
+        {visibleTab === 'context' && <ChatContextPanel sessionId={rootType === 'chat' ? rootId : null} />}
         </div>
       </div>
     </aside>

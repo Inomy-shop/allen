@@ -13,6 +13,7 @@ import MermaidChatBlock from './MermaidChatBlock';
 import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { WorkflowInterventionAction } from '../execution/WorkflowInterventionAction';
+import { sanitizeChatAssistantResponse } from '../../lib/chat-response-sanitize';
 
 const ChatExecutionsPanel = React.lazy(() =>
   import('./ChatRunSidebar').then(module => ({ default: module.ExecutionsPanel })),
@@ -2421,7 +2422,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         const suppressLinkedRunPanels = item.type === 'message-part';
         const msgThreads = msg._id ? threadsByMessage[msg._id] : undefined;
         const senderLabel = msg.role === 'user' ? userDisplayName(msg) : '';
-        const diffSplit = msg.role === 'assistant' ? splitFirstDiffFence(msg.content) : { text: msg.content, diff: null };
+        const visibleContent = msg.role === 'assistant' ? sanitizeChatAssistantResponse(msg.content) : msg.content;
+        const visibleError = msg.role === 'assistant' ? sanitizeChatAssistantResponse(msg.error) : msg.error;
+        const diffSplit = msg.role === 'assistant' ? splitFirstDiffFence(visibleContent) : { text: visibleContent, diff: null };
         const messageRuns = msg.role === 'assistant' && msg._id
           ? runsBySourceMessage.get(msg._id) ?? []
           : [];
@@ -2458,19 +2461,19 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               {showResponse && msg.role === 'assistant' && !messageHasActiveRuns && (
                 <ToolCallsSection calls={msg.toolCalls} threads={msgThreads} agentMap={agentMap} />
               )}
-              {showResponse && msg.error && (
+              {showResponse && visibleError && (
                 <div className="chat-msg-error">
                   <AlertCircle className="w-3 h-3 shrink-0" />
-                  {msg.error}
+                  {visibleError}
                 </div>
               )}
             </div>
-            {showResponse && (msg.content || msg.error) && (
+            {showResponse && (visibleContent || visibleError) && (
               <div className="chat-save-row">
-                <MessageCopyButton text={msg.content || msg.error || ''} />
-                {msg.role !== 'user' && msg.content && onSaveToLearnings && (
+                <MessageCopyButton text={visibleContent || visibleError || ''} />
+                {msg.role !== 'user' && visibleContent && onSaveToLearnings && (
                   <button
-                    onClick={() => onSaveToLearnings(msg.content)}
+                    onClick={() => onSaveToLearnings(visibleContent)}
                     title="Save to learnings"
                     aria-label="Save to learnings"
                   >
@@ -2547,7 +2550,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               <div className={activeToolCalls.length > 0 || thinkingText ? 'mt-2' : undefined}>
                 {streamText ? (
                   <>
-                    {renderMarkdown(streamText)}
+                    {renderMarkdown(sanitizeChatAssistantResponse(streamText))}
                     <span className="inline-block w-0.5 h-4 bg-accent-blue/70 ml-0.5 animate-pulse align-middle" />
                   </>
                 ) : thinkingText ? (

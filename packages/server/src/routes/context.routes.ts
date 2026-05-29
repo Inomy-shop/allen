@@ -30,6 +30,17 @@ export function contextRoutes(db: Db): Router {
     }
   });
 
+  router.get('/attempts/:contextAttemptId/semantic-query', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
+      const content = await lifecycle.getAttemptQueryContent(param(req, 'contextAttemptId'), 'semantic');
+      if (!content) return res.status(404).json({ error: 'Semantic context query not found' });
+      res.json(content);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   router.get('/attempts/:contextAttemptId/query-intent', async (req: Request, res: Response) => {
     try {
       if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());

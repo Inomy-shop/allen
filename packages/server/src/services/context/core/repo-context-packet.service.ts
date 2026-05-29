@@ -85,6 +85,7 @@ export class RepoContextPacketService {
     attempt: number;
     state: Record<string, unknown>;
     prompt?: string;
+    contextQuery?: unknown;
     parentPacketId?: string;
     parentExecutionId?: string | null;
     rootExecutionId?: string;
@@ -101,18 +102,9 @@ export class RepoContextPacketService {
     const packetId = randomUUID();
     const provider = normalizeRepoContextProvider(input.provider);
     const contextRetrievalMode = contextRetrievalModeForNode(input);
-    const contextEngine = contextRetrievalMode === 'mandatory_only'
-      ? new RepoContextEngine([new MandatoryContextMappingProvider(this.db)], undefined, { db: this.db })
-      : new RepoContextEngine(undefined, undefined, { db: this.db });
-    const adapter = new WorkflowContextInjectionAdapter();
-    const packet = await contextEngine.buildPacket({
-      packetId,
+    await this.lifecycle.recordAttemptBuildStarted({
+      contextAttemptId: packetId,
       executionId: input.executionId,
-      repoId,
-      repoName: String(repo.name ?? ''),
-      repoPath: String(repo.path ?? ''),
-      indexId,
-      indexFreshness: 'provider_runtime',
       workflowName: input.workflowName,
       nodeName: input.nodeName,
       nodeRole: input.nodeRole,
@@ -120,16 +112,61 @@ export class RepoContextPacketService {
       targetRole: input.targetRole,
       callerRole: input.callerRole,
       attempt: input.attempt,
-      state: input.state,
-      prompt: input.prompt,
-      provider,
-      currentFiles,
-      nodes: [],
+      repoId,
+      repoName: String(repo.name ?? ''),
+      repoPath: String(repo.path ?? ''),
       worktreePath: input.state.worktree_path,
-      parentPacketId: input.parentPacketId,
+      parentContextAttemptId: input.parentPacketId,
       parentExecutionId: input.parentExecutionId,
       rootExecutionId: input.rootExecutionId,
+      indexId,
+      indexFreshness: 'provider_runtime',
+      taskPrompt: firstString(input.prompt),
+      currentFiles,
+      contextProvider: configuredProvider,
+      contextRetrievalMode,
     });
+    const contextEngine = contextRetrievalMode === 'mandatory_only'
+      ? new RepoContextEngine([new MandatoryContextMappingProvider(this.db)], undefined, { db: this.db })
+      : new RepoContextEngine(undefined, undefined, { db: this.db });
+    const adapter = new WorkflowContextInjectionAdapter();
+    let packet;
+    try {
+      packet = await withTimeout(contextEngine.buildPacket({
+        packetId,
+        executionId: input.executionId,
+        repoId,
+        repoName: String(repo.name ?? ''),
+        repoPath: String(repo.path ?? ''),
+        indexId,
+        indexFreshness: 'provider_runtime',
+        workflowName: input.workflowName,
+        nodeName: input.nodeName,
+        nodeRole: input.nodeRole,
+        executionKind: input.executionKind,
+        targetRole: input.targetRole,
+        callerRole: input.callerRole,
+        attempt: input.attempt,
+        state: input.state,
+        prompt: input.prompt,
+        contextQuery: input.contextQuery,
+        provider,
+        currentFiles,
+        nodes: [],
+        worktreePath: input.state.worktree_path,
+        parentPacketId: input.parentPacketId,
+        parentExecutionId: input.parentExecutionId,
+        rootExecutionId: input.rootExecutionId,
+      }), contextPacketBuildTimeoutMs(), 'repo context packet build timed out');
+    } catch (err) {
+      const message = (err as Error).message;
+      await this.lifecycle.markAttemptBuildStatus(
+        packetId,
+        isTimeoutError(err) ? 'timed_out' : 'failed',
+        { error: message },
+      );
+      return null;
+    }
     packet.providerDiagnostics.push({
       code: 'repo_context_retrieval_mode',
       severity: 'info',
@@ -139,26 +176,36 @@ export class RepoContextPacketService {
         : 'Repo-operating node used full configured context retrieval.',
     });
     if (contextRetrievalMode === 'mandatory_only' && packet.selectedRefs.length === 0) {
+      await this.lifecycle.markAttemptBuildStatus(packetId, 'skipped', { error: 'No mandatory context mapping selected for this node.' });
       return null;
     }
-    const injection = await adapter.buildInjection({
-      packet,
-      provider,
-      repoPath: String(repo.path ?? ''),
-      worktreePath: firstString(input.state.worktree_path, input.state.repo_path, input.state.repository_path),
-    });
-    const systemPromptBlock = adapter.renderSystemPromptBlock(injection);
-    const promptBlock = adapter.renderContextPacket(packet);
-    const contextInjection = summarizeInjection(injection);
-    await this.lifecycle.saveAttemptFromPacket({
-      packet,
-      injection,
-      contextInjection,
-      promptBlock,
-      systemPromptBlock,
-      contextProvider: configuredProvider,
-      contextRetrievalMode,
-    });
+    let injection;
+    let systemPromptBlock;
+    let promptBlock;
+    let contextInjection;
+    try {
+      injection = await adapter.buildInjection({
+        packet,
+        provider,
+        repoPath: String(repo.path ?? ''),
+        worktreePath: firstString(input.state.worktree_path, input.state.repo_path, input.state.repository_path),
+      });
+      systemPromptBlock = adapter.renderSystemPromptBlock(injection);
+      promptBlock = adapter.renderContextPacket(packet);
+      contextInjection = summarizeInjection(injection);
+      await this.lifecycle.saveAttemptFromPacket({
+        packet,
+        injection,
+        contextInjection,
+        promptBlock,
+        systemPromptBlock,
+        contextProvider: configuredProvider,
+        contextRetrievalMode,
+      });
+    } catch (err) {
+      await this.lifecycle.markAttemptBuildStatus(packetId, 'failed', { error: (err as Error).message });
+      return null;
+    }
 
     const traceSummary = {
       packetId,
@@ -659,4 +706,28 @@ function summarizeContextEvaluationForTrace(evaluation: Record<string, unknown>)
     diagnostics: normalizeUsageArray(evaluation.diagnostics).slice(0, 10),
     feedbackEvidenceCount: normalizeUsageArray(evaluation.feedbackEvidence).length,
   };
+}
+
+function contextPacketBuildTimeoutMs(): number {
+  const value = Number(process.env.ALLEN_CONTEXT_PACKET_BUILD_TIMEOUT_MS ?? process.env.ALLEN_SPAWN_CONTEXT_BUILD_TIMEOUT_MS ?? 120_000);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 120_000;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(message);
+      (error as Error & { code?: string }).code = 'CONTEXT_PACKET_BUILD_TIMEOUT';
+      reject(error);
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'CONTEXT_PACKET_BUILD_TIMEOUT'
+    || /timed?\s*out|timeout/i.test((error as Error | null)?.message ?? '');
 }
