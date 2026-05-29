@@ -205,6 +205,7 @@ function structuredContextQuerySignal(block: AllenContextQueryBlock): ContextTas
 }
 
 export function renderContextQuery(intent: ContextQueryIntent): string {
+  const retrievalSignals = renderableRetrievalSignals(intent);
   return capRenderedQuery([
     `Workflow: ${intent.workflowName}`,
     `Node: ${intent.nodeName}`,
@@ -222,12 +223,12 @@ export function renderContextQuery(intent: ContextQueryIntent): string {
     intent.pathScopes.length ? `Path scopes: ${intent.pathScopes.join(', ')}` : '',
     intent.moduleHints.length ? `Module hints: ${intent.moduleHints.join(', ')}` : '',
     intent.domainHints?.length ? `Domain hints: ${intent.domainHints.join(', ')}` : '',
-    intent.task ? `Retrieval signals: ${intent.task}` : '',
+    retrievalSignals ? `Retrieval signals: ${retrievalSignals}` : '',
   ].filter(Boolean).join('\n'), RENDERED_CONTEXT_QUERY_MAX_CHARS);
 }
 
 export function renderSemanticContextQuery(intent: ContextQueryIntent): string {
-  const semanticTask = semanticTaskText(intent.task);
+  const semanticTask = semanticTaskText(renderableRetrievalSignals(intent));
   return capRenderedQuery([
     `Role: ${intent.role}`,
     `Role family: ${intent.roleFamily}`,
@@ -353,7 +354,7 @@ function structuredTaskSignals(input: KnowledgeRetrievalInput): { entries: strin
       sources.push(`state.${key}`);
     }
   }
-  const usage = isRecord(input.state.repo_context_usage) ? input.state.repo_context_usage : undefined;
+  const usage = !isSpawnedAgentWorkflow(input.workflowName) && isRecord(input.state.repo_context_usage) ? input.state.repo_context_usage : undefined;
   const moduleIdentified = usage ? firstString(usage.module_identified, usage.moduleIdentified) : undefined;
   if (moduleIdentified) {
     entries.push(`Module identified: ${moduleIdentified}`);
@@ -660,6 +661,27 @@ function semanticTaskText(task: string): string {
     .split(/\s+\|\s+/)
     .filter((entry) => !isPathOnlyTaskEntry(entry))
     .join(' | ');
+}
+
+function renderableRetrievalSignals(intent: ContextQueryIntent): string {
+  const userPrompt = normalizeComparableSignal(intent.userPromptSignal ?? '');
+  const entries = intent.task
+    .split(/\s+\|\s+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .filter((entry) => {
+      const userRequest = entry.replace(/^User request:\s*/i, '');
+      return normalizeComparableSignal(userRequest) !== userPrompt;
+    });
+  return entries.join(' | ');
+}
+
+function normalizeComparableSignal(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function isSpawnedAgentWorkflow(workflowName: string): boolean {
+  return workflowName.includes(':spawn_agent/');
 }
 
 function isPathOnlyTaskEntry(entry: string): boolean {

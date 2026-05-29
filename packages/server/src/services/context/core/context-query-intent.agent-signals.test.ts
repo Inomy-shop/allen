@@ -121,9 +121,40 @@ describe('context query intent agent role signals', () => {
     expect(rendered).not.toContain('No file edits');
     expect(semantic).toContain(`User request: ${contextQuery.user_request}`);
     expect(semantic).toContain('ASIN grouping');
+    expect(semantic).not.toContain('Retrieval signals: User request:');
     expect(semantic).not.toContain('src/product/grouping.ts');
     expect(semantic).not.toContain('src/shared/product-grouping');
     expect(semantic).not.toContain('Path hints:');
+  });
+
+  it('does not duplicate prompt fallback user request as a retrieval signal', () => {
+    const prompt = 'Analyze the product grouping module and report upstream and downstream ingestion flow.';
+    const intent = buildContextQueryIntent(input({ prompt }));
+    const semantic = renderSemanticContextQuery(intent);
+    const rendered = renderContextQuery(intent);
+
+    expect(intent.task).toContain(`User request: ${prompt}`);
+    expect(semantic).toContain(`User request: ${prompt}`);
+    expect(semantic).not.toContain('Retrieval signals: User request:');
+    expect(rendered).not.toContain('Retrieval signals: User request:');
+  });
+
+  it('keeps repo_context_usage out of spawned-agent retrieval signals', () => {
+    const intent = buildContextQueryIntent(input({
+      workflowName: 'chat:spawn_agent/backend-developer',
+      nodeName: 'backend-developer',
+      nodeRole: 'backend-developer',
+      prompt: 'Analyze product grouping.',
+      state: {
+        repo_context_usage: {
+          module_identified: 'checkout billing module',
+        },
+      },
+    }));
+    const semantic = renderSemanticContextQuery(intent);
+
+    expect(intent.querySignalSources).not.toContain('state.repo_context_usage.module_identified');
+    expect(semantic).not.toContain('checkout billing module');
   });
 
   it('maps repo category aliases and keeps domain labels out of categories', () => {

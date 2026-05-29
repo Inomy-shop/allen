@@ -130,6 +130,107 @@ function normalizeSpawnContextQuery(value: unknown): Record<string, unknown> | u
   return value as Record<string, unknown>;
 }
 
+type SpawnContextQuerySource = 'tool_arg' | 'derived_prompt' | 'prompt_fallback';
+
+function resolveSpawnContextQuery(value: unknown, prompt: string, repoPath?: string): {
+  contextQuery?: Record<string, unknown>;
+  source: SpawnContextQuerySource;
+} {
+  const explicit = normalizeSpawnContextQuery(value);
+  if (explicit) return { contextQuery: explicit, source: 'tool_arg' };
+  const derived = deriveSpawnContextQuery(prompt, repoPath);
+  if (derived) return { contextQuery: derived, source: 'derived_prompt' };
+  return { source: 'prompt_fallback' };
+}
+
+function deriveSpawnContextQuery(prompt: string, repoPath?: string): Record<string, unknown> | undefined {
+  if (!repoPath) return undefined;
+  const retrievalText = extractRetrievalTaskText(prompt);
+  if (!retrievalText) return undefined;
+  const topics = deriveRetrievalTopics(retrievalText);
+  return {
+    user_request: retrievalText,
+    task_type: /\b(analy[sz]e|analysis|inspect|investigat|review)\b/i.test(retrievalText)
+      ? 'repo_analysis'
+      : 'repo_task',
+    ...(topics.length ? { topics } : {}),
+    required_categories: ['source', 'guideline'],
+    preferred_categories: ['design', 'runbook'],
+  };
+}
+
+function extractRetrievalTaskText(prompt: string): string | undefined {
+  const text = prompt.replace(/\r\n/g, '\n').trim();
+  if (!text) return undefined;
+  const taskSection = extractPromptSection(text, 'Task');
+  const candidate = taskSection || text.split(executionOnlyPromptBoundary)[0] || text;
+  const cleaned = compactForContextQuery(candidate
+    .replace(/^\s*(?:Task|User request|User prompt)\s*:\s*/i, '')
+    .replace(/\b(?:for\s+)?repo\s+`[^`]+`/gi, '')
+    .replace(/\b(?:for\s+)?repo\s+\/[^\s]+/gi, '')
+    .replace(/\b(?:repo path|worktree path|working directory)\s*:\s*`?\/[^\s`]+`?/gi, ''));
+  return cleaned || undefined;
+}
+
+const executionOnlyPromptBoundary = /^\s*(?:Strict constraints|Hard guardrails|Guardrails|Constraints|Final response|Output|Do not stop because)\s*:/gim;
+
+function extractPromptSection(text: string, label: string): string | undefined {
+  const startPattern = new RegExp(`^\\s*${label}\\s*:`, 'im');
+  const start = startPattern.exec(text);
+  if (!start) return undefined;
+  const afterLabel = start.index + start[0].length;
+  const remainder = text.slice(afterLabel);
+  executionOnlyPromptBoundary.lastIndex = 0;
+  const boundary = executionOnlyPromptBoundary.exec(remainder);
+  executionOnlyPromptBoundary.lastIndex = 0;
+  return remainder.slice(0, boundary?.index ?? remainder.length);
+}
+
+function compactForContextQuery(value: string, maxLength = 900): string {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !isExecutionOnlyContextQueryLine(line))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength);
+}
+
+function isExecutionOnlyContextQueryLine(line: string): boolean {
+  const normalized = line.toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return /^strict constraints:?$/.test(normalized)
+    || /^hard guardrails:?$/.test(normalized)
+    || /\bread only\b/.test(normalized)
+    || /\bdo not\b.*\b(edit|write|commit|push|open pr|pull request|migration|db|service)\b/.test(normalized)
+    || /\bno\b.*\b(edits?|commits?|prs?|pull requests?|implementation worktree)\b/.test(normalized)
+    || /\ballen_save_artifact\b/.test(normalized)
+    || /\bsave\b.*\b(artifact|report|analysis)\b/.test(normalized)
+    || /\bfinal response\b/.test(normalized)
+    || /\bdo not stop because\b/.test(normalized);
+}
+
+function deriveRetrievalTopics(text: string): string[] {
+  const lower = text.toLowerCase();
+  const topics: string[] = [];
+  const phraseTopics: Array<[RegExp, string]> = [
+    [/\bproduct grouping\b/, 'product grouping'],
+    [/\basin\b/, 'ASIN'],
+    [/\bvariant grouping\b|\bvariants?\b/, 'variant grouping'],
+    [/\bupstream\b|\bingestion\b/, 'upstream ingestion'],
+    [/\bdownstream\b|\bconsumption\b|\bconsumer\b/, 'downstream consumption'],
+    [/\bfields?\b|\btables?\b|\bschema\b/, 'data fields and tables'],
+    [/\bsemantic post-processing\b|\bsemantic\b/, 'semantic post-processing'],
+    [/\brisk\b|\bcaveat\b|\bgotcha\b|\boperational\b/, 'operational risks'],
+    [/\bapi\b/, 'API'],
+    [/\btests?\b|\bvalidation\b/, 'tests and validation'],
+  ];
+  for (const [pattern, topic] of phraseTopics) {
+    if (pattern.test(lower)) topics.push(topic);
+  }
+  return [...new Set(topics)].slice(0, 10);
+}
+
 // Codex CLI spawn lifecycle controls. Without these, a hung codex child
 // (or one blocked writing to stderr because nobody drains the pipe) holds
 // the spawning Promise's closure alive forever — see the workspace
@@ -977,7 +1078,6 @@ const spawnAgent: ChatTool = {
     const rawPrompt = args.prompt as string;
     const promptSanitization = stripUnsupportedInlineContextQuery(rawPrompt);
     const prompt = promptSanitization.prompt;
-    const contextQuery = normalizeSpawnContextQuery(args.context_query);
     const resumeSession = args.session_id as string | undefined;
 
     const role = await db.collection('agents').findOne({ name: agentName });
@@ -1000,6 +1100,8 @@ const spawnAgent: ChatTool = {
     if (!repoPath && typeof role.sourceRepoPath === 'string' && role.sourceRepoPath) {
       repoPath = role.sourceRepoPath;
     }
+    const resolvedContextQuery = resolveSpawnContextQuery(args.context_query, prompt, repoPath);
+    const contextQuery = resolvedContextQuery.contextQuery;
 
     const { randomUUID } = await import('node:crypto');
     const executionId = randomUUID();
@@ -1077,7 +1179,7 @@ const spawnAgent: ChatTool = {
         chatSessionId: chatSessionIdForMeta,
         parentMessageId: activeCtxForMeta?.parentMessageId,
         contextQuery: {
-          source: contextQuery ? 'tool_arg' : 'prompt_fallback',
+          source: resolvedContextQuery.source,
           inlineBlockStripped: promptSanitization.stripped,
         },
         repoKnowledgeParent: providedRepoKnowledgePacketId ? {
@@ -2274,6 +2376,8 @@ async function runSpawnInBackground(
 // The function is called via __internalsForTest so tests can replace the reference.
 export const __internalsForTest = {
   stripUnsupportedInlineContextQuery,
+  deriveSpawnContextQuery,
+  resolveSpawnContextQuery,
   runSpawnInBackground: (...args: Parameters<typeof runSpawnInBackground>) =>
     runSpawnInBackground(...args),
   markSpawnCompletedUnlessTerminal,

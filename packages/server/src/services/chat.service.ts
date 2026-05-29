@@ -639,6 +639,80 @@ export function normalizeGeneratedChatTitle(candidate: unknown, userMessage: str
   return sanitizeChatTitle(candidate) ?? fallbackTitleFromUserMessage(userMessage);
 }
 
+export function sanitizeChatAssistantResponse(candidate: unknown): string {
+  if (typeof candidate !== 'string') return '';
+  let text = candidate;
+  let previous = '';
+  while (text !== previous) {
+    previous = text;
+    text = stripTrailingRepoContextUsageMarker(text)
+      .replace(/\s+$/g, '');
+    text = stripTrailingRepoContextUsageJsonFence(text)
+      .replace(/\s+$/g, '');
+    text = stripTrailingRepoContextUsageJsonObject(text)
+      .replace(/\s+$/g, '');
+    text = stripTrailingRepoContextUsageSection(text)
+      .replace(/\s+$/g, '');
+  }
+  return text;
+}
+
+function stripTrailingRepoContextUsageMarker(text: string): string {
+  return text.replace(
+    /(?:\n\s*)*(?:repo[_\s-]*context[_\s-]*usage|repocontextusage)\s*:\s*no\s+repo\s+context\s+used\.?\s*$/i,
+    '',
+  );
+}
+
+function stripTrailingRepoContextUsageJsonFence(text: string): string {
+  const match = text.match(/(?:\n\s*)```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/i);
+  if (!match?.[1]) return text;
+  return isStandaloneRepoContextUsageJson(match[1])
+    ? text.slice(0, match.index).replace(/\s+$/g, '')
+    : text;
+}
+
+function stripTrailingRepoContextUsageJsonObject(text: string): string {
+  const starts = [...text.matchAll(/(?:^|\n)\s*\{/g)].map((match) => match.index ?? 0);
+  for (let i = starts.length - 1; i >= 0; i -= 1) {
+    const start = starts[i];
+    const candidate = text.slice(start).trim();
+    if (!candidate.endsWith('}')) continue;
+    if (isStandaloneRepoContextUsageJson(candidate)) {
+      return text.slice(0, start).replace(/\s+$/g, '');
+    }
+  }
+  return text;
+}
+
+function stripTrailingRepoContextUsageSection(text: string): string {
+  const marker = /(?:^|\n)\s*(?:[-*]\s*)?(?:#{1,6}\s*)?(?:`{1,3})?(?:repo[_\s-]*context[_\s-]*usage|repocontextusage)\b[\s\S]*$/i;
+  const match = text.match(marker);
+  if (!match || match.index == null) return text;
+  return text.slice(0, match.index).replace(/\s+$/g, '');
+}
+
+function isStandaloneRepoContextUsageJson(raw: string): boolean {
+  try {
+    const parsed = JSON.parse(raw.trim());
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    const keys = Object.keys(parsed as Record<string, unknown>);
+    return keys.length === 1 && keys[0] === 'repo_context_usage';
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeChatMessagesForDisplay(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.role !== 'assistant') return message;
+    return {
+      ...message,
+      content: sanitizeChatAssistantResponse(message.content),
+    };
+  });
+}
+
 interface VerifiedTitle {
   title: string;
   isValid: boolean;
@@ -913,7 +987,7 @@ export class ChatService {
     const msgs = await this.messages.find({ sessionId: id }).sort({ createdAt: -1 }).limit(50).toArray() as ChatMessage[];
     msgs.reverse();
     const [hydrated] = await this.hydrateArchivedWorkspaceSnapshots([session as unknown as ChatSession]);
-    return { ...hydrated, streaming: this.isStreaming(id), messages: msgs };
+    return { ...hydrated, streaming: this.isStreaming(id), messages: sanitizeChatMessagesForDisplay(msgs) };
   }
 
   private async hydrateArchivedWorkspaceSnapshots<T extends ChatSession>(sessions: T[]): Promise<T[]> {
@@ -1011,7 +1085,7 @@ export class ChatService {
     const hasMore = data.length > limit;
     if (hasMore) data.pop();
     data.reverse();
-    return { data, hasMore };
+    return { data: sanitizeChatMessagesForDisplay(data), hasMore };
   }
 
   private serializeQueueItem(doc: Record<string, unknown>): ChatQueueItem {
@@ -1620,8 +1694,9 @@ User: ${userMessage.slice(0, 500)}`;
       const callbacks = {
         signal: entry.abortController.signal,
         onText: (fullText: string) => {
-          entry.currentText = fullText;
-          broadcastToListeners(entry, 'message_delta', { text: fullText, messageId: assistantMsgId });
+          const visibleText = sanitizeChatAssistantResponse(fullText);
+          entry.currentText = visibleText;
+          broadcastToListeners(entry, 'message_delta', { text: visibleText, messageId: assistantMsgId });
         },
         onThinking: (thinking: string) => {
           entry.currentThinking = thinking;
@@ -1723,10 +1798,12 @@ User: ${userMessage.slice(0, 500)}`;
       clearInterval(saveInterval);
       const durationMs = Date.now() - startMs;
       const costUsd = result.costUsd;
+      const visibleResponseText = sanitizeChatAssistantResponse(result.text);
+      entry.currentText = visibleResponseText;
 
       await this.messages.updateOne(
         { _id: new ObjectId(assistantMsgId) },
-        { $set: { content: result.text, status: 'completed', costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+        { $set: { content: visibleResponseText, status: 'completed', costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
       );
 
       // Save execution trace to chat_logs (fire-and-forget)
@@ -1735,7 +1812,7 @@ User: ${userMessage.slice(0, 500)}`;
         messageId: assistantMsgId,
         llmSessionId: result.sessionId,
         userMessage: content,
-        assistantResponse: result.text.slice(0, 2000),
+        assistantResponse: visibleResponseText.slice(0, 2000),
         model: result.model,
         costUsd,
         durationMs,
@@ -1767,7 +1844,7 @@ User: ${userMessage.slice(0, 500)}`;
       );
 
       broadcastToListeners(entry, 'message_complete', {
-        messageId: assistantMsgId, text: result.text, costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking,
+        messageId: assistantMsgId, text: visibleResponseText, costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking,
       });
 
       // Auto-title strategy: fire exactly once on turn 1, using only the
@@ -1781,7 +1858,7 @@ User: ${userMessage.slice(0, 500)}`;
       const shouldAutoTitle = priorCount <= 2 && prevSource !== 'user' && prevSource !== 'auto';
 
       if (shouldAutoTitle) {
-        const responseText = result.text.trim() || undefined;
+        const responseText = visibleResponseText.trim() || undefined;
         const deterministicTitle = deterministicSessionTaskTitle(content);
         Promise.resolve(deterministicTitle ?? this.generateTitleWithLLM(content, responseText))
           .then(async (generatedTitle) => {
@@ -1869,7 +1946,11 @@ User: ${userMessage.slice(0, 500)}`;
             // Same artifact-root context as the primary call above so a
             // mid-retry allen_save_artifact still files under this chat.
             chatSessionId: sessionId,
-            onText: (fullText) => { entry.currentText = fullText; broadcastToListeners(entry, 'message_delta', { text: fullText, messageId: assistantMsgId }); },
+            onText: (fullText) => {
+              const visibleText = sanitizeChatAssistantResponse(fullText);
+              entry.currentText = visibleText;
+              broadcastToListeners(entry, 'message_delta', { text: visibleText, messageId: assistantMsgId });
+            },
             onThinking: (thinking) => {
               entry.currentThinking = thinking;
               broadcastToListeners(entry, 'thinking', { text: thinking, messageId: assistantMsgId });
@@ -1918,14 +1999,16 @@ User: ${userMessage.slice(0, 500)}`;
 
           // Save successful retry result
           const durationMs = Date.now() - startMs;
+          const visibleRetryText = sanitizeChatAssistantResponse(retryResult.text);
+          entry.currentText = visibleRetryText;
           await this.messages.updateOne(
             { _id: new ObjectId(assistantMsgId) },
-            { $set: { content: retryResult.text, status: 'completed', costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+            { $set: { content: visibleRetryText, status: 'completed', costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
           );
           if (retryResult.sessionId) {
             await this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set: { llmSessionId: retryResult.sessionId } });
           }
-          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: retryResult.text, costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
+          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: visibleRetryText, costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
           return; // success — skip error handling below
         } catch (retryErr) {
           console.error('Auto-retry also failed:', retryErr instanceof Error ? retryErr.message : retryErr);

@@ -7,6 +7,7 @@ import {
 import RoleIcon from '../common/RoleIcon';
 import ThreadDetailPanel from './ThreadDetailPanel';
 import { renderMarkdown } from './ChatMessageList';
+import { sanitizeChatAssistantResponse } from '../../lib/chat-response-sanitize';
 
 // ── Types ──
 
@@ -105,7 +106,8 @@ function ThreadMsg({ msg, agentInfo, collapsed: initCollapsed }: {
   const name = agentInfo?.displayName ?? msg.agent;
   const isQ = msg.type === 'question';
   const isA = msg.type === 'answer';
-  const isLong = msg.content.length > 300;
+  const visibleContent = sanitizeChatAssistantResponse(msg.content);
+  const isLong = visibleContent.length > 300;
 
   return (
     <div className={`py-2 ${isQ ? 'pl-3 border-l-2 border-amber-400/50 bg-amber-400/[0.03] rounded-r' : isA ? 'pl-3 border-l-2 border-accent-green/50 bg-accent-green/[0.03] rounded-r' : ''}`}>
@@ -131,10 +133,10 @@ function ThreadMsg({ msg, agentInfo, collapsed: initCollapsed }: {
 
       {/* Content — same rendering as main chat */}
       {collapsed ? (
-        <div className="text-[12px] text-theme-muted font-body pl-5">{msg.content.slice(0, 150).replace(/\n/g, ' ')}...</div>
+        <div className="text-[12px] text-theme-muted font-body pl-5">{visibleContent.slice(0, 150).replace(/\n/g, ' ')}...</div>
       ) : (
         <div className="text-sm text-theme-secondary font-body leading-relaxed pl-5">
-          {renderMarkdown(msg.content)}
+          {renderMarkdown(visibleContent)}
         </div>
       )}
 
@@ -261,7 +263,7 @@ export function AgentThread({ thread, agents }: AgentThreadProps) {
             <div>
               {thread.messages.map((msg, i) => (
                 <ThreadMsg key={i} msg={msg} agentInfo={agents?.[msg.agent]}
-                  collapsed={msg.content.length > 300 && i < thread.messages!.length - 1} />
+                  collapsed={sanitizeChatAssistantResponse(msg.content).length > 300 && i < thread.messages!.length - 1} />
               ))}
             </div>
           )}

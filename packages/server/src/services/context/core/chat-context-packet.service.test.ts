@@ -10,6 +10,11 @@ describe('classifyChatContextRetrievalPrompt', () => {
     'do it',
     'retry',
     'Implement the plan.',
+    'Hi',
+    'Hello!',
+    'hey there',
+    'good morning',
+    'thank you',
   ])('skips low-signal action prompt: %s', (prompt) => {
     expect(classifyChatContextRetrievalPrompt(prompt)).toMatchObject({
       shouldSkip: true,
@@ -25,6 +30,9 @@ describe('classifyChatContextRetrievalPrompt', () => {
     'LIN-123',
     '@repo continue',
     'retry checkoutFailureHandler',
+    'hello product grouping',
+    'hi update ASIN grouping',
+    'thanks, now implement ASIN grouping',
   ])('keeps retrieval enabled for concrete prompt: %s', (prompt) => {
     expect(classifyChatContextRetrievalPrompt(prompt).shouldSkip).toBe(false);
   });
