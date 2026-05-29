@@ -1,6 +1,6 @@
 # Allen App · UI kit
 
-A click-through React recreation of the Allen control plane (`packages/ui` in the [Kalpai-poc/allen](https://github.com/Kalpai-poc/allen) monorepo).
+A click-through React recreation of the Allen control plane (`packages/ui` in the [Inomy-shop/allen](https://github.com/Inomy-shop/allen) monorepo).
 
 Open `index.html` to see the shell assembled, or pull individual components into a new mock.
 

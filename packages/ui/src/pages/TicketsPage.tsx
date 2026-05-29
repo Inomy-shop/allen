@@ -143,6 +143,12 @@ function compareRunRecency(a: LinearIssue, b: LinearIssue): number {
   return bTime - aTime;
 }
 
+function integrationErrorMessage(err: unknown, fallback: string): string {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  if (!message || message === 'fetch failed' || message.includes('Failed to fetch')) return fallback;
+  return message;
+}
+
 function dispatchTargetLabel(target: DispatchTarget | null): string {
   if (!target) return 'auto';
   if (target.kind === 'workflow') return `workflow: ${target.workflowName}`;
@@ -296,7 +302,10 @@ export default function TicketsPage() {
       const s = await linearApi.status();
       setStatus(s);
     } catch (err) {
-      setStatus({ configured: false, error: (err as Error).message });
+      setStatus({
+        configured: false,
+        error: integrationErrorMessage(err, 'Allen could not check the Linear connection.'),
+      });
     } finally {
       setStatusLoading(false);
     }
@@ -310,10 +319,11 @@ export default function TicketsPage() {
       const p = await linearApi.projects();
       setProjects(p ?? []);
     } catch (err) {
-      toast.error(`Failed to load Linear projects: ${(err as Error).message}`);
+      const error = integrationErrorMessage(err, 'Linear could not be reached. Check your network connection or Linear status, then retry.');
+      setStatus(prev => ({ configured: prev?.configured ?? true, workspaceName: prev?.workspaceName, workspaceUrlKey: prev?.workspaceUrlKey, error }));
       setProjects([]);
     }
-  }, [toast]);
+  }, []);
 
   const loadIssues = useCallback(async () => {
     setListLoading(true);
@@ -329,12 +339,13 @@ export default function TicketsPage() {
       // the real API response includes all LinearIssue fields — safe at runtime.
       setIssues((list ?? []) as unknown as LinearIssue[]);
     } catch (err) {
-      toast.error(`Failed to load Linear issues: ${(err as Error).message}`);
+      const error = integrationErrorMessage(err, 'Linear could not be reached. Check your network connection or Linear status, then retry.');
+      setStatus(prev => ({ configured: prev?.configured ?? true, workspaceName: prev?.workspaceName, workspaceUrlKey: prev?.workspaceUrlKey, error }));
       setIssues([]);
     } finally {
       setListLoading(false);
     }
-  }, [projectFilter, stateFilters, search, toast]);
+  }, [projectFilter, stateFilters, search]);
 
   useEffect(() => {
     if (!status?.configured) return;
@@ -496,8 +507,8 @@ export default function TicketsPage() {
 
   if (statusLoading) {
     return (
-      <div className="content scroll-hide bg-app">
-        <div className="flex w-full items-center gap-2 px-8 py-8 font-mono text-[11px] text-theme-muted">
+      <div className="content scroll-hide !p-0 h-full bg-app" data-screen-label="linear-tickets">
+        <div className="flex h-full w-full items-center justify-center gap-2 px-8 py-8 font-mono text-[11px] text-theme-muted">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking Linear connection...
         </div>
       </div>
@@ -505,29 +516,45 @@ export default function TicketsPage() {
   }
 
   if (!status?.configured) {
+    const statusCheckFailed = Boolean(status?.error);
     return (
-      <div className="content scroll-hide bg-app">
+      <div className="content scroll-hide !p-0 h-full bg-app" data-screen-label="linear-tickets">
         <div className="flex min-h-full w-full items-center justify-center px-8 py-8">
         <div className="w-full max-w-[480px] rounded-md border border-app bg-app-card px-6 py-8 text-center">
           <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-md border border-app bg-app text-accent">
             <AlertCircle className="h-5 w-5" />
           </span>
           <div>
-            <h2 className="mt-5 text-[17px] font-semibold text-theme-primary">Linear is not connected</h2>
+            <h2 className="mt-5 text-[17px] font-semibold text-theme-primary">
+              {statusCheckFailed ? 'Could not check Linear' : 'Linear is not connected'}
+            </h2>
             <p className="mt-2 text-[13px] text-theme-muted">
-              Add a Linear API token to Allen before tickets can be synced and dispatched.
+              {statusCheckFailed
+                ? status?.error
+                : 'Add a Linear API token to Allen before tickets can be synced and dispatched.'}
             </p>
           </div>
-          <div className="mt-5 inline-flex items-center gap-2 rounded-md border border-app bg-app px-3 py-2 font-mono text-[11px] text-accent">
-            <KeyRound className="h-3.5 w-3.5" /> ALLEN_LINEAR_ACCESS_TOKEN
-          </div>
+          {!statusCheckFailed && (
+            <div className="mt-5 inline-flex items-center gap-2 rounded-md border border-app bg-app px-3 py-2 font-mono text-[11px] text-accent">
+              <KeyRound className="h-3.5 w-3.5" /> ALLEN_LINEAR_ACCESS_TOKEN
+            </div>
+          )}
           <div className="mt-6 flex items-center justify-center gap-2">
+            {!statusCheckFailed && (
+              <button
+                onClick={() => navigate('/settings/mcp')}
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+                type="button"
+              >
+                Connect Linear
+              </button>
+            )}
             <button
               onClick={loadStatus}
               className="inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
               type="button"
             >
-              <RefreshCw className="h-3.5 w-3.5" /> Recheck
+              <RefreshCw className="h-3.5 w-3.5" /> {statusCheckFailed ? 'Retry' : 'Recheck'}
             </button>
           </div>
         </div>
@@ -538,19 +565,21 @@ export default function TicketsPage() {
 
   if (status.configured && status.error) {
     return (
-      <div className="content scroll-hide bg-app">
+      <div className="content scroll-hide !p-0 h-full bg-app" data-screen-label="linear-tickets">
         <div className="flex min-h-full w-full items-center justify-center px-8 py-8">
         <div className="w-full max-w-[480px] rounded-md border border-accent-red/30 bg-accent-red/5 px-6 py-8 text-center">
           <AlertCircle className="mx-auto h-6 w-6 text-accent-red" />
           <h2 className="mt-4 text-[17px] font-semibold text-theme-primary">Could not reach Linear</h2>
           <p className="mt-2 text-[13px] text-theme-muted">{status.error}</p>
-          <button
-            onClick={loadStatus}
-            className="mt-5 inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
-            type="button"
-          >
-            <RefreshCw className="h-3.5 w-3.5" /> Retry
-          </button>
+          <div className="mt-5 flex items-center justify-center gap-2">
+            <button
+              onClick={loadStatus}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
+              type="button"
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> Retry
+            </button>
+          </div>
         </div>
         </div>
       </div>
@@ -562,9 +591,9 @@ export default function TicketsPage() {
   const runningCount = issues.filter(i => isActiveRun(i.agentAssignee) || isCompletedRun(i.agentAssignee)).length;
 
   return (
-    <div className="content scroll-hide bg-app" data-screen-label="linear-tickets">
-      <div className="flex h-full w-full flex-col py-8">
-        <div className="mb-6 flex items-start justify-between gap-4 px-0">
+    <div className="content scroll-hide !p-0 bg-app" data-screen-label="linear-tickets">
+      <div className="flex h-full w-full flex-col px-8 py-8">
+        <div className="mb-6 flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
               <TicketCheck className="h-[18px] w-[18px]" />

@@ -13,7 +13,7 @@ import {
   CheckCircle, XCircle, HelpCircle, ExternalLink, ChevronDown, ChevronRight, Wrench,
   Package, FolderGit2, Loader2, AlertCircle, X as XIcon, Copy, Check,
   Search, Github, FileText, Table2, Video, Figma, BriefcaseBusiness, Database,
-  HardDrive, MessageSquare, Brain, Folder, AlertTriangle,
+  HardDrive, MessageSquare, Brain, Folder, AlertTriangle, Pencil,
 } from 'lucide-react';
 import IconTooltipButton from '../common/IconTooltipButton';
 import Select from '../common/Select';
@@ -49,6 +49,7 @@ function ServerCard({
   const [busy, setBusy] = useState<null | 'test' | 'delete' | 'reinstall'>(null);
   const [flash, setFlash] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const sourceKind = server.source?.kind ?? (server.bundleId ? 'bundle (legacy)' : 'custom');
   const sourceLabel =
@@ -151,6 +152,9 @@ function ServerCard({
               {busy === 'reinstall' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
             </IconTooltipButton>
           )}
+          <IconTooltipButton label="Edit server" onClick={() => setEditOpen(true)} disabled={!!busy}>
+            <Pencil className="w-3.5 h-3.5" />
+          </IconTooltipButton>
           <IconTooltipButton label="Delete server" tone="danger" onClick={() => setDeleteOpen(true)} disabled={!!busy}>
             <Trash2 className="w-3.5 h-3.5" />
           </IconTooltipButton>
@@ -227,6 +231,15 @@ function ServerCard({
         }}
         onConfirm={() => void handleDelete()}
       />
+      <EditServerModal
+        open={editOpen}
+        server={server}
+        onClose={() => setEditOpen(false)}
+        onSaved={() => {
+          setEditOpen(false);
+          onChange();
+        }}
+      />
     </div>
   );
 }
@@ -290,6 +303,589 @@ function McpDeleteDialog({
       </div>
     </div>,
     document.body,
+  );
+}
+
+function parseKeyList(value: string): string[] {
+  return Array.from(new Set(
+    value
+      .split(/[\n,]+/)
+      .map((item) => bareCredentialKey(item))
+      .filter(Boolean),
+  ));
+}
+
+function parseArgs(value: string): string[] {
+  return value
+    .split('\n')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function EditServerModal({
+  open,
+  server,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  server: McpServer;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  if (!open) return null;
+
+  const isPreset = server.source?.kind === 'preset';
+  return (
+    <McpServerModalShell
+      title="Edit MCP server"
+      description={isPreset
+        ? <>Update variables for <span className="font-mono text-theme-secondary">{server.name}</span>. Preset command, name, path, and type are managed by Allen.</>
+        : <>Update connection details for <span className="font-mono text-theme-secondary">{server.name}</span>.</>}
+      onClose={onClose}
+    >
+      {isPreset
+        ? <EditPresetServerForm server={server} onClose={onClose} onSaved={onSaved} />
+        : <EditCustomServerForm server={server} onClose={onClose} onSaved={onSaved} />}
+    </McpServerModalShell>
+  );
+}
+
+function presetServerCredentialKeys(server: McpServer): string[] {
+  return [...(server.envKeys ?? []), ...(server.argKeys ?? [])];
+}
+
+function EditPresetServerForm({
+  server,
+  onClose,
+  onSaved,
+}: {
+  server: McpServer;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const isDesktop = typeof window !== 'undefined' && Boolean(window.allenDesktop);
+  const [presets, setPresets] = useState<McpPreset[]>([]);
+  const [credentialDrafts, setCredentialDrafts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [missing, setMissing] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.presets().then(setPresets).catch(() => setPresets([]));
+  }, []);
+
+  const presetName = server.source?.kind === 'preset' ? server.source.presetName : undefined;
+  const preset = presets.find((item) => item.name === presetName) ?? null;
+  const keys = preset ? [...preset.envKeys, ...(preset.argKeys ?? [])] : presetServerCredentialKeys(server);
+  const normalizedKeys = credentialKeys(keys);
+  const isSaveDisabled = busy || (normalizedKeys.length === 0 && isDesktop);
+
+  async function submit() {
+    setBusy(true);
+    setMissing(null);
+    setError(null);
+    try {
+      await api.update(server._id, {
+        credentials: isDesktop ? credentialsFromDrafts(keys, credentialDrafts) : undefined,
+      });
+      onSaved();
+    } catch (e) {
+      const err = e as Error;
+      const missingCredentials = missingCredentialsFromError(err);
+      if (missingCredentials) setMissing(missingCredentials);
+      else setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-app bg-app-card">
+      <div className="flex items-start gap-3 border-b border-app px-4 py-4">
+        {preset ? <NativePresetIcon preset={preset} /> : <Server className="mt-1 h-5 w-5 shrink-0 text-theme-muted" />}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h4 className="text-[15px] font-semibold text-theme-primary">{presetName ?? server.name}</h4>
+            <span className="rounded-sm border border-app bg-app-muted/45 px-1.5 py-0.5 font-mono text-[10px] text-theme-muted">
+              {server.type}
+            </span>
+          </div>
+          <p className="mt-1 max-w-3xl text-[12px] leading-5 text-theme-muted">
+            {preset?.description ?? server.description}
+          </p>
+          <div className="mt-2 max-w-3xl truncate rounded-md border border-app bg-app px-2.5 py-1.5 font-mono text-[11px] text-theme-secondary">
+            {preset ? presetCommandPreview(preset) : (server.command ? `${server.command}${server.args?.length ? ' ' + server.args.join(' ') : ''}` : server.url ?? 'Preset connection')}
+          </div>
+        </div>
+      </div>
+
+      <section className="p-4">
+        <div className="rounded-lg border border-app bg-app p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-[12px] font-semibold text-theme-primary">Variables</div>
+              <p className="mt-1 text-[12px] leading-5 text-theme-muted">
+                Add only the values. Leave a value blank to keep the existing saved value.
+              </p>
+            </div>
+            <span className="shrink-0 rounded-sm border border-app bg-app-card px-1.5 py-0.5 font-mono text-[10px] text-theme-muted">
+              {normalizedKeys.length} required
+            </span>
+          </div>
+
+          {normalizedKeys.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {normalizedKeys.map((key) => (
+                <label
+                  key={key}
+                  className="grid items-center gap-3 rounded-md border border-app bg-app-card p-3 md:grid-cols-[minmax(0,1fr)_minmax(260px,360px)]"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-medium text-theme-muted">Key</span>
+                    <span className="mt-1 block truncate font-mono text-[11px] leading-5 text-theme-secondary" title={key}>
+                      {key}
+                    </span>
+                  </span>
+                  {isDesktop ? (
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={credentialDrafts[key] ?? ''}
+                      onChange={(event) => setCredentialDrafts((prev) => ({ ...prev, [key]: event.target.value }))}
+                      placeholder="keep existing"
+                      className="h-9 w-full rounded-md border border-app bg-app px-3 font-mono text-[12px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:ring-2 focus:ring-accent/15"
+                    />
+                  ) : (
+                    <span className="truncate rounded-md border border-app bg-app px-3 py-2 font-mono text-[11px] text-theme-muted">
+                      read from .env
+                    </span>
+                  )}
+                </label>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 rounded-md border border-app bg-app-card px-3 py-3 text-[12px] text-theme-muted">
+              This preset has no variables to edit.
+            </div>
+          )}
+
+          <div className="mt-3 space-y-2">
+            {missing && <MissingEnvError missing={missing} onDismiss={() => setMissing(null)} />}
+            {error && <div className="rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 font-mono text-[11px] text-accent-red">{error}</div>}
+          </div>
+        </div>
+      </section>
+
+      <div className="flex justify-end gap-2 border-t border-app px-4 py-4">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={busy}
+          className="inline-flex h-9 items-center justify-center rounded-md border border-app bg-app-card px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:bg-app-muted hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={isSaveDisabled}
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-accent/40 bg-accent px-3.5 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}
+          Save variables
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function initialCredentialRows(server: McpServer): CredentialRow[] {
+  return (server.envKeys ?? []).map((key) => ({
+    id: `${server._id}-${key}`,
+    key: bareCredentialKey(key),
+  }));
+}
+
+function EditCustomServerForm({
+  server,
+  onClose,
+  onSaved,
+}: {
+  server: McpServer;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const isDesktop = typeof window !== 'undefined' && Boolean(window.allenDesktop);
+  const repoSource = server.source?.kind === 'repo' ? server.source : null;
+  const isRepoSource = Boolean(repoSource);
+  const [name, setName] = useState(server.name);
+  const [type, setType] = useState<McpServer['type']>(server.type);
+  const [entryPath, setEntryPath] = useState(repoSource?.entryPath ?? '');
+  const [installPath, setInstallPath] = useState(repoSource?.installPath ?? '');
+  const [command, setCommand] = useState(server.command ?? '');
+  const [argsInput, setArgsInput] = useState((server.args ?? []).join('\n'));
+  const [url, setUrl] = useState(server.url ?? '');
+  const [headersInput, setHeadersInput] = useState(server.headers ? JSON.stringify(server.headers, null, 2) : '');
+  const [pythonInterpreter, setPythonInterpreter] = useState(server.python?.interpreter ?? 'python3');
+  const [requirementsPath, setRequirementsPath] = useState(server.python?.requirementsPath ?? '');
+  const [envKeysInput, setEnvKeysInput] = useState((server.envKeys ?? []).map(bareCredentialKey).join('\n'));
+  const [credentialRows, setCredentialRows] = useState<CredentialRow[]>(() => initialCredentialRows(server));
+  const [credentialDrafts, setCredentialDrafts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [missing, setMissing] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const isPyEntry = isRepoSource && entryPath.toLowerCase().endsWith('.py');
+  const declaredEnvKeys = useMemo(() => parseKeyList(envKeysInput), [envKeysInput]);
+  const rowEnvKeys = useMemo(
+    () => credentialRows.map((row) => bareCredentialKey(row.key)).filter(Boolean),
+    [credentialRows],
+  );
+  const envKeys = useMemo(
+    () => Array.from(new Set(isDesktop ? rowEnvKeys : declaredEnvKeys)),
+    [declaredEnvKeys, isDesktop, rowEnvKeys],
+  );
+  const requirementsDefault = useMemo(() => {
+    if (!isPyEntry || !entryPath) return '';
+    const last = entryPath.lastIndexOf('/');
+    return last > 0 ? `${entryPath.slice(0, last)}/requirements.txt` : 'requirements.txt';
+  }, [isPyEntry, entryPath]);
+
+  function updateCredentialRow(id: string, nextKey: string) {
+    setCredentialRows((current) => {
+      const previous = current.find((row) => row.id === id);
+      if (previous) {
+        const previousFullKey = fullCredentialKey(previous.key);
+        const nextFullKey = fullCredentialKey(nextKey);
+        if (previousFullKey !== nextFullKey) {
+          setCredentialDrafts((drafts) => {
+            const next = { ...drafts };
+            if (next[previousFullKey] !== undefined && next[nextFullKey] === undefined) {
+              next[nextFullKey] = next[previousFullKey];
+            }
+            delete next[previousFullKey];
+            return next;
+          });
+        }
+      }
+      return current.map((row) => row.id === id ? { ...row, key: nextKey } : row);
+    });
+  }
+
+  function removeCredentialRow(id: string) {
+    setCredentialRows((current) => {
+      const row = current.find((item) => item.id === id);
+      if (row) {
+        const fullKey = fullCredentialKey(row.key);
+        setCredentialDrafts((drafts) => {
+          const next = { ...drafts };
+          delete next[fullKey];
+          return next;
+        });
+      }
+      return current.filter((item) => item.id !== id);
+    });
+  }
+
+  function addCredentialRow(key = '') {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setCredentialRows((current) => [...current, { id, key }]);
+  }
+
+  async function submit() {
+    if (!name.trim()) { setError('name required'); return; }
+    if (isRepoSource && !entryPath.trim()) { setError('entry path required'); return; }
+    setBusy(true);
+    setMissing(null);
+    setError(null);
+    try {
+      let headers: Record<string, string> | undefined;
+      if (!isRepoSource && (type === 'http' || type === 'sse') && headersInput.trim()) {
+        const parsed = JSON.parse(headersInput);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('Headers must be a JSON object.');
+        }
+        headers = Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, String(value)]));
+      }
+
+      const trimmedCommand = command.trim();
+      const body: Partial<McpServer> & { credentials?: Record<string, string> } = {
+        name: name.trim(),
+        envKeys,
+        argKeys: server.argKeys ?? [],
+        credentials: isDesktop ? credentialsFromDrafts([...envKeys, ...(server.argKeys ?? [])], credentialDrafts) : undefined,
+      };
+
+      if (repoSource) {
+        body.type = 'stdio';
+        body.source = {
+          ...repoSource,
+          entryPath: entryPath.trim(),
+          installPath: installPath.trim() || undefined,
+        };
+        body.command = trimmedCommand;
+        body.args = server.args ?? [];
+        body.python = isPyEntry && !trimmedCommand
+          ? {
+              interpreter: pythonInterpreter.trim() || 'python3',
+              ...(requirementsPath.trim() ? { requirementsPath: requirementsPath.trim() } : {}),
+            }
+          : undefined;
+      } else {
+        body.type = type;
+        if (type === 'stdio') {
+          body.command = trimmedCommand;
+          body.args = parseArgs(argsInput);
+          body.url = '';
+          body.headers = {};
+        } else {
+          body.command = '';
+          body.args = [];
+          body.url = url.trim();
+          body.headers = headers ?? {};
+        }
+      }
+
+      await api.update(server._id, body);
+      onSaved();
+    } catch (e) {
+      const err = e as Error;
+      const missingCredentials = missingCredentialsFromError(err);
+      if (missingCredentials) {
+        setMissing(missingCredentials);
+        if (isDesktop) {
+          setCredentialRows((current) => {
+            const existing = new Set(current.map((row) => fullCredentialKey(row.key)));
+            const additions = missingCredentials
+              .filter((key) => !existing.has(fullCredentialKey(key)))
+              .map((key) => ({ id: `${Date.now()}-${key}`, key: bareCredentialKey(key) }));
+            return [...current, ...additions];
+          });
+        }
+      } else {
+        setError(err.message);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Field label="Name">
+        <input
+          type="text"
+          placeholder="e.g. my-postgres"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+        />
+      </Field>
+
+      {isRepoSource ? (
+        <>
+          <Field label="Entry file">
+            <input
+              type="text"
+              placeholder="e.g. .claude/mcp/postgres/server.mjs"
+              value={entryPath}
+              onChange={(e) => {
+                const value = e.target.value;
+                setEntryPath(value);
+                if (value) setCommand(value.toLowerCase().endsWith('.py') ? '' : commandForExtension(value));
+              }}
+              className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+            />
+          </Field>
+
+          <Field label="Install dir">
+            <input
+              type="text"
+              placeholder="auto (entry file's directory)"
+              value={installPath}
+              onChange={(e) => setInstallPath(e.target.value)}
+              className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+            />
+            <div className="text-[10px] text-theme-subtle mt-1 font-body">
+              Directory containing <code className="font-mono text-theme-muted">package.json</code>. Leave blank to use the entry file's folder.
+            </div>
+          </Field>
+
+          <Field label="Command">
+            <input
+              type="text"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              placeholder={isPyEntry ? 'leave blank — Allen will create a venv' : 'e.g. node, npx tsx'}
+              className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+            />
+            {isPyEntry && !command && (
+              <p className="text-[10px] text-theme-subtle font-body mt-1">
+                Allen will create an isolated venv at <code className="font-mono text-theme-muted">~/.allen/venvs/&lt;id&gt;/</code> and install requirements.txt on first spawn.
+              </p>
+            )}
+          </Field>
+
+          {isPyEntry && !command && (
+            <>
+              <Field label="Python interpreter">
+                <input
+                  type="text"
+                  value={pythonInterpreter}
+                  onChange={(e) => setPythonInterpreter(e.target.value)}
+                  placeholder="python3"
+                  className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+                />
+              </Field>
+
+              <Field label="requirements.txt">
+                <input
+                  type="text"
+                  value={requirementsPath}
+                  onChange={(e) => setRequirementsPath(e.target.value)}
+                  placeholder={requirementsDefault || 'auto-detected sibling'}
+                  className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+                />
+              </Field>
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          <Field label="Type">
+            <select
+              value={type}
+              onChange={(event) => setType(event.target.value as McpServer['type'])}
+              className="h-9 w-full rounded-md border border-app bg-app-card px-2.5 text-sm text-theme-primary outline-none transition-colors focus:border-accent-blue/60"
+            >
+              <option value="stdio">stdio</option>
+              <option value="http">http</option>
+              <option value="sse">sse</option>
+            </select>
+          </Field>
+          {type === 'stdio' ? (
+            <>
+              <Field label="Command">
+                <input
+                  value={command}
+                  onChange={(event) => setCommand(event.target.value)}
+                  placeholder="node"
+                  className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+                />
+              </Field>
+              <Field label="Args">
+                <textarea
+                  value={argsInput}
+                  onChange={(event) => setArgsInput(event.target.value)}
+                  rows={3}
+                  placeholder="one argument per line"
+                  className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+                />
+              </Field>
+            </>
+          ) : (
+            <>
+              <Field label="URL">
+                <input
+                  value={url}
+                  onChange={(event) => setUrl(event.target.value)}
+                  placeholder="https://..."
+                  className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+                />
+              </Field>
+              <Field label="Headers JSON">
+                <textarea
+                  value={headersInput}
+                  onChange={(event) => setHeadersInput(event.target.value)}
+                  rows={3}
+                  placeholder='{"Authorization":"Bearer ..."}'
+                  className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+                />
+              </Field>
+            </>
+          )}
+        </>
+      )}
+
+      {isDesktop ? (
+        <Field label="Credential values">
+          <div className="space-y-2">
+            {credentialRows.map((row) => {
+              const fullKey = fullCredentialKey(row.key);
+              return (
+                <div key={row.id} className="grid grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)_auto] gap-2">
+                  <input
+                    type="text"
+                    value={row.key}
+                    onChange={(event) => updateCredentialRow(row.id, event.target.value)}
+                    placeholder="API_KEY"
+                    className="min-w-0 px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+                  />
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={credentialDrafts[fullKey] ?? ''}
+                    onChange={(event) => setCredentialDrafts((prev) => ({ ...prev, [fullKey]: event.target.value }))}
+                    placeholder="keep existing"
+                    className="min-w-0 px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60"
+                  />
+                  <IconTooltipButton label="Remove credential" tone="danger" onClick={() => removeCredentialRow(row.id)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </IconTooltipButton>
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => addCredentialRow()}
+              className="inline-flex items-center gap-1.5 rounded-md border border-app px-2.5 py-1.5 text-[12px] text-theme-secondary transition-colors hover:bg-app-muted hover:text-theme-primary"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add credential
+            </button>
+            <div className="text-[10px] text-theme-subtle font-body">
+              Values are saved in the desktop secret store. Blank values keep the existing saved value.
+            </div>
+          </div>
+        </Field>
+      ) : (
+        <Field label="Env keys">
+          <textarea
+            placeholder="Bare credential names from .env — e.g. POSTGRES_HOST, POSTGRES_PORT"
+            value={envKeysInput}
+            onChange={(e) => setEnvKeysInput(e.target.value)}
+            className="w-full px-2.5 py-1.5 rounded-md border border-app bg-app-card text-theme-primary text-sm font-mono placeholder:text-theme-subtle focus:outline-none focus:border-accent-blue/60 min-h-[60px]"
+          />
+          {envKeys.length > 0 && (
+            <div className="text-[10px] text-theme-subtle mt-1 font-mono">
+              Web expects these to exist in .env as: <span className="text-theme-muted">{credentialKeys(envKeys).join(', ')}</span>
+            </div>
+          )}
+        </Field>
+      )}
+
+      {missing && <MissingEnvError missing={missing} onDismiss={() => setMissing(null)} />}
+      {error && <div className="text-xs text-accent-red font-mono">{error}</div>}
+
+      <div className="flex justify-end gap-2 pt-2">
+        <button
+          onClick={onClose}
+          disabled={busy}
+          className="px-3 py-1.5 rounded-md border border-app text-theme-secondary hover:bg-app-muted text-sm font-body transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={() => void submit()}
+          disabled={busy || !name.trim() || (isRepoSource && !entryPath.trim())}
+          className="px-3 py-1.5 rounded-md bg-accent-blue text-white hover:opacity-90 disabled:opacity-40 text-sm font-body flex items-center gap-1.5 transition-opacity"
+        >
+          {busy && <Loader2 className="w-3 h-3 animate-spin" />}
+          Save changes
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -607,20 +1203,33 @@ function presetCommandPreview(preset: McpPreset): string {
   return [preset.command, ...(preset.args ?? [])].filter(Boolean).join(' ');
 }
 
-function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
-  const [mode, setMode] = useState<AddMode>('preset');
-
-  // Lock body scroll while modal is open + close on Escape.
+function McpServerModalShell({
+  title,
+  description,
+  onClose,
+  closeDisabled = false,
+  tabs,
+  children,
+  maxWidth = 'max-w-4xl',
+}: {
+  title: string;
+  description: React.ReactNode;
+  onClose: () => void;
+  closeDisabled?: boolean;
+  tabs?: React.ReactNode;
+  children: React.ReactNode;
+  maxWidth?: string;
+}) {
   useEffect(() => {
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !closeDisabled) onClose(); };
     window.addEventListener('keydown', onKey);
     return () => {
       document.body.style.overflow = prevOverflow;
       window.removeEventListener('keydown', onKey);
     };
-  }, [onClose]);
+  }, [closeDisabled, onClose]);
 
   // Portal to document.body so no ancestor's backdrop-filter / transform /
   // contain / filter creates a containing block that clips a `position:
@@ -630,33 +1239,53 @@ function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAdded: ()
   return createPortal(
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={() => { if (!closeDisabled) onClose(); }}
     >
       <div
-        className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-app bg-app-card shadow-2xl"
+        className={`flex max-h-[88vh] w-full ${maxWidth} flex-col overflow-hidden rounded-lg border border-app bg-app-card shadow-2xl`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-4 border-b border-app px-5 py-4">
           <div className="min-w-0">
-            <h3 className="text-[15px] font-semibold text-theme-primary">Add MCP server</h3>
-            <p className="mt-1 text-[12px] leading-5 text-theme-muted">
-              Connect Allen to external tools through curated presets or a repository-hosted MCP server.
-            </p>
+            <h3 className="text-[15px] font-semibold text-theme-primary">{title}</h3>
+            <p className="mt-1 text-[12px] leading-5 text-theme-muted">{description}</p>
           </div>
-          <button onClick={onClose} className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-secondary">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={closeDisabled}
+            className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-secondary disabled:cursor-not-allowed disabled:opacity-60"
+          >
             <XIcon className="h-4 w-4" />
           </button>
         </div>
-        <div className="flex gap-1 border-b border-app px-5 pt-3">
-          <TabButton active={mode === 'preset'} onClick={() => setMode('preset')} icon={<Package className="h-3.5 w-3.5" />}>Preset</TabButton>
-          <TabButton active={mode === 'repo'} onClick={() => setMode('repo')} icon={<FolderGit2 className="h-3.5 w-3.5" />}>Repository</TabButton>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5">
-          {mode === 'preset' ? <AddFromPreset onAdded={onAdded} onClose={onClose} /> : <AddFromRepo onAdded={onAdded} onClose={onClose} />}
+        {tabs}
+        <div className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-5">
+          {children}
         </div>
       </div>
     </div>,
     document.body,
+  );
+}
+
+function AddServerModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+  const [mode, setMode] = useState<AddMode>('preset');
+
+  return (
+    <McpServerModalShell
+      title="Add MCP server"
+      description="Connect Allen to external tools through curated presets or a repository-hosted MCP server."
+      onClose={onClose}
+      tabs={(
+        <div className="flex gap-1 border-b border-app px-5 pt-3">
+          <TabButton active={mode === 'preset'} onClick={() => setMode('preset')} icon={<Package className="h-3.5 w-3.5" />}>Preset</TabButton>
+          <TabButton active={mode === 'repo'} onClick={() => setMode('repo')} icon={<FolderGit2 className="h-3.5 w-3.5" />}>Repository</TabButton>
+        </div>
+      )}
+    >
+      {mode === 'preset' ? <AddFromPreset onAdded={onAdded} onClose={onClose} /> : <AddFromRepo onAdded={onAdded} onClose={onClose} />}
+    </McpServerModalShell>
   );
 }
 

@@ -259,23 +259,17 @@ function GeneralTab() {
         <SettingsRow label="Appearance" description="Use system mode or choose a fixed light or dark theme.">
           <AppearancePicker />
         </SettingsRow>
-        <SettingsRow label="Startup view" description="Open Allen to the operational dashboard.">
-          <SettingsValue>Dashboard</SettingsValue>
-        </SettingsRow>
         <SettingsRow label="Command palette" description="Quickly navigate and run app commands.">
           <ShortcutKey value="⌘K" />
         </SettingsRow>
-        <SettingsRow label="Repository handoff" description="Ask before using a repository for a new workflow.">
-          <SettingsSwitch checked />
+        <SettingsRow label="Focus chat input" description="Focus chat input, or jump to dashboard and focus it from another page.">
+          <ShortcutKey value="⌘L" />
         </SettingsRow>
       </SettingsPanel>
 
       <SettingsPanel title="Notifications" description="Keep interruptions focused on work that needs attention.">
         <SettingsRow label="Run completions" description="Notify when Allen completes a long-running task.">
           <SettingsSwitch />
-        </SettingsRow>
-        <SettingsRow label="Approval requests" description="Surface required approvals and questions.">
-          <SettingsSwitch checked />
         </SettingsRow>
         <SettingsRow label="Daily digest" description="Summarize completed work and unresolved items.">
           <SettingsValue>Off</SettingsValue>

@@ -264,7 +264,7 @@ export default function RepoContextManagementPage() {
     : 'none';
 
   return (
-    <div className="min-h-full px-6 pt-5 pb-8">
+    <div className="min-h-full px-8 pt-8 pb-8">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <button

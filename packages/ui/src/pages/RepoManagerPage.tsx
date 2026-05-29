@@ -5,6 +5,7 @@ import Select from '../components/common/Select';
 import {
   Check, Copy, FolderGit2, Plus, RefreshCw, Trash2, Pencil, ScanSearch, X,
   GitBranch, Sparkles, ExternalLink, Loader2, Settings, Monitor, FileText, Download,
+  Github, HardDrive, FolderOpen, CheckCircle2, AlertTriangle, XCircle,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
@@ -80,30 +81,125 @@ type ContextRuntimeConfig = {
   cogneeEnabled: boolean;
 };
 
+const FORM_INPUT_CLASS = 'h-9 w-full rounded-md border border-app bg-app px-3 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]';
+const FORM_LABEL_CLASS = 'mb-2 block font-mono text-[11px] uppercase tracking-[0.12em] text-theme-muted';
+const DIALOG_BACKDROP_CLASS = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-sm';
+const DIALOG_PANEL_CLASS = 'overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200';
+const SECONDARY_BUTTON_CLASS = 'inline-flex h-9 items-center justify-center rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:bg-app-muted hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-50';
+const PRIMARY_BUTTON_CLASS = 'inline-flex h-9 items-center justify-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50';
+const TERTIARY_BUTTON_CLASS = 'inline-flex h-9 items-center justify-center gap-2 rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:bg-app-muted hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-50';
+const SEGMENTED_GROUP_CLASS = 'inline-flex h-9 items-center rounded-md border border-app bg-app-card p-1';
+const SEGMENTED_BUTTON_CLASS = 'inline-flex h-7 items-center justify-center gap-2 rounded-md px-2.5 text-[12px] font-medium transition-colors';
+const ROW_ICON_BUTTON_CLASS = 'h-8 w-8 border border-app bg-app hover:border-app-strong';
+const ROW_DANGER_ICON_BUTTON_CLASS = 'h-8 w-8 border border-app bg-app hover:border-accent-red/50';
+
+type AddRepoMode = 'clone' | 'local';
+type ValidationCheckStatus = 'pass' | 'warn' | 'fail';
+
+interface RepoValidationCheck {
+  id: string;
+  label: string;
+  status: ValidationCheckStatus;
+  detail: string;
+}
+
+interface RepoValidationResult {
+  ok: boolean;
+  source: AddRepoMode;
+  name?: string;
+  path?: string;
+  clonePath?: string;
+  branch?: string;
+  detected?: Repo['detected'];
+  checks: RepoValidationCheck[];
+}
+
+function validationStatusClass(status: ValidationCheckStatus): string {
+  if (status === 'pass') return 'border-accent-green/25 bg-accent-green/10 text-accent-green';
+  if (status === 'warn') return 'border-accent-yellow/25 bg-accent-yellow/10 text-accent-yellow';
+  return 'border-accent-red/25 bg-accent-red/10 text-accent-red';
+}
+
+function ValidationStatusIcon({ status }: { status: ValidationCheckStatus }) {
+  if (status === 'pass') return <CheckCircle2 className="h-3.5 w-3.5" />;
+  if (status === 'warn') return <AlertTriangle className="h-3.5 w-3.5" />;
+  return <XCircle className="h-3.5 w-3.5" />;
+}
+
+function RepoValidationPreview({ result }: { result: RepoValidationResult | null }) {
+  if (!result) return null;
+  return (
+    <div className="rounded-md border border-app bg-app-card">
+      <div className="flex items-center justify-between gap-3 border-b border-app bg-app-muted/25 px-3 py-2">
+        <div className="font-mono text-[10.5px] font-medium uppercase tracking-[0.14em] text-theme-muted">Validation</div>
+        <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[10.5px] ${result.ok ? 'border-accent-green/25 bg-accent-green/10 text-accent-green' : 'border-accent-red/25 bg-accent-red/10 text-accent-red'}`}>
+          {result.ok ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+          {result.ok ? 'ready' : 'blocked'}
+        </span>
+      </div>
+      <div className="divide-y divide-app">
+        {result.checks.map(check => (
+          <div key={check.id} className="flex min-h-11 items-start gap-2 px-3 py-2">
+            <span className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${validationStatusClass(check.status)}`}>
+              <ValidationStatusIcon status={check.status} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[11.5px] font-medium text-theme-primary">{check.label}</div>
+              <div className="mt-0.5 text-[11px] leading-4 text-theme-muted [overflow-wrap:anywhere]">{check.detail}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ── Add Dialog ─────────────────────────────────────────────────────────── */
 
 function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+  const [mode, setMode] = useState<AddRepoMode>('clone');
   const [url, setUrl] = useState('');
+  const [localPath, setLocalPath] = useState('');
   const [branch, setBranch] = useState('main');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [tags, setTags] = useState('');
+  const [validation, setValidation] = useState<RepoValidationResult | null>(null);
+  const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const isDesktop = typeof window !== 'undefined' && Boolean(window.allenDesktop);
+
+  useEffect(() => {
+    if (!open) return;
+    setError('');
+    setValidation(null);
+  }, [branch, localPath, mode, name, open, url]);
 
   const handleSubmit = async () => {
-    if (!url.trim()) { setError('Repository URL is required'); return; }
+    if (mode === 'clone' && !url.trim()) { setError('Repository URL is required'); return; }
+    if (mode === 'local' && !localPath.trim()) { setError('Local repository path is required'); return; }
     setSaving(true);
     setError('');
     try {
-      await repoApi.clone({
-        url: url.trim(),
-        branch: branch.trim() || 'main',
-        name: name.trim() || undefined,
-        description: description.trim() || undefined,
-        tags: tags.trim() ? tags.split(',').map(t => t.trim()).filter(Boolean) : [],
-      });
-      setUrl(''); setBranch('main'); setName(''); setDescription(''); setTags('');
+      const parsedTags = tags.trim() ? tags.split(',').map(t => t.trim()).filter(Boolean) : [];
+      if (mode === 'local') {
+        await repoApi.create({
+          path: localPath.trim(),
+          name: name.trim() || undefined,
+          description: description.trim() || undefined,
+          tags: parsedTags,
+        });
+      } else {
+        await repoApi.clone({
+          url: url.trim(),
+          branch: branch.trim() || 'main',
+          name: name.trim() || undefined,
+          description: description.trim() || undefined,
+          tags: parsedTags,
+        });
+      }
+      setUrl(''); setLocalPath(''); setBranch('main'); setName(''); setDescription(''); setTags(''); setValidation(null);
       onCreated();
       onClose();
     } catch (e: any) {
@@ -113,13 +209,37 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
     }
   };
 
+  const handleValidate = async () => {
+    setChecking(true);
+    setError('');
+    try {
+      const result = mode === 'local'
+        ? await repoApi.validateLocal(localPath.trim())
+        : await repoApi.validateClone({
+          url: url.trim(),
+          branch: branch.trim() || 'main',
+          name: name.trim() || undefined,
+        });
+      setValidation(result);
+    } catch (e: any) {
+      setValidation(null);
+      setError(e.message);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const chooseLocalDirectory = async () => {
+    const selected = await window.allenDesktop?.selectDirectory();
+    if (selected) setLocalPath(selected);
+  };
+
   if (!open) return null;
-  const inputClass = 'h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]';
-  const labelClass = 'mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-theme-muted';
+  const primaryLabel = mode === 'local' ? 'Onboard repository' : 'Clone repository';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-sm" role="dialog" aria-modal="true">
-      <div className="w-full max-w-[560px] overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200">
+    <div className={DIALOG_BACKDROP_CLASS} role="dialog" aria-modal="true">
+      <div className={`w-full max-w-[640px] ${DIALOG_PANEL_CLASS}`}>
         <div className="flex items-start justify-between gap-4 border-b border-app px-6 py-5">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app text-accent">
@@ -127,7 +247,7 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
             </span>
             <div>
               <h2 className="text-[16px] font-semibold text-theme-primary">Add repository</h2>
-              <p className="mt-1 text-[13px] text-theme-muted">Clone a Git repository and let Allen detect the project shape.</p>
+              <p className="mt-1 text-[13px] text-theme-muted">Clone from GitHub or onboard a local checkout already on this machine.</p>
             </div>
           </div>
           <IconTooltipButton label="Close" onClick={onClose} className="h-9 w-9">
@@ -135,46 +255,112 @@ function AddRepoDialog({ open, onClose, onCreated }: { open: boolean; onClose: (
           </IconTooltipButton>
         </div>
 
-        <div className="max-h-[58vh] space-y-4 overflow-auto px-6 py-5">
+        <div className="max-h-[62vh] space-y-4 overflow-auto px-6 py-5">
           {error && (
             <div className="rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">{error}</div>
           )}
-          <div>
-            <label className={labelClass}>Repository URL</label>
-            <input type="text" value={url} onChange={e => setUrl(e.target.value)}
-              placeholder="https://github.com/owner/repo or git@github.com:owner/repo.git" className={`${inputClass} font-mono`} autoFocus />
-            <p className="mt-2 text-[12px] text-theme-muted">HTTPS or SSH URL. Allen clones it into the local repositories directory.</p>
+
+          <div className={`${SEGMENTED_GROUP_CLASS} grid grid-cols-2`}>
+            <button
+              type="button"
+              onClick={() => setMode('clone')}
+              className={`${SEGMENTED_BUTTON_CLASS} ${mode === 'clone' ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'}`}
+            >
+              <Github className="h-4 w-4" />
+              Clone from GitHub
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('local')}
+              className={`${SEGMENTED_BUTTON_CLASS} ${mode === 'local' ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'}`}
+            >
+              <HardDrive className="h-4 w-4" />
+              Existing local repo
+            </button>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+
+          {mode === 'local' ? (
             <div>
-              <label className={labelClass}>Branch</label>
-              <input type="text" value={branch} onChange={e => setBranch(e.target.value)}
-                placeholder="main" className={`${inputClass} font-mono`} />
+              <label className={FORM_LABEL_CLASS}>Repository path</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={localPath}
+                  onChange={e => setLocalPath(e.target.value)}
+                  placeholder="/Users/you/projects/app"
+                  className={`${FORM_INPUT_CLASS} min-w-0 flex-1 font-mono`}
+                  autoFocus
+                />
+                {isDesktop && (
+                  <button
+                    type="button"
+                    onClick={chooseLocalDirectory}
+                    className={`${SECONDARY_BUTTON_CLASS} shrink-0`}
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                    Browse
+                  </button>
+                )}
+              </div>
+              <p className="mt-2 text-[12px] text-theme-muted">Allen registers this checkout in place. Your files are not moved into the managed repositories directory.</p>
             </div>
+          ) : (
+            <>
+              <div>
+                <label className={FORM_LABEL_CLASS}>Repository URL</label>
+                <input type="text" value={url} onChange={e => setUrl(e.target.value)}
+                  placeholder="https://github.com/owner/repo or git@github.com:owner/repo.git" className={`${FORM_INPUT_CLASS} font-mono`} autoFocus />
+                <p className="mt-2 text-[12px] text-theme-muted">HTTPS or SSH URL. Allen clones it into the local repositories directory.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={FORM_LABEL_CLASS}>Branch</label>
+                  <input type="text" value={branch} onChange={e => setBranch(e.target.value)}
+                    placeholder="main" className={`${FORM_INPUT_CLASS} font-mono`} />
+                </div>
+                <div>
+                  <label className={FORM_LABEL_CLASS}>Name</label>
+                  <input type="text" value={name} onChange={e => setName(e.target.value)}
+                    placeholder="Auto-derived" className={FORM_INPUT_CLASS} />
+                </div>
+              </div>
+            </>
+          )}
+
+          {mode === 'local' && (
             <div>
-              <label className={labelClass}>Name</label>
+              <label className={FORM_LABEL_CLASS}>Name</label>
               <input type="text" value={name} onChange={e => setName(e.target.value)}
-                placeholder="Auto-derived" className={inputClass} />
+                placeholder="Auto-derived from folder" className={FORM_INPUT_CLASS} />
             </div>
-          </div>
+          )}
+
           <div>
-            <label className={labelClass}>Description</label>
+            <label className={FORM_LABEL_CLASS}>Description</label>
             <input type="text" value={description} onChange={e => setDescription(e.target.value)}
-              placeholder="Brief description" className={inputClass} />
+              placeholder="Brief description" className={FORM_INPUT_CLASS} />
           </div>
           <div>
-            <label className={labelClass}>Tags</label>
+            <label className={FORM_LABEL_CLASS}>Tags</label>
             <input type="text" value={tags} onChange={e => setTags(e.target.value)}
-              placeholder="Comma-separated, e.g. backend, api" className={`${inputClass} font-mono`} />
+              placeholder="Comma-separated, e.g. backend, api" className={`${FORM_INPUT_CLASS} font-mono`} />
           </div>
+
+          <RepoValidationPreview result={validation} />
         </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-app px-6 py-4">
-          <button onClick={onClose} className="inline-flex h-9 items-center justify-center rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary" type="button">Cancel</button>
-          <button onClick={handleSubmit} disabled={saving} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50" type="button">
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderGit2 className="w-4 h-4" />}
-            {saving ? 'Cloning...' : 'Clone repository'}
+        <div className="flex items-center justify-between gap-3 border-t border-app px-6 py-4">
+          <button onClick={handleValidate} disabled={checking || saving || (mode === 'clone' ? !url.trim() : !localPath.trim())} className={TERTIARY_BUTTON_CLASS} type="button">
+            {checking ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            Validate
           </button>
+          <div className="flex items-center gap-3">
+            <button onClick={onClose} className={SECONDARY_BUTTON_CLASS} type="button">Cancel</button>
+            <button onClick={handleSubmit} disabled={saving} className={PRIMARY_BUTTON_CLASS} type="button">
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : mode === 'local' ? <HardDrive className="w-4 h-4" /> : <FolderGit2 className="w-4 h-4" />}
+              {saving ? (mode === 'local' ? 'Onboarding...' : 'Cloning...') : primaryLabel}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -230,12 +416,9 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
   };
 
   if (!open || !repo) return null;
-  const inputClass = 'h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]';
-  const labelClass = 'mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-theme-muted';
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-sm" role="dialog" aria-modal="true">
-      <div className="w-full max-w-[620px] overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200">
+    <div className={DIALOG_BACKDROP_CLASS} role="dialog" aria-modal="true">
+      <div className={`w-full max-w-[620px] ${DIALOG_PANEL_CLASS}`}>
         <div className="flex items-start justify-between gap-4 border-b border-app px-6 py-5">
           <div className="flex min-w-0 items-center gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app bg-app text-accent">
@@ -256,26 +439,26 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
             <div className="rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">{error}</div>
           )}
           <div>
-            <label className={labelClass}>Name</label>
-            <input type="text" value={name} onChange={e => setName(e.target.value)} className={inputClass} />
+            <label className={FORM_LABEL_CLASS}>Name</label>
+            <input type="text" value={name} onChange={e => setName(e.target.value)} className={FORM_INPUT_CLASS} />
           </div>
           <div>
-            <label className={labelClass}>Description</label>
-            <input type="text" value={description} onChange={e => setDescription(e.target.value)} className={inputClass} />
+            <label className={FORM_LABEL_CLASS}>Description</label>
+            <input type="text" value={description} onChange={e => setDescription(e.target.value)} className={FORM_INPUT_CLASS} />
           </div>
           <div>
-            <label className={labelClass}>Tags</label>
+            <label className={FORM_LABEL_CLASS}>Tags</label>
             <input type="text" value={tags} onChange={e => setTags(e.target.value)}
-              placeholder="Comma-separated" className={`${inputClass} font-mono`} />
+              placeholder="Comma-separated" className={`${FORM_INPUT_CLASS} font-mono`} />
           </div>
           <div>
-            <label className={labelClass}>Context</label>
+            <label className={FORM_LABEL_CLASS}>Context</label>
             <textarea value={context} onChange={e => setContext(e.target.value)}
-              rows={3} className="w-full resize-none rounded-md border border-app bg-app-muted px-3 py-2 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]" placeholder="Brief context for chat agent" />
+              rows={3} className="w-full resize-none rounded-md border border-app bg-app px-3 py-2 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]" placeholder="Brief context for chat agent" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={labelClass}>Default Workflow</label>
+              <label className={FORM_LABEL_CLASS}>Default Workflow</label>
               <Select
                 value={defaultWorkflow}
                 onChange={setDefaultWorkflow}
@@ -291,14 +474,14 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
               />
             </div>
             <div>
-              <label className={labelClass}>Status</label>
-              <div className="grid h-10 grid-cols-2 rounded-md border border-app bg-app p-1">
+              <label className={FORM_LABEL_CLASS}>Status</label>
+              <div className={`${SEGMENTED_GROUP_CLASS} grid w-full grid-cols-2`}>
                 {(['active', 'archived'] as const).map((value) => (
                   <button
                     key={value}
                     type="button"
                     onClick={() => setStatus(value)}
-                    className={`rounded-md text-[13px] font-medium transition-colors ${status === value ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'}`}
+                    className={`${SEGMENTED_BUTTON_CLASS} ${status === value ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'}`}
                   >
                     {value}
                   </button>
@@ -309,8 +492,8 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
         </div>
 
         <div className="flex items-center justify-end gap-3 border-t border-app px-6 py-4">
-          <button onClick={onClose} className="inline-flex h-9 items-center justify-center rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary" type="button">Cancel</button>
-          <button onClick={handleSubmit} disabled={saving} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50" type="button">
+          <button onClick={onClose} className={SECONDARY_BUTTON_CLASS} type="button">Cancel</button>
+          <button onClick={handleSubmit} disabled={saving} className={PRIMARY_BUTTON_CLASS} type="button">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />}
             {saving ? 'Saving...' : 'Save changes'}
           </button>
@@ -576,9 +759,9 @@ export default function RepoManagerPage() {
   };
 
   return (
-    <div className="content !p-0 scroll-hide bg-app" data-screen-label="repositories">
+    <div className="content scroll-hide !p-0 bg-app" data-screen-label="repositories">
       <div className="w-full px-8 py-8">
-        <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="mb-5 flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
               <FolderGit2 className="h-[18px] w-[18px]" />
@@ -606,34 +789,44 @@ export default function RepoManagerPage() {
           </div>
         </div>
 
-        {loading ? (
-          <div className="space-y-3">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="rounded-md border border-app bg-app-card px-5 py-4">
-                <div className="h-4 w-48 animate-pulse rounded-md bg-app-muted" />
-                <div className="mt-3 h-3 w-80 animate-pulse rounded-md bg-app-muted" />
-                <div className="mt-4 flex gap-2">
-                  <div className="h-5 w-16 animate-pulse rounded-md bg-app-muted" />
-                  <div className="h-5 w-20 animate-pulse rounded-md bg-app-muted" />
+        <section className="overflow-hidden rounded-md border border-app bg-app-card">
+          {repoList.length > 0 && (
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-app bg-app-muted/25 px-4 py-2 font-mono text-[10.5px] uppercase tracking-[0.14em] text-theme-muted">
+              <span>Repository</span>
+              <span>Actions</span>
+            </div>
+          )}
+
+          {loading ? (
+            <div>
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="border-t border-app px-4 py-3 first:border-t-0">
+                  <div className="flex items-center gap-4">
+                    <div className="h-9 w-9 animate-pulse rounded-md bg-app-muted" />
+                    <div className="min-w-0 flex-1">
+                      <div className="h-4 w-48 animate-pulse rounded-md bg-app-muted" />
+                      <div className="mt-2 h-3 w-80 animate-pulse rounded-md bg-app-muted" />
+                    </div>
+                    <div className="h-8 w-36 animate-pulse rounded-md bg-app-muted" />
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        ) : repoList.length === 0 ? (
-          <div className="rounded-md border border-dashed border-app bg-app-card px-5 py-12 text-center">
-            <FolderGit2 className="mx-auto h-8 w-8 text-theme-subtle" />
-            <div className="mt-4 text-[15px] font-semibold text-theme-primary">No repositories yet</div>
-            <p className="mt-1 text-[13px] text-theme-muted">Add a repository before creating workspaces or dispatching code tasks.</p>
-            <button
-              onClick={() => setAddOpen(true)}
-              className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
-              type="button"
-            >
-              <Plus className="w-3.5 h-3.5" /> Add repository
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-3">
+              ))}
+            </div>
+          ) : repoList.length === 0 ? (
+            <div className="px-5 py-12 text-center">
+              <FolderGit2 className="mx-auto h-8 w-8 text-theme-subtle" />
+              <div className="mt-4 text-[15px] font-semibold text-theme-primary">No repositories yet</div>
+              <p className="mt-1 text-[13px] text-theme-muted">Add a repository before creating workspaces or dispatching code tasks.</p>
+              <button
+                onClick={() => setAddOpen(true)}
+                className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+                type="button"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add repository
+              </button>
+            </div>
+          ) : (
+            <div className="divide-y divide-app">
             {repoList.map((repo) => {
               const hasRunningScan = repo.contextScan?.status === 'scanning';
               const isScanning = scanningId === repo._id;
@@ -642,8 +835,8 @@ export default function RepoManagerPage() {
               const cogneeStatus = contextConfig.cogneeEnabled ? cogneeStatusByRepo[repo._id] : undefined;
               const remote = repoRemote(repo);
               return (
-                <div key={repo._id} className={`rounded-md border border-app bg-app-card px-3 py-1.5 transition-colors hover:border-app-strong hover:bg-app-muted/20 ${isArchived ? 'opacity-60' : ''}`}>
-                  <div className="flex items-start gap-2.5">
+                <div key={repo._id} className={`px-4 py-3 transition-colors hover:bg-app-muted/30 ${isArchived ? 'opacity-60' : ''}`}>
+                  <div className="grid min-h-[68px] grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                         <span className="truncate text-[14px] font-semibold text-theme-primary">{repo.name}</span>
@@ -656,7 +849,7 @@ export default function RepoManagerPage() {
                             <span className="truncate">{remote.label}</span>
                           </a>
                         )}
-                        {isArchived && <span className="rounded-md bg-app-muted px-2 py-0.5 font-mono text-[10.5px] text-theme-muted">archived</span>}
+                        {isArchived && <span className="rounded-md border border-app bg-app px-2 py-0.5 font-mono text-[10.5px] text-theme-muted">archived</span>}
                       </div>
                       {repo.description && <p className="mt-0.5 text-[12px] text-theme-muted">{repo.description}</p>}
                       {contextConfig.cogneeEnabled && (
@@ -683,36 +876,36 @@ export default function RepoManagerPage() {
                       </div>
                       {contextConfig.cogneeEnabled && <CogneeProgress status={cogneeStatus} />}
                     </div>
-                    <div className="ml-auto flex self-stretch shrink-0 flex-col items-end justify-between gap-1">
+                    <div className="flex shrink-0 flex-col items-end gap-2">
                       <div className="flex items-center gap-1">
                         {contextConfig.enabled && (
-                          <button onClick={(e) => { e.stopPropagation(); navigate(`/repos/${repo._id}/context-management`); }} className="inline-flex h-[26px] items-center gap-1 rounded-md border border-app bg-app px-1.5 text-[11.5px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary" title="Open context management" type="button">
+                          <button onClick={(e) => { e.stopPropagation(); navigate(`/repos/${repo._id}/context-management`); }} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-app bg-app px-2 text-[12px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:bg-app-muted hover:text-theme-primary" title="Open context management" type="button">
                             <FileText className="w-3 h-3" />
                             Context
                           </button>
                         )}
-                        <IconTooltipButton label="New workspace" onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className="h-[26px] w-[26px] border border-app bg-app hover:border-app-strong">
+                        <IconTooltipButton label="New workspace" onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className={ROW_ICON_BUTTON_CLASS}>
                           <Monitor className="w-3 h-3" />
                         </IconTooltipButton>
-                        <IconTooltipButton label="Pull latest" onClick={(e) => handlePull(e, repo._id)} disabled={pullingId === repo._id} className="h-[26px] w-[26px] border border-app bg-app hover:border-app-strong">
+                        <IconTooltipButton label="Pull latest" onClick={(e) => handlePull(e, repo._id)} disabled={pullingId === repo._id} className={ROW_ICON_BUTTON_CLASS}>
                           {pullingId === repo._id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
                         </IconTooltipButton>
                         {hasRunningScan ? (
-                          <IconTooltipButton label="Cancel scan" tone="danger" onClick={(e) => handleCancelScan(e, repo._id)} disabled={isCancelingScan} className="h-[26px] w-[26px] border border-app bg-app hover:border-accent-red/50">
+                          <IconTooltipButton label="Cancel scan" tone="danger" onClick={(e) => handleCancelScan(e, repo._id)} disabled={isCancelingScan} className={ROW_DANGER_ICON_BUTTON_CLASS}>
                             {isCancelingScan ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
                           </IconTooltipButton>
                         ) : (
-                          <IconTooltipButton label="Scan repository" onClick={(e) => handleScan(e, repo._id)} disabled={isScanning} className="h-[26px] w-[26px] border border-app bg-app hover:border-app-strong">
+                          <IconTooltipButton label="Scan repository" onClick={(e) => handleScan(e, repo._id)} disabled={isScanning} className={ROW_ICON_BUTTON_CLASS}>
                             {isScanning ? <Loader2 className="w-3 h-3 animate-spin" /> : <ScanSearch className="w-3 h-3" />}
                           </IconTooltipButton>
                         )}
-                        <IconTooltipButton label="Workspace config" onClick={(e) => { e.stopPropagation(); setConfigRepoId(repo._id); }} className="h-[26px] w-[26px] border border-app bg-app hover:border-app-strong">
+                        <IconTooltipButton label="Workspace config" onClick={(e) => { e.stopPropagation(); setConfigRepoId(repo._id); }} className={ROW_ICON_BUTTON_CLASS}>
                           <Settings className="w-3 h-3" />
                         </IconTooltipButton>
-                        <IconTooltipButton label="Edit repository" onClick={(e) => { e.stopPropagation(); setEditRepo(repo); }} className="h-[26px] w-[26px] border border-app bg-app hover:border-app-strong">
+                        <IconTooltipButton label="Edit repository" onClick={(e) => { e.stopPropagation(); setEditRepo(repo); }} className={ROW_ICON_BUTTON_CLASS}>
                           <Pencil className="w-3 h-3" />
                         </IconTooltipButton>
-                        <IconTooltipButton label="Delete repository" tone="danger" onClick={(e) => { e.stopPropagation(); setDeletingRepo({ id: repo._id, name: repo.name }); }} className="h-[26px] w-[26px] border border-app bg-app hover:border-accent-red/50">
+                        <IconTooltipButton label="Delete repository" tone="danger" onClick={(e) => { e.stopPropagation(); setDeletingRepo({ id: repo._id, name: repo.name }); }} className={ROW_DANGER_ICON_BUTTON_CLASS}>
                           <Trash2 className="w-3 h-3" />
                         </IconTooltipButton>
                       </div>
@@ -722,8 +915,9 @@ export default function RepoManagerPage() {
                 </div>
               );
             })}
-          </div>
-        )}
+            </div>
+          )}
+        </section>
 
         <AddRepoDialog open={addOpen} onClose={() => setAddOpen(false)} onCreated={refresh} />
         <EditRepoDialog repo={editRepo} open={!!editRepo} onClose={() => setEditRepo(null)} onUpdated={refresh} />
@@ -767,12 +961,9 @@ function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClos
       />
     );
   }
-  const inputClass = 'h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]';
-  const labelClass = 'mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-theme-muted';
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-sm" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="w-full max-w-[520px] overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)]" onClick={e => e.stopPropagation()}>
+    <div className={DIALOG_BACKDROP_CLASS} onClick={onClose} role="dialog" aria-modal="true">
+      <div className={`w-full max-w-[520px] ${DIALOG_PANEL_CLASS}`} onClick={e => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-4 border-b border-app px-6 py-5">
           <div className="flex min-w-0 items-center gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app bg-app text-accent">
@@ -790,24 +981,25 @@ function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClos
         <div className="space-y-4 px-6 py-5">
           {error && <div className="rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">{error}</div>}
           <div>
-            <label className={labelClass}>Workspace Name</label>
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="feature/my-feature" className={inputClass} autoFocus />
+            <label className={FORM_LABEL_CLASS}>Workspace Name</label>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="feature/my-feature" className={FORM_INPUT_CLASS} autoFocus />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={labelClass}>Branch</label>
-              <input value={branch} onChange={e => setBranch(e.target.value)} placeholder="feature/new-thing" className={`${inputClass} font-mono`} />
+              <label className={FORM_LABEL_CLASS}>Branch</label>
+              <input value={branch} onChange={e => setBranch(e.target.value)} placeholder="feature/new-thing" className={`${FORM_INPUT_CLASS} font-mono`} />
             </div>
             <div>
-              <label className={labelClass}>Base Branch</label>
-              <input value={baseBranch} onChange={e => setBaseBranch(e.target.value)} className={`${inputClass} font-mono`} />
+              <label className={FORM_LABEL_CLASS}>Base Branch</label>
+              <input value={baseBranch} onChange={e => setBaseBranch(e.target.value)} className={`${FORM_INPUT_CLASS} font-mono`} />
             </div>
           </div>
         </div>
         <div className="flex justify-end gap-3 border-t border-app px-6 py-4">
-          <button onClick={onClose} className="inline-flex h-9 items-center justify-center rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary" type="button">Cancel</button>
-          <button onClick={handleCreate} disabled={creating} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50" type="button">
-            {creating ? 'Creating...' : 'Create Workspace'}
+          <button onClick={onClose} className={SECONDARY_BUTTON_CLASS} type="button">Cancel</button>
+          <button onClick={handleCreate} disabled={creating} className={PRIMARY_BUTTON_CLASS} type="button">
+            {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Monitor className="w-4 h-4" />}
+            {creating ? 'Creating...' : 'Create workspace'}
           </button>
         </div>
       </div>

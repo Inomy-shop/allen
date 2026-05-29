@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type * as Monaco from 'monaco-editor';
 import {
@@ -18,7 +18,6 @@ import {
   GitBranch,
   Loader2,
   ListTree,
-  PanelRightClose,
   PlayCircle,
   RefreshCw,
   Rows3,
@@ -833,7 +832,6 @@ function ArtifactLinks({ run, context }: { run: SpawnedAgent; context: RunStatus
             <ArtifactViewer
               artifact={selectedArtifact}
               onClose={() => setSelectedArtifact(null)}
-              showExternalLink={false}
             />
           </div>
         </div>
@@ -1616,7 +1614,6 @@ function ChatArtifactsPanel({
             <ArtifactViewer
               artifact={selectedArtifact}
               onClose={() => setSelectedArtifact(null)}
-              showExternalLink
             />
           ) : (
             <div className="cr-empty">Select an artifact to preview it here.</div>
@@ -2308,20 +2305,47 @@ function FileChangesPanel({
 
   const renderDiffPreview = (file: PanelDiffFile | null) => (
     <section className="cr-adjacent-preview">
-      <div className="ws-diff-h">
-        <FileText className="h-3.5 w-3.5 text-theme-muted" />
-        <span className="mono truncate">{file?.path ?? 'Code changes'}</span>
-        <div className="ws-diff-h-r">
-          {file && (
-            <>
-              <span className="add">+{file.additions ?? 0}</span>
-              <span className="del">-{file.deletions ?? 0}</span>
-            </>
-          )}
-          <div className="ws-diff-mode" role="group" aria-label="Diff view mode">
-            <button className={diffMode === 'unified' ? 'active' : ''} onClick={() => setDiffMode('unified')} type="button">unified</button>
-            <button className={diffMode === 'split' ? 'active' : ''} onClick={() => setDiffMode('split')} type="button">split</button>
+      <div className="sticky top-0 z-[2] flex min-h-[58px] shrink-0 items-center gap-3 border-b border-app bg-app-card px-4 py-3">
+        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-app bg-app-muted text-theme-muted">
+          <FileText className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-mono text-[13px] font-medium text-theme-primary">
+            {file?.path ?? 'Code changes'}
           </div>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {file && (
+            <div className="inline-flex items-center overflow-hidden rounded-md border border-app bg-app-muted font-mono text-[12px] leading-none">
+              <span className="border-r border-app px-2.5 py-1.5 text-accent-green">+{file.additions ?? 0}</span>
+              <span className="px-2.5 py-1.5 text-accent-red">-{file.deletions ?? 0}</span>
+            </div>
+          )}
+          <div className="inline-flex items-center rounded-md border border-app bg-app-muted p-0.5" role="group" aria-label="Diff view mode">
+            <button
+              className={`rounded px-3 py-1.5 font-mono text-[11px] leading-none transition-colors ${diffMode === 'unified' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
+              onClick={() => setDiffMode('unified')}
+              type="button"
+            >
+              unified
+            </button>
+            <button
+              className={`rounded px-3 py-1.5 font-mono text-[11px] leading-none transition-colors ${diffMode === 'split' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
+              onClick={() => setDiffMode('split')}
+              type="button"
+            >
+              split
+            </button>
+          </div>
+          <button
+            type="button"
+            className="grid h-8 w-8 place-items-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
+            onClick={() => setActiveDiffPath('')}
+            title="Close preview"
+            aria-label="Close preview"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       </div>
       <div className="ws-diff-body">
@@ -2343,6 +2367,18 @@ function FileChangesPanel({
       <div className="ws-diff-h">
         <FileText className="h-3.5 w-3.5 text-theme-muted" />
         <span className="truncate">{browserPath || browserSource?.name || activeWorkspace?.name || repoBrowseSource?.name || 'Repository files'}</span>
+        <button
+          type="button"
+          className="ml-auto rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
+          onClick={() => {
+            setBrowserPath('');
+            setBrowserContent('');
+          }}
+          title="Close preview"
+          aria-label="Close preview"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
       </div>
       {browserLoading ? (
         <div className="cr-loading-state"><Loader2 className="h-4 w-4 animate-spin" /><span>Loading workspace files...</span></div>
@@ -2659,14 +2695,14 @@ export default function ChatRunSidebar({
       className={`chat-rail relative flex h-full flex-none flex-col gap-3 overflow-visible border-l border-app bg-app-muted px-3.5 pt-2.5 ${visibleTab === 'files' || visibleTab === 'changes' ? 'pb-0' : 'pb-8'} ${
         fullScreen ? 'fullscreen absolute inset-0 z-[80] h-full w-full max-w-none border-l-0 px-5' : ''
       }`}
-      style={fullScreen ? undefined : { width }}
+      style={fullScreen ? undefined : ({ width, '--chat-run-sidebar-width': `${width}px` } as CSSProperties)}
     >
       {!fullScreen && <div className="chat-rail-resize" onMouseDown={startResize} title="Drag to resize" />}
       <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between gap-2 border-b border-app-strong bg-app-muted pb-2">
         <PanelTabs activeTab={visibleTab} onTabChange={onTabChange} counts={counts} />
         <div className="inline-flex shrink-0 items-center">
           <button type="button" className="rounded p-1.5 text-theme-muted transition-colors hover:bg-app-card hover:text-theme-primary" onClick={onClose} title="Close side panel" aria-label="Close side panel">
-            <PanelRightClose className="h-3.5 w-3.5" />
+            <X className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>

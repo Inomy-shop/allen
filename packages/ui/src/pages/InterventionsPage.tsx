@@ -321,7 +321,7 @@ function InterventionsListView() {
   };
 
   return (
-    <div className="content scroll-hide" data-screen-label="interventions">
+    <div className="content scroll-hide [&_.page-head]:!px-8 [&_.page-head]:!pt-8" data-screen-label="interventions">
       <div className="page-head">
         <div className="ph-row">
           <div>
@@ -591,7 +591,7 @@ function InterventionDetailView() {
   }
 
   return (
-    <div className="w-full p-6">
+    <div className="w-full px-8 py-8">
       {/* Breadcrumb + status pill + quick meta */}
       <div className="mb-4 flex items-center gap-3 text-[11px] font-mono text-theme-muted flex-wrap">
         <Link to="/interventions" className="flex items-center gap-1 hover:text-theme-primary transition-colors">

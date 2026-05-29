@@ -22,14 +22,13 @@ import ArtifactsPanel from '../components/artifacts/ArtifactsPanel';
 import ArtifactViewer from '../components/artifacts/ArtifactViewer';
 import { artifacts as artifactsApi, type ArtifactDoc } from '../services/api';
 import GanttTimeline from '../components/execution/GanttTimeline';
-import StateTimeline from '../components/execution/StateTimeline';
 import HumanInputDialog from '../components/execution/HumanInputDialog';
 import CheckpointsPanel from '../components/execution/CheckpointsPanel';
 import { WorkflowInterventionDialog, type WorkflowInterventionSubmit } from '../components/execution/WorkflowInterventionAction';
 import { ToolCallRow, type ToolCall } from '../components/common/ToolCallLog';
 import { buildTracesForTimeline } from '../utils/executionState';
 
-type ExecutionRightPanelView = 'node' | 'logs' | 'state' | 'rerun' | 'artifacts';
+type ExecutionRightPanelView = 'node' | 'rerun' | 'artifacts';
 
 /**
  * Human-friendly duration format:
@@ -1534,7 +1533,7 @@ function AgentArtifactRow({
           {artifact.contentType} · {compactArtifactSize(artifact.sizeBytes)}
         </span>
       </span>
-      <ExternalLink className="h-3 w-3 shrink-0 text-theme-subtle" />
+      <ChevronRight className="h-3 w-3 shrink-0 text-theme-subtle" />
     </button>
   );
 }
@@ -1834,7 +1833,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   return (
     <div className="h-full overflow-y-auto bg-app">
       <header className="border-b border-app bg-app">
-        <div className="flex w-full flex-wrap items-center gap-4 px-8 py-4">
+        <div className="flex w-full flex-wrap items-center gap-4 px-8 pb-4 pt-8">
           <div className="flex min-w-[320px] flex-1 items-center gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app bg-app-card text-accent-purple shadow-sm">
               <Cpu className="h-5 w-5" />
@@ -1915,7 +1914,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         </div>
       </header>
 
-      <main className="grid w-full grid-cols-1 gap-4 px-8 py-5 xl:grid-cols-[minmax(0,1fr)_330px]">
+      <main className="grid w-full grid-cols-1 gap-4 px-8 pb-8 pt-5 xl:grid-cols-[minmax(0,1fr)_330px]">
         <div className="min-w-0 space-y-4">
           {sortedTraces.length > 1 && (
             <div className="overflow-x-auto rounded-md border border-app bg-app-card p-1">
@@ -2140,7 +2139,6 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             <ArtifactViewer
               artifact={agentArtifactPreview}
               onClose={() => setAgentArtifactPreview(null)}
-              showExternalLink={false}
             />
           </div>
         </div>
@@ -2198,7 +2196,7 @@ export default function ExecutionDetailPage() {
   // Interventions for this workflow run — drives the pending approval action
   // in the header while keeping the execution canvas focused.
   const [runInterventions, setRunInterventions] = useState<any[]>([]);
-  const [mainView, setMainView] = useState<'graph' | 'trace'>('trace');
+  const [mainView, setMainView] = useState<'graph' | 'trace' | 'logs'>('trace');
   const [traceTimelineOpen, setTraceTimelineOpen] = useState(false);
   const [checkpointCount, setCheckpointCount] = useState<number | null>(null);
   const [artifactCount, setArtifactCount] = useState<number | null>(null);
@@ -2683,27 +2681,6 @@ export default function ExecutionDetailPage() {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setRightPanelView('logs')}
-            className={`btn-ghost text-xs inline-flex items-center gap-1 ${rightPanelView === 'logs' ? 'text-theme-primary bg-app-muted' : ''}`}
-            title="Show execution logs"
-          >
-            <Terminal className="w-3.5 h-3.5" />
-            <span>Logs</span>
-            {logs.length > 0 && (
-              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
-                {logs.length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setRightPanelView('state')}
-            className={`btn-ghost text-xs inline-flex items-center gap-1 ${rightPanelView === 'state' ? 'text-theme-primary bg-app-muted' : ''}`}
-            title="Show chronological state changes across checkpoints"
-          >
-            <Activity className="w-3.5 h-3.5" />
-            <span>State Changes</span>
-          </button>
-          <button
             onClick={() => setRightPanelView('rerun')}
             className={`btn-ghost text-xs inline-flex items-center gap-1 ${rightPanelView === 'rerun' ? 'text-theme-primary bg-app-muted' : ''}`}
             title="Show saved states, rerun controls, and feedback"
@@ -2884,17 +2861,29 @@ export default function ExecutionDetailPage() {
                   type="button"
                   onClick={() => setMainView('graph')}
                   className={`rounded px-3 py-1.5 text-[11px] font-mono transition-colors ${mainView === 'graph' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
-                >
-                  Graph
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMainView('trace')}
-                  className={`rounded px-3 py-1.5 text-[11px] font-mono transition-colors ${mainView === 'trace' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
-                >
-                  Trace
-                </button>
-              </div>
+	                >
+	                  Graph
+	                </button>
+	                <button
+	                  type="button"
+	                  onClick={() => setMainView('trace')}
+	                  className={`rounded px-3 py-1.5 text-[11px] font-mono transition-colors ${mainView === 'trace' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
+	                >
+	                  Trace
+	                </button>
+	                <button
+	                  type="button"
+	                  onClick={() => setMainView('logs')}
+	                  className={`inline-flex items-center gap-1 rounded px-3 py-1.5 text-[11px] font-mono transition-colors ${mainView === 'logs' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
+	                >
+	                  Logs
+	                  {logs.length > 0 && (
+	                    <span className="ml-0.5 rounded-sm bg-accent-soft px-1 py-px text-[10px] font-mono tabular-nums text-accent">
+	                      {logs.length}
+	                    </span>
+	                  )}
+	                </button>
+	              </div>
               <div className="flex items-center gap-3">
                 <div className="font-mono text-[10px] text-theme-muted">
                   {Array.from(nodeStates.values()).filter(state => state.status === 'completed').length}/{nodeStates.size} nodes
@@ -2902,19 +2891,28 @@ export default function ExecutionDetailPage() {
               </div>
             </div>
             <div className="flex-1 min-h-0 overflow-hidden">
-              {mainView === 'graph' ? (
-                <LiveGraph
-                  workflow={workflow}
-                  nodeStates={nodeStates}
-                  selectedNode={selectedNode}
-                  onSelectNode={inspectNode}
-                  spawnCounts={(children ?? []).reduce((acc: Record<string, number>, c) => {
+	              {mainView === 'graph' ? (
+	                <LiveGraph
+	                  workflow={workflow}
+	                  nodeStates={nodeStates}
+	                  selectedNode={selectedNode}
+	                  onSelectNode={inspectNode}
+	                  spawnCounts={(children ?? []).reduce((acc: Record<string, number>, c) => {
                     if (c.parentCaller) acc[c.parentCaller] = (acc[c.parentCaller] ?? 0) + 1;
                     return acc;
                   }, {})}
-                />
-              ) : (
-                <div className="flex h-full min-h-0 flex-col overflow-hidden bg-app-card">
+	                />
+	              ) : mainView === 'logs' ? (
+	                <ExecutionLogsPanel
+	                  executionId={id!}
+	                  logs={logs}
+	                  logFilter={logFilter}
+	                  onNodeFilterChange={setLogFilter}
+	                  workflowNodes={workflowNodeNames}
+	                  traces={traces}
+	                />
+	              ) : (
+	                <div className="flex h-full min-h-0 flex-col overflow-hidden bg-app-card">
                   <div className="border-b border-app px-4 py-2 flex items-center justify-between gap-3 bg-surface-50">
                     <div>
                       <div className="text-[12px] font-semibold text-theme-primary">Trace</div>
@@ -2966,25 +2964,12 @@ export default function ExecutionDetailPage() {
               onMouseDown={rightPanelView === 'artifacts' ? artifactRightResizeStart : rightResizeStart}
             />
             <div className="min-h-0 flex-1 overflow-hidden">
-              {rightPanelView === 'logs' ? (
-                <ExecutionLogsPanel
-                  executionId={id!}
-                  logs={logs}
-                  logFilter={logFilter}
-                  onNodeFilterChange={setLogFilter}
-                  workflowNodes={workflowNodeNames}
-                  traces={traces}
-                />
-              ) : rightPanelView === 'state' ? (
-                <div className="h-full overflow-auto bg-app-card p-4">
-                  <StateTimeline executionId={id!} />
-                </div>
-              ) : rightPanelView === 'rerun' ? (
-                <div className="h-full overflow-auto bg-app-card p-4">
-                  <CheckpointsPanel
-                    executionId={id!}
-                    executionStatus={execution.status}
-                    feedbackEntries={feedbackEntries}
+	              {rightPanelView === 'rerun' ? (
+	                <div className="h-full overflow-auto bg-app-card p-4">
+	                  <CheckpointsPanel
+	                    executionId={id!}
+	                    executionStatus={execution.status}
+	                    feedbackEntries={feedbackEntries}
                     canAppendFeedback={canAppendFeedback}
                     agentNodeNames={agentNodeNames}
                     onFeedbackCreated={(entries) => setFeedbackEntries((prev) => [...prev, ...entries])}

@@ -780,6 +780,7 @@ export default function ChatPage() {
           inheritedEffort={selectedAgentDoc?.reasoningEffort ?? (activeProvider === 'codex' ? 'high' : 'medium')}
           inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
           onAgentOverridesChanged={handleOverridesChange}
+          maxVisibleLines={4}
           extraControls={(() => {
             const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
             return (

@@ -52,6 +52,7 @@ export interface McpServerRecord {
    * keys are forwarded — the child never sees Allen's other env.
    */
   envKeys?: string[];
+  argKeys?: string[];
 
   /**
    * Python-specific config. Set when source is a repo entry ending in .py

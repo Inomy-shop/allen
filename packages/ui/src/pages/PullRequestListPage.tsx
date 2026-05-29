@@ -2,11 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { pullRequests } from '../services/workspaceService';
 import {
-  ArrowRight, Bot, Clock, ExternalLink, FileDiff, FolderGit2,
-  GitPullRequest, ListChecks, Minus, Plus, RefreshCw,
+  AlertCircle, ArrowRight, Bot, Clock, ExternalLink, FileDiff, FolderGit2,
+  GitPullRequest, KeyRound, ListChecks, Minus, Plus, RefreshCw,
 } from 'lucide-react';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
-import { executions as executionsApi, workflows as workflowsApi } from '../services/api';
+import { executions as executionsApi, system as systemApi, workflows as workflowsApi } from '../services/api';
 import IconTooltipButton from '../components/common/IconTooltipButton';
 
 const STATUS_FILTERS = [
@@ -33,33 +33,66 @@ function timeAgo(date: string) {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+function integrationErrorMessage(err: unknown, fallback: string): string {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  if (!message || message === 'fetch failed' || message.includes('Failed to fetch')) return fallback;
+  return message;
+}
+
 export default function PullRequestListPage() {
   const navigate = useNavigate();
   const [prs, setPrs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [githubConfigured, setGithubConfigured] = useState<boolean | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('open');
   const [pendingWsId, setPendingWsId] = useState<string | null>(null);
   const [resolveBusy, setResolveBusy] = useState(false);
 
+  const loadGitHubStatus = useCallback(async () => {
+    try {
+      const runtime = await systemApi.desktopRuntime();
+      const githubSecret = runtime.secrets.find(secret => secret.key === 'ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN');
+      setGithubConfigured(Boolean(githubSecret?.configured));
+    } catch {
+      setGithubConfigured(null);
+    }
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
       setPrs(await pullRequests.list({ status: statusFilter || undefined }));
-    } catch {
+      setConnectionError(null);
+    } catch (err) {
+      setConnectionError(integrationErrorMessage(err, 'Allen could not load pull requests.'));
       setPrs([]);
     } finally {
       setLoading(false);
     }
   }, [statusFilter]);
 
+  useEffect(() => { void loadGitHubStatus(); }, [loadGitHubStatus]);
   useEffect(() => { void load(); }, [load]);
 
   async function handleSync() {
     setSyncing(true);
     try {
-      await pullRequests.syncAll().catch(() => {});
+      if (githubConfigured === false) {
+        setConnectionError('GitHub is not connected. Connect GitHub in Settings, then sync pull requests.');
+        return;
+      }
+      const result = await pullRequests.syncAll();
       await load();
+      setConnectionError(
+        result.errorCount > 0
+          ? (result.summary || 'GitHub sync finished with errors. Check the GitHub connection and retry.')
+          : null,
+      );
+      await loadGitHubStatus();
+    } catch (err) {
+      setConnectionError(integrationErrorMessage(err, 'GitHub could not be reached. Check your network connection or GitHub status, then retry.'));
     } finally {
       setSyncing(false);
     }
@@ -113,6 +146,43 @@ export default function PullRequestListPage() {
           description: 'Sync from GitHub to import pull requests for review.',
         };
 
+  if (githubConfigured === false) {
+    return (
+      <div className="content scroll-hide !p-0 h-full bg-app" data-screen-label="pull-requests">
+        <div className="flex min-h-full w-full items-center justify-center px-8 py-8">
+          <div className="w-full max-w-[480px] rounded-md border border-app bg-app-card px-6 py-8 text-center">
+            <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-md border border-app bg-app text-accent">
+              <AlertCircle className="h-5 w-5" />
+            </span>
+            <h2 className="mt-5 text-[17px] font-semibold text-theme-primary">GitHub is not connected</h2>
+            <p className="mt-2 text-[13px] text-theme-muted">
+              Add the GitHub credential before pull requests can be synced from repositories.
+            </p>
+            <div className="mt-5 inline-flex items-center gap-2 rounded-md border border-app bg-app px-3 py-2 font-mono text-[11px] text-accent">
+              <KeyRound className="h-3.5 w-3.5" /> ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN
+            </div>
+            <div className="mt-6 flex items-center justify-center gap-2">
+              <button
+                onClick={() => navigate('/settings/mcp')}
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+                type="button"
+              >
+                Connect GitHub
+              </button>
+              <button
+                onClick={loadGitHubStatus}
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
+                type="button"
+              >
+                <RefreshCw className="h-3.5 w-3.5" /> Recheck
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="content scroll-hide bg-app" data-screen-label="pull-requests">
       <div className="w-full px-8 py-8">
@@ -138,6 +208,30 @@ export default function PullRequestListPage() {
             </button>
           </div>
         </div>
+
+        {connectionError && (
+          <div className="mb-4 rounded-md border border-accent-red/30 bg-accent-red/5 px-5 py-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-accent-red" />
+                <div>
+                  <div className="text-[14px] font-semibold text-theme-primary">Could not reach GitHub</div>
+                  <p className="mt-1 text-[13px] text-theme-muted">{connectionError}</p>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  onClick={handleSync}
+                  disabled={syncing}
+                  className="inline-flex h-8 items-center gap-2 rounded-md border border-app bg-app px-3 text-[12px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-50"
+                  type="button"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} /> Retry
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-app bg-app-card px-3 py-2">
           <div className="flex items-center gap-1">

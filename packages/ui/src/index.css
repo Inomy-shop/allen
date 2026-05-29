@@ -9303,7 +9303,7 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    right: calc(100% + 14px);
+    right: 100%;
     z-index: 35;
     display: flex;
     width: min(760px, calc(100vw - 460px));
@@ -9321,11 +9321,17 @@
   }
 
   .chat-rail .cr-adjacent-preview {
-    top: -58px;
+    position: fixed;
+    top: 52px;
+    right: var(--chat-run-sidebar-width, 388px);
     bottom: 0;
     height: auto;
     border-top: 0 !important;
     border-bottom: 0 !important;
+  }
+
+  html[data-runtime="desktop"] .chat-rail .cr-adjacent-preview {
+    top: 56px;
   }
 
   .chat-rail .cr-adjacent-preview .ws-code-preview,

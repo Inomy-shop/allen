@@ -37,7 +37,6 @@ function RowSkeleton() {
   return (
     <div className="flex items-center gap-4 px-4 py-3 border-b border-border/10 animate-pulse">
       <div className="w-5" />
-      <div className="w-8 h-8 rounded-lg bg-app-muted" />
       <div className="w-48 space-y-1.5">
         <div className="h-3.5 w-32 bg-app-muted rounded" />
         <div className="h-2.5 w-20 bg-app-muted/50 rounded" />
@@ -229,17 +228,12 @@ export default function WorkflowListPage() {
                     }
                   </button>
 
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md border ${isValid ? 'border-accent/25 bg-accent-soft text-accent' : 'border-accent-red/25 bg-accent-red/10 text-accent-red'}`}>
-                      <GitBranch className="h-4 w-4" />
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate text-[13.5px] font-semibold text-theme-primary">{wf.name}</span>
+                      <span className="shrink-0 font-mono text-[10.5px] text-theme-subtle">v{wf.version}</span>
                     </div>
-                    <div className="min-w-0">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <span className="truncate text-[13.5px] font-semibold text-theme-primary">{wf.name}</span>
-                        <span className="shrink-0 font-mono text-[10.5px] text-theme-subtle">v{wf.version}</span>
-                      </div>
-                      <p className="mt-1 truncate text-[12px] text-theme-muted">{shortDescription(wf.description)}</p>
-                    </div>
+                    <p className="mt-1 truncate text-[12px] text-theme-muted">{shortDescription(wf.description)}</p>
                   </div>
 
                   <div className="flex items-center gap-3 font-mono text-[11px] text-theme-muted">

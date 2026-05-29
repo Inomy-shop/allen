@@ -16,19 +16,16 @@ import { useAuthStore } from './stores/authStore';
 import { BRAND_NAME } from './lib/brand';
 import {
   chat as chatApi,
-  dashboard as dashboardApi,
   executions as executionsApi,
   interventions as interventionsApi,
-  linear as linearApi,
 } from './services/api';
-import { pullRequests as pullRequestsApi, workspaces as workspacesApi } from './services/workspaceService';
+import { workspaces as workspacesApi } from './services/workspaceService';
 import { usePanelLayout } from './hooks/usePanelLayout';
 
 interface NavItem {
   to: string;
   icon: React.ComponentType<{ className?: string }>;
   label: string;
-  badgeKey?: keyof NavCounts;
   activePrefixes?: string[];
   end?: boolean;
 }
@@ -36,7 +33,7 @@ interface NavItem {
 interface NavGroup {
   id: string;
   label?: string;
-  collapsible?: boolean;
+  dividerBefore?: boolean;
   items: NavItem[];
 }
 
@@ -48,30 +45,37 @@ interface CommandItem {
   icon: React.ComponentType<{ className?: string }>;
 }
 
-interface NavCounts {
-  mywork?: number;
-  chats?: number;
-  tickets?: number;
-  pulls?: number;
-  workspaces?: number;
-  activity?: number;
+type SidebarPanelId = 'workspaces' | 'navigation';
+
+interface SidebarWorkspace {
+  _id: string;
+  name: string;
+  repoId?: string;
+  repoName?: string;
+  repoPath?: string;
+  branch?: string;
+  status?: string;
+  source?: string;
+  prNumber?: number;
+  updatedAt?: string;
+  createdAt?: string;
 }
 
-// ── Nav Groups (Allen design system: primary actions, sources, studio) ──
+// ── Nav Groups (Allen design system: flat navigation with subtle dividers) ──
 
 const NAV_GROUPS: NavGroup[] = [
   { id: 'primary', items: [
-    { to: '/', icon: LayoutDashboard, label: 'Dashboard', badgeKey: 'mywork', end: true },
-    { to: '/executions', icon: CirclePlay, label: 'Executions', badgeKey: 'activity', activePrefixes: ['/executions'] },
-    { to: '/chats', icon: History, label: 'History', badgeKey: 'chats', activePrefixes: ['/chats', '/chat'] },
+    { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
+    { to: '/executions', icon: CirclePlay, label: 'Executions', activePrefixes: ['/executions'] },
+    { to: '/chats', icon: History, label: 'History', activePrefixes: ['/chats', '/chat'] },
   ]},
-  { id: 'sources', label: 'Sources', collapsible: true, items: [
-    { to: '/tickets', icon: TicketCheck, label: 'Linear', badgeKey: 'tickets' },
-    { to: '/pull-requests', icon: GitPullRequest, label: 'Pull requests', badgeKey: 'pulls' },
+  { id: 'sources', dividerBefore: true, items: [
+    { to: '/tickets', icon: TicketCheck, label: 'Linear' },
+    { to: '/pull-requests', icon: GitPullRequest, label: 'Pull requests' },
     { to: '/agents?section=repos', icon: GitBranch, label: 'Repositories' },
-    { to: '/workspaces', icon: FolderGit2, label: 'Workspaces', badgeKey: 'workspaces' },
+    { to: '/workspaces', icon: FolderGit2, label: 'Workspaces' },
   ]},
-  { id: 'studio', label: 'Studio', collapsible: true, items: [
+  { id: 'studio', dividerBefore: true, items: [
     { to: '/agents?section=teams-agents', icon: UsersRound, label: 'Teams & Agents' },
     { to: '/workflows', icon: Workflow, label: 'Workflows', activePrefixes: ['/workflows'] },
   ]},
@@ -131,8 +135,63 @@ const COMMANDS: CommandItem[] = [
   { id: 'agents', label: 'Open teams & agents', group: 'Studio', to: '/agents?section=teams-agents', icon: UsersRound },
 ];
 
-function routeTitle(pathname: string): string {
+const SIDEBAR_PANEL_ORDER: SidebarPanelId[] = ['navigation', 'workspaces'];
+const SIDEBAR_PANEL_LABELS: Record<SidebarPanelId, string> = {
+  workspaces: 'Workspaces',
+  navigation: 'App navigation',
+};
+const WORKSPACE_REPO_COLLAPSE_KEY = 'allen-app-sidebar-collapsed-workspace-repos';
+const SETTINGS_ROUTE_DETAILS: Array<{ prefix: string; label: string }> = [
+  { prefix: '/settings/runtime', label: 'Runtime' },
+  { prefix: '/settings/mcp', label: 'MCP Servers' },
+  { prefix: '/settings/schedules', label: 'Schedules' },
+  { prefix: '/settings/learnings', label: 'Learnings' },
+  { prefix: '/settings/team', label: 'Team' },
+  { prefix: '/settings/account', label: 'Account' },
+  { prefix: '/settings/general', label: 'General' },
+  { prefix: '/settings', label: 'General' },
+];
+
+function loadCollapsedWorkspaceRepos(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = window.localStorage.getItem(WORKSPACE_REPO_COLLAPSE_KEY);
+    return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveCollapsedWorkspaceRepos(value: Set<string>) {
+  try {
+    window.localStorage.setItem(WORKSPACE_REPO_COLLAPSE_KEY, JSON.stringify(Array.from(value)));
+  } catch {
+    // Ignore storage failures; the sidebar still works without persistence.
+  }
+}
+
+function sidebarWorkspaceTime(workspace: SidebarWorkspace): number {
+  const raw = workspace.updatedAt ?? workspace.createdAt ?? '';
+  const time = raw ? new Date(raw).getTime() : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function workspaceRepoLabel(workspace: SidebarWorkspace): string {
+  return workspace.repoName
+    ?? workspace.repoPath?.split('/').filter(Boolean).at(-1)
+    ?? 'Unknown repo';
+}
+
+function routeTitle(pathname: string, search = ''): string {
   if (pathname === '/') return 'Dashboard';
+  if (pathname.startsWith('/agents')) {
+    const params = new URLSearchParams(search);
+    const section = params.get('section') ?? params.get('tab') ?? 'teams-agents';
+    if (section === 'repos') return 'Repositories';
+    if (section === 'skills') return 'Skills';
+    if (section === 'integrations') return 'Integrations';
+    return 'Teams & Agents';
+  }
   const match = ROUTE_TITLES.find(route => pathname.startsWith(route.prefix));
   return match?.label ?? 'Allen';
 }
@@ -140,6 +199,8 @@ function routeTitle(pathname: string): string {
 function routeDetail(pathname: string, chatTopbarTitle: string | null): string | null {
   if (/^\/repos\/[^/]+\/context-management/.test(pathname)) return 'Context Management';
   if (/^\/chat\/[^/]+/.test(pathname)) return chatTopbarTitle;
+  const settingsDetail = SETTINGS_ROUTE_DETAILS.find(route => pathname.startsWith(route.prefix));
+  if (settingsDetail) return settingsDetail.label;
   return null;
 }
 
@@ -148,7 +209,6 @@ function AppTopbar({
   detail,
   liveCount,
   approvalCount,
-  healthy,
   commandOpen,
   onCommandOpen,
   onRunningOpen,
@@ -162,7 +222,6 @@ function AppTopbar({
   detail?: string | null;
   liveCount: number;
   approvalCount: number;
-  healthy: boolean;
   commandOpen: boolean;
   onCommandOpen: () => void;
   onRunningOpen: () => void;
@@ -198,7 +257,7 @@ function AppTopbar({
       <div className="crumb">
         <span>allen</span>
         <span className="sep">/</span>
-        <span className="now">{title}</span>
+        <span className={detail ? undefined : 'now'}>{title}</span>
         {detail && (
           <>
             <span className="sep">/</span>
@@ -225,10 +284,6 @@ function AppTopbar({
         >
           <span className={`dot ${approvalCount > 0 ? 'dot-warn' : 'dot-idle'}`} />
           {approvalCount} approvals
-        </span>
-        <span className={healthy ? 'chip topbar-chip chip-ok' : 'chip topbar-chip chip-warn'}>
-          <span className={healthy ? 'dot dot-ok' : 'dot dot-warn'} />
-          {healthy ? 'Connected' : 'Reconnecting'}
         </span>
       </div>
 
@@ -372,12 +427,6 @@ function ShellCommandPalette({
   );
 }
 
-function formatNavBadge(value?: number): string | null {
-  if (!value || value <= 0) return null;
-  if (value > 99) return '99+';
-  return String(value);
-}
-
 function navTargetMatches(to: string, location: ReturnType<typeof useLocation>): boolean {
   const [path, query = ''] = to.split('?');
   if (location.pathname !== path) return false;
@@ -403,25 +452,30 @@ function isNavItemActive(
   return isActive;
 }
 
-function isNavGroupActive(group: NavGroup, location: ReturnType<typeof useLocation>): boolean {
-  return group.items.some(item => isNavItemActive(item, location));
-}
-
 // ── Main App ──
 
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
-  const title = routeTitle(location.pathname);
-  const [expandedNav, setExpandedNav] = useState<Record<string, boolean>>({});
+  const title = routeTitle(location.pathname, location.search);
   const [chatTopbarTitle, setChatTopbarTitle] = useState<string | null>(null);
   const detail = routeDetail(location.pathname, chatTopbarTitle);
   const [commandOpen, setCommandOpen] = useState(false);
   const [liveCount, setLiveCount] = useState(0);
   const [approvalCount, setApprovalCount] = useState(0);
-  const [healthKnown, setHealthKnown] = useState(false);
-  const [navCounts, setNavCounts] = useState<NavCounts>({});
   const [canGoBack, setCanGoBack] = useState(false);
+  const [sidebarPanel, setSidebarPanel] = useState<SidebarPanelId>('navigation');
+  const [workspaceSearch, setWorkspaceSearch] = useState('');
+  const [sidebarWorkspaces, setSidebarWorkspaces] = useState<SidebarWorkspace[]>([]);
+  const [sidebarWorkspacesLoading, setSidebarWorkspacesLoading] = useState(false);
+  const [collapsedWorkspaceRepos, setCollapsedWorkspaceRepos] = useState<Set<string>>(() => loadCollapsedWorkspaceRepos());
+  const sidebarGestureLockRef = useRef(false);
+  const sidebarWheelGestureActiveRef = useRef(false);
+  const sidebarWheelCanRearmRef = useRef(true);
+  const sidebarWheelDirectionRef = useRef<1 | -1 | null>(null);
+  const sidebarWheelGestureTimerRef = useRef<number | null>(null);
+  const sidebarPointerStartRef = useRef<{ x: number; y: number } | null>(null);
+  const sidebarCarouselRef = useRef<HTMLDivElement | null>(null);
 
   const currentUser = useAuthStore((s) => s.user);
 
@@ -437,6 +491,34 @@ export default function App() {
   const setColorMode = useSettingsStore((s) => s.setColorMode);
   const resolvedMode = resolveColorMode(colorMode);
   const toggleColorMode = () => setColorMode(resolvedMode === 'dark' ? 'light' : 'dark');
+  const activeWorkspaceId = location.pathname.match(/^\/workspaces\/([^/]+)/)?.[1] ?? null;
+  const workspaceGroups = useMemo(() => {
+    const query = workspaceSearch.trim().toLowerCase();
+    const visible = sidebarWorkspaces
+      .filter((workspace) => {
+        if (!query) return true;
+        return workspace.name.toLowerCase().includes(query)
+          || workspaceRepoLabel(workspace).toLowerCase().includes(query)
+          || (workspace.branch ?? '').toLowerCase().includes(query);
+      })
+      .sort((a, b) => sidebarWorkspaceTime(b) - sidebarWorkspaceTime(a));
+
+    const groups = new Map<string, { key: string; label: string; items: SidebarWorkspace[]; latest: number }>();
+    for (const workspace of visible) {
+      const label = workspaceRepoLabel(workspace);
+      const key = workspace.repoId ?? `repo:${label.toLowerCase()}`;
+      const latest = sidebarWorkspaceTime(workspace);
+      const existing = groups.get(key);
+      if (existing) {
+        existing.items.push(workspace);
+        existing.latest = Math.max(existing.latest, latest);
+      } else {
+        groups.set(key, { key, label, items: [workspace], latest });
+      }
+    }
+
+    return Array.from(groups.values()).sort((a, b) => b.latest - a.latest);
+  }, [sidebarWorkspaces, workspaceSearch]);
 
   useEffect(() => {
     const index = window.history.state?.idx;
@@ -454,9 +536,8 @@ export default function App() {
         if (cancelled) return;
         setLiveCount(count ?? 0);
         setApprovalCount(pending.length ?? 0);
-        setHealthKnown(true);
       } catch {
-        if (!cancelled) setHealthKnown(false);
+        // Keep the last visible counts if the poll fails.
       }
     }
     void loadLiveCount();
@@ -495,92 +576,169 @@ export default function App() {
   }, [location.pathname]);
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadNavCounts() {
-      const sessionParams = currentUser?.id ? { ownerUserId: currentUser.id } : undefined;
-      const [
-        pending,
-        sessions,
-        tickets,
-        prs,
-        spaces,
-        recentRuns,
-        activeRuns,
-      ] = await Promise.allSettled([
-        interventionsApi.list({ status: 'pending', limit: 100 }),
-        chatApi.listSessions(sessionParams),
-        linearApi.issues({ limit: 200 }),
-        pullRequestsApi.list(),
-        workspacesApi.list(),
-        executionsApi.listPaged({ limit: 1, offset: 0 }),
-        executionsApi.listPaged({ status: 'running', limit: 100, offset: 0 }),
-      ]);
-      if (cancelled) return;
-
-      const pendingCount = pending.status === 'fulfilled' ? (pending.value ?? []).length : undefined;
-      const activeCount = activeRuns.status === 'fulfilled'
-        ? (activeRuns.value.items ?? []).filter((run: any) => Boolean(run?.meta?.chatSessionId)).length
-        : undefined;
-      const userSessions = sessions.status === 'fulfilled' ? (sessions.value ?? []) : [];
-      setNavCounts({
-        mywork: (pendingCount ?? 0) + (activeCount ?? 0),
-        chats: sessions.status === 'fulfilled' ? userSessions.length : undefined,
-        tickets: tickets.status === 'fulfilled' ? (tickets.value ?? []).length : undefined,
-        pulls: prs.status === 'fulfilled' ? (prs.value ?? []).length : undefined,
-        workspaces: spaces.status === 'fulfilled' ? (spaces.value ?? []).length : undefined,
-        activity: recentRuns.status === 'fulfilled' ? recentRuns.value.total ?? 0 : undefined,
-      });
-    }
-    void loadNavCounts();
-    const interval = setInterval(loadNavCounts, 30000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [currentUser?.id]);
-
-  useEffect(() => {
-    const activeGroup = NAV_GROUPS.find(group => group.collapsible && isNavGroupActive(group, location));
-    if (!activeGroup) return;
-    setExpandedNav(prev => prev[activeGroup.id] ? prev : { ...prev, [activeGroup.id]: true });
-  }, [location.pathname, location.search]);
-
-  useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      if (!(event.metaKey || event.ctrlKey)) return;
+
+      const key = event.key.toLowerCase();
+      if (key === 'k') {
         event.preventDefault();
         setCommandOpen(true);
+        return;
+      }
+
+      if (key === 'l') {
+        const isChatInputRoute = location.pathname === '/'
+          || location.pathname === '/chat'
+          || location.pathname.startsWith('/chat/');
+        if (isChatInputRoute) return;
+
+        event.preventDefault();
+        navigate('/', { state: { focusDashboardChat: Date.now() } });
       }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
+  }, [location.pathname, navigate]);
+
+  useEffect(() => {
+    if (sidebarPanel !== 'workspaces') return;
+    let cancelled = false;
+    setSidebarWorkspacesLoading(true);
+    workspacesApi.list()
+      .then((items) => {
+        if (!cancelled) setSidebarWorkspaces((items ?? []) as SidebarWorkspace[]);
+      })
+      .catch(() => {
+        if (!cancelled) setSidebarWorkspaces([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSidebarWorkspacesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sidebarPanel]);
+
+  useEffect(() => {
+    return () => {
+      if (sidebarWheelGestureTimerRef.current !== null) {
+        window.clearTimeout(sidebarWheelGestureTimerRef.current);
+      }
+    };
   }, []);
 
   const navPanel = usePanelLayout({
     storageKey: 'app-nav',
     direction: 'horizontal',
-    defaultSize: 264,
-    minSize: 236,
-    maxSize: 360,
+    defaultSize: 290,
+    minSize: 260,
+    maxSize: 396,
   });
-
-  const toggleNavGroup = (groupId: string) => {
-    setExpandedNav(prev => ({ ...prev, [groupId]: !prev[groupId] }));
-  };
 
   const isSettingsRoute = location.pathname.startsWith('/settings');
   const shellNavState = navPanel.collapsed && !isSettingsRoute ? 'nav-collapsed' : 'nav-expanded';
+  const sidebarPanelIndex = Math.max(0, SIDEBAR_PANEL_ORDER.indexOf(sidebarPanel));
+
+  function moveSidebarPanel(direction: -1 | 1, respectTransitionLock = true) {
+    if (respectTransitionLock && sidebarGestureLockRef.current) return;
+
+    let moved = false;
+    setSidebarPanel((currentPanel) => {
+      const currentIndex = SIDEBAR_PANEL_ORDER.indexOf(currentPanel);
+      const nextIndex = Math.max(0, Math.min(SIDEBAR_PANEL_ORDER.length - 1, currentIndex + direction));
+      const nextPanel = SIDEBAR_PANEL_ORDER[nextIndex];
+      if (!nextPanel || nextPanel === currentPanel) return currentPanel;
+      moved = true;
+      return nextPanel;
+    });
+
+    if (moved && respectTransitionLock) {
+      sidebarGestureLockRef.current = true;
+      window.setTimeout(() => {
+        sidebarGestureLockRef.current = false;
+      }, 380);
+    }
+  }
+
+  function handleSidebarCarouselWheel(event: WheelEvent) {
+    if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+    event.preventDefault();
+    const absDeltaX = Math.abs(event.deltaX);
+    const direction = event.deltaX > 0 ? 1 : -1;
+
+    if (sidebarWheelGestureTimerRef.current !== null) {
+      window.clearTimeout(sidebarWheelGestureTimerRef.current);
+    }
+    sidebarWheelGestureTimerRef.current = window.setTimeout(() => {
+      sidebarWheelGestureActiveRef.current = false;
+      sidebarWheelCanRearmRef.current = true;
+      sidebarWheelDirectionRef.current = null;
+      sidebarWheelGestureTimerRef.current = null;
+    }, 100);
+
+    if (absDeltaX <= 4 || direction !== sidebarWheelDirectionRef.current) {
+      sidebarWheelCanRearmRef.current = true;
+    }
+    if (sidebarWheelGestureActiveRef.current && !sidebarWheelCanRearmRef.current) return;
+    if (absDeltaX < 16) return;
+
+    sidebarWheelGestureActiveRef.current = true;
+    sidebarWheelCanRearmRef.current = false;
+    sidebarWheelDirectionRef.current = direction;
+    moveSidebarPanel(direction, false);
+  }
+
+  useEffect(() => {
+    const carousel = sidebarCarouselRef.current;
+    if (!carousel) return;
+    carousel.addEventListener('wheel', handleSidebarCarouselWheel, { passive: false });
+    return () => {
+      carousel.removeEventListener('wheel', handleSidebarCarouselWheel);
+    };
+  }, []);
+
+  function handleSidebarPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.pointerType === 'mouse') return;
+    sidebarPointerStartRef.current = { x: event.clientX, y: event.clientY };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function handleSidebarPointerUp(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.pointerType === 'mouse') return;
+    const start = sidebarPointerStartRef.current;
+    sidebarPointerStartRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (!start) return;
+
+    const deltaX = start.x - event.clientX;
+    const deltaY = start.y - event.clientY;
+    if (Math.abs(deltaX) > 44 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2) {
+      moveSidebarPanel(deltaX > 0 ? 1 : -1);
+    }
+  }
+
+  function toggleWorkspaceRepo(repoKey: string) {
+    setCollapsedWorkspaceRepos((current) => {
+      const next = new Set(current);
+      next.has(repoKey) ? next.delete(repoKey) : next.add(repoKey);
+      saveCollapsedWorkspaceRepos(next);
+      return next;
+    });
+  }
 
   return (
     <div className={`app-shell ${shellNavState} ${isSettingsRoute ? 'settings-shell' : ''}`}>
       {/* Navigation sidebar — collapsible and resizable */}
       {isSettingsRoute ? (
-        <nav className="sidebar settings-mode-sidebar">
+        <nav className="sidebar settings-mode-sidebar !w-[290px] !min-w-[290px] [animation:none]">
           <div className="settings-mode-head">
             <button
               type="button"
               className="settings-back-button"
-              onClick={() => navigate('/')}
+              onClick={() => {
+                setSidebarPanel('navigation');
+                navigate('/');
+              }}
             >
               <ArrowLeft className="h-4 w-4" />
               <span>Back to app</span>
@@ -630,47 +788,27 @@ export default function App() {
             </button>
           </div>
           <div className="sidebar-inner scroll-hide">
-            {NAV_GROUPS.map(group => {
-              const groupOpen = !group.collapsible || Boolean(expandedNav[group.id]);
-              const groupActive = group.collapsible && isNavGroupActive(group, location);
-
-              return (
-                <div key={group.id} className="nav-group">
-                  {group.label && group.collapsible && (
-                    <button
-                      type="button"
-                      className={`nav-group-toggle nav-group-toggle-icon ${groupActive ? 'active' : ''}`}
-                      aria-expanded={groupOpen}
-                      onClick={() => toggleNavGroup(group.id)}
-                      aria-label={group.label}
-                      data-sidebar-tooltip={group.label}
+            {NAV_GROUPS.map(group => (
+              <div key={group.id} className={`nav-group ${group.dividerBefore ? 'mt-2 pt-2 before:mx-2 before:mb-2 before:block before:border-t before:border-app before:content-[""]' : ''}`}>
+                <div className="nav-group-items">
+                  {group.items.map(item => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      end={item.end ?? item.to === '/'}
+                      className={({ isActive }) =>
+                        `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`
+                      }
+                      aria-label={item.label}
+                      data-sidebar-tooltip={item.label}
                     >
-                      <ChevronRight className={`nav-caret ${groupOpen ? 'open' : ''}`} />
-                    </button>
-                  )}
-
-                  {groupOpen && (
-                    <div className="nav-group-items">
-                      {group.items.map(item => (
-                        <NavLink
-                          key={item.to}
-                          to={item.to}
-                          end={item.end ?? item.to === '/'}
-                          className={({ isActive }) =>
-                            `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`
-                          }
-                          aria-label={item.label}
-                          data-sidebar-tooltip={item.label}
-                        >
-                          <item.icon className="ico" />
-                          <span className="lbl">{item.label}</span>
-                        </NavLink>
-                      ))}
-                    </div>
-                  )}
+                      <item.icon className="ico" />
+                      <span className="lbl">{item.label}</span>
+                    </NavLink>
+                  ))}
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
           <div className="sidebar-foot-wrap sidebar-foot-icon">
             <NavLink
@@ -693,7 +831,9 @@ export default function App() {
         </div>
       ) : (
         /* Expanded: full nav with dynamic width */
-        <nav className="sidebar">
+        <nav
+          className="sidebar !w-[290px] !min-w-[290px] [animation:none]"
+        >
           {/* Workspace switcher pill — with collapse button */}
           <div className="brand">
             <NavLink to="/" className="brand-link">
@@ -705,31 +845,98 @@ export default function App() {
             <span className="brand-sub">v0.1.0</span>
           </div>
 
-          {/* Nav groups */}
-          <div className="sidebar-inner scroll-hide">
-            {NAV_GROUPS.map(group => {
-              const groupOpen = !group.collapsible || Boolean(expandedNav[group.id]);
-              const groupActive = group.collapsible && isNavGroupActive(group, location);
+          <div
+            ref={sidebarCarouselRef}
+            className="min-h-0 flex-1 overflow-hidden overscroll-contain touch-pan-y"
+            onPointerDown={handleSidebarPointerDown}
+            onPointerUp={handleSidebarPointerUp}
+            onPointerCancel={() => {
+              sidebarPointerStartRef.current = null;
+            }}
+          >
+            <div
+              className="flex h-full transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+              style={{ transform: `translate3d(-${sidebarPanelIndex * 100}%, 0, 0)` }}
+            >
+              <div className="order-2 min-w-0 w-full shrink-0">
+                <div className="flex min-h-0 h-full flex-col">
+                  <div className="px-4 pb-3 pt-2">
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
+                      <input
+                        value={workspaceSearch}
+                        onChange={(event) => setWorkspaceSearch(event.target.value)}
+                        placeholder="Search workspaces"
+                        className="input h-9 w-full pl-8 pr-3 text-[12px]"
+                      />
+                    </div>
+                  </div>
+                  <div className="scroll-hide flex-1 space-y-3 overflow-y-auto px-2 pb-3">
+                    {sidebarWorkspacesLoading && (
+                      <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">Loading workspaces...</div>
+                    )}
+                    {!sidebarWorkspacesLoading && workspaceGroups.length === 0 && (
+                      <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">
+                        {workspaceSearch.trim() ? 'No matching workspaces.' : 'No recent workspaces.'}
+                      </div>
+                    )}
+                    {workspaceGroups.map((group) => {
+                      const collapsed = collapsedWorkspaceRepos.has(group.key);
+                      const hasActive = group.items.some((workspace) => workspace._id === activeWorkspaceId);
+                      const showItems = !collapsed || hasActive;
+                      return (
+                        <div key={group.key}>
+                          <button
+                            type="button"
+                            onClick={() => toggleWorkspaceRepo(group.key)}
+                            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-theme-secondary transition-colors hover:bg-app-muted hover:text-theme-primary"
+                          >
+                            <ChevronRight className={`h-3 w-3 shrink-0 text-theme-subtle transition-transform ${showItems ? 'rotate-90' : ''}`} />
+                            <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-theme-muted" />
+                            <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{group.label}</span>
+                            <span className="font-mono text-[10px] text-theme-subtle">{group.items.length}</span>
+                          </button>
+                          {showItems && (
+                            <div className="mt-1 space-y-1">
+                              {group.items.map((workspace) => {
+                                const active = workspace._id === activeWorkspaceId;
+                                return (
+                                  <button
+                                    key={workspace._id}
+                                    type="button"
+                                    onClick={() => navigate(`/workspaces/${workspace._id}`)}
+                                    className={`group flex w-full items-start rounded-md border px-2.5 py-2 text-left transition-colors ${
+                                      active
+                                        ? 'border-app bg-app-card text-theme-primary'
+                                        : 'border-transparent text-theme-secondary hover:bg-app-muted hover:text-theme-primary'
+                                    }`}
+                                  >
+                                    <span className="min-w-0 flex-1">
+                                      <span className="block truncate text-[12.5px] font-medium leading-tight">{workspace.name}</span>
+                                      <span className="mt-1 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-theme-subtle">
+                                        {workspace.branch && <span className="truncate">{workspace.branch}</span>}
+                                        {workspace.source === 'pr' && workspace.prNumber && <span>PR #{workspace.prNumber}</span>}
+                                        {workspace.status && <span>{workspace.status}</span>}
+                                      </span>
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
 
-              return (
-                <div key={group.id} className="nav-group">
-                  {group.label && group.collapsible && (
-                    <button
-                      type="button"
-                      className={`nav-group-toggle ${groupActive ? 'active' : ''}`}
-                      aria-expanded={groupOpen}
-                      onClick={() => toggleNavGroup(group.id)}
-                    >
-                      <span>{group.label}</span>
-                      <ChevronRight className={`nav-caret ${groupOpen ? 'open' : ''}`} />
-                    </button>
-                  )}
-
-                  {groupOpen && (
-                    <div className="nav-group-items">
-                      {group.items.map(item => {
-                        const badge = formatNavBadge(item.badgeKey ? navCounts[item.badgeKey] : undefined);
-                        return (
+              <div className="order-1 min-w-0 w-full shrink-0">
+                <div className="sidebar-inner scroll-hide">
+                  {NAV_GROUPS.map(group => (
+                    <div key={group.id} className={`nav-group ${group.dividerBefore ? 'mt-2 pt-2 before:mx-3 before:mb-2 before:block before:border-t before:border-app before:content-[""]' : ''}`}>
+                      <div className="nav-group-items">
+                        {group.items.map(item => (
                           <NavLink
                             key={item.to}
                             to={item.to}
@@ -740,19 +947,32 @@ export default function App() {
                           >
                             <item.icon className="ico" />
                             <span className="lbl">{item.label}</span>
-                            {badge && (
-                              <span className="badge">
-                                {badge}
-                              </span>
-                            )}
                           </NavLink>
-                        );
-                      })}
+                        ))}
+                      </div>
                     </div>
-                  )}
+                  ))}
                 </div>
-              );
-            })}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-center gap-2 px-3 py-2">
+            {SIDEBAR_PANEL_ORDER.map((panel) => (
+              <button
+                key={panel}
+                type="button"
+                aria-label={SIDEBAR_PANEL_LABELS[panel]}
+                aria-current={sidebarPanel === panel ? 'true' : undefined}
+                title={SIDEBAR_PANEL_LABELS[panel]}
+                onClick={() => setSidebarPanel(panel)}
+                className={`h-2.5 w-2.5 rounded-full border transition-colors ${
+                  sidebarPanel === panel
+                    ? 'border-accent bg-accent'
+                    : 'border-theme-subtle/40 bg-theme-subtle/35 hover:border-theme-subtle/60 hover:bg-theme-subtle/60'
+                }`}
+              />
+            ))}
           </div>
 
           {/* Bottom — user chip + version */}
@@ -794,7 +1014,6 @@ export default function App() {
           detail={detail}
           liveCount={liveCount}
           approvalCount={approvalCount}
-          healthy={healthKnown}
           commandOpen={commandOpen}
           onCommandOpen={() => setCommandOpen(true)}
           onRunningOpen={() => navigate('/executions?status=running')}

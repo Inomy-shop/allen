@@ -63,6 +63,8 @@ interface ChatInputProps {
   slashCommands?: SlashCommandOption[];
   onSlashCommand?: (command: SlashCommandOption, raw: string) => boolean | void;
   extraControls?: ReactNode;
+  maxVisibleLines?: number;
+  fixedVisibleLines?: boolean;
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -198,6 +200,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     slashCommands = [],
     onSlashCommand,
     extraControls,
+    maxVisibleLines,
+    fixedVisibleLines,
   },
   ref,
 ) {
@@ -321,11 +325,28 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const pickerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  function textareaMaxHeight(el: HTMLTextAreaElement): number {
+    if (!maxVisibleLines || maxVisibleLines <= 0) return TEXTAREA_MAX_HEIGHT;
+    const style = window.getComputedStyle(el);
+    const lineHeight = Number.parseFloat(style.lineHeight) || 22;
+    const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
+    const borderTop = Number.parseFloat(style.borderTopWidth) || 0;
+    const borderBottom = Number.parseFloat(style.borderBottomWidth) || 0;
+    return Math.ceil((lineHeight * maxVisibleLines) + paddingTop + paddingBottom + borderTop + borderBottom);
+  }
+
   function resizeTextarea(el: HTMLTextAreaElement): void {
+    const maxHeight = textareaMaxHeight(el);
     el.style.height = 'auto';
-    const nextHeight = Math.min(Math.max(el.scrollHeight, TEXTAREA_MIN_HEIGHT), TEXTAREA_MAX_HEIGHT);
+    const nextHeight = fixedVisibleLines && maxVisibleLines
+      ? maxHeight
+      : Math.min(Math.max(el.scrollHeight, TEXTAREA_MIN_HEIGHT), maxHeight);
     el.style.height = `${nextHeight}px`;
-    el.style.overflowY = el.scrollHeight > TEXTAREA_MAX_HEIGHT ? 'auto' : 'hidden';
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    if (el.scrollHeight > maxHeight) {
+      el.scrollTop = el.scrollHeight;
+    }
   }
 
   useImperativeHandle(ref, () => ({
@@ -536,8 +557,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     setLinearIssues([]);
     setLinearError(null);
     if (textareaRef.current) {
-      textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT}px`;
-      textareaRef.current.style.overflowY = 'hidden';
+      resizeTextarea(textareaRef.current);
     }
   }, [value, attachments, disabled, onSend, slashCommands, onSlashCommand]);
 

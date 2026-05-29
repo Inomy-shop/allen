@@ -769,10 +769,13 @@ export function systemRoutes(db: Db): Router {
 
   router.delete('/desktop-runtime/secrets/:key', requireAuth, async (req: AuthedRequest, res: Response) => {
     try {
+      const config = getRuntimeConfigProvider();
+      if (config.get('ALLEN_DESKTOP') !== '1') return res.status(400).json({ error: 'desktop_runtime_only' });
       const key = await validateRuntimeSecretKey(req.params.key, db);
       const secrets = getRuntimeSecretsProvider();
       if (!secrets.deleteSecret) return res.status(400).json({ error: 'runtime_secrets_are_read_only' });
       await secrets.deleteSecret(key);
+      (config as { delete?: (runtimeKey: string) => void }).delete?.(key);
       delete process.env[key];
       return res.status(204).send();
     } catch (err) {

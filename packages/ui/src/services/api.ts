@@ -1018,7 +1018,7 @@ export const mcp = {
     /** Python venv config — sent only for .py entries without a manual command override. */
     python?: { interpreter?: string; requirementsPath?: string };
   }) => request<McpServer>('/mcp/servers', { method: 'POST', body: JSON.stringify(body) }),
-  update: (id: string, body: Partial<McpServer>) =>
+  update: (id: string, body: Partial<McpServer> & { credentials?: Record<string, string> }) =>
     request<McpServer>(`/mcp/servers/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   toggle: (id: string) =>
     request<McpServer>(`/mcp/servers/${id}/toggle`, { method: 'PATCH' }),

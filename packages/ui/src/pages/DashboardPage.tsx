@@ -1,5 +1,5 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
   CheckCircle2,
@@ -685,6 +685,7 @@ function activateConversationRow(
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const user = useAuthStore((s) => s.user);
   const chatInputRef = useRef<ChatInputHandle>(null);
   const [pendingInterventions, setPendingInterventions] = useState<InterventionItem[]>([]);
@@ -755,7 +756,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.metaKey && event.key.toLowerCase() === 'l') {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l') {
         event.preventDefault();
         chatInputRef.current?.focus();
       }
@@ -764,6 +765,18 @@ export default function DashboardPage() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+
+  useEffect(() => {
+    const state = location.state as { focusDashboardChat?: number } | null;
+    if (!state?.focusDashboardChat) return;
+
+    const timer = window.setTimeout(() => {
+      chatInputRef.current?.focus();
+      navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [location.pathname, location.search, location.state, navigate]);
 
 
   useEffect(() => {
@@ -1001,7 +1014,7 @@ export default function DashboardPage() {
             New chat
           </div>
           <h1 className="mt-3 text-[32px] font-semibold leading-[1.1] tracking-[-0.018em] text-theme-primary">{greeting}, <span className="text-accent">{firstName}</span></h1>
-          <div className="mt-8 [&_.chat-composer]:max-w-none [&_.chat-composer]:min-h-[172px] [&_.chat-composer]:rounded-md [&_.chat-composer]:px-5 [&_.chat-composer]:pb-0 [&_.chat-composer]:pt-4 [&_.chat-composer]:shadow-none [&_.chat-composer-field]:relative [&_.chat-composer-field]:min-h-[124px] [&_.chat-composer-field]:flex [&_.chat-composer-field]:flex-col [&_.chat-composer-field_textarea]:min-h-[86px] [&_.chat-composer-field_textarea]:flex-1 [&_.chat-composer-field_textarea]:p-0 [&_.chat-composer-field_textarea]:pb-10 [&_.chat-composer-field_textarea]:pr-48 [&_.chat-composer-field_textarea]:text-[16px] [&_.chat-composer-field_textarea]:leading-[1.6] [&_.cc-foot]:absolute [&_.cc-foot]:bottom-[-16px] [&_.cc-foot]:left-0 [&_.cc-foot]:right-0 [&_.cc-foot]:mt-0 [&_.cc-foot]:pt-0">
+          <div className="mt-8 [&_.chat-composer]:max-w-none [&_.chat-composer]:rounded-md [&_.chat-composer]:px-5 [&_.chat-composer]:py-4 [&_.chat-composer]:shadow-none [&_.chat-composer-field]:relative [&_.chat-composer-field_textarea]:h-[103px] [&_.chat-composer-field_textarea]:p-0 [&_.chat-composer-field_textarea]:pr-48 [&_.chat-composer-field_textarea]:text-[16px] [&_.chat-composer-field_textarea]:leading-[1.6]">
             <ChatInput
               ref={chatInputRef}
               onSend={sendPrompt}
@@ -1020,6 +1033,8 @@ export default function DashboardPage() {
               inheritedEffort={selectedAgentDoc?.reasoningEffort ?? (selectedProvider === 'codex' ? 'high' : 'medium')}
               inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
               onAgentOverridesChanged={setAgentOverrides}
+              maxVisibleLines={4}
+              fixedVisibleLines
               extraControls={(
                 <AgentChatDropdown
                   value={selectedAgent}

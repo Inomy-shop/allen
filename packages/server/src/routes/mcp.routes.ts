@@ -17,7 +17,7 @@ import {
 import { McpBundleService } from '../services/mcp-bundle.service.js';
 import { healthCheckMcpServer } from '../services/mcp-health.service.js';
 import { evictMcpConnection, getCachedMcpTools, loadMcpTools } from '../services/chat-mcp-client.js';
-import { getRuntimeSecretsProvider } from '../runtime/config.js';
+import { getRuntimeConfigProvider, getRuntimeSecretsProvider } from '../runtime/config.js';
 import { buildMcpSourceEnvForServer, listMissingMcpCredentialEnv, mcpCredentialEnvKey } from '../runtime/mcp-credentials.js';
 
 const BUNDLE_UPLOAD_TMP = '/tmp/mcp-bundle-uploads';
@@ -148,6 +148,40 @@ async function persistProvidedMcpCredentials(
     await secrets.setSecret(key, value);
     process.env[key] = value;
   }
+}
+
+function credentialKeysForMcpServer(server: Pick<McpServerRecord, 'envKeys' | 'argKeys'>): string[] {
+  return Array.from(new Set([
+    ...(server.envKeys ?? []),
+    ...(server.argKeys ?? []),
+  ].map(mcpCredentialEnvKey)));
+}
+
+async function deleteUnusedMcpCredentials(
+  service: McpService,
+  deletedServer: Pick<McpServerRecord, 'envKeys' | 'argKeys'>,
+): Promise<void> {
+  const runtimeConfig = getRuntimeConfigProvider();
+  if (runtimeConfig.get('ALLEN_DESKTOP') !== '1') return;
+
+  const keys = credentialKeysForMcpServer(deletedServer);
+  if (keys.length === 0) return;
+
+  const remainingReferencedKeys = new Set(
+    (await service.list()).flatMap((server) => credentialKeysForMcpServer(server)),
+  );
+  const keysToDelete = keys.filter((key) => !remainingReferencedKeys.has(key));
+  if (keysToDelete.length === 0) return;
+
+  const secrets = getRuntimeSecretsProvider();
+  const config = runtimeConfig as {
+    delete?: (runtimeKey: string) => void;
+  };
+  await Promise.all(keysToDelete.map(async (key) => {
+    await secrets.deleteSecret?.(key);
+    config.delete?.(key);
+    delete process.env[key];
+  }));
 }
 
 /** Scan a repo for candidate MCP entry files. Heuristics: files matching
@@ -555,14 +589,47 @@ export function mcpRoutes(db: Db): Router {
       const existing = await service.getById(id);
       if (!existing) return res.status(404).json({ error: 'MCP server not found' });
 
-      const update: Partial<McpServerRecord> = { ...req.body };
+      const credentials = (req.body as { credentials?: Record<string, string> }).credentials;
+      let update: Partial<McpServerRecord> = { ...req.body };
       // Strip fields that should never be mutated via PUT
       delete (update as Record<string, unknown>)._id;
       delete (update as Record<string, unknown>).ownerId;
       delete (update as Record<string, unknown>).createdAt;
+      delete (update as Record<string, unknown>).credentials;
+      for (const key of Object.keys(update) as Array<keyof McpServerRecord>) {
+        if (update[key] === undefined) delete update[key];
+      }
+
+      // Presets are curated records: their name, command, args, URL, type,
+      // source, and declared credential keys stay tied to MCP_PRESETS. Editing a
+      // preset only updates the app-managed credential values supplied above.
+      if (existing.source?.kind === 'preset') {
+        update = {};
+      }
+
+      const nextEnvKeys = existing.source?.kind === 'preset'
+        ? (existing.envKeys ?? [])
+        : (update.envKeys ?? existing.envKeys ?? []);
+      const nextArgKeys = existing.source?.kind === 'preset'
+        ? (existing.argKeys ?? [])
+        : (update.argKeys ?? existing.argKeys ?? []);
+      const nextCredentialKeys = [
+        ...(nextEnvKeys ?? []),
+        ...(nextArgKeys ?? []),
+      ];
+      await persistProvidedMcpCredentials(credentials, nextCredentialKeys);
+
+      const missing = await listMissingMcpCredentialEnv(nextCredentialKeys);
+      if (missing.length > 0) {
+        return res.status(400).json({
+          error: `Missing required credential${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. Add ${missing.length > 1 ? 'them' : 'it'} in Settings or configure the matching environment variable, then retry.`,
+          missing,
+        });
+      }
 
       const server = await service.update(id, update);
       if (!server) return res.status(404).json({ error: 'MCP server not found' });
+      await deleteUnusedMcpCredentials(service, existing);
 
       // If installPath changed or source changed, bust the install cache.
       const oldInstall = (existing.source?.kind === 'repo')
@@ -576,7 +643,11 @@ export function mcpRoutes(db: Db): Router {
       syncUserToCodex(service, req).catch(() => {});
       res.json(server);
     } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
+      const message = (err as Error).message;
+      const status = message === 'runtime_secrets_are_read_only' || message.startsWith('unsupported MCP credential key:')
+        ? 400
+        : 500;
+      res.status(status).json({ error: message });
     }
   });
 
@@ -601,6 +672,7 @@ export function mcpRoutes(db: Db): Router {
       const existing = await service.getById(id);
       if (!existing) return res.status(404).json({ error: 'MCP server not found' });
       await service.delete(id);
+      await deleteUnusedMcpCredentials(service, existing);
       evictMcpConnection(existing.name);
       // Synchronously remove from Codex before the fire-and-forget sync so
       // there is no window where the deleted name re-appears in a later

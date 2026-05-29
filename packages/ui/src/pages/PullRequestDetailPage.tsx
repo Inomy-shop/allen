@@ -108,7 +108,7 @@ export default function PullRequestDetailPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* ── Header ───────────────────────────────────────────────────────── */}
-      <div className="px-6 pt-4 pb-3 border-b border-app shrink-0">
+      <div className="px-8 pt-8 pb-3 border-b border-app shrink-0">
         <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
           <Link to="/pull-requests" className="hover:text-theme-primary transition-colors flex items-center gap-1">
             <ArrowLeft className="w-3 h-3" /> Pull requests
@@ -267,7 +267,7 @@ function ConversationTab({
 
   return (
     <div className="flex-1 overflow-y-auto min-h-0">
-      <div className="px-6 py-6 space-y-4">
+      <div className="px-8 pb-8 pt-6 space-y-4">
         {/* Description card */}
         <div className="card overflow-hidden">
           <div className="flex items-center gap-2 px-4 py-2.5 border-b border-app bg-app-muted/40">

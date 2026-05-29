@@ -8,13 +8,13 @@ This folder is the design system distilled from the Allen product UI. It's a man
 
 Everything here was derived directly from these Allen repositories. Browse them to go deeper:
 
-- **Codebase (canonical):** https://github.com/Kalpai-poc/allen — the monorepo. The visual system lives in `packages/ui/`:
+- **Codebase (canonical):** https://github.com/Inomy-shop/allen — the monorepo. The visual system lives in `packages/ui/`:
   - `packages/ui/src/index.css` — the full v2 token + component layer (light/dark, all class hooks)
   - `packages/ui/tailwind.config.js` — Tailwind theme mapping
   - `packages/ui/src/App.tsx` — shell, sidebar, topbar, command palette
   - `packages/ui/src/components/` — chat, agents, executions, workspace, settings
   - `packages/ui/src/pages/` — full page scaffolds
-- **README (product overview):** https://github.com/Kalpai-poc/allen/blob/main/README.md
+- **README (product overview):** https://github.com/Inomy-shop/allen/blob/main/README.md
 - **Org-mirror:** the same code is also hosted at `Inomy-shop/allen`.
 
 If you have access, read the `*.tsx` files first — they're the source of truth for component shape and copy.

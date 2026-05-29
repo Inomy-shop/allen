@@ -160,42 +160,43 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
   return (
     <div className="flex flex-col h-full relative">
       {/* Header with filter and search */}
-      <div className="px-3 py-1.5 border-b border-app sticky top-0 bg-surface-50 z-10 flex items-center gap-2">
-        <h2 className="font-heading text-[10px] font-semibold text-theme-secondary uppercase tracking-widest shrink-0">Logs</h2>
-        <Select
-          value={nodeFilter ?? '__all__'}
-          onChange={(v) => onNodeFilterChange(v === '__all__' ? null : v)}
-          options={filterOptions}
-          placeholder="Filter by node"
-          className="w-36"
-        />
-        <div className="flex items-center gap-1 flex-1 min-w-0">
-          <Search className="w-3 h-3 text-theme-muted shrink-0" />
-          <input
-            type="text"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search logs..."
-            className="bg-transparent text-xs text-theme-secondary placeholder-gray-600 outline-none w-full font-mono"
+      <div className="border-b border-app bg-surface-50 px-4 py-3 sticky top-0 z-10">
+        <div className="flex flex-wrap items-center gap-3">
+          <Select
+            value={nodeFilter ?? '__all__'}
+            onChange={(v) => onNodeFilterChange(v === '__all__' ? null : v)}
+            options={filterOptions}
+            placeholder="Filter by node"
+            className="w-[288px]"
           />
-        </div>
-        {/* Spawned-agent log toggle. Only shown when there's at least one
-            child log in the current set so we don't clutter the header
-            for non-spawn workflows. */}
-        {spawnLogCount > 0 && (
-          <label
-            className="flex items-center gap-1 text-[10px] font-mono text-theme-muted hover:text-theme-primary cursor-pointer shrink-0"
-            title={`${spawnLogCount} log line${spawnLogCount === 1 ? '' : 's'} from spawned agents`}
-          >
+          <label className="relative min-w-[300px] flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
             <input
-              type="checkbox"
-              checked={showSpawnLogs}
-              onChange={e => setShowSpawnLogs(e.target.checked)}
-              className="w-3 h-3 accent-accent-purple"
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search logs..."
+              className="h-9 w-full rounded-md border border-app bg-app px-8 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
             />
-            Spawn ({spawnLogCount})
           </label>
-        )}
+          {/* Spawned-agent log toggle. Only shown when there's at least one
+              child log in the current set so we don't clutter the header
+              for non-spawn workflows. */}
+          {spawnLogCount > 0 && (
+            <label
+              className="flex items-center gap-1 text-[10px] font-mono text-theme-muted hover:text-theme-primary cursor-pointer shrink-0"
+              title={`${spawnLogCount} log line${spawnLogCount === 1 ? '' : 's'} from spawned agents`}
+            >
+              <input
+                type="checkbox"
+                checked={showSpawnLogs}
+                onChange={e => setShowSpawnLogs(e.target.checked)}
+                className="w-3 h-3 accent-accent-purple"
+              />
+              Spawn ({spawnLogCount})
+            </label>
+          )}
+        </div>
       </div>
 
       {/* Log entries */}

@@ -527,7 +527,7 @@ function setupApplicationMenu(): void {
       label: 'Help',
       submenu: [
         { label: 'Allen Website', click: () => { void openExternalUrl('https://askallen.build/'); } },
-        { label: 'GitHub', click: () => { void openExternalUrl('https://github.com/Kalpai-poc/allen'); } },
+        { label: 'GitHub', click: () => { void openExternalUrl('https://github.com/Inomy-shop/allen'); } },
       ],
     },
   ];
