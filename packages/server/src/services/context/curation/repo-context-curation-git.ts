@@ -127,13 +127,28 @@ function markdownTitle(content: string): string | undefined {
   return undefined;
 }
 
-function isSafeBranchName(value: string): boolean {
+export function isSafeBranchName(value: string): boolean {
   return Boolean(value)
     && !/[\s\0~^:?*[\\]/.test(value)
     && !value.includes('..')
     && !value.includes('@{')
     && !value.startsWith('-')
     && !value.endsWith('.');
+}
+
+/**
+ * Validate and normalise a caller-supplied branch/ref, falling back to the repo's
+ * default branch when the requested value is absent or fails safety checks.
+ *
+ * Accepts bare branch names (`main`, `feature/foo`,
+ * `context/knowledge-docs-curation-branch-tfsvp1`) and strips a leading
+ * `origin/` prefix so callers may pass either form.
+ */
+export function resolveRequestedBranch(requested: string | undefined, defaultBranch: string): string {
+  if (!requested) return defaultBranch;
+  // Strip optional remote prefix — `origin/foo` → `foo`
+  const normalized = requested.startsWith('origin/') ? requested.slice('origin/'.length) : requested;
+  return isSafeBranchName(normalized) ? normalized : defaultBranch;
 }
 
 function firstString(...values: unknown[]): string | undefined {

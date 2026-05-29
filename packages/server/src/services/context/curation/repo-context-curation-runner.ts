@@ -68,6 +68,7 @@ export async function createRepoContextCurationRun(db: Db, input: {
   repoId: string;
   repoName: string;
   expectedFiles: CandidateContextFile[];
+  branch?: string;
   scope?: Record<string, unknown>;
 }): Promise<Record<string, unknown>> {
   const existing = await db.collection(STAGE_RUNS).findOne({ executionId: input.executionId, status: { $in: ['running', 'validated'] } });
@@ -84,6 +85,7 @@ export async function createRepoContextCurationRun(db: Db, input: {
     budgets: curationBudgets(),
     expectedFiles: input.expectedFiles,
     expectedFileCount: input.expectedFiles.length,
+    branch: input.branch,
     scope: input.scope ?? {},
     createdAt: now,
     updatedAt: now,

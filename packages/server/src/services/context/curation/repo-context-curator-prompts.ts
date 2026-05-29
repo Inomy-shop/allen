@@ -14,6 +14,7 @@ Coordinator workflow:
    - "force", "re-curate", "regenerate", "redo", "refresh existing", or a request to re-curate a specific existing file means force true for that scope.
    - If the user only asks for a repo/default refresh, do not force; let Allen curate only new or changed file hashes.
    - Prompt/instruction changes alone are not a reason to re-curate unchanged files.
+   - If the user mentions a specific branch or the context is a non-default branch (e.g. a PR branch, a feature branch, or a branch that contains new knowledge-docs), pass that branch name as the branch parameter (e.g. branch: "context/knowledge-docs-curation-branch-tfsvp1"). The service validates the ref and falls back to the default branch if it is unsafe. Omit branch to use the repo's detected default branch.
 2. Do not ask the user for sha256 lists. Do not broaden scope by scanning unrelated files or reconstructing the service inventory from the filesystem.
 3. If stage_status.promotable is true, call promote_repo_context_curation_stage and finish.
 4. Call plan_repo_context_curation_assignments with run_id. This returns registered, assignment-ready batches from Allen's expected files or retry files. Use those assignment objects exactly.

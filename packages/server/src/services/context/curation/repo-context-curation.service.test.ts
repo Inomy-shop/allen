@@ -5,15 +5,34 @@ const mockInventory = vi.hoisted(() => ({
 }));
 
 vi.mock('./repo-context-curation-git.js', () => ({
-  collectDefaultBranchContextFiles: vi.fn(async () => ({
-    branch: 'main',
-    ref: 'origin/main',
+  collectDefaultBranchContextFiles: vi.fn(async (_repoPath: string, branch: string) => ({
+    branch,
+    ref: `origin/${branch}`,
     headSha: 'head-sha',
     candidates: mockInventory.candidates,
     diagnostics: [],
   })),
   contextInventoryConfig: () => ({ source: 'test' }),
   resolveDefaultBranchName: () => 'main',
+  isSafeBranchName: vi.fn((value: string) =>
+    Boolean(value)
+    && !/[\s\0~^:?*[\\]/.test(value)
+    && !value.includes('..')
+    && !value.includes('@{')
+    && !value.startsWith('-')
+    && !value.endsWith('.'),
+  ),
+  resolveRequestedBranch: vi.fn((requested: string | undefined, defaultBranch: string) => {
+    if (!requested) return defaultBranch;
+    const normalized = requested.startsWith('origin/') ? requested.slice('origin/'.length) : requested;
+    const safe = Boolean(normalized)
+      && !/[\s\0~^:?*[\\]/.test(normalized)
+      && !normalized.includes('..')
+      && !normalized.includes('@{')
+      && !normalized.startsWith('-')
+      && !normalized.endsWith('.');
+    return safe ? normalized : defaultBranch;
+  }),
 }));
 
 vi.mock('../common/context-role-inventory.js', () => ({
@@ -25,11 +44,13 @@ import { RepoContextCurationService } from './repo-context-curation.service.js';
 import {
   buildRepoContextCuratorSystemPrompt,
   buildRepoContextCuratorWorkerSystemPrompt,
+  buildRepoContextCuratorWorkerUserPrompt,
 } from './repo-context-curator-prompts.js';
 import {
   buildRepoContextCurationAssignmentPlan,
   validateStageEntry,
 } from './repo-context-curation-runner.js';
+import * as gitModule from './repo-context-curation-git.js';
 
 function candidate(path: string, sourceHash: string) {
   return { path, title: path, sourceHash, bytes: 1000, kind: 'markdown' as const };
@@ -146,9 +167,9 @@ function dateMs(value: unknown): number {
   return Number.isFinite(date.getTime()) ? date.getTime() : 0;
 }
 
-async function buildInput(priorEntries: Record<string, unknown>[], scope: Record<string, unknown> = {}) {
+async function buildInput(priorEntries: Record<string, unknown>[], scope: Record<string, unknown> = {}, options: { branch?: string } = {}) {
   const service = new RepoContextCurationService(makeDb(priorEntries));
-  return (service as any).buildRunInput({ _id: 'repo-1', name: 'repo', path: '/tmp/repo' }, scope);
+  return (service as any).buildRunInput({ _id: 'repo-1', name: 'repo', path: '/tmp/repo' }, scope, options);
 }
 
 describe('RepoContextCurationService reuse selection', () => {
@@ -424,5 +445,106 @@ describe('Repo context curation stage validation', () => {
     });
 
     expect(validation.ok).toBe(true);
+  });
+});
+
+describe('Branch-aware curation', () => {
+  beforeEach(() => {
+    mockInventory.candidates = [];
+    vi.mocked(gitModule.collectDefaultBranchContextFiles).mockClear();
+  });
+
+  it('passes default branch to inventory when no branch override is given', async () => {
+    mockInventory.candidates = [candidate('docs/a.md', 'hash-a')];
+
+    const input = await buildInput([]);
+
+    expect(gitModule.collectDefaultBranchContextFiles).toHaveBeenCalledWith('/tmp/repo', 'main');
+    expect(input.branch).toBe('main');
+    expect(input.gitRef).toBe('origin/main');
+  });
+
+  it('passes the requested branch to inventory, including knowledge-docs paths', async () => {
+    mockInventory.candidates = [
+      candidate('knowledge-docs/onboarding.md', 'hash-onboarding'),
+      candidate('knowledge-docs/runbook.md', 'hash-runbook'),
+    ];
+
+    const input = await buildInput([], {}, { branch: 'context/knowledge-docs-curation-branch-tfsvp1' });
+
+    expect(gitModule.collectDefaultBranchContextFiles).toHaveBeenCalledWith(
+      '/tmp/repo',
+      'context/knowledge-docs-curation-branch-tfsvp1',
+    );
+    expect(input.branch).toBe('context/knowledge-docs-curation-branch-tfsvp1');
+    expect(input.newOrChangedFiles.map((f: any) => f.path)).toEqual([
+      'knowledge-docs/onboarding.md',
+      'knowledge-docs/runbook.md',
+    ]);
+  });
+
+  it('strips leading origin/ prefix and passes bare branch name to inventory', async () => {
+    mockInventory.candidates = [candidate('docs/a.md', 'hash-a')];
+
+    const input = await buildInput([], {}, { branch: 'origin/feature/my-docs' });
+
+    // resolveRequestedBranch strips "origin/" before passing to git
+    expect(gitModule.collectDefaultBranchContextFiles).toHaveBeenCalledWith('/tmp/repo', 'feature/my-docs');
+    expect(input.branch).toBe('feature/my-docs');
+  });
+
+  it('falls back to default branch when requested branch is unsafe (shell injection attempt)', async () => {
+    mockInventory.candidates = [candidate('docs/a.md', 'hash-a')];
+
+    // Branch with spaces and dangerous chars
+    const input = await buildInput([], {}, { branch: 'main; rm -rf /' });
+
+    expect(gitModule.collectDefaultBranchContextFiles).toHaveBeenCalledWith('/tmp/repo', 'main');
+    expect(input.branch).toBe('main');
+  });
+
+  it('falls back to default branch when requested branch contains double-dot path traversal', async () => {
+    mockInventory.candidates = [candidate('docs/a.md', 'hash-a')];
+
+    const input = await buildInput([], {}, { branch: '../secret-branch' });
+
+    expect(gitModule.collectDefaultBranchContextFiles).toHaveBeenCalledWith('/tmp/repo', 'main');
+    expect(input.branch).toBe('main');
+  });
+
+  it('falls back to default branch when requested branch starts with a dash', async () => {
+    mockInventory.candidates = [candidate('docs/a.md', 'hash-a')];
+
+    const input = await buildInput([], {}, { branch: '-evil' });
+
+    expect(gitModule.collectDefaultBranchContextFiles).toHaveBeenCalledWith('/tmp/repo', 'main');
+    expect(input.branch).toBe('main');
+  });
+});
+
+describe('Coordinator and worker prompts include branch/ref context', () => {
+  it('coordinator system prompt instructs passing branch for non-default branch curation', () => {
+    const prompt = buildRepoContextCuratorSystemPrompt();
+
+    expect(prompt).toContain('branch');
+    expect(prompt).toContain('prepare_repo_context_curation');
+  });
+
+  it('worker user prompt includes branch and HEAD sha fields', () => {
+    const prompt = buildRepoContextCuratorWorkerUserPrompt({
+      repoName: 'my-repo',
+      repoPath: '/tmp/repo',
+      branch: 'context/knowledge-docs-curation-branch-tfsvp1',
+      headSha: 'abc123',
+      runId: 'run-1',
+      assignmentId: 'curation-001',
+      workerId: 'repo-context-curation-worker-001',
+      roleInventory: [],
+      spawnedRoleInventory: [],
+      assignedFiles: [],
+    });
+
+    expect(prompt).toContain('context/knowledge-docs-curation-branch-tfsvp1');
+    expect(prompt).toContain('abc123');
   });
 });
