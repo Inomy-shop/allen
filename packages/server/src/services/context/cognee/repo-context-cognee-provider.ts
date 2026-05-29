@@ -323,17 +323,13 @@ export class MultiDatasetCogneeProvider implements KnowledgeRetrievalProvider {
 
     const perDatasetLimit = positiveIntegerEnv('ALLEN_CHAT_CONTEXT_PER_DATASET_RESULTS', 8);
     const maxDatasets = positiveIntegerEnv('ALLEN_CHAT_CONTEXT_MAX_DATASETS', 24);
+    const datasetConcurrency = Math.min(8, Math.max(1, positiveIntegerEnv('ALLEN_CHAT_CONTEXT_DATASET_CONCURRENCY', 4)));
     const selectedDatasets = datasets.slice(0, maxDatasets);
-    const results: Array<{
-      dataset: ActiveCogneeDataset;
-      candidates: KnowledgeCandidateRef[];
-      selectedRefs: KnowledgeCandidateRef[];
-      rejectedRefs: KnowledgeCandidateRef[];
-      diagnostics: Array<Record<string, unknown>>;
-    }> = [];
-    for (const dataset of selectedDatasets) {
-      results.push(await this.searchDataset(input, dataset, perDatasetLimit));
-    }
+    const results = await mapWithConcurrency(
+      selectedDatasets,
+      datasetConcurrency,
+      (dataset) => this.searchDataset(input, dataset, perDatasetLimit),
+    );
 
     const candidates = uniqueMultiDatasetRefs(results.flatMap((result) => result.candidates));
     const selectedRefs = uniqueMultiDatasetRefs(results.flatMap((result) => result.selectedRefs));
@@ -513,6 +509,24 @@ export class MultiDatasetCogneeProvider implements KnowledgeRetrievalProvider {
     }
     return datasets;
   }
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 type ActiveCogneeDataset = {

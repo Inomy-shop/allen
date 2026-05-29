@@ -22,6 +22,7 @@ const mockAppendAutomationMessage = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ messageId: 'msg-abc123' }),
 );
 const mockCancelChatSession = vi.hoisted(() => vi.fn().mockResolvedValue({ cancelled: false }));
+const mockExecuteChatTool = vi.hoisted(() => vi.fn().mockResolvedValue({}));
 
 // ── Mock all service modules that chat.routes.ts imports ─────────────────────
 
@@ -45,7 +46,7 @@ vi.mock('../services/chat.service.js', () => ({
 }));
 
 vi.mock('../services/chat-tools.js', () => ({
-  executeChatTool: vi.fn().mockResolvedValue({}),
+  executeChatTool: mockExecuteChatTool,
   resolveActiveSession: vi.fn().mockReturnValue(null),
 }));
 
@@ -105,6 +106,8 @@ describe('POST /api/chat/sessions/:id/automation-message', () => {
   beforeEach(() => {
     mockAppendAutomationMessage.mockClear();
     mockAppendAutomationMessage.mockResolvedValue({ messageId: 'msg-abc123' });
+    mockExecuteChatTool.mockClear();
+    mockExecuteChatTool.mockResolvedValue({});
     app = makeApp();
   });
 
@@ -209,5 +212,44 @@ describe('POST /api/chat/sessions/:id/automation-message', () => {
 
     expect(res.status).toBe(429);
     expect(res.body.error).toMatch(/too many requests/i);
+  });
+});
+
+describe('POST /api/chat/spawn-agent', () => {
+  let app: ReturnType<typeof makeApp>;
+
+  beforeEach(() => {
+    mockExecuteChatTool.mockClear();
+    mockExecuteChatTool.mockResolvedValue({ execution_id: 'exec-1', status: 'running' });
+    app = makeApp();
+  });
+
+  it('forwards structured context_query to spawn_agent', async () => {
+    const contextQuery = {
+      user_request: 'Analyze product grouping',
+      topics: ['product grouping'],
+    };
+    const res = await request(app)
+      .post('/api/chat/spawn-agent')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        agent_name: 'backend-developer',
+        prompt: 'Run analysis',
+        context_query: contextQuery,
+        repo_path: '/repo',
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockExecuteChatTool).toHaveBeenCalledWith(
+      'spawn_agent',
+      expect.objectContaining({
+        agent_name: 'backend-developer',
+        prompt: 'Run analysis',
+        context_query: contextQuery,
+        repo_path: '/repo',
+      }),
+      FAKE_DB,
+      expect.any(Object),
+    );
   });
 });

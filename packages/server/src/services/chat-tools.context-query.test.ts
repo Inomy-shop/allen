@@ -68,4 +68,18 @@ describe('spawn agent context query prompt sanitization', () => {
     expect(resolved.source).toBe('prompt_fallback');
     expect(resolved.contextQuery).toBeUndefined();
   });
+
+  it('preserves retrieval intent from one-line read-only prompts', () => {
+    const resolved = __internalsForTest.resolveSpawnContextQuery(
+      undefined,
+      'READ-ONLY analysis: analyze product grouping identifiers and downstream consumption. Do not edit files.',
+      '/repo',
+    );
+
+    expect(resolved.source).toBe('derived_prompt');
+    expect(resolved.contextQuery?.user_request).toContain('analyze product grouping identifiers');
+    expect(resolved.contextQuery?.user_request).toContain('downstream consumption');
+    expect(resolved.contextQuery?.user_request).not.toContain('READ-ONLY');
+    expect(resolved.contextQuery?.user_request).not.toContain('Do not edit files');
+  });
 });

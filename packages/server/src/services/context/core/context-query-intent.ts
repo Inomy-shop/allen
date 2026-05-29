@@ -90,7 +90,7 @@ export function buildContextQueryIntent(input: KnowledgeRetrievalInput): Context
   const agentRoleSignals = normalizeAgentRoleSignals(input.agentRoleSignals);
   const agentRoleText = agentRoleSignals.map((signal) => signal.signalText).join(' ');
   const userPromptSignal = firstString(structuredQuery?.user_request)
-    ?? promptTaskSignal(input.prompt).entries[0]?.replace(/^User request:\s*/, '');
+    ?? userPromptSignalFromPrompt(input.prompt, taskSignal);
   const taskHaystack = `${input.workflowName} ${input.nodeName} ${rawRole} ${userPromptSignal ?? ''} ${task} ${agentRoleText}`.toLowerCase();
   const roleFamily = roleFamilyFor(role, taskHaystack);
   const requiredCategories: string[] = [];
@@ -259,8 +259,15 @@ function buildTaskSignal(input: KnowledgeRetrievalInput): ContextTaskSignal {
   const sectionSignals = promptSectionSignals(input.prompt);
   const pathSignal = buildPathSignals(input);
   const agentSignals = agentRoleTaskSignals(input);
-  const entries = [...promptSignal.entries, ...structured.entries, ...sectionSignals.entries];
-  const sources = uniqueStrings([...promptSignal.sources, ...structured.sources, ...pathSignal.sources, ...sectionSignals.sources, ...agentSignals.sources]);
+  const preferredEntries = [...structured.entries, ...sectionSignals.entries];
+  const entries = preferredEntries.length ? preferredEntries : promptSignal.entries;
+  const sources = uniqueStrings([
+    ...(preferredEntries.length ? [] : promptSignal.sources),
+    ...structured.sources,
+    ...pathSignal.sources,
+    ...sectionSignals.sources,
+    ...agentSignals.sources,
+  ]);
   const sections = uniqueStrings(sectionSignals.sections);
   if (entries.length > 0) {
     return {
@@ -279,6 +286,16 @@ function buildTaskSignal(input: KnowledgeRetrievalInput): ContextTaskSignal {
 function promptTaskSignal(prompt: unknown): { entries: string[]; sources: string[] } {
   const text = compactTaskText(firstString(prompt) ?? '', RAW_PROMPT_FALLBACK_MAX_CHARS);
   return text ? { entries: [`User request: ${text}`], sources: ['prompt.user_request'] } : { entries: [], sources: [] };
+}
+
+function userPromptSignalFromPrompt(prompt: unknown, taskSignal: ContextTaskSignal): string | undefined {
+  const explicitSection = promptSectionSignals(prompt).entries
+    .find((entry) => /^(USER PROMPT|USER REQUEST):/i.test(entry));
+  if (explicitSection) return explicitSection.replace(/^(USER PROMPT|USER REQUEST):\s*/i, '');
+  if (taskSignal.sources.includes('raw_prompt_fallback') || taskSignal.sources.includes('prompt.user_request')) {
+    return taskSignal.text.replace(/^User request:\s*/i, '');
+  }
+  return undefined;
 }
 
 function agentRoleTaskSignals(input: KnowledgeRetrievalInput): { entries: string[]; sources: string[] } {
@@ -685,7 +702,7 @@ function isSpawnedAgentWorkflow(workflowName: string): boolean {
 }
 
 function isPathOnlyTaskEntry(entry: string): boolean {
-  return /^(Current files|Changed files|Path terms|Prompt file references|Prompt path terms|Target files|Path hints|Path scopes|Module hints|FILES CHANGED|FILES TO TOUCH)\s*:/i.test(entry.trim());
+  return /^(Current files|Changed files|Path terms|Prompt file references|Prompt path terms|Target files|Path hints|Path scopes|Module hints|FILES CHANGED)\s*:/i.test(entry.trim());
 }
 
 function stableStringify(value: unknown): string {

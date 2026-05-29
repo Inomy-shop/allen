@@ -189,12 +189,27 @@ function extractPromptSection(text: string, label: string): string | undefined {
 function compactForContextQuery(value: string, maxLength = 900): string {
   return value
     .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line && !isExecutionOnlyContextQueryLine(line))
+    .map(cleanContextQueryLine)
+    .filter(Boolean)
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maxLength);
+}
+
+function cleanContextQueryLine(line: string): string {
+  const trimmed = line.trim();
+  if (!trimmed) return '';
+  const withoutMarkers = trimmed
+    .replace(/\bREAD[-\s]*ONLY\b\s*(?:task|analysis)?\s*[:;,.—-]?\s*/gi, '')
+    .replace(/\bNOT\s+an\s+implementation\s+task\b\s*[:;,.—-]?\s*/gi, '')
+    .replace(/\bno\s+code\s+changes?\b\s*[:;,.—-]?\s*/gi, '');
+  const segments = withoutMarkers
+    .split(/(?<=[.!?])\s+|;\s+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .filter((segment) => !isExecutionOnlyContextQueryLine(segment));
+  return segments.join(' ').trim();
 }
 
 function isExecutionOnlyContextQueryLine(line: string): boolean {

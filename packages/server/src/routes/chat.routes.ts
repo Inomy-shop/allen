@@ -171,7 +171,7 @@ export function chatRoutes(db: Db): Router {
   router.post('/spawn-agent', async (req: Request, res: Response) => {
     try {
       const {
-        agent_name, prompt, repo_path, session_id,
+        agent_name, prompt, context_query, repo_path, session_id,
         // Spawn-tree linkage forwarded from the Allen MCP server's env.
         // The MCP server reads ALLEN_PARENT_EXECUTION_ID / _CALLER /
         // _ROOT_EXECUTION_ID from its subprocess env and puts them here so
@@ -184,7 +184,7 @@ export function chatRoutes(db: Db): Router {
       } = req.body;
       if (!agent_name || !prompt) return res.status(400).json({ error: 'agent_name and prompt are required' });
       const result = await executeChatTool('spawn_agent', {
-        agent_name, prompt, repo_path, session_id,
+        agent_name, prompt, context_query, repo_path, session_id,
         parent_execution_id, parent_caller, root_execution_id,
         artifact_root_type, artifact_root_id,
         repo_knowledge_packet_id, repo_knowledge_repo_id, repo_knowledge_index_id,

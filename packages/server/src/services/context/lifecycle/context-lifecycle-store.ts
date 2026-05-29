@@ -661,6 +661,7 @@ export class ContextLifecycleStore {
       this.traces.find({ executionId: { $in: executionIds }, type: 'agent' }).sort({ startedAt: 1 }).toArray(),
       this.getWorkflowEvaluation(executionId),
     ]);
+    const artifactsByHash = await this.loadArtifactsByHash(contentArtifactHashes(refs, events));
     const refsByAttempt = groupBy(refs, (row) => String(row.contextAttemptId));
     const eventsByAttempt = groupBy(events, (row) => String(row.contextAttemptId));
     const evaluationsByAttempt = new Map(evaluations.filter((row) => row.scope !== 'workflow').map((row) => [String(row.contextAttemptId), row]));
@@ -704,8 +705,17 @@ export class ContextLifecycleStore {
       refs,
       events,
       evaluations,
-      packets: await Promise.all(attempts.map((attempt) => this.getAttemptPacketView(String(attempt.contextAttemptId)))),
-      usage: await Promise.all(attempts.map((attempt) => this.getUsageView(String(attempt.contextAttemptId)))),
+      packets: attempts.map((attempt) => this.packetViewFromRows(
+        attempt,
+        refsByAttempt.get(String(attempt.contextAttemptId)) ?? [],
+        eventsByAttempt.get(String(attempt.contextAttemptId)) ?? [],
+        artifactsByHash,
+      )),
+      usage: attempts.map((attempt) => this.usageViewFromRows(
+        attempt,
+        refsByAttempt.get(String(attempt.contextAttemptId)) ?? [],
+        eventsByAttempt.get(String(attempt.contextAttemptId)) ?? [],
+      )),
       nodeAttempts,
       nodeSummaries: nodeAttempts.map((attempt) => ({
         executionId: attempt.executionId,
@@ -948,6 +958,113 @@ export class ContextLifecycleStore {
         charCount: numberValue(event?.charCount),
       };
     }));
+  }
+
+  private async loadArtifactsByHash(hashes: string[]): Promise<Map<string, Record<string, unknown>>> {
+    const uniqueHashes = Array.from(new Set(hashes.filter(Boolean)));
+    if (!uniqueHashes.length) return new Map();
+    const rows = await this.artifacts.find({ hash: { $in: uniqueHashes } }).toArray();
+    return new Map(rows.map((row) => [String(row.hash), row]));
+  }
+
+  private packetViewFromRows(
+    attempt: Record<string, unknown>,
+    refs: StoredRef[],
+    events: Array<Record<string, unknown>>,
+    artifactsByHash: Map<string, Record<string, unknown>>,
+  ): Record<string, unknown> {
+    const contextAttemptId = String(attempt.contextAttemptId);
+    const byType = eventsByType(events);
+    const refsById = new Map(refs.map((ref) => [ref.refId, ref]));
+    const rowsFor = (type: ContextRefEventType) => uniqueByRefId((byType.get(type) ?? [])
+      .map((event) => refFromEvent(event, refsById))
+      .filter(Boolean) as Array<Record<string, unknown>>);
+    const injectedRefs = this.withEventContentFromMap(rowsFor('injected_full'), byType.get('injected_full') ?? [], artifactsByHash);
+    const providerNativeRefs = rowsFor('provider_native');
+    const skippedRefs = rowsFor('skipped').filter((ref) => firstString(ref.stage) === 'packing');
+    const refReadModel = refs.map((ref) => lifecycleRefReadModel(ref, events));
+    return {
+      ...attempt,
+      packetId: contextAttemptId,
+      parentPacketId: attempt.parentContextAttemptId,
+      refs: refReadModel,
+      lifecycle: events.map((event) => lifecycleEventReadModel(event)),
+      selectedRefs: rowsFor('selected'),
+      injectableRefs: rowsFor('injectable'),
+      filteredRefs: rowsFor('filtered'),
+      rejectedRefs: rowsFor('rejected'),
+      candidateRefs: rowsFor('candidate'),
+      availableRefs: rowsFor('selected').filter((ref) => ref.mandatory !== true),
+      contextInjection: {
+        ...(isRecord(attempt.contextInjection) ? attempt.contextInjection : {}),
+        injectedRefs,
+        providerNativeRefs,
+        skippedProviderNativeRefs: providerNativeRefs,
+        skippedRefs,
+      },
+      contextQuery: contextQueryReadModel(attempt),
+      providerDiagnostics: [],
+      rerankerDiagnostics: [],
+    };
+  }
+
+  private usageViewFromRows(
+    attempt: Record<string, unknown>,
+    refs: StoredRef[],
+    events: Array<Record<string, unknown>>,
+    usageTraceId?: string,
+  ): Record<string, unknown> {
+    const eventRows = usageTraceId ? events.filter((event) => event.usageTraceId === usageTraceId) : events;
+    const refsById = new Map(refs.map((ref) => [ref.refId, ref]));
+    const byType = eventsByType(eventRows);
+    const rowsFor = (type: ContextRefEventType) => uniqueByRefId((byType.get(type) ?? [])
+      .map((event) => refFromEvent(event, refsById))
+      .filter(Boolean) as Array<Record<string, unknown>>);
+    return {
+      traceId: usageTraceId,
+      usageTraceId,
+      executionId: attempt.executionId,
+      executionTraceId: firstString(eventRows.find((event) => event.executionTraceId)?.executionTraceId),
+      workflowName: attempt.workflowName,
+      nodeName: attempt.nodeName,
+      nodeRole: attempt.nodeRole,
+      attempt: attempt.attempt,
+      packetId: attempt.contextAttemptId,
+      contextAttemptId: attempt.contextAttemptId,
+      contextPreselected: rowsFor('selected'),
+      loaded: rowsFor('loaded'),
+      claimedUsed: rowsFor('applied'),
+      reportedLoaded: rowsFor('reported_loaded'),
+      reportedApplied: rowsFor('reported_applied'),
+      sourceDiscovery: rowsFor('source_discovered'),
+      sourceDiscoveryEvidence: (byType.get('source_discovered') ?? [])
+        .flatMap((event) => normalizeUsageArray(event.sourceDiscoveryEvidence)),
+      skipped: rowsFor('skipped').filter((ref) => firstString(ref.stage) === 'agent_usage'),
+      contextBodyLoads: rowsFor('tool_body_loaded'),
+      skillBodyLoads: rowsFor('tool_body_loaded').filter((ref) => ref.kind === 'skill' || ref.kind === 'skill_reference'),
+      diagnostics: [],
+      sawUsageKeys: events.some((event) => event.usageTraceId === usageTraceId),
+      createdAt: events.find((event) => event.usageTraceId === usageTraceId)?.createdAt,
+    };
+  }
+
+  private withEventContentFromMap(
+    refs: Array<Record<string, unknown>>,
+    events: Array<Record<string, unknown>>,
+    artifactsByHash: Map<string, Record<string, unknown>>,
+  ): Array<Record<string, unknown>> {
+    const eventByRefId = new Map(events.map((event) => [String(event.refId), event]));
+    return refs.map((ref) => {
+      const event = eventByRefId.get(String(ref.refId));
+      const hash = firstString(event?.contentArtifactHash);
+      const artifact = hash ? artifactsByHash.get(hash) : null;
+      return {
+        ...ref,
+        content: firstString(artifact?.content),
+        contentSha256: firstString(event?.contentSha256, ref.contentSha256, hash),
+        charCount: numberValue(event?.charCount),
+      };
+    });
   }
 }
 
@@ -1207,6 +1324,13 @@ function rollup(evaluations: Array<Record<string, unknown>>): Record<string, unk
 
 function hasEvent(events: Array<Record<string, unknown>>, ref: Record<string, unknown>, type: ContextRefEventType): boolean {
   return events.some((event) => event.contextAttemptId === ref.contextAttemptId && event.refId === ref.refId && event.type === type);
+}
+
+function contentArtifactHashes(refs: Array<Record<string, unknown>>, events: Array<Record<string, unknown>>): string[] {
+  return Array.from(new Set([
+    ...refs.map((ref) => firstString(ref.contentArtifactHash)),
+    ...events.map((event) => firstString(event.contentArtifactHash)),
+  ].filter((value): value is string => Boolean(value))));
 }
 
 function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
