@@ -14,6 +14,7 @@ import {
   collectDefaultBranchContextFiles,
   contextInventoryConfig,
   resolveDefaultBranchName,
+  resolveRequestedBranch,
 } from './repo-context-curation-git.js';
 import {
   createRepoContextCurationRun,
@@ -220,7 +221,8 @@ export class RepoContextCurationService {
   async prepareForCoordinator(body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const repo = await this.resolveRepo(body);
     const scope = normalizeScope(body.scope ?? body);
-    const input = await this.buildRunInput(repo, scope);
+    const requestedBranch = stringValue(body.branch) ?? stringValue(body.git_ref) ?? stringValue(body.gitRef);
+    const input = await this.buildRunInput(repo, scope, { branch: requestedBranch });
     const executionId = stringValue(body.source_execution_id) ?? stringValue(body.execution_id);
     const profile = executionId
       ? await this.createProfileForExecution(input, executionId, 'Context curation coordinator prepared')
@@ -231,6 +233,7 @@ export class RepoContextCurationService {
       repoId: input.repoId,
       repoName: input.repoName,
       expectedFiles: input.newOrChangedFiles,
+      branch: input.branch,
       scope,
     });
     const stageStatus = await getRepoContextCurationStageStatus(this.db, String(run.runId));
@@ -308,7 +311,8 @@ export class RepoContextCurationService {
       throw new Error(`Curation staging run is not promotable; retry ${stage.retryFiles.length} file(s) first.`);
     }
     const repo = await this.repoById(String(run.repoId));
-    const input = await this.buildRunInput(repo, normalizeScope(run.scope));
+    const runBranch = stringValue(run.branch as unknown);
+    const input = await this.buildRunInput(repo, normalizeScope(run.scope), { branch: runBranch });
     const expectedFiles = normalizeCandidateFiles(run.expectedFiles);
     const inputForSave = { ...input, newOrChangedFiles: expectedFiles };
     const newEntries = normalizeCuratorEntries({
@@ -339,14 +343,15 @@ export class RepoContextCurationService {
     };
   }
 
-  private async buildRunInput(repo: Record<string, unknown>, scope: CurationScopeInput = {}): Promise<CurationRunInput> {
+  private async buildRunInput(repo: Record<string, unknown>, scope: CurationScopeInput = {}, options: { branch?: string } = {}): Promise<CurationRunInput> {
     const repoId = String(repo._id);
     const repoName = String(repo.name ?? 'repo');
     const repoPath = String(repo.path ?? '');
     if (!repoPath) throw new Error('Repo path is missing');
     const defaultBranch = resolveDefaultBranchName(repo);
+    const effectiveBranch = resolveRequestedBranch(options.branch, defaultBranch);
     const [inventory, roleInventoryFull, spawnedRoleInventoryFull] = await Promise.all([
-      collectDefaultBranchContextFiles(repoPath, defaultBranch),
+      collectDefaultBranchContextFiles(repoPath, effectiveBranch),
       buildWorkflowRoleInventory(this.db),
       buildSpawnedAgentRoleInventory(this.db),
     ]);
