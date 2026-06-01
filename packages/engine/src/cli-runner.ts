@@ -146,7 +146,7 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
   if (normalizedModel) args.push('--model', normalizedModel);
   if (opts.resume) args.push('--resume', opts.resume);
   if (opts.mcpServers && Object.keys(opts.mcpServers).length > 0) {
-    args.push('--mcp-config', JSON.stringify({ mcpServers: opts.mcpServers }));
+    args.push('--mcp-config', JSON.stringify({ mcpServers: opts.mcpServers }), '--strict-mcp-config');
   }
 
   let child: ChildProcess | null = null;
