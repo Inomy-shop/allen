@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo, type MouseEvent } fr
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, X, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
-  Download, RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
+  RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
   ArrowRight, AlertTriangle, Save, Activity,
   MessageSquare, FileText, FolderGit2, GitPullRequest, ExternalLink, Cpu,
@@ -2642,16 +2642,6 @@ export default function ExecutionDetailPage() {
     refresh();
   }, [id, refresh]);
 
-  const handlePause = useCallback(async () => {
-    if (id) await api.pause(id);
-    refresh();
-  }, [id, refresh]);
-
-  const handleResume = useCallback(async () => {
-    if (id) await api.resume(id);
-    refresh();
-  }, [id, refresh]);
-
   const handleSubmitInput = useCallback(async (data: Record<string, unknown>) => {
     if (!id || !latestInputEvent) return;
     try {
@@ -2711,18 +2701,6 @@ export default function ExecutionDetailPage() {
   }, [id, contextEngineEnabled]);
 
   const canAppendFeedback = ['completed', 'failed', 'cancelled'].includes(execution?.status);
-
-  const handleExportTraces = useCallback(async () => {
-    if (!id) return;
-    const data = await api.traces(id);
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `execution-${id}-traces.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [id]);
 
   // Augment traces with synthetic 'running' entries for nodes currently
   // executing. Traces are only persisted after completion, so without this
@@ -2915,6 +2893,37 @@ export default function ExecutionDetailPage() {
           </div>
 
         <div className="flex items-center gap-2">
+          {runContext?.pullRequest && (
+            <a
+              href={runContext.pullRequest.url ?? '#'}
+              target={runContext.pullRequest.url ? '_blank' : undefined}
+              rel={runContext.pullRequest.url ? 'noreferrer' : undefined}
+              className="btn-ghost text-xs inline-flex max-w-[280px] items-center gap-1.5 text-accent-green"
+              title={runContext.pullRequest.title ?? (runContext.pullRequest.number ? `PR #${runContext.pullRequest.number}` : 'Pull request')}
+            >
+              <GitPullRequest className="h-[1em] w-[1em] shrink-0" />
+              <span className="shrink-0">
+                {runContext.pullRequest.number ? `PR #${runContext.pullRequest.number}` : 'Pull request'}
+              </span>
+              {runContext.pullRequest.title && (
+                <>
+                  <span className="text-theme-subtle">·</span>
+                  <span className="truncate text-theme-secondary">
+                    {runContext.pullRequest.title}
+                  </span>
+                </>
+              )}
+              {runContext.pullRequest.status && (
+                <span className="shrink-0 font-mono text-[10px] text-theme-muted">
+                  {runContext.pullRequest.status}
+                </span>
+              )}
+              {runContext.pullRequest.url && <ExternalLink className="h-[1em] w-[1em] shrink-0 text-theme-subtle" />}
+            </a>
+          )}
+          <button onClick={refresh} className="btn-ghost text-xs" title="Refresh">
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
           <button
             onClick={() => setRightPanelView('rerun')}
             className={`btn-ghost text-xs inline-flex items-center gap-1 ${rightPanelView === 'rerun' ? 'text-theme-primary bg-app-muted' : ''}`}
@@ -2946,9 +2955,6 @@ export default function ExecutionDetailPage() {
               </span>
             )}
           </button>
-          <button onClick={handleExportTraces} className="btn-ghost text-xs" title="Export traces">
-            <Download className="w-3.5 h-3.5" />
-          </button>
           {execution.status === 'failed' && execution.failedNode && (
             <button
               onClick={() => handleRetryFrom(execution.failedNode)}
@@ -2959,24 +2965,10 @@ export default function ExecutionDetailPage() {
             </button>
           )}
           {isLive && (
-            <>
-              {isPaused ? (
-                <button onClick={handleResume} className="btn-primary text-xs" title="Resume execution">
-                  <Play className="w-3.5 h-3.5 mr-1" /> Resume
-                </button>
-              ) : (
-                <button onClick={handlePause} className="btn-ghost text-xs" title="Pause execution">
-                  <Pause className="w-3.5 h-3.5" />
-                </button>
-              )}
-              <button onClick={handleCancel} className="btn-danger text-xs" title="Cancel execution">
-                <XCircle className="w-3.5 h-3.5 mr-1" /> Cancel
-              </button>
-            </>
+            <button onClick={handleCancel} className="btn-danger text-xs" title="Cancel execution">
+              <XCircle className="w-3.5 h-3.5 mr-1" /> Cancel
+            </button>
           )}
-          <button onClick={refresh} className="btn-ghost text-xs" title="Refresh">
-            <RefreshCw className="w-3.5 h-3.5" />
-          </button>
           </div>
         </div>
       </header>

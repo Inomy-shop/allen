@@ -2894,9 +2894,6 @@ const submitExecutionInput: ChatTool = {
       } else if (decision === 'request_changes') {
         const nodeName = intervention.stage;
         const originalFields = (intervention as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
-        if (Object.keys(fieldValues).length === 0) {
-          return { error: 'field_values is required for HITL responses.' };
-        }
         const values: Record<string, unknown> = { ...fieldValues };
         const isEscalation = intervention.severity === 'escalation'
           || String(intervention.stage ?? '').toLowerCase().includes('escalation');

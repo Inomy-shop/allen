@@ -41,7 +41,8 @@ import ChatContextPanel from './ChatContextPanel';
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 const TERMINAL_STATUSES = new Set(['completed', 'merged', 'failed', 'failure', 'error', 'errored', 'cancelled', 'canceled', 'closed']);
-const CHAT_RUN_SIDEBAR_MIN_WIDTH = 388;
+const PROGRESS_COUNTED_STEP_STATUSES = new Set(['completed', 'skipped']);
+const CHAT_RUN_SIDEBAR_MIN_WIDTH = 400;
 
 export type ChatRunPanelTab = 'tasks' | 'executions' | 'files' | 'changes' | 'context';
 type FilePanelView = 'files' | 'changes';
@@ -330,7 +331,7 @@ function workflowStepStatusFromState(state: ReturnType<typeof compactSteps>[numb
 
 function workflowStepsForContext(context: RunStatus | null): SidebarWorkflowStep[] {
   const hydratedSteps = context?.workflowSteps ?? [];
-  if (hydratedSteps.length > 0) return hydratedSteps;
+  if (hydratedSteps.length > 0) return normalizeWorkflowStepStatuses(hydratedSteps);
   if (context?.runType !== 'workflow') return [];
   return compactSteps(context).map((step, index): SidebarWorkflowStep => ({
     id: step.id,
@@ -340,6 +341,38 @@ function workflowStepsForContext(context: RunStatus | null): SidebarWorkflowStep
     attempts: step.state === 'wait' ? 0 : 1,
     type: step.meta || 'workflow',
   }));
+}
+
+function workflowStepHasRunData(step: SidebarWorkflowStep): boolean {
+  return (step.attempts ?? 0) > 0
+    || Boolean(step.startedAt || step.completedAt || step.durationMs || step.io?.input || step.io?.output);
+}
+
+function normalizeWorkflowStepStatuses(steps: SidebarWorkflowStep[]): SidebarWorkflowStep[] {
+  const progressedIndexes = steps
+    .map((step, index) => {
+      const status = String(step.status ?? '').toLowerCase();
+      const hasRunData = workflowStepHasRunData(step);
+      return (status !== 'pending' && status !== 'not_started') || hasRunData ? index : -1;
+    })
+    .filter(index => index >= 0);
+  const lastProgressedIndex = progressedIndexes.length > 0 ? Math.max(...progressedIndexes) : -1;
+
+  return steps.map((step, index) => {
+    const normalized = String(step.status ?? '').toLowerCase();
+    const hasRunData = workflowStepHasRunData(step);
+    if ((normalized === 'pending' || normalized === 'not_started') && !hasRunData && index < lastProgressedIndex) {
+      return { ...step, status: 'skipped' };
+    }
+    return step;
+  });
+}
+
+function workflowProgressLabel(context: RunStatus | null, steps: SidebarWorkflowStep[]): string {
+  const total = context?.progress.total ?? steps.length;
+  if (steps.length === 0) return `${context?.progress.completed ?? 0}/${total}`;
+  const counted = steps.filter(step => PROGRESS_COUNTED_STEP_STATUSES.has(String(step.status ?? '').toLowerCase())).length;
+  return `${counted}/${total}`;
 }
 
 function runState(context: RunStatus | null, run: SpawnedAgent): 'ok' | 'run' | 'wait-you' | 'fail' | 'wait' {
@@ -419,9 +452,9 @@ function nodeStepState(status?: string | null): 'ok' | 'run' | 'wait-you' | 'fai
 
 function nodeDisplayMeta(step: NonNullable<RunStatus['workflowSteps']>[number]): string {
   const normalized = (step.status ?? '').toLowerCase();
-  const didNotRun = normalized === 'pending' || normalized === 'skipped' || normalized === 'not_started';
   const actor = step.agent || humanLabel(step.type ?? 'node');
-  if (didNotRun) return `${actor} · cancelled`;
+  if (normalized === 'skipped') return `${actor} · skipped`;
+  if (normalized === 'pending' || normalized === 'not_started') return `${actor} · pending`;
   return [
     actor,
     formatDuration(step.durationMs),
@@ -510,7 +543,8 @@ function WorkflowExecutionHeader({ run, context }: { run: SpawnedAgent; context:
   const executionName = safeRunName(context.title);
   const status = humanLabel(context.status ?? run.status);
   const cost = formatCost(context.execution.cost);
-  const progress = `${context.progress.completed ?? 0}/${context.progress.total ?? workflowStepsForContext(context).length} steps`;
+  const workflowSteps = workflowStepsForContext(context);
+  const progress = `${workflowProgressLabel(context, workflowSteps)} steps`;
   const subtitle = [
     executionName && executionName !== workflowName ? executionName : 'Workflow execution',
     progress,
@@ -1456,11 +1490,9 @@ function SplitDiffView({ file }: { file: PanelDiffFile }) {
 function PanelTabs({
   activeTab,
   onTabChange,
-  counts,
 }: {
   activeTab: ChatRunPanelTab;
   onTabChange: (tab: ChatRunPanelTab) => void;
-  counts: Partial<Record<ChatRunPanelTab, number>>;
 }) {
   const tabs: Array<{ id: ChatRunPanelTab; label: string; icon: React.ElementType }> = [
     { id: 'tasks', label: 'Tasks', icon: ListTree },
@@ -1469,7 +1501,7 @@ function PanelTabs({
     { id: 'context', label: 'Context', icon: BookOpen },
   ];
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Chat resources">
+    <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden" role="tablist" aria-label="Chat resources">
       {tabs.map(tab => {
         const Icon = tab.icon;
         const isActive = activeTab === tab.id;
@@ -1486,11 +1518,6 @@ function PanelTabs({
           >
             <Icon className={`h-3.5 w-3.5 ${isActive ? 'text-theme-primary' : 'text-theme-subtle'}`} aria-hidden="true" />
             <span>{tab.label}</span>
-            {counts[tab.id] != null && counts[tab.id]! > 0 && (
-              <span className={`font-mono text-[10.5px] ${isActive ? 'text-theme-secondary' : 'text-theme-subtle'}`}>
-                {counts[tab.id]}
-              </span>
-            )}
           </button>
         );
       })}
@@ -2580,7 +2607,7 @@ function TasksPanel({
         <div className="rounded-md border border-app bg-app-card/30 p-2">
           <WorkflowExecutionHeader run={activeRun} context={activeContext!} />
           <div className="mt-2 border-t border-app pt-3">
-            <RailSection title="workflow steps" count={`${activeContext?.progress.completed ?? 0}/${activeContext?.progress.total ?? activeWorkflowSteps.length}`}>
+            <RailSection title="workflow steps" count={workflowProgressLabel(activeContext, activeWorkflowSteps)}>
               <div className="cr-steps">
                 {activeWorkflowSteps.map((step, index) => (
                   <WorkflowNodeStep
@@ -2649,14 +2676,6 @@ export default function ChatRunSidebar({
     return !['completed', 'failed', 'cancelled', 'canceled'].includes(status);
   }) ?? sortedRuns[sortedRuns.length - 1] ?? null;
   const activeContext = activeRun?.runContext ?? null;
-  const workspaceCount = new Set(allRuns.map(run => run.runContext?.workspace?.id).filter(Boolean)).size;
-  const pullRequestCount = new Set(allRuns.map(run => run.runContext?.pullRequest?.id).filter(Boolean)).size;
-  const repoBrowseCount = repoBrowseSource?.id ? 1 : 0;
-  const counts: Partial<Record<ChatRunPanelTab, number>> = {
-    tasks: sortedRuns.length,
-    files: Math.max(workspaceCount, pullRequestCount, repoBrowseCount),
-    changes: Math.max(workspaceCount, pullRequestCount),
-  };
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2702,7 +2721,7 @@ export default function ChatRunSidebar({
     >
       {!fullScreen && <div className="chat-rail-resize" onMouseDown={startResize} title="Drag to resize" />}
       <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between gap-2 border-b border-app-strong bg-app-muted pb-2">
-        <PanelTabs activeTab={visibleTab} onTabChange={onTabChange} counts={counts} />
+        <PanelTabs activeTab={visibleTab} onTabChange={onTabChange} />
         <div className="inline-flex shrink-0 items-center">
           <button type="button" className="rounded p-1.5 text-theme-muted transition-colors hover:bg-app-card hover:text-theme-primary" onClick={onClose} title="Close side panel" aria-label="Close side panel">
             <X className="h-3.5 w-3.5" />

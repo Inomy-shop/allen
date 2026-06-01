@@ -171,6 +171,7 @@ export interface SpawnedAgent {
 export interface WorkflowInterventionAnswer {
   executionId: string;
   interventionId?: string;
+  actionId?: string;
   decision: 'approve' | 'request_changes' | 'reject' | 'answer';
   fieldValues?: Record<string, unknown>;
   feedback?: string;
@@ -1491,7 +1492,8 @@ export function useChat() {
 
     await interventionsApi.respond(input.interventionId, {
       decision: input.decision,
-      field_values: input.decision === 'approve' || input.decision === 'answer' ? input.fieldValues : undefined,
+      action_id: input.actionId,
+      field_values: input.fieldValues,
       feedback: input.feedback,
       answer: input.answer,
       answered_by_user_id: useAuthStore.getState().user?.id,

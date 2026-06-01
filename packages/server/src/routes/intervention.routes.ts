@@ -193,10 +193,7 @@ export function interventionRoutes(db: Db): Router {
       if (decision === 'request_changes') {
         const originalFields = (existing as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
         const nodeName = human_node_name ?? existing.stage;
-        if (!field_values || typeof field_values !== 'object') {
-          return res.status(400).json({ error: 'field_values is required for HITL responses.' });
-        }
-        const values: Record<string, unknown> = { ...field_values };
+        const values: Record<string, unknown> = field_values && typeof field_values === 'object' ? { ...field_values } : {};
         const isEscalation = existing.severity === 'escalation'
           || String(existing.stage ?? '').toLowerCase().includes('escalation');
         const hasDecisionField = originalFields.some(f => f.name === 'approval_decision' || f.name === 'decision' || f.name === 'escalation_decision');
@@ -321,10 +318,7 @@ export function interventionRoutes(db: Db): Router {
         const originalFields = (existing as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
         const nodeName = human_node_name ?? existing.stage;
         const actionValue = action_id ?? decision;
-        if (!field_values || typeof field_values !== 'object') {
-          return res.status(400).json({ error: 'field_values is required for HITL responses.' });
-        }
-        const values: Record<string, unknown> = { ...field_values };
+        const values: Record<string, unknown> = field_values && typeof field_values === 'object' ? { ...field_values } : {};
         if (originalFields.some(f => f.name === 'approval_decision') && values.approval_decision == null) {
           values.approval_decision = actionValue === 'abandon' ? 'reject' : actionValue;
         }

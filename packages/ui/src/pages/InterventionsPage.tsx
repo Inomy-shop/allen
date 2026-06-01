@@ -575,10 +575,7 @@ function InterventionDetailView() {
         action_id: actionId,
         feedback: payload.feedback,
         scope: payload.scope as 'requirements' | 'architecture' | 'technical_design' | 'all' | undefined,
-        field_values:
-          decision === 'answer' || decision === 'approve' || decision === 'request_changes'
-            ? (fieldValues as Record<string, string>)
-            : undefined,
+        field_values: fieldValues as Record<string, string>,
         human_node_name: item.stage,
       });
       toast.success(`Response submitted: ${decision}`);

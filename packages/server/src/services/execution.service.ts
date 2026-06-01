@@ -1016,17 +1016,15 @@ export class ExecutionService {
         : {}) ?? {})) ?? {}) as Record<string, unknown>;
     const workflowNodes = ((workflowDoc?.parsed as Record<string, unknown> | undefined)?.nodes ?? workflowSnapshotNodes) as Record<string, unknown>;
     const workflowNodeNames = Object.keys(workflowNodes);
-    const workflowNodeSet = new Set(workflowNodeNames);
-    const completedWorkflowNodes = [...new Set((exec.completedNodes ?? [])
-      .filter((node) => workflowNodeSet.size === 0 || workflowNodeSet.has(node)))];
     const totalNodes = isAgentExecution
       ? 1
-      : workflowNodeNames.length || Math.max(completedWorkflowNodes.length, exec.currentNodes?.length ?? 0);
-    const completedCount = isAgentExecution
-      ? (exec.status === 'completed' ? 1 : 0)
-      : Math.min(completedWorkflowNodes.length, totalNodes);
+      : workflowNodeNames.length || Math.max(exec.completedNodes?.length ?? 0, exec.currentNodes?.length ?? 0);
     const pendingIntervention = interventions.find((i: any) => i.status === 'pending') ?? null;
     const currentStep = this.currentStep(exec, isAgentExecution, traces);
+    const workflowSteps = isAgentExecution ? [] : this.workflowStepContext(exec as unknown as Record<string, unknown>, workflowNodes, traces);
+    const completedCount = isAgentExecution
+      ? (exec.status === 'completed' ? 1 : 0)
+      : Math.min(workflowSteps.filter(step => ['completed', 'skipped'].includes(String(step.status ?? '').toLowerCase())).length, totalNodes);
     const percent = totalNodes > 0 ? Math.round((completedCount / totalNodes) * 100) : 0;
     const origin = this.inferOrigin(row, assignment) as RunOrigin;
     const runType: RunType = isAgentExecution ? 'agent' : 'workflow';
@@ -1111,7 +1109,7 @@ export class ExecutionService {
       workspace: workspace ? this.workspaceContext(workspace) : null,
       pullRequest: pullRequest ? this.pullRequestContext(pullRequest) : null,
       childAgents: directChildren.map((child) => this.childAgentContext(child)),
-      workflowSteps: isAgentExecution ? [] : this.workflowStepContext(exec as unknown as Record<string, unknown>, workflowNodes, traces),
+      workflowSteps,
       interventions: interventions.map((intervention) => ({ ...intervention })),
       artifacts: artifacts.map((artifact) => this.artifactContext(artifact)),
       recentActivity: this.recentActivity(logs, activity),
@@ -1646,16 +1644,97 @@ export class ExecutionService {
 
   async getTraces(executionId: string): Promise<Record<string, unknown>[]> {
     const traces = await this.stateManager.getTraces(executionId);
-    return hydrateTraceContextEvaluations(this.db, executionId, traces);
+    const withHumanInterventions = await this.withSyntheticHumanInterventionTraces(executionId, traces);
+    return hydrateTraceContextEvaluations(this.db, executionId, withHumanInterventions);
   }
 
   async getTracesByNode(executionId: string, node: string): Promise<Record<string, unknown>[]> {
-    const traces = await this.stateManager.getTracesByNode(executionId, node);
-    return hydrateTraceContextEvaluations(this.db, executionId, traces);
+    const traces = await this.getTraces(executionId);
+    return traces.filter((trace) => String(trace.node ?? '') === node);
   }
 
   async getTraceByAttempt(executionId: string, node: string, attempt: number): Promise<Record<string, unknown> | null> {
-    return this.stateManager.getTraceByAttempt(executionId, node, attempt);
+    const traces = await this.getTracesByNode(executionId, node);
+    return traces.find((trace) => Number(trace.attempt ?? 1) === attempt) ?? null;
+  }
+
+  private async withSyntheticHumanInterventionTraces(
+    executionId: string,
+    traces: Record<string, unknown>[],
+  ): Promise<Record<string, unknown>[]> {
+    const interventions = await new InterventionService(this.db).listForWorkflowRun(executionId).catch(() => []);
+    const answered = interventions.filter((item) => item.status === 'answered' || item.status === 'skipped');
+    if (answered.length === 0) return traces;
+
+    const byNode = new Map<string, Record<string, unknown>[]>();
+    for (const trace of traces) {
+      const node = stringValue(trace.node);
+      if (!node) continue;
+      const list = byNode.get(node) ?? [];
+      list.push(trace);
+      byNode.set(node, list);
+    }
+
+    const synthetic: Record<string, unknown>[] = [];
+    for (const intervention of answered) {
+      const node = intervention.stage;
+      if (!node || (byNode.get(node)?.length ?? 0) > 0) continue;
+      const response = intervention.response ?? null;
+      const startedAt = intervention.created_at ?? intervention.answered_at ?? new Date();
+      const completedAt = intervention.answered_at ?? intervention.created_at ?? new Date();
+      const startedMs = new Date(startedAt).getTime();
+      const completedMs = new Date(completedAt).getTime();
+      const durationMs = Number.isFinite(startedMs) && Number.isFinite(completedMs)
+        ? Math.max(0, completedMs - startedMs)
+        : 0;
+
+      synthetic.push({
+        executionId,
+        executionTraceId: `human-${intervention.intervention_id}`,
+        node,
+        attempt: 1,
+        status: intervention.status === 'skipped' ? 'skipped' : 'completed',
+        type: 'human',
+        agent: null,
+        inputState: {
+          question: intervention.question,
+          fields: intervention.fields,
+          intervention_id: intervention.intervention_id,
+        },
+        renderedPrompt: intervention.question ?? intervention.context_summary ?? '',
+        output: {
+          human_input: {
+            kind: intervention.kind,
+            sourceNode: node,
+            decision: response?.decision,
+            summary: response?.decision ? `Human selected ${response.decision}` : undefined,
+            fields: [],
+            fieldsByName: {},
+            feedback: response?.feedback ? { label: 'Feedback', value: response.feedback } : undefined,
+          },
+          intervention_id: intervention.intervention_id,
+          decision: response?.decision,
+          feedback: response?.feedback,
+          answer: response?.answer,
+        },
+        rawResponse: response
+          ? compactJsonValue(response) ?? ''
+          : '',
+        activity: [],
+        cost: { actual: 0, estimated: 0, method: 'human_intervention' },
+        durationMs,
+        startedAt,
+        completedAt,
+        synthetic: true,
+      });
+    }
+
+    if (synthetic.length === 0) return traces;
+    return [...traces, ...synthetic].sort((a, b) => {
+      const aTime = new Date(String(a.startedAt ?? a.completedAt ?? 0)).getTime();
+      const bTime = new Date(String(b.startedAt ?? b.completedAt ?? 0)).getTime();
+      return aTime - bTime;
+    });
   }
 
   async getStats(): Promise<Record<string, unknown>> {
@@ -2224,7 +2303,7 @@ export class ExecutionService {
       tracesByNode.set(node, list);
     }
 
-    return Object.entries(workflowNodes).map(([nodeName, rawNode], index) => {
+    const steps = Object.entries(workflowNodes).map(([nodeName, rawNode], index) => {
       const nodeDef = (rawNode && typeof rawNode === 'object' ? rawNode : {}) as Record<string, unknown>;
       const nodeTraces = tracesByNode.get(nodeName) ?? [];
       const firstTrace = nodeTraces[0] ?? null;
@@ -2234,7 +2313,8 @@ export class ExecutionService {
       const traceStatus = stringValue(lastTrace?.status);
       const status =
         failedNode === nodeName || traceStatus === 'failed' ? 'failed'
-        : completedSet.has(nodeName) || (runStatus === 'completed' && traceStatus === 'completed') ? 'completed'
+        : completedSet.has(nodeName) || traceStatus === 'completed' ? 'completed'
+        : traceStatus === 'skipped' ? 'skipped'
         : currentSet.has(nodeName) && runStatus !== 'completed' ? 'running'
         : CANCELLED_STATUSES.has(runStatus) && currentSet.has(nodeName) ? 'cancelled'
         : 'pending';
@@ -2302,6 +2382,33 @@ export class ExecutionService {
         },
       };
     });
+
+    return this.normalizeSkippedWorkflowSteps(steps);
+  }
+
+  private normalizeSkippedWorkflowSteps(steps: Record<string, unknown>[]): Record<string, unknown>[] {
+    const progressedIndexes = steps
+      .map((step, index) => {
+        const status = String(step.status ?? '').toLowerCase();
+        const hasRunData = this.workflowStepHasRunData(step);
+        return (status !== 'pending' && status !== 'not_started') || hasRunData ? index : -1;
+      })
+      .filter(index => index >= 0);
+    const lastProgressedIndex = progressedIndexes.length > 0 ? Math.max(...progressedIndexes) : -1;
+
+    return steps.map((step, index) => {
+      const status = String(step.status ?? '').toLowerCase();
+      if ((status === 'pending' || status === 'not_started') && !this.workflowStepHasRunData(step) && index < lastProgressedIndex) {
+        return { ...step, status: 'skipped' };
+      }
+      return step;
+    });
+  }
+
+  private workflowStepHasRunData(step: Record<string, unknown>): boolean {
+    const io = (step.io && typeof step.io === 'object' ? step.io : {}) as Record<string, unknown>;
+    return (typeof step.attempts === 'number' && step.attempts > 0)
+      || Boolean(step.startedAt || step.completedAt || step.durationMs || io.input || io.output);
   }
 
   private recentActivity(
