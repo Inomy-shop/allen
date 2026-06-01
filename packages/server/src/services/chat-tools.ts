@@ -47,9 +47,6 @@ interactive Claude Code harness. Therefore:
   directly by its full name (for example \`mcp__allen__*\`,
   \`mcp__pipeline-api-server__*\`, \`mcp__documentdb__*\`, \`mcp__postgres__*\`,
   \`mcp__opensearch__*\`, \`mcp__oxylabs-server__*\`, \`mcp__aws__*\`).
-- The \`ToolSearch\` tool is NOT available in this environment. Never
-  emit a \`ToolSearch\` call — it has no handler here and emitting it
-  will stall the run until the idle watchdog fires.
 - If you're unsure a tool exists, just attempt the call — an
   unknown-tool error surfaces in seconds, whereas \`ToolSearch\` hangs.
 `.trim();
