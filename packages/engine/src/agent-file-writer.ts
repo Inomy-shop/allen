@@ -16,6 +16,8 @@ import { resolve as resolvePath } from 'node:path';
 import { expandToClaudeTools } from './tool-mapping.js';
 import { ALLEN_MCP_CLAUDE_TOOL_NAMES } from './allen-mcp-tools.js';
 
+const CLAUDE_TOOL_SEARCH = 'ToolSearch';
+
 /**
  * Single source of truth for the artifact-save instruction appended to every
  * agent's system prompt. Exported so the SDK / Codex / delegate paths in the
@@ -354,6 +356,10 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
         expandedTools.push(t);
         seen.add(t);
       }
+    }
+    if (expandedTools.some((t) => t.startsWith('mcp__')) && !seen.has(CLAUDE_TOOL_SEARCH)) {
+      expandedTools.push(CLAUDE_TOOL_SEARCH);
+      seen.add(CLAUDE_TOOL_SEARCH);
     }
   // }
   const frontmatter = [

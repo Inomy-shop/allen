@@ -21,7 +21,7 @@ import { ContextEvaluationService } from './context/evaluation/context-evaluatio
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
-import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload, type MaterializedAgentFileMetadata } from '@allen/engine';
 import {
   getRuntimeApiBaseUrl,
   getRuntimeJwtAccessSecret,
@@ -30,12 +30,9 @@ import {
 
 /**
  * Claude-spawn-only system-prompt notice. Appended (via appendSystemPrompt
- * or inlined into customSystemPrompt) to every Claude-path spawn so the
- * model doesn't emit `ToolSearch` calls out of habit from the interactive
- * Claude Code harness. `ToolSearch` has no handler in the SDK/CLI spawn
- * environment — emitting it used to stall the stream for ~15 min until
- * Anthropic's idle watchdog fired. Not applied on the Codex path (Codex
- * doesn't emit this pattern and has its own prompt conventions).
+ * or inlined into customSystemPrompt) to every Claude-path spawn so the model
+ * understands that it is running as an Allen spawned agent. Not applied on the
+ * Codex path, which has its own prompt conventions.
  */
 const CLAUDE_SPAWN_NOTICE = `
 ## Execution environment
@@ -43,12 +40,12 @@ const CLAUDE_SPAWN_NOTICE = `
 You are running as a spawned agent via the Claude CLI / SDK, NOT the
 interactive Claude Code harness. Therefore:
 
-- MCP tools are loaded eagerly according to this agent's MCP configuration — call the tool you want
-  directly by its full name (for example \`mcp__allen__*\`,
+- Allen MCP tools are loaded according to this agent's MCP configuration. When you know the
+  tool name, call it directly by its full name (for example \`mcp__allen__*\`,
   \`mcp__pipeline-api-server__*\`, \`mcp__documentdb__*\`, \`mcp__postgres__*\`,
   \`mcp__opensearch__*\`, \`mcp__oxylabs-server__*\`, \`mcp__aws__*\`).
-- If you're unsure a tool exists, just attempt the call — an
-  unknown-tool error surfaces in seconds, whereas \`ToolSearch\` hangs.
+- If a configured MCP tool is not visible in your initial tool list, use \`ToolSearch\`
+  to discover it before using shell commands to inspect local Claude/MCP config files.
 `.trim();
 
 function toHumanInterventionPayload(doc: {
@@ -113,6 +110,37 @@ const ALWAYS_ON_ALLEN_CONTEXT_TOOLS = [
   `mcp__${MCP_SERVER_NAME}__get_repo_skill_body`,
   `mcp__${MCP_SERVER_NAME}__get_node_context_usage`,
 ];
+
+function summarizeToolNames(tools: string[] | undefined): { toolCount: number; nativeCount: number; mcpCount: number } {
+  const list = tools ?? [];
+  return {
+    toolCount: list.length,
+    nativeCount: list.filter((tool) => !tool.startsWith('mcp__')).length,
+    mcpCount: list.filter((tool) => tool.startsWith('mcp__')).length,
+  };
+}
+
+function summarizeMcpServers(value: unknown): { count: number; names: string[]; raw?: unknown } {
+  if (Array.isArray(value)) {
+    const names = value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const rec = item as Record<string, unknown>;
+          if (typeof rec.name === 'string') return rec.name;
+          if (typeof rec.server === 'string') return rec.server;
+        }
+        return undefined;
+      })
+      .filter((name): name is string => Boolean(name));
+    return { count: names.length, names, raw: value };
+  }
+  if (value && typeof value === 'object') {
+    const names = Object.keys(value as Record<string, unknown>);
+    return { count: names.length, names, raw: value };
+  }
+  return { count: 0, names: [] };
+}
 
 function stripUnsupportedInlineContextQuery(prompt: string): { prompt: string; stripped: boolean } {
   const stripped = prompt.replace(/<allen_context_query>\s*[\s\S]*?\s*<\/allen_context_query>\s*/gi, '');
@@ -1579,6 +1607,43 @@ async function runSpawnInBackground(
 
   const MAX_SPAWN_RETRIES = 3;
   let currentResumeSession = resumeSession;
+  let materializedAgentFileForTrace: (MaterializedAgentFileMetadata & {
+    toolCount: number;
+    nativeCount: number;
+    mcpCount: number;
+  }) | undefined;
+  let capturedToolsAvailable: string[] | undefined;
+  let capturedClaudeInitMcpServers: { count: number; names: string[]; raw?: unknown } | undefined;
+  let claudeExecutionMode: 'cli' | 'sdk' | undefined;
+  let claudeMcpConfigServerNames: string[] | undefined;
+  let claudeDiscoveredMcpToolNames: string[] | undefined;
+
+  const buildSpawnRuntimeContext = () => {
+    const runtimeToolCounts = summarizeToolNames(capturedToolsAvailable);
+    return {
+      repoContextLoadingGuidancePresent,
+      repoContextLoadingGuidanceInjected,
+      mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
+      mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
+      mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,
+      mandatoryRepoContextTargetLayer: provider === 'codex' && repoKnowledgeSystemPromptBlock ? 'codex_prompt_instruction_prefix' : repoKnowledgePacketSummary?.mandatoryContextTargetLayer,
+      claudeExecutionMode,
+      mcpConfigServerCount: claudeMcpConfigServerNames?.length,
+      mcpConfigServerNames: claudeMcpConfigServerNames,
+      discoveredMcpToolCount: claudeDiscoveredMcpToolNames?.length,
+      discoveredMcpToolNames: claudeDiscoveredMcpToolNames,
+      materializedAgentFile: materializedAgentFileForTrace,
+      materializedAgentToolCount: materializedAgentFileForTrace?.toolCount,
+      materializedAgentNativeCount: materializedAgentFileForTrace?.nativeCount,
+      materializedAgentMcpCount: materializedAgentFileForTrace?.mcpCount,
+      claudeInitToolCount: capturedToolsAvailable ? runtimeToolCounts.toolCount : undefined,
+      claudeInitNativeCount: capturedToolsAvailable ? runtimeToolCounts.nativeCount : undefined,
+      claudeInitMcpCount: capturedToolsAvailable ? runtimeToolCounts.mcpCount : undefined,
+      claudeInitMcpServerCount: capturedClaudeInitMcpServers?.count,
+      claudeInitMcpServerNames: capturedClaudeInitMcpServers?.names,
+      claudeInitMcpServers: capturedClaudeInitMcpServers?.raw,
+    };
+  };
 
   for (let attempt = 0; attempt <= MAX_SPAWN_RETRIES; attempt++) {
     let toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown> }[] = [];
@@ -1869,6 +1934,27 @@ async function runSpawnInBackground(
         extraEnv: spawnContextEnv,
         externalServerNames: externalMcpServers,
       });
+      claudeMcpConfigServerNames = Object.keys(mcpServers);
+      logger.info('[spawn] prepared claude mcp config', {
+        executionId,
+        agentName,
+        serverCount: claudeMcpConfigServerNames.length,
+        serverNames: claudeMcpConfigServerNames,
+        externalServerNames: externalMcpServers,
+        disabledMcpToolCount: disallowedMcpToolNames.length,
+      });
+      liveLog({
+        type: 'tool_start',
+        content: `[claude] MCP config prepared (${claudeMcpConfigServerNames.length} servers): ${claudeMcpConfigServerNames.join(', ') || 'none'}`,
+        args: {
+          source: 'mcp-config',
+          serverCount: claudeMcpConfigServerNames.length,
+          serverNames: claudeMcpConfigServerNames,
+          externalServerNames: externalMcpServers,
+          disabledMcpToolCount: disallowedMcpToolNames.length,
+          disabledMcpToolNames: disallowedMcpToolNames,
+        },
+      });
       const sdkOptions: Record<string, unknown> = {
         model, permissionMode: 'bypassPermissions',
         // Pin cwd so the SDK doesn't implicitly inherit the server's own
@@ -1886,8 +1972,6 @@ async function runSpawnInBackground(
         // ALLEN_SYSTEM_PROMPT_MODE: 'append' (default) preserves Claude
         // Code's built-in agentic scaffolding; 'custom' reverts to the old
         // full-replacement behavior. Matches node-executor.ts wiring.
-        // CLAUDE_SPAWN_NOTICE warns the model that ToolSearch isn't wired
-        // here (claude-cli only — codex path above has its own prompt).
         const systemPromptBody = `${CLAUDE_SPAWN_NOTICE}\n\n${roleSystemWithMandatoryRepoContext}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}`;
         if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPromptBody;
         else sdkOptions.appendSystemPrompt = systemPromptBody;
@@ -1901,6 +1985,12 @@ async function runSpawnInBackground(
       // Execution mode. Claude-provider spawns default to CLI mode. Explicit
       // ALLEN_AGENT_EXECUTION_MODE=cli|sdk overrides. See cli-runner.ts.
       const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
+      claudeExecutionMode = useCliMode ? 'cli' : 'sdk';
+      liveLog({
+        type: 'tool_start',
+        content: `[claude] execution mode=${claudeExecutionMode}`,
+        args: { source: 'claude-execution-mode', mode: claudeExecutionMode },
+      });
       let msgStream: AsyncIterable<any>;
       if (useCliMode) {
         const { queryViaCli } = await import('@allen/engine');
@@ -1920,16 +2010,25 @@ async function runSpawnInBackground(
           logger.warn('[spawn] MCP tool discovery failed (allowlist will lack mcp__* entries)', { executionId, agentName, error: (err as Error).message });
         }
         discoveredMcpTools = Array.from(new Set([...discoveredMcpTools, ...ALWAYS_ON_ALLEN_CONTEXT_TOOLS]));
+        claudeDiscoveredMcpToolNames = discoveredMcpTools;
+        const discoveredToolCounts = summarizeToolNames(discoveredMcpTools);
+        liveLog({
+          type: 'tool_start',
+          content: `[agent-tools] discovered MCP allowlist tools (${discoveredToolCounts.toolCount} tools, ${discoveredToolCounts.mcpCount} MCP)`,
+          args: {
+            source: 'mcp-tool-discovery',
+            ...discoveredToolCounts,
+            tools: discoveredMcpTools,
+          },
+        });
         msgStream = queryViaCli({
           agent: {
             name: agentName,
             description: (role as any)?.description,
-            // Mirror the SDK path — ARTIFACTS_GUIDANCE and CLAUDE_SPAWN_NOTICE
-            // must be part of the system prompt for the CLI branch too.
-            // Without ARTIFACTS_GUIDANCE, CLI-mode agents never see the
-            // instruction to save via allen_save_artifact. Without
-            // CLAUDE_SPAWN_NOTICE, CLI-mode agents emit `ToolSearch` out of
-            // harness habit and stall their stream for ~15 min.
+            // Mirror the SDK path — ARTIFACTS_GUIDANCE and
+            // CLAUDE_SPAWN_NOTICE must be part of the system prompt for the
+            // CLI branch too. Without ARTIFACTS_GUIDANCE, CLI-mode agents
+            // never see the instruction to save via allen_save_artifact.
             system: `${CLAUDE_SPAWN_NOTICE}\n\n${roleSystemWithMandatoryRepoContext}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}`,
             model: sdkOptions.model as string | undefined,
             tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
@@ -1946,6 +2045,11 @@ async function runSpawnInBackground(
           mcpServers: sdkOptions.mcpServers as Record<string, unknown> | undefined,
           abortSignal: abortController.signal,
           onMaterializedAgentFile: (metadata) => {
+            const materializedToolCounts = summarizeToolNames(metadata.tools);
+            materializedAgentFileForTrace = {
+              ...metadata,
+              ...materializedToolCounts,
+            };
             db.collection('executions').updateOne(
               { id: executionId },
               {
@@ -1956,6 +2060,8 @@ async function runSpawnInBackground(
                     sha256: metadata.sha256,
                     byteLength: metadata.byteLength,
                     containsMandatoryRepoContext: metadata.containsMandatoryRepoContext,
+                    tools: metadata.tools,
+                    ...materializedToolCounts,
                     createdAt: metadata.createdAt,
                   },
                 },
@@ -1968,10 +2074,21 @@ async function runSpawnInBackground(
               sha256: metadata.sha256,
               byteLength: metadata.byteLength,
               containsMandatoryRepoContext: metadata.containsMandatoryRepoContext,
+              ...materializedToolCounts,
             });
             liveLog({
               type: 'tool_start',
-              content: `[claude-cli] materialized agent file ${metadata.subagentName} sha256=${metadata.sha256}`,
+              content: `[agent-tools] passed to materialized agent file (${materializedToolCounts.toolCount} tools, ${materializedToolCounts.mcpCount} MCP): ${metadata.subagentName}`,
+              args: {
+                source: 'materialized-agent-file',
+                subagentName: metadata.subagentName,
+                path: metadata.path,
+                sha256: metadata.sha256,
+                byteLength: metadata.byteLength,
+                containsMandatoryRepoContext: metadata.containsMandatoryRepoContext,
+                ...materializedToolCounts,
+                tools: metadata.tools,
+              },
             });
           },
           stderr: (chunk) => liveLog({ type: 'tool_start', content: `[claude-cli stderr] ${chunk.slice(0, 4000)}` }),
@@ -1990,45 +2107,88 @@ async function runSpawnInBackground(
         msgStream = query({ prompt: promptForThisAttempt, options: sdkOptions as any });
       }
 
-      // Client-side idle watchdog (claude-cli path only). Claude's server-
-      // side stream-idle timeout is ~15 min, which is too generous when a
-      // run stalls. We race every `next()` against a setTimeout whose
-      // threshold depends on whether we've already seen a `ToolSearch`
-      // tool_use in this stream:
-      //   - Default: 5 min. Longer than any legit single tool call
-      //     should run, so false positives are rare.
-      //   - After ToolSearch: 5 min. ToolSearch has no handler in the
-      //     spawn env, so the stream is very likely to stall from here
-      //     on — but the model can sometimes recover by emitting a
-      //     different tool call after a long pause. 5 min beats
-      //     Anthropic's 15-min server-side watchdog by a comfortable
-      //     margin while giving the model time to course-correct.
-      //     Bumped from 60s after agent runs were getting prematurely
-      //     failed by the tighter window.
-      // On timeout we abort the controller and let the existing catch/
-      // retry logic at `isTimeout` take over.
+      // Client-side idle watchdog. Claude's server-side stream-idle timeout
+      // is generous; abort locally if the stream stops producing messages.
       const STREAM_IDLE_MS = 900_000; // 15 min — general stall
-      const STREAM_IDLE_AFTER_TOOLSEARCH_MS = 300_000; // 5 min — after ToolSearch
-      let toolSearchSeen = false;
       const streamIterator = (msgStream as AsyncIterable<any>)[Symbol.asyncIterator]();
       while (true) {
-        const currentIdleMs = toolSearchSeen ? STREAM_IDLE_AFTER_TOOLSEARCH_MS : STREAM_IDLE_MS;
         const raced = await Promise.race([
           streamIterator.next().then(r => ({ kind: 'msg' as const, result: r })),
           new Promise<{ kind: 'timeout' }>(resolve =>
-            setTimeout(() => resolve({ kind: 'timeout' }), currentIdleMs),
+            setTimeout(() => resolve({ kind: 'timeout' }), STREAM_IDLE_MS),
           ),
         ]);
         if (raced.kind === 'timeout') {
-          const reason = toolSearchSeen ? 'post-ToolSearch' : 'general';
-          const warn = `[spawn:${agentName}] claude-cli stream idle >${currentIdleMs / 1000}s (${reason}) — aborting`;
-          logger.warn('[spawn] claude-cli stream idle', { executionId, agentName, idleSec: currentIdleMs / 1000, reason });
+          const warn = `[spawn:${agentName}] claude stream idle >${STREAM_IDLE_MS / 1000}s — aborting`;
+          logger.warn('[spawn] claude stream idle', { executionId, agentName, idleSec: STREAM_IDLE_MS / 1000 });
           if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'warn', content: warn });
           abortController.abort(new Error('Stream idle (client-side watchdog)'));
-          throw new Error(`claude-cli stream idle timeout (${currentIdleMs / 1000}s, ${reason})`);
+          throw new Error(`claude stream idle timeout (${STREAM_IDLE_MS / 1000}s)`);
         }
         if (raced.result.done) break;
         const msg = raced.result.value;
+
+        if ((msg as any).type === 'system' && (msg as any).subtype === 'init') {
+          const tools = (msg as any).tools;
+          const mcpServersSummary = summarizeMcpServers((msg as any).mcp_servers ?? (msg as any).mcpServers);
+          if (!capturedClaudeInitMcpServers) capturedClaudeInitMcpServers = mcpServersSummary;
+          if (!capturedToolsAvailable && Array.isArray(tools)) {
+            capturedToolsAvailable = tools as string[];
+            const initToolCounts = summarizeToolNames(capturedToolsAvailable);
+            logger.info('[spawn] claude system init tools', {
+              executionId,
+              agentName,
+              ...initToolCounts,
+              mcpServerCount: mcpServersSummary.count,
+              mcpServerNames: mcpServersSummary.names,
+            });
+            liveLog({
+              type: 'tool_start',
+              content: `[agent-tools] available at claude init (${initToolCounts.toolCount} tools, ${initToolCounts.mcpCount} MCP)`,
+              args: {
+                source: 'claude-system-init',
+                ...initToolCounts,
+                tools: capturedToolsAvailable,
+                mcpServerCount: mcpServersSummary.count,
+                mcpServerNames: mcpServersSummary.names,
+                mcpServers: mcpServersSummary.raw,
+              },
+            });
+            if (materializedAgentFileForTrace && materializedAgentFileForTrace.tools.length > capturedToolsAvailable.length) {
+              const runtimeTools = capturedToolsAvailable;
+              const missing = materializedAgentFileForTrace.tools.filter((tool) => !runtimeTools.includes(tool));
+              logger.warn('[spawn] claude init tool list smaller than materialized agent file', {
+                executionId,
+                agentName,
+                frontmatterCount: materializedAgentFileForTrace.tools.length,
+                runtimeCount: capturedToolsAvailable.length,
+                missingCount: missing.length,
+              });
+              liveLog({
+                type: 'tool_start',
+                content: `[agent-tools] claude init tools (${capturedToolsAvailable.length}) < materialized tools (${materializedAgentFileForTrace.tools.length}) — ${missing.length} missing`,
+                args: {
+                  source: 'claude-system-init-mismatch',
+                  frontmatterCount: materializedAgentFileForTrace.tools.length,
+                  runtimeCount: capturedToolsAvailable.length,
+                  missingCount: missing.length,
+                  missing,
+                },
+              });
+            }
+          } else if (mcpServersSummary.count > 0) {
+            liveLog({
+              type: 'tool_start',
+              content: `[agent-tools] claude init reported MCP servers (${mcpServersSummary.count}): ${mcpServersSummary.names.join(', ')}`,
+              args: {
+                source: 'claude-system-init',
+                mcpServerCount: mcpServersSummary.count,
+                mcpServerNames: mcpServersSummary.names,
+                mcpServers: mcpServersSummary.raw,
+              },
+            });
+          }
+        }
 
         if ('session_id' in msg && msg.session_id) {
           const incoming = msg.session_id as string;
@@ -2057,23 +2217,6 @@ async function runSpawnInBackground(
           }
           for (const block of blocks) {
             if (block.type === 'tool_use' && block.name) {
-              // Guard: Claude sometimes emits `ToolSearch` out of habit
-              // from the interactive harness. Spawned agents don't have
-              // that tool registered, so the stream would stall until
-              // Anthropic's 15-min idle watchdog. Rather than abort
-              // immediately, mark the stream as post-ToolSearch so the
-              // watchdog above uses the shorter 1-min threshold. This
-              // gives a small grace window in case the model recovers
-              // on its own, while still cutting total wait from ~15 min
-              // to ≤1 min. The existing isTimeout retry path (the
-              // watchdog throws an error containing "timeout") then
-              // re-runs with CLAUDE_SPAWN_NOTICE in force.
-              if (block.name === 'ToolSearch' && !toolSearchSeen) {
-                const warn = `[spawn:${agentName}] model emitted ToolSearch — will abort in ${STREAM_IDLE_AFTER_TOOLSEARCH_MS / 1000}s if stream stays idle`;
-                logger.warn('[spawn] model emitted ToolSearch', { executionId, agentName, abortInSec: STREAM_IDLE_AFTER_TOOLSEARCH_MS / 1000 });
-                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'warn', content: warn });
-                toolSearchSeen = true;
-              }
               const args = (block.input as Record<string, unknown>) ?? {};
               const desc = toolDescription(block.name, args);
               const toolUseId = block.id ?? '';
@@ -2191,17 +2334,12 @@ async function runSpawnInBackground(
       output: traceOutput,
       toolCalls,
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
+      toolsAvailable: capturedToolsAvailable,
+      materializedAgentFile: materializedAgentFileForTrace,
       contextAttemptId: repoKnowledgePacketSummary?.packetId,
       contextUsageTraceId: contextUsageTrace?.traceId,
       contextEvaluationId,
-      runtimeContext: {
-        repoContextLoadingGuidancePresent,
-        repoContextLoadingGuidanceInjected,
-        mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
-        mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
-        mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,
-        mandatoryRepoContextTargetLayer: provider === 'codex' && repoKnowledgeSystemPromptBlock ? 'codex_prompt_instruction_prefix' : repoKnowledgePacketSummary?.mandatoryContextTargetLayer,
-      },
+      runtimeContext: buildSpawnRuntimeContext(),
       cost: { actual: costUsd, estimated: costUsd, model, method: 'sdk_reported' as const },
       durationMs, startedAt: new Date(startMs), completedAt: new Date(),
     });
@@ -2282,17 +2420,12 @@ async function runSpawnInBackground(
             output: cancelledOutput,
             toolCalls,
             activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
+            toolsAvailable: capturedToolsAvailable,
+            materializedAgentFile: materializedAgentFileForTrace,
             contextAttemptId: repoKnowledgePacketSummary?.packetId,
             contextUsageTraceId: contextUsageTrace?.traceId,
             contextEvaluationId,
-            runtimeContext: {
-              repoContextLoadingGuidancePresent,
-              repoContextLoadingGuidanceInjected,
-              mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
-              mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
-              mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,
-              mandatoryRepoContextTargetLayer: provider === 'codex' && repoKnowledgeSystemPromptBlock ? 'codex_prompt_instruction_prefix' : repoKnowledgePacketSummary?.mandatoryContextTargetLayer,
-            },
+            runtimeContext: buildSpawnRuntimeContext(),
             cost: { actual: 0, estimated: 0, model, method: 'sdk_reported' as const },
             durationMs, startedAt: new Date(startMs), completedAt: new Date(),
           },
@@ -2361,17 +2494,12 @@ async function runSpawnInBackground(
       output: failedTraceOutput,
       toolCalls,
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
+      toolsAvailable: capturedToolsAvailable,
+      materializedAgentFile: materializedAgentFileForTrace,
       contextAttemptId: repoKnowledgePacketSummary?.packetId,
       contextUsageTraceId: contextUsageTrace?.traceId,
       contextEvaluationId,
-      runtimeContext: {
-        repoContextLoadingGuidancePresent,
-        repoContextLoadingGuidanceInjected,
-        mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
-        mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
-        mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,
-        mandatoryRepoContextTargetLayer: provider === 'codex' && repoKnowledgeSystemPromptBlock ? 'codex_prompt_instruction_prefix' : repoKnowledgePacketSummary?.mandatoryContextTargetLayer,
-      },
+      runtimeContext: buildSpawnRuntimeContext(),
       cost: { actual: 0, estimated: 0, model, method: 'sdk_reported' as const },
       durationMs, startedAt: new Date(startMs), completedAt: new Date(),
     });

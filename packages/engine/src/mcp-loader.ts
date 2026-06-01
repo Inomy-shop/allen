@@ -486,6 +486,10 @@ export function getAllenMcpConfig(
     command: runner.command,
     args: runner.args,
     env,
+    // Claude Code may defer large MCP tool sets behind tool discovery. Allen
+    // tools are runtime-critical for spawned agents (artifacts, waits,
+    // nested spawns), so keep this built-in server eagerly loaded.
+    alwaysLoad: true,
   };
 }
 
