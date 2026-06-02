@@ -232,12 +232,20 @@ export default function OnboardingFirstWorkflowPage() {
     title: string;
     copy: string;
     state: 'done' | 'active' | 'next';
-  }> = [
-    { number: '01', title: 'Create admin', copy: 'Admin account is ready for this instance.', state: 'done' },
-    { number: '02', title: 'Verify runtime', copy: 'Required machine checks passed.', state: 'done' },
-    { number: '03', title: 'Connect repo', copy: 'Repository is available for workspaces.', state: 'done' },
-    { number: '04', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'active' },
-  ];
+  }> = isDesktop
+    ? [
+      { number: '01', title: 'Create admin', copy: 'Admin account is ready for this instance.', state: 'done' },
+      { number: '02', title: 'Verify runtime', copy: 'Required machine checks passed.', state: 'done' },
+      { number: '03', title: 'Choose models', copy: 'Inbuilt workflow defaults are configured.', state: 'done' },
+      { number: '04', title: 'Connect repo', copy: 'Repository is available for workspaces.', state: 'done' },
+      { number: '05', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'active' },
+    ]
+    : [
+      { number: '01', title: 'Create admin', copy: 'Admin account is ready for this instance.', state: 'done' },
+      { number: '02', title: 'Verify runtime', copy: 'Required machine checks passed.', state: 'done' },
+      { number: '03', title: 'Connect repo', copy: 'Repository is available for workspaces.', state: 'done' },
+      { number: '04', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'active' },
+    ];
 
   async function launch() {
     if (!selectedRepo || !selectedWorkflow) return;
@@ -312,7 +320,7 @@ export default function OnboardingFirstWorkflowPage() {
                           ? <CircleDot className="h-5 w-5" />
                           : <Circle className="h-5 w-5" />}
                     </div>
-                    {number !== '04' && (
+                    {number !== (isDesktop ? '05' : '04') && (
                       <div className={`onboarding-step-line absolute bottom-0 top-6 w-px ${
                         state === 'done' ? 'bg-accent-green/35' : 'bg-border'
                       }`} />

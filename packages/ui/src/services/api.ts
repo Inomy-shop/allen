@@ -1198,7 +1198,7 @@ export const system = {
       userCount: number;
       adminCount: number;
       complete: boolean;
-      step: 'account' | 'complete';
+      step: 'account' | 'health' | 'model_defaults' | 'repository' | 'first_workflow' | 'complete';
     }>('/system/onboarding-status'),
   health: () =>
     request<{
@@ -1254,6 +1254,20 @@ export const system = {
       '/system/desktop-runtime/settings',
       { method: 'PATCH', body: JSON.stringify({ values }) },
     ),
+  saveDesktopOnboardingModelDefaults: (body: {
+    chatProvider: 'codex' | 'claude-cli';
+    agentProvider: '' | 'codex' | 'claude-cli';
+    agentModel?: string;
+  }) =>
+    request<{
+      chatProvider: 'codex' | 'claude-cli';
+      agentProvider: '' | 'codex' | 'claude-cli';
+      agentModel: string;
+      settings: DesktopRuntimeSettingsResponse;
+    }>('/system/desktop-runtime/onboarding/model-defaults', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   setupDesktopCogneeContext: (provider: 'cognee' | 'cognee_memory' = 'cognee') =>
     request<{
       setup: DesktopRuntimeSettingsResponse['contextSetup'];
@@ -1284,18 +1298,18 @@ export const system = {
     request<{
       complete: boolean;
       skipped: boolean;
-      step: 'health' | 'repository' | 'first_workflow' | 'complete';
+      step: 'health' | 'model_defaults' | 'repository' | 'first_workflow' | 'complete';
       completedAt: string | null;
       skippedAt: string | null;
     }>('/system/onboarding-progress'),
   updateOnboardingProgress: (body: {
-    step?: 'health' | 'repository' | 'first_workflow' | 'complete';
+    step?: 'health' | 'model_defaults' | 'repository' | 'first_workflow' | 'complete';
     action?: 'complete' | 'skip';
   }) =>
     request<{
       complete: boolean;
       skipped: boolean;
-      step: 'health' | 'repository' | 'first_workflow' | 'complete';
+      step: 'health' | 'model_defaults' | 'repository' | 'first_workflow' | 'complete';
       completedAt: string | null;
       skippedAt: string | null;
     }>('/system/onboarding-progress', {

@@ -94,12 +94,20 @@ export default function OnboardingAccountPage() {
     title: string;
     copy: string;
     state: 'done' | 'active' | 'next';
-  }> = [
-    { number: '01', title: 'Create admin', copy: 'Unlock this local Allen instance.', state: 'active' },
-    { number: '02', title: 'Verify runtime', copy: 'Check CLIs, auth, ports, and local services.', state: 'next' },
-    { number: '03', title: 'Connect repo', copy: 'Register a checkout or clone a starter repository.', state: 'next' },
-    { number: '04', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'next' },
-  ];
+  }> = isDesktop
+    ? [
+      { number: '01', title: 'Create admin', copy: 'Unlock this local Allen instance.', state: 'active' },
+      { number: '02', title: 'Verify runtime', copy: 'Check CLIs, auth, ports, and local services.', state: 'next' },
+      { number: '03', title: 'Choose models', copy: 'Set chat and seeded workflow defaults.', state: 'next' },
+      { number: '04', title: 'Connect repo', copy: 'Register a checkout or clone a starter repository.', state: 'next' },
+      { number: '05', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'next' },
+    ]
+    : [
+      { number: '01', title: 'Create admin', copy: 'Unlock this local Allen instance.', state: 'active' },
+      { number: '02', title: 'Verify runtime', copy: 'Check CLIs, auth, ports, and local services.', state: 'next' },
+      { number: '03', title: 'Connect repo', copy: 'Register a checkout or clone a starter repository.', state: 'next' },
+      { number: '04', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'next' },
+    ];
 
   return (
     <OnboardingShell
@@ -138,7 +146,7 @@ export default function OnboardingAccountPage() {
                         ? <CircleDot className="h-5 w-5" />
                         : <Circle className="h-5 w-5" />}
                   </div>
-                  {number !== '04' && (
+                  {number !== (isDesktop ? '05' : '04') && (
                     <div className={`onboarding-step-line absolute bottom-0 top-6 w-px ${
                       state === 'done' ? 'bg-accent-green/35' : 'bg-border'
                     }`} />

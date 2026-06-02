@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { BRAND_SLUG } from '../../lib/brand';
 
-type OnboardingStep = 'account' | 'health' | 'repository' | 'first_workflow';
+type OnboardingStep = 'account' | 'health' | 'model_defaults' | 'repository' | 'first_workflow';
 
 interface OnboardingShellProps {
   step: OnboardingStep;

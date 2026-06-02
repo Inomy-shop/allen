@@ -288,7 +288,7 @@ export async function setupDesktopRuntime(
   const workspaceBaseDir = nonEmpty(config.WORKSPACE_BASE_DIR) ?? nonEmpty(env.WORKSPACE_BASE_DIR) ?? resolve(allenRoot, 'workspaces');
   const uploadsDir = nonEmpty(config.UPLOADS_DIR) ?? nonEmpty(env.UPLOADS_DIR) ?? resolve(allenRoot, 'uploads');
   const mcpBundlesDir = nonEmpty(config.MCP_BUNDLES_DIR) ?? nonEmpty(env.MCP_BUNDLES_DIR) ?? resolve(allenRoot, 'mcp-servers');
-  const seedOverride = nonEmpty(config.SEED_OVERRIDE) ?? nonEmpty(env.SEED_OVERRIDE) ?? 'true';
+  const seedOverride = nonEmpty(config.SEED_OVERRIDE) ?? nonEmpty(env.SEED_OVERRIDE) ?? 'false';
   delete config.MONGODB_URI;
   const mongoUri = undefined;
   const apiPort = await stickyDesktopPort(config.DESKTOP_API_PORT, env.DESKTOP_API_PORT, DESKTOP_API_PORT_RANGE);

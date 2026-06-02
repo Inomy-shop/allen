@@ -727,7 +727,7 @@ function WorkContextSection({ runs }: { runs: SpawnedAgent[] }) {
 
   return (
     <RailSection title="references" count={`${count}`}>
-      <div className="cr-context-grid">
+      <div className="cr-context-grid compact">
         {pullRequests.map(pr => {
           const status = humanLabel(pr.status ?? 'open');
           const title = `PR ${pr.number ? `#${pr.number}` : ''} ${status}`.trim();
@@ -963,6 +963,167 @@ type PanelArtifactItem = {
   sourceRun?: SpawnedAgent;
   runtimeArtifact?: RunStatus['artifacts'][number];
 };
+
+type ArtifactRootRef = {
+  rootType: 'chat' | 'workflow' | 'agent';
+  rootId: string;
+};
+
+function usePanelArtifactItems({
+  rootType,
+  rootId,
+  runs,
+}: {
+  rootType?: 'chat' | 'workflow' | 'agent';
+  rootId?: string | null;
+  runs: SpawnedAgent[];
+}) {
+  const [items, setItems] = useState<PanelArtifactItem[]>([]);
+
+  const artifactRoots = useMemo(() => {
+    const roots = new Map<string, ArtifactRootRef>();
+    const addRoot = (type: ArtifactRootRef['rootType'] | undefined, id: string | null | undefined) => {
+      if (!type || !id) return;
+      roots.set(`${type}:${id}`, { rootType: type, rootId: id });
+    };
+
+    addRoot(rootType, rootId);
+    for (const run of runs) {
+      const runRootType = run.kind === 'workflow' || run.runContext?.runType === 'workflow' ? 'workflow' : 'agent';
+      addRoot(runRootType, run.executionId);
+    }
+    return [...roots.values()];
+  }, [rootType, rootId, runs]);
+
+  const runtimeItems = useMemo(() => {
+    const next: PanelArtifactItem[] = [];
+    for (const run of runs) {
+      for (const artifact of artifactsForRun(run, run.runContext ?? null)) {
+        next.push({
+          artifactId: artifact.artifactId,
+          filename: artifact.filename,
+          relativePath: artifact.relativePath,
+          contentType: artifact.contentType,
+          createdAt: artifact.createdAt,
+          sourceRun: run,
+          runtimeArtifact: artifact,
+        });
+      }
+    }
+    return next;
+  }, [runs]);
+
+  useEffect(() => {
+    if (artifactRoots.length === 0) {
+      setItems([]);
+      return;
+    }
+    let cancelled = false;
+    Promise.all(artifactRoots.map(root => artifactsApi.list({ ...root, limit: 50 })))
+      .then(lists => {
+        if (cancelled) return;
+        setItems(lists.flat().map(item => ({
+          artifactId: item.artifactId,
+          filename: item.filename,
+          relativePath: item.relativePath,
+          contentType: item.contentType,
+          createdAt: item.createdAt,
+        })));
+      })
+      .catch(() => {
+        if (!cancelled) setItems([]);
+      });
+    return () => { cancelled = true; };
+  }, [artifactRoots]);
+
+  return useMemo(() => {
+    const seen = new Set<string>();
+    return [...items, ...runtimeItems].filter(item => {
+      if (seen.has(item.artifactId)) return false;
+      seen.add(item.artifactId);
+      return true;
+    });
+  }, [items, runtimeItems]);
+}
+
+function panelArtifactLabel(item: PanelArtifactItem): string {
+  if (item.runtimeArtifact) return artifactTypeLabel(item.runtimeArtifact);
+  return humanLabel(item.contentType ?? 'file').toLowerCase();
+}
+
+function ChatArtifactsSummarySection({
+  rootType,
+  rootId,
+  runs,
+}: {
+  rootType?: 'chat' | 'workflow' | 'agent';
+  rootId?: string | null;
+  runs: SpawnedAgent[];
+}) {
+  const artifacts = usePanelArtifactItems({ rootType, rootId, runs });
+  const [expanded, setExpanded] = useState(false);
+  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactDoc | null>(null);
+  const [loadingArtifactId, setLoadingArtifactId] = useState<string | null>(null);
+
+  async function openArtifact(item: PanelArtifactItem) {
+    setLoadingArtifactId(item.artifactId);
+    try {
+      setSelectedArtifact(await artifactsApi.get(item.artifactId));
+    } catch {
+      if (item.runtimeArtifact && item.sourceRun) {
+        setSelectedArtifact(fallbackArtifactDoc(item.runtimeArtifact, item.sourceRun));
+      }
+    } finally {
+      setLoadingArtifactId(null);
+    }
+  }
+
+  if (artifacts.length === 0) return null;
+
+  return (
+    <section className="cr-section cr-artifacts-summary">
+      <button type="button" className="cr-section-toggle" onClick={() => setExpanded(value => !value)} aria-expanded={expanded}>
+        <h6>
+          artifacts
+          <span className="cr-ct">{artifacts.length}</span>
+        </h6>
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </button>
+      {expanded && (
+        <div className="cr-section-body cr-artifacts-summary-list">
+          {artifacts.map(item => (
+            <button
+              key={item.artifactId}
+              type="button"
+              className={`cr-art compact ${loadingArtifactId === item.artifactId ? 'loading' : ''}`}
+              onClick={() => openArtifact(item)}
+            >
+              <span className="cr-art-ic"><FileText className="h-3 w-3" /></span>
+              <span className="cr-art-body">
+                <span className="cr-art-h">
+                  <span className="cr-art-title">{item.filename ?? item.relativePath ?? 'Artifact'}</span>
+                </span>
+                <span className="cr-art-sub">{panelArtifactLabel(item)} · {timeAgo(item.createdAt)}</span>
+              </span>
+              {loadingArtifactId === item.artifactId ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-theme-subtle" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 text-theme-subtle" />
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+      {selectedArtifact && (
+        <div className="artifact-modal-backdrop" onClick={() => setSelectedArtifact(null)}>
+          <div className="artifact-modal" onClick={event => event.stopPropagation()}>
+            <ArtifactViewer artifact={selectedArtifact} onClose={() => setSelectedArtifact(null)} />
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
 
 type PanelDiffFile = {
   path: string;
@@ -1540,60 +1701,10 @@ function ChatArtifactsPanel({
   rootId?: string | null;
   runs: SpawnedAgent[];
 }) {
-  const [items, setItems] = useState<PanelArtifactItem[]>([]);
+  const merged = usePanelArtifactItems({ rootType, rootId, runs });
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactDoc | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(false);
-
-  const runtimeItems = useMemo(() => {
-    const next: PanelArtifactItem[] = [];
-    for (const run of runs) {
-      for (const artifact of artifactsForRun(run, run.runContext ?? null)) {
-        next.push({
-          artifactId: artifact.artifactId,
-          filename: artifact.filename,
-          relativePath: artifact.relativePath,
-          contentType: artifact.contentType,
-          createdAt: artifact.createdAt,
-          sourceRun: run,
-          runtimeArtifact: artifact,
-        });
-      }
-    }
-    return next;
-  }, [runs]);
-
-  useEffect(() => {
-    if (!rootType || !rootId) {
-      setItems([]);
-      return;
-    }
-    let cancelled = false;
-    artifactsApi.list({ rootType, rootId, limit: 50 })
-      .then(list => {
-        if (cancelled) return;
-        setItems(list.map(item => ({
-          artifactId: item.artifactId,
-          filename: item.filename,
-          relativePath: item.relativePath,
-          contentType: item.contentType,
-          createdAt: item.createdAt,
-        })));
-      })
-      .catch(() => {
-        if (!cancelled) setItems([]);
-      });
-    return () => { cancelled = true; };
-  }, [rootType, rootId]);
-
-  const merged = useMemo(() => {
-    const seen = new Set<string>();
-    return [...items, ...runtimeItems].filter(item => {
-      if (seen.has(item.artifactId)) return false;
-      seen.add(item.artifactId);
-      return true;
-    });
-  }, [items, runtimeItems]);
 
   async function openArtifact(item: PanelArtifactItem) {
     setLoadingId(item.artifactId);
@@ -2574,6 +2685,8 @@ function TasksPanel({
   activeContext,
   sortedRuns,
   contextRuns,
+  rootType,
+  rootId,
   expanded,
   onOpenNode,
   onOpenExecution,
@@ -2583,6 +2696,8 @@ function TasksPanel({
   activeContext: RunStatus | null;
   sortedRuns: SpawnedAgent[];
   contextRuns: SpawnedAgent[];
+  rootType?: 'chat' | 'workflow' | 'agent';
+  rootId?: string | null;
   expanded: boolean;
   onOpenNode: (executionId: string, nodeId: string) => void;
   onOpenExecution: (executionId: string) => void;
@@ -2596,6 +2711,7 @@ function TasksPanel({
   return (
     <div className={`cr-task-panel ${expanded ? 'expanded' : 'compact'}`}>
       <WorkContextSection runs={contextRuns} />
+      <ChatArtifactsSummarySection rootType={rootType} rootId={rootId} runs={contextRuns} />
 
       {showAttempts && (
         <RailSection title="runs" count={`${attemptRuns.length}`}>
@@ -2750,6 +2866,8 @@ export default function ChatRunSidebar({
                 activeContext={activeContext}
                 sortedRuns={sortedRuns}
                 contextRuns={allRuns}
+                rootType={rootType}
+                rootId={rootId}
                 expanded={fullScreen}
                 onOpenNode={() => undefined}
                 onOpenExecution={() => undefined}

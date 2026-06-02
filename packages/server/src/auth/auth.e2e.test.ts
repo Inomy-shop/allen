@@ -95,7 +95,7 @@ describe('auth e2e: UI first-admin bootstrap', () => {
     expect(doc?.mustResetPassword).toBe(false);
   });
 
-  it('closes bootstrap after the first user exists', async () => {
+  it('closes account bootstrap after the first user exists but keeps setup onboarding open', async () => {
     const res = await request(ctx.app)
       .post('/api/auth/bootstrap')
       .send({
@@ -108,7 +108,8 @@ describe('auth e2e: UI first-admin bootstrap', () => {
 
     const status = await request(ctx.app).get('/api/system/onboarding-status');
     expect(status.body.isFirstRun).toBe(false);
-    expect(status.body.step).toBe('complete');
+    expect(status.body.complete).toBe(false);
+    expect(status.body.step).toBe('health');
     expect(status.body.userCount).toBe(1);
     expect(status.body.adminCount).toBe(1);
   });

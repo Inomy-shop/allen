@@ -189,19 +189,32 @@ export default function OnboardingHealthPage() {
     };
   }, [summary]);
 
-  const runtimeLabel = typeof window !== 'undefined' && window.allenDesktop ? 'desktop runtime' : 'web setup';
+  const isDesktop = typeof window !== 'undefined' && Boolean(window.allenDesktop);
+  const coreChecksPassed = summary
+    ? ['node', 'npm', 'mongodb', 'git'].every(id => summary.checks.some(check => check.id === id && check.status === 'pass'))
+    : false;
+  const canContinue = isDesktop ? coreChecksPassed : Boolean(summary?.requiredPassed);
+  const runtimeLabel = isDesktop ? 'desktop runtime' : 'web setup';
   const runtimeCopy = 'Allen checks local dependencies before agents create workspaces or run workflows.';
   const bootstrapSteps: Array<{
     number: string;
     title: string;
     copy: string;
     state: 'done' | 'active' | 'next';
-  }> = [
-    { number: '01', title: 'Create admin', copy: 'Admin account is ready for this instance.', state: 'done' },
-    { number: '02', title: 'Verify runtime', copy: 'Check CLIs, auth, ports, database, and local services.', state: 'active' },
-    { number: '03', title: 'Connect repo', copy: 'Register a checkout or clone a starter repository.', state: 'next' },
-    { number: '04', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'next' },
-  ];
+  }> = isDesktop
+    ? [
+      { number: '01', title: 'Create admin', copy: 'Admin account is ready for this instance.', state: 'done' },
+      { number: '02', title: 'Verify runtime', copy: 'Check CLIs, auth, ports, database, and local services.', state: 'active' },
+      { number: '03', title: 'Choose models', copy: 'Set chat and inbuilt workflow defaults.', state: 'next' },
+      { number: '04', title: 'Connect repo', copy: 'Register a checkout or clone a starter repository.', state: 'next' },
+      { number: '05', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'next' },
+    ]
+    : [
+      { number: '01', title: 'Create admin', copy: 'Admin account is ready for this instance.', state: 'done' },
+      { number: '02', title: 'Verify runtime', copy: 'Check CLIs, auth, ports, database, and local services.', state: 'active' },
+      { number: '03', title: 'Connect repo', copy: 'Register a checkout or clone a starter repository.', state: 'next' },
+      { number: '04', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'next' },
+    ];
 
   return (
     <OnboardingShell
@@ -245,7 +258,7 @@ export default function OnboardingHealthPage() {
                         ? <CircleDot className="h-5 w-5" />
                         : <Circle className="h-5 w-5" />}
                   </div>
-                  {number !== '04' && (
+                  {number !== (isDesktop ? '05' : '04') && (
                     <div className={`onboarding-step-line absolute bottom-0 top-6 w-px ${
                       state === 'done' ? 'bg-accent-green/35' : 'bg-border'
                     }`} />
@@ -334,9 +347,9 @@ export default function OnboardingHealthPage() {
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
               <div className="grid min-w-0 grid-cols-[32px_minmax(0,1fr)] gap-3">
                 <div className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full border ${
-                  summary?.requiredPassed ? 'border-accent-green/20 bg-accent-green/10' : 'border-accent-yellow/25 bg-accent-yellow/10'
+                  canContinue ? 'border-accent-green/20 bg-accent-green/10' : 'border-accent-yellow/25 bg-accent-yellow/10'
                 }`}>
-                  {summary?.requiredPassed
+                  {canContinue
                     ? <CheckCircle2 className="h-4 w-4 text-accent-green" />
                     : <AlertTriangle className="h-4 w-4 text-accent-yellow" />}
                 </div>
@@ -348,17 +361,20 @@ export default function OnboardingHealthPage() {
                     </code>
                   </div>
                   <p className="mt-1 max-w-[560px] text-[12px] leading-5 text-theme-muted">
-                    Required checks must pass before setup continues. Optional warnings can be fixed later.
+                    {isDesktop
+                      ? 'Core checks must pass before setup continues. Provider checks are used on the next step.'
+                      : 'Required checks must pass before setup continues. Optional warnings can be fixed later.'}
                   </p>
                 </div>
               </div>
 
               <button
                 type="button"
-                disabled={!summary?.requiredPassed}
+                disabled={!canContinue}
                 onClick={async () => {
-                  await system.updateOnboardingProgress({ step: 'repository' }).catch(() => {});
-                  navigate('/onboarding/repository', { replace: true });
+                  const nextStep = isDesktop ? 'model_defaults' : 'repository';
+                  await system.updateOnboardingProgress({ step: nextStep }).catch(() => {});
+                  navigate(isDesktop ? '/onboarding/model-defaults' : '/onboarding/repository', { replace: true });
                 }}
                 className="onboarding-control btn-primary w-full justify-center sm:w-auto"
               >
@@ -367,7 +383,7 @@ export default function OnboardingHealthPage() {
               </button>
             </div>
 
-            {summary && !summary.requiredPassed && (
+            {summary && !canContinue && (
               <p className="mt-3 text-[12px] leading-5 text-theme-muted">
                 Fix the failed required checks, then retry.
               </p>

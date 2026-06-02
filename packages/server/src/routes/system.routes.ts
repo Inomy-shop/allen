@@ -10,12 +10,15 @@ import { UserService } from '../services/user.service.js';
 import { runSystemHealth } from '../services/system-health.service.js';
 import { contextProviderRuntimeConfig } from '../services/context/config/context-provider-config.js';
 import { requireAuth, type AuthedRequest } from '../middleware/requireAuth.js';
+import { requireAdmin } from '../middleware/requireAdmin.js';
 import { getRuntimeConfigProvider, getRuntimeSecretsProvider } from '../runtime/config.js';
 import { mcpCredentialEnvKey } from '../runtime/mcp-credentials.js';
 import { MCP_PRESETS } from '../services/mcp.service.js';
+import { OrgSeedService } from '../services/org-seed.js';
+import { seedDefaultWorkflows } from '../seed.js';
 
 const exec = promisify(execFile);
-const ONBOARDING_STEPS = new Set(['health', 'repository', 'first_workflow', 'complete']);
+const ONBOARDING_STEPS = new Set(['health', 'model_defaults', 'repository', 'first_workflow', 'complete']);
 
 type RuntimeSettingKind = 'boolean' | 'number' | 'path' | 'select' | 'string';
 
@@ -67,6 +70,54 @@ const PROVIDER_OPTIONS = [
   { label: 'Claude CLI', value: 'claude-cli' },
 ] as const;
 
+const AGENT_MODEL_OPTIONS = [
+  { label: 'Provider default', value: '' },
+  { label: 'sonnet', value: 'sonnet' },
+  { label: 'opus', value: 'opus' },
+  { label: 'haiku', value: 'haiku' },
+  { label: 'gpt-5.5', value: 'gpt-5.5' },
+  { label: 'gpt-5.4', value: 'gpt-5.4' },
+  { label: 'gpt-5.3-codex', value: 'gpt-5.3-codex' },
+  { label: 'gpt-5.2-codex', value: 'gpt-5.2-codex' },
+  { label: 'gpt-5.1-codex-max', value: 'gpt-5.1-codex-max' },
+  { label: 'gpt-5.2', value: 'gpt-5.2' },
+  { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini' },
+] as const;
+
+const CLAUDE_AGENT_MODEL_OPTIONS = new Set(['', 'sonnet', 'opus', 'haiku']);
+const CODEX_AGENT_MODEL_OPTIONS = new Set([
+  '',
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.3-codex',
+  'gpt-5.2-codex',
+  'gpt-5.1-codex-max',
+  'gpt-5.2',
+  'gpt-5.1-codex-mini',
+]);
+
+const CONTEXT_LLM_MODEL_OPTIONS = [
+  { label: 'gpt-5.5', value: 'gpt-5.5' },
+  { label: 'gpt-5.4', value: 'gpt-5.4' },
+  { label: 'gpt-5.3-codex', value: 'gpt-5.3-codex' },
+  { label: 'gpt-5.2-codex', value: 'gpt-5.2-codex' },
+  { label: 'sonnet', value: 'sonnet' },
+  { label: 'opus', value: 'opus' },
+  { label: 'haiku', value: 'haiku' },
+] as const;
+
+const RERANKER_MODEL_OPTIONS = [
+  { label: 'BAAI/bge-reranker-base', value: 'BAAI/bge-reranker-base' },
+  { label: 'BAAI/bge-reranker-large', value: 'BAAI/bge-reranker-large' },
+  { label: 'BAAI/bge-reranker-v2-m3', value: 'BAAI/bge-reranker-v2-m3' },
+] as const;
+
+const COGNEE_EMBEDDING_MODEL_OPTIONS = [
+  { label: 'BAAI/bge-small-en-v1.5', value: 'BAAI/bge-small-en-v1.5' },
+  { label: 'BAAI/bge-base-en-v1.5', value: 'BAAI/bge-base-en-v1.5' },
+  { label: 'BAAI/bge-large-en-v1.5', value: 'BAAI/bge-large-en-v1.5' },
+] as const;
+
 const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
   {
     id: 'runtime',
@@ -77,7 +128,7 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
       { key: 'WORKSPACE_BASE_DIR', label: 'Workspace directory', kind: 'path', defaultValue: '~/.allen/workspaces', readOnly: true },
       { key: 'UPLOADS_DIR', label: 'Local uploads directory', kind: 'path', defaultValue: '~/.allen/uploads', readOnly: true },
       { key: 'MCP_BUNDLES_DIR', label: 'MCP bundles directory', kind: 'path', defaultValue: '~/.allen/mcp-servers', readOnly: true, advanced: true },
-      { key: 'SEED_OVERRIDE', label: 'Refresh built-ins on startup', description: 'Overwrite seeded agents, workflows, skills, and schedules from the bundled definitions.', kind: 'boolean', defaultValue: 'true', restartRequired: true },
+      { key: 'SEED_OVERRIDE', label: 'Refresh built-ins on startup', description: 'Overwrite seeded agents, workflows, skills, and schedules from the bundled definitions.', kind: 'boolean', defaultValue: 'false', restartRequired: true },
       { key: 'TERMINAL_WS_PORT', label: 'Terminal websocket port', description: 'Leave empty to let desktop choose a local port.', kind: 'number', defaultValue: 'auto', restartRequired: true, advanced: true },
       { key: 'ALLEN_DISABLE_AUTO_UPDATE', label: 'Disable auto update', kind: 'boolean', defaultValue: 'false', restartRequired: true, advanced: true },
     ],
@@ -93,19 +144,17 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
       { key: 'S3_UPLOAD_PREFIX', label: 'S3 key prefix', kind: 'string', defaultValue: '', showWhen: { key: 'S3_UPLOAD_ENABLED', equals: 'true' } },
       { key: 'S3_UPLOAD_ENDPOINT', label: 'Custom S3 endpoint', kind: 'string', defaultValue: '', advanced: true, showWhen: { key: 'S3_UPLOAD_ENABLED', equals: 'true' } },
       { key: 'S3_UPLOAD_FORCE_PATH_STYLE', label: 'Use path-style S3 URLs', kind: 'boolean', defaultValue: 'false', advanced: true, showWhen: { key: 'S3_UPLOAD_ENABLED', equals: 'true' } },
-      { key: 'ALLEN_PUBLIC_URL', label: 'Public artifact base URL', description: 'Leave empty to use the local API URL.', kind: 'string', defaultValue: 'local API URL' },
       { key: 'ALLEN_APP_BASE_URL', label: 'App base URL for approvals', kind: 'string', defaultValue: '', advanced: true },
     ],
   },
   {
     id: 'agents',
-    title: 'Agents',
+    title: 'Agents & Workflows Model Configuration',
     description: 'Defaults for new chat sessions, seeded workflow agents, and Claude/Codex execution behavior.',
     fields: [
       { key: 'ALLEN_DEFAULT_CHAT_PROVIDER', label: 'Default chat provider', kind: 'select', defaultValue: 'codex', options: [...PROVIDER_OPTIONS] },
       { key: 'ALLEN_DEFAULT_AGENT_PROVIDER', label: 'Default workflow agent provider', description: 'Preserve keeps the role-specific provider mix from seed definitions.', kind: 'select', defaultValue: 'preserve seeded mix', options: [{ label: 'Preserve seeded mix', value: '' }, ...PROVIDER_OPTIONS], restartRequired: true },
-      { key: 'ALLEN_DEFAULT_AGENT_MODEL', label: 'Default workflow agent model', description: 'Used when a flattened workflow agent provider is selected.', kind: 'string', defaultValue: 'provider default', restartRequired: true },
-      { key: 'ALLEN_AGENT_EXECUTION_MODE', label: 'Claude execution mode', kind: 'select', defaultValue: 'cli', options: [{ label: 'CLI', value: 'cli' }, { label: 'SDK', value: 'sdk' }] },
+      { key: 'ALLEN_DEFAULT_AGENT_MODEL', label: 'Default workflow agent model', description: 'Used when a flattened workflow agent provider is selected.', kind: 'select', defaultValue: 'provider default', options: [...AGENT_MODEL_OPTIONS], restartRequired: true, showWhen: { key: 'ALLEN_DEFAULT_AGENT_PROVIDER', notEquals: '' } },
       { key: 'CLAUDE_BIN', label: 'Claude CLI path', kind: 'path', defaultValue: 'auto from PATH' },
       { key: 'ALLEN_SYSTEM_PROMPT_MODE', label: 'System prompt mode', kind: 'select', defaultValue: 'append', options: [{ label: 'Append', value: 'append' }, { label: 'Custom', value: 'custom' }], advanced: true },
       { key: 'ALLEN_AGENT_SKIP_LEARNINGS', label: 'Skip learned context in prompts', kind: 'boolean', defaultValue: 'false', advanced: true },
@@ -121,18 +170,18 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
     fields: [
       { key: 'ALLEN_CONTEXT_PROVIDER', label: 'Cognee context', description: 'Enable Cognee-backed repository context. Saving this change applies to future context builds without restarting the app.', kind: 'select', defaultValue: 'disabled', options: [{ label: 'Disabled', value: '' }, { label: 'Allen', value: 'allen' }, { label: 'Cognee', value: 'cognee' }, { label: 'Cognee Memory', value: 'cognee_memory' }] },
       { key: 'ALLEN_CONTEXT_LLM_PROVIDER', label: 'Context LLM provider', kind: 'select', defaultValue: 'codex', options: [...PROVIDER_OPTIONS], showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
-      { key: 'ALLEN_CONTEXT_LLM_MODEL', label: 'Context LLM model', kind: 'string', defaultValue: 'gpt-5.5', showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
+      { key: 'ALLEN_CONTEXT_LLM_MODEL', label: 'Context LLM model', kind: 'select', defaultValue: 'gpt-5.5', options: [...CONTEXT_LLM_MODEL_OPTIONS], showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
       { key: 'ALLEN_PYTHON', label: 'Python environment path', kind: 'path', defaultValue: 'system Python', readOnly: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
       { key: 'ALLEN_CONTEXT_MAX_FILE_CHARS', label: 'Max chars per context file', kind: 'number', defaultValue: '60000', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
       { key: 'ALLEN_CONTEXT_MAX_TOTAL_CHARS', label: 'Max total context chars', kind: 'number', defaultValue: '180000', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
       { key: 'ALLEN_CONTEXT_MAX_INJECTED_REFS', label: 'Max injected refs', kind: 'number', defaultValue: '12', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
       { key: 'ALLEN_CONTEXT_RERANKER', label: 'Semantic reranker', kind: 'select', defaultValue: 'disabled', options: [{ label: 'Disabled', value: '' }, { label: 'BGE', value: 'bge' }], showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
-      { key: 'ALLEN_CONTEXT_RERANKER_MODEL', label: 'Reranker model', kind: 'string', defaultValue: 'BAAI/bge-reranker-base', showWhen: { key: 'ALLEN_CONTEXT_RERANKER', equals: 'bge' } },
+      { key: 'ALLEN_CONTEXT_RERANKER_MODEL', label: 'Reranker model', kind: 'select', defaultValue: 'BAAI/bge-reranker-base', options: [...RERANKER_MODEL_OPTIONS], showWhen: { key: 'ALLEN_CONTEXT_RERANKER', equals: 'bge' } },
       { key: 'ALLEN_CONTEXT_RERANKER_TIMEOUT_MS', label: 'Reranker timeout', kind: 'number', defaultValue: '120000', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_RERANKER', equals: 'bge' } },
       { key: 'ALLEN_COGNEE_DATA_DIR', label: 'Cognee data directory', kind: 'path', defaultValue: '~/.allen/cognee', readOnly: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
       { key: 'ALLEN_COGNEE_TIMEOUT_MS', label: 'Cognee timeout', kind: 'number', defaultValue: '14400000 ingest / 120000 search', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
-      { key: 'ALLEN_COGNEE_EMBEDDING_PROVIDER', label: 'Cognee embedding provider', kind: 'string', defaultValue: 'local', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
-      { key: 'ALLEN_COGNEE_EMBEDDING_MODEL', label: 'Cognee embedding model', kind: 'string', defaultValue: 'BAAI/bge-small-en-v1.5', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
+      { key: 'ALLEN_COGNEE_EMBEDDING_PROVIDER', label: 'Cognee embedding provider', kind: 'select', defaultValue: 'local', options: [{ label: 'Local', value: 'local' }], advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
+      { key: 'ALLEN_COGNEE_EMBEDDING_MODEL', label: 'Cognee embedding model', kind: 'select', defaultValue: 'BAAI/bge-small-en-v1.5', options: [...COGNEE_EMBEDDING_MODEL_OPTIONS], advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
       { key: 'ALLEN_CONTEXT_SEMANTIC_EVALUATOR', label: 'Semantic evaluator', kind: 'select', defaultValue: 'disabled', options: [{ label: 'Disabled', value: '' }, { label: 'DeepEval', value: 'deepeval' }], advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
       { key: 'ALLEN_DEEPEVAL_SCRIPT', label: 'DeepEval script', kind: 'path', defaultValue: 'bundled evaluator', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_SEMANTIC_EVALUATOR', equals: 'deepeval' } },
     ],
@@ -288,7 +337,7 @@ function normalizeRuntimeSettingValue(field: RuntimeSettingDef, raw: unknown): s
   }
   if (field.kind === 'select') {
     const allowed = new Set((field.options ?? []).map((option) => option.value));
-    if (!allowed.has(value)) {
+    if (!allowed.has(value) && !field.key.endsWith('_MODEL')) {
       throw new Error(`invalid_value:${field.key}`);
     }
   }
@@ -377,6 +426,7 @@ async function pythonCanImportCognee(pythonPath: string): Promise<{ ok: boolean;
 async function desktopCogneeSetupStatus(
   persisted: Record<string, string>,
   detectedDefaults: Record<string, string>,
+  options: { verifyImport?: boolean } = {},
 ): Promise<DesktopCogneeSetupStatus> {
   const provider = currentRuntimeSettingValue('ALLEN_CONTEXT_PROVIDER', persisted, detectedDefaults);
   const configuredPython = persisted.ALLEN_PYTHON ?? getRuntimeConfigProvider().get('ALLEN_PYTHON') ?? null;
@@ -384,8 +434,15 @@ async function desktopCogneeSetupStatus(
     ?? detectedDefaults.ALLEN_PYTHON
     ?? detectedDefaults.PYTHON
     ?? 'python3';
-  const importCheck = await pythonCanImportCognee(pythonPath);
   const selected = COGNEE_CONTEXT_PROVIDERS.has(provider);
+  const importCheck = options.verifyImport
+    ? await pythonCanImportCognee(pythonPath)
+    : {
+      ok: Boolean(configuredPython),
+      detail: configuredPython
+        ? 'Python import check is deferred until setup runs.'
+        : `ALLEN_PYTHON is not set. Desktop setup will create ${COGNEE_CONTEXT_VENV_PYTHON} and use it for Cognee.`,
+    };
   const setupRecommended = selected && (!configuredPython || !importCheck.ok);
 
   return {
@@ -395,9 +452,7 @@ async function desktopCogneeSetupStatus(
     venvPython: COGNEE_CONTEXT_VENV_PYTHON,
     cogneeImportOk: importCheck.ok,
     setupRecommended,
-    detail: !configuredPython
-      ? `ALLEN_PYTHON is not set. Desktop setup will create ${COGNEE_CONTEXT_VENV_PYTHON} and use it for Cognee.`
-      : importCheck.detail,
+    detail: importCheck.detail,
   };
 }
 
@@ -449,6 +504,31 @@ function updateRuntimeProviderValue(key: string, value: string | undefined): voi
   provider.set?.(key, value);
   if (value === '') delete process.env[key];
   else process.env[key] = value;
+}
+
+function isProviderValue(value: string): value is 'codex' | 'claude-cli' {
+  return value === 'codex' || value === 'claude-cli';
+}
+
+function validateAgentModelForProvider(provider: 'codex' | 'claude-cli' | '', model: string): void {
+  if (!provider) {
+    if (model) throw new Error('agent_model_requires_agent_provider');
+    return;
+  }
+  const allowed = provider === 'codex' ? CODEX_AGENT_MODEL_OPTIONS : CLAUDE_AGENT_MODEL_OPTIONS;
+  if (!allowed.has(model)) throw new Error('invalid_agent_model_for_provider');
+}
+
+async function refreshDesktopSeedDefaults(db: Db): Promise<void> {
+  const previousSeedOverride = process.env.SEED_OVERRIDE;
+  process.env.SEED_OVERRIDE = 'true';
+  try {
+    await new OrgSeedService(db).seed();
+    await seedDefaultWorkflows(db);
+  } finally {
+    if (previousSeedOverride === undefined) delete process.env.SEED_OVERRIDE;
+    else process.env.SEED_OVERRIDE = previousSeedOverride;
+  }
 }
 
 function findContextSetupScript(): string | null {
@@ -537,7 +617,7 @@ async function runDesktopCogneeSetup(configPath: string, provider: string): Prom
   const output = `${stdout}\n${stderr}`.trim().split('\n').filter(Boolean).slice(-80);
   return {
     output,
-    setup: await desktopCogneeSetupStatus(persisted, detected),
+    setup: await desktopCogneeSetupStatus(persisted, detected, { verifyImport: true }),
   };
 }
 
@@ -554,6 +634,21 @@ function onboardingProgressPayload(onboarding: Record<string, unknown>) {
     completedAt,
     skippedAt,
   };
+}
+
+type OnboardingProgressPayload = ReturnType<typeof onboardingProgressPayload>;
+
+async function adminSetupProgress(db: Db): Promise<OnboardingProgressPayload> {
+  const adminUsers = await db.collection('users')
+    .find({ role: 'admin' }, { projection: { onboarding: 1, updatedAt: 1, createdAt: 1 } })
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .toArray();
+
+  const adminProgress = adminUsers.map(user => onboardingProgressPayload((user.onboarding ?? {}) as Record<string, unknown>));
+  const complete = adminProgress.find(progress => progress.complete);
+  if (complete) return complete;
+
+  return adminProgress.find(progress => progress.step !== 'health') ?? adminProgress[0] ?? onboardingProgressPayload({});
 }
 
 type ExecErrorWithOutput = Error & {
@@ -606,12 +701,13 @@ export function systemRoutes(db: Db): Router {
         users.countAdmins(),
       ]);
       const isFirstRun = userCount === 0;
+      const setupProgress = isFirstRun ? onboardingProgressPayload({ step: 'account' }) : await adminSetupProgress(db);
       return res.json({
         isFirstRun,
         userCount,
         adminCount,
-        complete: !isFirstRun,
-        step: isFirstRun ? 'account' : 'complete',
+        complete: isFirstRun ? false : setupProgress.complete,
+        step: isFirstRun ? 'account' : setupProgress.step,
       });
     } catch (err) {
       console.error('[system/onboarding-status]', err);
@@ -723,6 +819,65 @@ export function systemRoutes(db: Db): Router {
     }
   });
 
+  router.post('/desktop-runtime/onboarding/model-defaults', requireAuth, requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const config = getRuntimeConfigProvider();
+      if (config.get('ALLEN_DESKTOP') !== '1') {
+        return res.status(400).json({ error: 'desktop_model_defaults_are_desktop_only' });
+      }
+      const configPath = config.get('ALLEN_DESKTOP_CONFIG_PATH');
+      if (!configPath) {
+        return res.status(400).json({ error: 'desktop_runtime_config_path_missing' });
+      }
+
+      const chatProviderRaw = String(req.body?.chatProvider ?? '').trim();
+      const agentProviderRaw = String(req.body?.agentProvider ?? '').trim();
+      const agentModel = String(req.body?.agentModel ?? '').trim();
+      if (!isProviderValue(chatProviderRaw)) {
+        return res.status(400).json({ error: 'invalid_chat_provider' });
+      }
+      if (agentProviderRaw && !isProviderValue(agentProviderRaw)) {
+        return res.status(400).json({ error: 'invalid_agent_provider' });
+      }
+      validateAgentModelForProvider(agentProviderRaw as 'codex' | 'claude-cli' | '', agentModel);
+
+      const persisted = readDesktopRuntimeConfigFile(configPath);
+      persisted.ALLEN_DEFAULT_CHAT_PROVIDER = chatProviderRaw;
+      updateRuntimeProviderValue('ALLEN_DEFAULT_CHAT_PROVIDER', chatProviderRaw);
+      if (agentProviderRaw) {
+        persisted.ALLEN_DEFAULT_AGENT_PROVIDER = agentProviderRaw;
+        updateRuntimeProviderValue('ALLEN_DEFAULT_AGENT_PROVIDER', agentProviderRaw);
+      } else {
+        delete persisted.ALLEN_DEFAULT_AGENT_PROVIDER;
+        updateRuntimeProviderValue('ALLEN_DEFAULT_AGENT_PROVIDER', undefined);
+      }
+      if (agentProviderRaw && agentModel) {
+        persisted.ALLEN_DEFAULT_AGENT_MODEL = agentModel;
+        updateRuntimeProviderValue('ALLEN_DEFAULT_AGENT_MODEL', agentModel);
+      } else {
+        delete persisted.ALLEN_DEFAULT_AGENT_MODEL;
+        updateRuntimeProviderValue('ALLEN_DEFAULT_AGENT_MODEL', undefined);
+      }
+      writeDesktopRuntimeConfigFile(configPath, persisted);
+
+      await refreshDesktopSeedDefaults(db);
+      return res.json({
+        chatProvider: chatProviderRaw,
+        agentProvider: agentProviderRaw,
+        agentModel: agentProviderRaw ? agentModel : '',
+        settings: await desktopRuntimeSettingsPayload(),
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      const status = [
+        'agent_model_requires_agent_provider',
+        'invalid_agent_model_for_provider',
+      ].includes(message) ? 400 : 500;
+      console.error('[system/desktop-runtime/onboarding/model-defaults]', err);
+      return res.status(status).json({ error: message });
+    }
+  });
+
   router.post('/desktop-runtime/context/cognee/setup', requireAuth, async (req: AuthedRequest, res: Response) => {
     try {
       const config = getRuntimeConfigProvider();
@@ -789,12 +944,17 @@ export function systemRoutes(db: Db): Router {
     try {
       const userId = req.user?.sub;
       if (!userId) return res.status(401).json({ error: 'unauthorized' });
-      const user = await db.collection('users').findOne(
-        { _id: new ObjectId(userId) },
-        { projection: { onboarding: 1 } },
-      );
-      const onboarding = (user?.onboarding ?? {}) as Record<string, unknown>;
-      return res.json(onboardingProgressPayload(onboarding));
+      if (req.user?.role !== 'admin') {
+        return res.json({
+          complete: true,
+          skipped: false,
+          step: 'complete',
+          completedAt: null,
+          skippedAt: null,
+        });
+      }
+      void userId;
+      return res.json(await adminSetupProgress(db));
     } catch (err) {
       console.error('[system/onboarding-progress]', err);
       return res.status(500).json({ error: 'onboarding_progress_failed' });
@@ -805,6 +965,7 @@ export function systemRoutes(db: Db): Router {
     try {
       const userId = req.user?.sub;
       if (!userId) return res.status(401).json({ error: 'unauthorized' });
+      if (req.user?.role !== 'admin') return res.status(403).json({ error: 'admin_only' });
 
       const step = typeof req.body?.step === 'string' ? req.body.step : undefined;
       const action = typeof req.body?.action === 'string' ? req.body.action : undefined;

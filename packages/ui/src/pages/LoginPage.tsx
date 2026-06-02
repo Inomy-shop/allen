@@ -43,14 +43,16 @@ export default function LoginPage() {
           navigate(`/reset-password?from=${encodeURIComponent(from)}`, { replace: true });
           return;
         }
-        const progress = await system.onboardingProgress().catch(() => null);
+        const progress = user.role === 'admin' ? await system.onboardingProgress().catch(() => null) : null;
         if (cancelled) return;
         if (progress && !progress.complete) {
           const path = progress.step === 'repository'
             ? '/onboarding/repository'
             : progress.step === 'first_workflow'
               ? '/onboarding/first-workflow'
-              : '/onboarding/health';
+              : progress.step === 'model_defaults'
+                ? '/onboarding/model-defaults'
+                : '/onboarding/health';
           navigate(path, { replace: true });
         } else {
           navigate(from, { replace: true });
@@ -81,13 +83,15 @@ export default function LoginPage() {
       if (data.user.mustResetPassword) {
         navigate(`/reset-password?from=${encodeURIComponent(from)}`, { replace: true });
       } else {
-        const progress = await system.onboardingProgress().catch(() => null);
+        const progress = data.user.role === 'admin' ? await system.onboardingProgress().catch(() => null) : null;
         if (progress && !progress.complete) {
           const path = progress.step === 'repository'
             ? '/onboarding/repository'
             : progress.step === 'first_workflow'
               ? '/onboarding/first-workflow'
-              : '/onboarding/health';
+              : progress.step === 'model_defaults'
+                ? '/onboarding/model-defaults'
+                : '/onboarding/health';
           navigate(path, { replace: true });
         } else {
           navigate(from, { replace: true });

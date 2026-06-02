@@ -94,8 +94,8 @@ describe('desktop runtime config', () => {
     expect(process.env.MONGODB_URI).toBeUndefined();
     expect(process.env.DESKTOP_API_PORT).toBe(String(runtime.apiPort));
     expect(process.env.DESKTOP_MONGO_PORT).toBe(String(runtime.mongoPort));
-    expect(process.env.SEED_OVERRIDE).toBe('true');
-    expect(runtime.configProvider.get('SEED_OVERRIDE')).toBe('true');
+    expect(process.env.SEED_OVERRIDE).toBe('false');
+    expect(runtime.configProvider.get('SEED_OVERRIDE')).toBe('false');
     expect(runtime.terminalWsPort).toBe(0);
     expect(config.JWT_ACCESS_SECRET).toBeUndefined();
     expect(config.JWT_REFRESH_SECRET).toBeUndefined();

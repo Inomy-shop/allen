@@ -14,6 +14,7 @@ import {
   User,
 } from 'lucide-react';
 import McpServerManager from '../components/settings/McpServerManager';
+import Select from '../components/common/Select';
 import ShortcutKey from '../components/common/ShortcutKey';
 import { auth as authApi, system as systemApi, type DesktopRuntimeSettingsResponse } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
@@ -121,17 +122,22 @@ function SettingsPageShell({
 function SettingsPanel({
   title,
   description,
+  action,
   children,
 }: {
   title: string;
   description?: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className="settings-panel">
       <div className="settings-panel-head">
-        <h2>{title}</h2>
-        {description && <p>{description}</p>}
+        <div className="settings-panel-head-copy">
+          <h2>{title}</h2>
+          {description && <p>{description}</p>}
+        </div>
+        {action && <div className="settings-panel-head-action">{action}</div>}
       </div>
       <div className="settings-panel-body">{children}</div>
     </section>
@@ -281,6 +287,32 @@ function GeneralTab() {
 
 type RuntimeSettings = DesktopRuntimeSettingsResponse;
 type RuntimeSettingField = RuntimeSettings['groups'][number]['fields'][number];
+type RuntimeSettingOption = NonNullable<RuntimeSettingField['options']>[number];
+
+const PROVIDER_DEFAULT_MODEL_OPTION: RuntimeSettingOption = { label: 'Provider default', value: '' };
+const CLAUDE_RUNTIME_MODEL_OPTIONS: RuntimeSettingOption[] = [
+  { label: 'sonnet', value: 'sonnet' },
+  { label: 'opus', value: 'opus' },
+  { label: 'haiku', value: 'haiku' },
+];
+const CODEX_RUNTIME_MODEL_OPTIONS: RuntimeSettingOption[] = [
+  { label: 'gpt-5.5', value: 'gpt-5.5' },
+  { label: 'gpt-5.4', value: 'gpt-5.4' },
+  { label: 'gpt-5.3-codex', value: 'gpt-5.3-codex' },
+  { label: 'gpt-5.2-codex', value: 'gpt-5.2-codex' },
+  { label: 'gpt-5.1-codex-max', value: 'gpt-5.1-codex-max' },
+  { label: 'gpt-5.2', value: 'gpt-5.2' },
+  { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini' },
+];
+
+function llmOptionsForProvider(provider: string, includeProviderDefault = false): RuntimeSettingOption[] {
+  const models = provider === 'claude-cli'
+    ? CLAUDE_RUNTIME_MODEL_OPTIONS
+    : provider === 'codex'
+      ? CODEX_RUNTIME_MODEL_OPTIONS
+      : [...CLAUDE_RUNTIME_MODEL_OPTIONS, ...CODEX_RUNTIME_MODEL_OPTIONS];
+  return includeProviderDefault ? [PROVIDER_DEFAULT_MODEL_OPTION, ...models] : models;
+}
 
 function runtimeSourceLabel(source: RuntimeSettingField['source']): string {
   if (source === 'desktop_config') return 'Desktop setting';
@@ -310,15 +342,27 @@ function settingsValueMap(settings: RuntimeSettings): Record<string, string> {
   return values;
 }
 
+function runtimeSelectOptions(field: RuntimeSettingField, values: Record<string, string>): RuntimeSettingOption[] {
+  if (field.key === 'ALLEN_DEFAULT_AGENT_MODEL') {
+    return llmOptionsForProvider(values.ALLEN_DEFAULT_AGENT_PROVIDER ?? '', true);
+  }
+  if (field.key === 'ALLEN_CONTEXT_LLM_MODEL') {
+    return llmOptionsForProvider(values.ALLEN_CONTEXT_LLM_PROVIDER ?? '');
+  }
+  return field.options ?? [];
+}
+
 function RuntimeSettingControl({
   editable,
   field,
   onChange,
+  runtimeValues,
   value,
 }: {
   editable: boolean;
   field: RuntimeSettingField;
   onChange: (key: string, value: string) => void;
+  runtimeValues: Record<string, string>;
   value: string;
 }) {
   const disabled = !editable || field.readOnly;
@@ -348,19 +392,22 @@ function RuntimeSettingControl({
   }
 
   if (field.kind === 'select') {
+    const options = runtimeSelectOptions(field, runtimeValues);
+    const hasCurrentValue = value === '' || options.some((option) => option.value === value);
+    const selectOptions = hasCurrentValue
+      ? options
+      : [{ value, label: value }, ...options];
     return (
-      <select
-        className="settings-edit-input"
+      <Select
+        className="settings-runtime-select"
         disabled={disabled}
         value={value}
-        onChange={(event) => onChange(field.key, event.target.value)}
-      >
-        {(field.options ?? []).map((option) => (
-          <option key={`${field.key}-${option.value}`} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+        options={selectOptions}
+        placeholder={field.defaultValue || 'Select...'}
+        searchable={selectOptions.length > 6}
+        searchPlaceholder={`Search ${field.label.toLowerCase()}...`}
+        onChange={(next) => onChange(field.key, next)}
+      />
     );
   }
 
@@ -384,9 +431,7 @@ function RuntimeTab() {
   const [desktopInfo, setDesktopInfo] = useState<Awaited<ReturnType<NonNullable<typeof window.allenDesktop>['getRuntimeInfo']>> | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [supportBundleStatus, setSupportBundleStatus] = useState<string | null>(null);
   const [cogneeSetupStatus, setCogneeSetupStatus] = useState<string | null>(null);
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     void systemApi.desktopRuntime().then(setRuntime).catch((err) => {
@@ -402,7 +447,22 @@ function RuntimeTab() {
   }, []);
 
   function updateRuntimeValue(key: string, value: string) {
-    setRuntimeValues((current) => ({ ...current, [key]: value }));
+    setRuntimeValues((current) => {
+      const next = { ...current, [key]: value };
+      if (key === 'ALLEN_DEFAULT_AGENT_PROVIDER') {
+        const options = llmOptionsForProvider(value, true);
+        if (!options.some((option) => option.value === next.ALLEN_DEFAULT_AGENT_MODEL)) {
+          next.ALLEN_DEFAULT_AGENT_MODEL = '';
+        }
+      }
+      if (key === 'ALLEN_CONTEXT_LLM_PROVIDER') {
+        const options = llmOptionsForProvider(value);
+        if (!options.some((option) => option.value === next.ALLEN_CONTEXT_LLM_MODEL)) {
+          next.ALLEN_CONTEXT_LLM_MODEL = options[0]?.value ?? '';
+        }
+      }
+      return next;
+    });
   }
 
   async function saveRuntimeSettings() {
@@ -429,23 +489,6 @@ function RuntimeTab() {
       setRuntimeSettings(result.settings);
       setRuntimeValues(settingsValueMap(result.settings));
       setCogneeSetupStatus(result.output.length > 0 ? result.output.join('\n') : result.setup.detail);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(null);
-    }
-  }
-
-  async function exportSupportBundle() {
-    setSaving('support-bundle');
-    setError(null);
-    setSupportBundleStatus(null);
-    try {
-      const result = await window.allenDesktop?.exportSupportBundle();
-      if (!result) throw new Error('Desktop bridge is unavailable');
-      if (result.canceled) return;
-      if (!result.ok) throw new Error(result.error ?? 'Support bundle export failed');
-      setSupportBundleStatus(result.path ? `saved to ${result.path}` : 'saved');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -500,19 +543,31 @@ function RuntimeTab() {
 
       {runtimeSettings && (
         <>
-          <SettingsPanel title="Desktop runtime settings" description="Feature flags and environment-backed settings managed by the desktop app. Defaults and current sources are shown for every field.">
-            <SettingsRow label="Advanced settings" description="Show low-level context, agent, and diagnostics options.">
-              <SettingsSwitch checked={showAdvanced} onClick={() => setShowAdvanced(!showAdvanced)} />
-            </SettingsRow>
-            <SettingsRow label="Config file" description={runtimeSettings.editable ? 'Changes are saved here and mirrored into the running desktop process.' : 'This install is running in web mode.'}>
-              <SettingsValue mono>{runtimeSettings.configPath ?? '.env'}</SettingsValue>
-            </SettingsRow>
-          </SettingsPanel>
-
           {runtimeSettings.groups.map((group) => {
-            const fields = group.fields.filter((field) => runtimeFieldVisible(field, runtimeValues) && (!field.advanced || showAdvanced));
+            const isCogneeContextGroup = group.id === 'context';
+            const providerField = group.fields.find((field) => field.key === 'ALLEN_CONTEXT_PROVIDER');
+            const cogneeEnabled = runtimeValues.ALLEN_CONTEXT_PROVIDER === 'cognee'
+              || runtimeValues.ALLEN_CONTEXT_PROVIDER === 'cognee_memory';
+            const fields = group.fields.filter((field) => (
+              runtimeFieldVisible(field, runtimeValues)
+              && !field.advanced
+              && field.key !== 'ALLEN_AGENT_EXECUTION_MODE'
+              && !(isCogneeContextGroup && field.key === 'ALLEN_CONTEXT_PROVIDER')
+            ));
+            if (fields.length === 0 && !isCogneeContextGroup) return null;
             return (
-              <SettingsPanel key={group.id} title={group.title} description={group.description}>
+              <SettingsPanel
+                key={group.id}
+                title={isCogneeContextGroup ? 'Cognee Context' : group.title}
+                description={isCogneeContextGroup ? 'Enable Cognee-backed repository context. Saving this change applies to future context builds without restarting the app.' : group.description}
+                action={isCogneeContextGroup && providerField ? (
+                  <SettingsSwitch
+                    checked={cogneeEnabled}
+                    disabled={!runtimeSettings.editable || providerField.readOnly}
+                    onClick={() => updateRuntimeValue('ALLEN_CONTEXT_PROVIDER', cogneeEnabled ? '' : 'cognee')}
+                  />
+                ) : undefined}
+              >
                 {fields.map((field) => (
                   <SettingsRow
                     key={field.key}
@@ -524,6 +579,7 @@ function RuntimeTab() {
                         editable={runtimeSettings.editable}
                         field={field}
                         value={runtimeValues[field.key] ?? ''}
+                        runtimeValues={runtimeValues}
                         onChange={updateRuntimeValue}
                       />
                       <div className="settings-field-meta">
@@ -610,21 +666,6 @@ function RuntimeTab() {
         </>
       )}
 
-      <SettingsPanel title="Diagnostics" description="Export a support bundle when debugging local runtime issues.">
-        <SettingsRow label="Support bundle" description="Includes diagnostics, health state, and recent log tails.">
-          <div className="settings-inline-action">
-            <SettingsValue mono>{supportBundleStatus ?? 'Not exported'}</SettingsValue>
-            <button
-              type="button"
-              className="settings-secondary-button"
-              disabled={saving === 'support-bundle'}
-              onClick={() => void exportSupportBundle()}
-            >
-              Export
-            </button>
-          </div>
-        </SettingsRow>
-      </SettingsPanel>
     </SettingsPageShell>
   );
 }
