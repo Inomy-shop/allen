@@ -104,22 +104,9 @@ type ChatDiffSnapshot = {
   files?: ChatDiffFile[];
 };
 
-type ExecutionLifecycleEvent = {
-  key: string;
-  executionId: string;
-  sourceMessageId?: string;
-  kind: 'agent' | 'workflow';
-  status: 'started' | 'completed' | 'failed' | 'cancelled' | 'needs_input';
-  name: string;
-  detail?: string;
-  timestamp: string;
-  timeMs: number;
-};
-
 type ChatTimelineItem =
   | { type: 'message'; key: string; message: ChatMessage; index: number; timeMs: number }
-  | { type: 'message-part'; key: string; message: ChatMessage; index: number; part: 'thinking' | 'response'; timeMs: number }
-  | { type: 'execution-event'; key: string; event: ExecutionLifecycleEvent; timeMs: number };
+  | { type: 'message-part'; key: string; message: ChatMessage; index: number; part: 'thinking' | 'response'; timeMs: number };
 
 /* ── Copy button for code blocks ─────────────────────────────────────────── */
 function CopyButton({ text }: { text: string }) {
@@ -236,10 +223,6 @@ function formatTimestampTitle(dateStr?: string): string {
   });
 }
 
-function isoFromMs(ms: number): string {
-  return new Date(ms).toISOString();
-}
-
 function timestampMs(value?: string | number | Date | null): number | null {
   if (value == null) return null;
   if (typeof value === 'number') {
@@ -250,187 +233,12 @@ function timestampMs(value?: string | number | Date | null): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-function firstActivityMs(run: SpawnedAgent): number | null {
-  const values = [
-    ...(run.runContext?.recentActivity ?? []).map((item: any) => timestampMs(item.at ?? item.timestamp)),
-    ...run.activity.map(item => timestampMs(item.timestamp)),
-  ].filter((value): value is number => value != null);
-  return values.length ? Math.min(...values) : null;
-}
-
-function lastActivityMs(run: SpawnedAgent): number | null {
-  const values = [
-    ...(run.runContext?.recentActivity ?? []).map((item: any) => timestampMs(item.at ?? item.timestamp)),
-    ...run.activity.map(item => timestampMs(item.timestamp)),
-  ].filter((value): value is number => value != null);
-  return values.length ? Math.max(...values) : null;
-}
-
-function sourceMessageMs(run: SpawnedAgent, messageTimes: Map<string, number>): number | null {
-  return run.sourceMessageId ? messageTimes.get(run.sourceMessageId) ?? null : null;
-}
-
-function runStartedMs(run: SpawnedAgent, messageTimes: Map<string, number>): number | null {
-  return timestampMs(run.runContext?.execution.startedAt)
-    ?? firstActivityMs(run)
-    ?? sourceMessageMs(run, messageTimes);
-}
-
-function runFinishedMs(run: SpawnedAgent, messageTimes: Map<string, number>): number | null {
-  const started = runStartedMs(run, messageTimes);
-  return timestampMs(run.runContext?.execution.completedAt)
-    ?? lastActivityMs(run)
-    ?? (started != null && run.durationMs != null ? started + Math.max(run.durationMs, 1) : null)
-    ?? started;
-}
-
-function interventionTimestampMs(run: SpawnedAgent, messageTimes: Map<string, number>): number | null {
-  const context = run.runContext;
-  const pending = context?.interventions?.find((item: any) => item.status === 'pending')
-    ?? context?.interventions?.[0];
-  const started = runStartedMs(run, messageTimes);
-  return timestampMs((pending as any)?.created_at ?? (pending as any)?.createdAt)
-    ?? lastActivityMs(run)
-    ?? (started != null ? started + 1 : null);
-}
-
-function safeExecutionName(value?: string | null): string | null {
-  const text = value
-    ?.replace(/^chat:spawn_agent\//, '')
-    .replace(/^.*:spawn_agent\//, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!text) return null;
-  if (text.length > 80) return null;
-  if (/^(you are|your task|task:|please|implement the|fix the)\b/i.test(text)) return null;
-  if (/[{}]/.test(text)) return null;
-  return text;
-}
-
-function executionKind(run: SpawnedAgent): 'agent' | 'workflow' {
-  return run.runContext?.runType === 'workflow' || run.kind === 'workflow' ? 'workflow' : 'agent';
-}
-
-function executionDisplayName(run: SpawnedAgent): string {
-  const context = run.runContext;
-  const workflowName = safeExecutionName(context?.execution.workflowName);
-  const title = safeExecutionName(context?.title);
-  const progress = safeExecutionName(context?.progress.label);
-  const agent = safeExecutionName(run.agent);
-  if (executionKind(run) === 'workflow') return workflowName ?? progress ?? title ?? agent ?? 'workflow';
-  return agent ?? title ?? workflowName ?? progress ?? 'agent';
-}
-
-function interventionDetail(run: SpawnedAgent): string | undefined {
-  const context = run.runContext;
-  const pending = context?.interventions?.find((item: any) => item.status === 'pending')
-    ?? context?.interventions?.[0];
-  return safeExecutionName((pending as any)?.title)
-    ?? safeExecutionName(context?.humanInput.title)
-    ?? safeExecutionName(context?.humanInput.stage)
-    ?? safeExecutionName(context?.progress.currentStep)
-    ?? undefined;
-}
-
-function isChildExecutionRun(run: SpawnedAgent): boolean {
-  if (run.parentExecutionId ?? run.runContext?.execution.parentExecutionId) return true;
-  return (run.spawnDepth ?? run.runContext?.execution.spawnDepth ?? 0) > 0;
-}
-
-function buildExecutionLifecycleEvents(
-  runs: SpawnedAgent[],
-  messages: ChatMessage[],
-): ExecutionLifecycleEvent[] {
-  const messageTimes = new Map(
-    messages
-      .map((message) => [message._id, timestampMs(message.createdAt)] as const)
-      .filter((entry): entry is [string, number] => Boolean(entry[0]) && entry[1] != null),
-  );
-  const events: ExecutionLifecycleEvent[] = [];
-
-  for (const run of runs) {
-    if (isChildExecutionRun(run)) continue;
-
-    const startedAt = runStartedMs(run, messageTimes);
-    if (startedAt == null) continue;
-    const kind = executionKind(run);
-    const name = executionDisplayName(run);
-    const status = (run.runContext?.status ?? run.status ?? '').toLowerCase();
-
-    events.push({
-      key: `${run.executionId}:started`,
-      executionId: run.executionId,
-      sourceMessageId: run.sourceMessageId,
-      kind,
-      status: 'started',
-      name,
-      timestamp: isoFromMs(startedAt),
-      timeMs: startedAt,
-    });
-
-    if (status === 'waiting_for_input' || status === 'waiting' || run.runContext?.humanInput.required) {
-      const inputAt = interventionTimestampMs(run, messageTimes) ?? startedAt + 1;
-      events.push({
-        key: `${run.executionId}:needs_input`,
-        executionId: run.executionId,
-        sourceMessageId: run.sourceMessageId,
-        kind,
-        status: 'needs_input',
-        name,
-        detail: interventionDetail(run),
-        timestamp: isoFromMs(inputAt),
-        timeMs: inputAt,
-      });
-    }
-
-    if (status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'canceled') {
-      const finishedAt = runFinishedMs(run, messageTimes) ?? startedAt + 1;
-      events.push({
-        key: `${run.executionId}:${status === 'canceled' ? 'cancelled' : status}`,
-        executionId: run.executionId,
-        sourceMessageId: run.sourceMessageId,
-        kind,
-        status: status === 'canceled' ? 'cancelled' : status as ExecutionLifecycleEvent['status'],
-        name,
-        detail: status === 'failed' ? workflowAttemptFailureLabel(run) : undefined,
-        timestamp: isoFromMs(finishedAt),
-        timeMs: finishedAt,
-      });
-    }
-  }
-
-  const seen = new Set<string>();
-  return events
-    .filter((event) => {
-      if (seen.has(event.key)) return false;
-      seen.add(event.key);
-      return true;
-    })
-    .sort((a, b) => a.timeMs - b.timeMs || executionLifecyclePriority(a.status) - executionLifecyclePriority(b.status));
-}
-
-function executionLifecyclePriority(status: ExecutionLifecycleEvent['status']): number {
-  if (status === 'started') return 1;
-  if (status === 'needs_input') return 2;
-  return 3;
-}
-
-function buildChatTimeline(messages: ChatMessage[], events: ExecutionLifecycleEvent[]): ChatTimelineItem[] {
-  const eventsBySourceMessage = new Map<string, ExecutionLifecycleEvent[]>();
-  for (const event of events) {
-    if (!event.sourceMessageId) continue;
-    const current = eventsBySourceMessage.get(event.sourceMessageId) ?? [];
-    current.push(event);
-    eventsBySourceMessage.set(event.sourceMessageId, current);
-  }
-  const consumedEvents = new Set<string>();
+function buildChatTimeline(messages: ChatMessage[]): ChatTimelineItem[] {
   const timeline: ChatTimelineItem[] = [];
 
   messages.forEach((message, index) => {
     const messageTime = timestampMs(message.createdAt) ?? index;
-    const linkedEvents = (message._id ? eventsBySourceMessage.get(message._id) ?? [] : [])
-      .sort((a, b) => a.timeMs - b.timeMs || executionLifecyclePriority(a.status) - executionLifecyclePriority(b.status));
-    const shouldSplit = message.role === 'assistant' && linkedEvents.length > 0;
+    const shouldSplit = message.role === 'assistant' && Boolean(message.thinkingText) && Boolean(message.content || message.error);
     if (!shouldSplit) {
       timeline.push({
         type: 'message',
@@ -442,101 +250,25 @@ function buildChatTimeline(messages: ChatMessage[], events: ExecutionLifecycleEv
       return;
     }
 
-    if (message.thinkingText) {
-      timeline.push({
-        type: 'message-part',
-        key: `message:${message._id ?? index}:thinking`,
-        message,
-        index,
-        part: 'thinking',
-        timeMs: messageTime,
-      });
-    }
-    for (const event of linkedEvents) {
-      consumedEvents.add(event.key);
-      timeline.push({
-        type: 'execution-event',
-        key: `event:${event.key}`,
-        event,
-        timeMs: event.timeMs,
-      });
-    }
-    const hasResponse = Boolean(message.content || message.error);
-    if (hasResponse) {
-      const latestEventMs = Math.max(...linkedEvents.map(event => event.timeMs));
-      timeline.push({
-        type: 'message-part',
-        key: `message:${message._id ?? index}:response`,
-        message,
-        index,
-        part: 'response',
-        timeMs: Math.max(messageTime, latestEventMs + 1),
-      });
-    }
-    if (!message.thinkingText && !hasResponse) {
-      timeline.push({
-      type: 'message',
-      key: `message:${message._id ?? index}`,
+    timeline.push({
+      type: 'message-part',
+      key: `message:${message._id ?? index}:thinking`,
       message,
       index,
+      part: 'thinking',
       timeMs: messageTime,
-      });
-    }
+    });
+    timeline.push({
+      type: 'message-part',
+      key: `message:${message._id ?? index}:response`,
+      message,
+      index,
+      part: 'response',
+      timeMs: messageTime + 1,
+    });
   });
 
-  const unlinkedEvents = events
-    .filter(event => !consumedEvents.has(event.key))
-    .map((event) => ({
-      type: 'execution-event' as const,
-      key: `event:${event.key}`,
-      event,
-      timeMs: event.timeMs,
-    }))
-    .sort((a, b) => a.timeMs - b.timeMs || a.key.localeCompare(b.key));
-
-  return [...timeline, ...unlinkedEvents];
-}
-
-function executionLifecycleText(event: ExecutionLifecycleEvent): string {
-  const label = event.kind === 'workflow' ? 'Workflow' : 'Agent';
-  if (event.status === 'started') return `${label} started: ${event.name}`;
-  if (event.status === 'completed') return `${label} completed: ${event.name}`;
-  if (event.status === 'failed') return `${label} failed: ${event.name}`;
-  if (event.status === 'cancelled') return `${label} cancelled: ${event.name}`;
-  return `${label} needs input: ${event.detail ?? event.name}`;
-}
-
-function ExecutionLifecycleRow({ event }: { event: ExecutionLifecycleEvent }) {
-  const LifecycleIcon =
-    event.status === 'started' ? PlayCircle
-      : event.status === 'completed' ? CheckCircle
-        : event.status === 'needs_input' ? AlertTriangle
-          : AlertCircle;
-  return (
-    <div className="ch-msg allen chat-exec-event al-msg-enter" data-status={event.status}>
-      <div className="ch-avatar">a</div>
-      <div className="ch-msg-body">
-        <div className="ch-msg-head">
-          <span className="ch-msg-who">allen</span>
-          <span className="ch-msg-ts" title={formatTimestampTitle(event.timestamp)}>
-            {formatTime(event.timestamp)}
-          </span>
-          <a className="chat-exec-event-link" href={`/executions/${event.executionId}`} target="_blank" rel="noopener noreferrer" title="Open execution">
-            <ExternalLink className="h-3 w-3" />
-          </a>
-        </div>
-        <div className="ch-msg-text chat-exec-event-text">
-          <span className="chat-exec-event-title">
-            <LifecycleIcon className="h-3.5 w-3.5" />
-            <span>{executionLifecycleText(event)}</span>
-          </span>
-          {event.detail && event.status !== 'needs_input' && (
-            <span className="chat-exec-event-detail">{event.detail}</span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+  return timeline;
 }
 
 function formatClock(dateStr?: string | null): string {
@@ -2347,14 +2079,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
 
     return byMessage;
   }, [messages, runsBySourceMessage]);
-  const executionLifecycleEvents = useMemo(
-    () => buildExecutionLifecycleEvents(spawnedAgents, messages),
-    [messages, spawnedAgents],
-  );
-  const executionLifecycleSignature = executionLifecycleEvents.map(event => event.key).join('|');
   const chatTimeline = useMemo(
-    () => buildChatTimeline(messages, executionLifecycleEvents),
-    [executionLifecycleEvents, messages],
+    () => buildChatTimeline(messages),
+    [messages],
   );
 
   // Load agent info for labels, avatars, and thread display
@@ -2389,7 +2116,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
     if (autoScrollRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, streamText, executionLifecycleSignature, pendingWorkflowIntervention?.intervention.intervention_id]);
+  }, [messages, streamText, pendingWorkflowIntervention?.intervention.intervention_id]);
 
   const renderWorkflowInterventionHeaderAction = (run: SpawnedAgent) => {
     if (!pendingWorkflowIntervention || !onAnswerWorkflowIntervention) return null;
@@ -2409,11 +2136,8 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         <div className="chat-empty-stream" />
       )}
 
-      {/* Messages and synthetic execution lifecycle rows */}
+      {/* Messages */}
       {chatTimeline.map((item) => {
-        if (item.type === 'execution-event') {
-          return <ExecutionLifecycleRow key={item.key} event={item.event} />;
-        }
         const msg = item.message;
         const i = item.index;
         const timelinePart = item.type === 'message-part' ? item.part : 'full';
