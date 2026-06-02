@@ -14,6 +14,7 @@ import { useResizable } from '../hooks/useResizable';
 import { executions as api, authHeaders, interventions as interventionsApi, repos as reposApi, system as systemApi, type RunStatus } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
+import TokenUsageDisplay from '../components/common/TokenUsageDisplay';
 import Select from '../components/common/Select';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 import LiveGraph from '../components/execution/LiveGraph';
@@ -228,19 +229,40 @@ function WorkflowTraceTable({
 
             let totalCost = state.cost;
             let totalDuration = state.durationMs;
+            // Initialize from first trace; aggregate across all attempts below (mirrors cost/duration logic)
+            let traceTokenUsage: import('../services/api').TokenUsageInfo | null =
+              deduped.length > 0 ? (deduped[0]?.tokenUsage ?? null) : null;
 
             if (deduped.length > 1) {
               let est = 0; let act: number | null = null; let dur = 0;
+              let cachedAcc: number | null = null;
+              let nonCachedAcc: number | null = null;
+              let outputAcc: number | null = null;
+              const sumNullable = (a: number | null, b: number | null): number | null =>
+                a === null && b === null ? null : (a ?? 0) + (b ?? 0);
+
               for (const t of deduped) {
                 est += t.cost?.estimated ?? 0;
                 if (t.cost?.actual != null) act = (act ?? 0) + t.cost.actual;
                 dur += t.durationMs ?? 0;
+                if (t.tokenUsage && typeof t.tokenUsage === 'object') {
+                  cachedAcc = sumNullable(cachedAcc, t.tokenUsage.inputCachedTokens);
+                  nonCachedAcc = sumNullable(nonCachedAcc, t.tokenUsage.inputNonCachedTokens);
+                  outputAcc = sumNullable(outputAcc, t.tokenUsage.outputTokens);
+                }
               }
               if ((state.status === 'running' || state.status === 'waiting_for_input') && state.durationMs != null) {
                 dur += state.durationMs;
               }
               if (est > 0 || act != null) totalCost = { estimated: est, actual: act };
               if (dur > 0) totalDuration = dur;
+              if (cachedAcc !== null || nonCachedAcc !== null || outputAcc !== null) {
+                traceTokenUsage = {
+                  inputCachedTokens: cachedAcc,
+                  inputNonCachedTokens: nonCachedAcc,
+                  outputTokens: outputAcc,
+                };
+              }
             }
 
             return (
@@ -257,7 +279,14 @@ function WorkflowTraceTable({
                 <td className="px-4 py-2 text-theme-secondary tabular-nums font-mono">
                   {totalDuration != null ? formatDuration(totalDuration) : '-'}
                 </td>
-                <td className="px-4 py-2"><CostDisplay cost={totalCost} /></td>
+                <td className="px-4 py-2">
+                  <CostDisplay cost={totalCost} />
+                  {traceTokenUsage && (
+                    <div className="mt-0.5">
+                      <TokenUsageDisplay tokenUsage={traceTokenUsage} />
+                    </div>
+                  )}
+                </td>
               </tr>
             );
           })}
@@ -1571,11 +1600,11 @@ function AgentMetric({
   value: React.ReactNode;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-md border border-app bg-app-card px-3 py-2">
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-app text-theme-muted">{icon}</span>
-      <div className="min-w-0">
-        <div className="font-mono text-[9.5px] uppercase tracking-[0.12em] text-theme-subtle">{label}</div>
-        <div className="truncate text-[12px] text-theme-primary">{value}</div>
+    <div className="flex min-w-0 items-center gap-2 rounded-md border border-app bg-app-card/80 px-2.5 py-2">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-app text-theme-muted">{icon}</span>
+      <div className="min-w-0 flex-1">
+        <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-theme-subtle">{label}</div>
+        <div className="min-w-0 text-[11.5px] leading-tight text-theme-primary">{value}</div>
       </div>
     </div>
   );
@@ -2137,8 +2166,23 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         </div>
       </header>
 
-      <main className="grid w-full grid-cols-1 gap-4 px-8 pb-8 pt-5 xl:grid-cols-[minmax(0,1fr)_330px]">
+      <main className="grid w-full grid-cols-1 gap-4 px-8 pb-8 pt-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-4">
+          <section className="grid gap-2 rounded-md border border-app bg-app-muted/25 p-2 sm:grid-cols-2 2xl:grid-cols-4">
+            <AgentMetric icon={<Clock className="h-3.5 w-3.5" />} label="Duration" value={durationMs > 0 ? formatDuration(durationMs) : '—'} />
+            <AgentMetric icon={<Terminal className="h-3.5 w-3.5" />} label="Model" value={modelLabel} />
+            <AgentMetric icon={<DollarSign className="h-3.5 w-3.5" />} label="Cost" value={<CostDisplay cost={cost} />} />
+            {execution.tokenUsage ? (
+              <AgentMetric
+                icon={<Cpu className="h-3.5 w-3.5" />}
+                label="Tokens"
+                value={<TokenUsageDisplay tokenUsage={execution.tokenUsage} />}
+              />
+            ) : (
+              <AgentMetric icon={<Cpu className="h-3.5 w-3.5" />} label="Tokens" value="—" />
+            )}
+          </section>
+
           {sortedTraces.length > 1 && (
             <div className="overflow-x-auto rounded-md border border-app bg-app-card p-1">
               <div className="flex items-center gap-1">
@@ -2222,51 +2266,47 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         <aside className="space-y-4">
           <section className="rounded-md border border-app bg-app-card">
             <div className="border-b border-app px-4 py-3">
-              <div className="text-[13px] font-semibold text-theme-primary">Run summary</div>
-              <div className="mt-1 text-[12px] text-theme-muted">Operational details and saved files.</div>
-            </div>
-            <div className="space-y-2 p-3">
-              <AgentMetric icon={<Clock className="h-3.5 w-3.5" />} label="Duration" value={durationMs > 0 ? formatDuration(durationMs) : '—'} />
-              <AgentMetric icon={<Terminal className="h-3.5 w-3.5" />} label="Model" value={modelLabel} />
-              <AgentMetric icon={<DollarSign className="h-3.5 w-3.5" />} label="Cost" value={<CostDisplay cost={cost} />} />
-              <div className="border-t border-app px-2.5 pt-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className="inline-flex items-center gap-2 text-[12px] font-semibold text-theme-primary">
-                    <FileText className="h-3.5 w-3.5 text-theme-muted" />
-                    Artifacts
-                  </div>
-                  {agentArtifacts.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => void openAgentArtifact(agentArtifacts[0])}
-                      className="text-[11px] font-medium text-accent transition-colors hover:text-accent-hover"
-                    >
-                      Open latest
-                    </button>
-                  )}
+              <div className="flex items-center justify-between gap-3">
+                <div className="inline-flex items-center gap-2 text-[13px] font-semibold text-theme-primary">
+                  <FileText className="h-3.5 w-3.5 text-theme-muted" />
+                  Artifacts
                 </div>
-                {agentArtifactsLoading ? (
-                  <div className="space-y-2">
-                    {[0, 1].map((index) => (
-                      <div key={index} className="h-11 rounded-md bg-app-muted/45 animate-pulse" />
-                    ))}
-                  </div>
-                ) : agentArtifacts.length > 0 ? (
-                  <div className="space-y-2">
-                    {agentArtifacts.slice(0, 3).map((artifact) => (
-                      <AgentArtifactRow
-                        key={artifact.artifactId}
-                        artifact={artifact}
-                        onOpen={() => void openAgentArtifact(artifact)}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded-md border border-dashed border-app bg-app px-3 py-3 text-[12px] text-theme-muted">
-                    No files saved for this run yet.
-                  </div>
+                {agentArtifacts.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void openAgentArtifact(agentArtifacts[0])}
+                    className="text-[11px] font-medium text-accent transition-colors hover:text-accent-hover"
+                  >
+                    Open latest
+                  </button>
                 )}
               </div>
+              <div className="mt-1 text-[12px] text-theme-muted">
+                {agentArtifactsLoading ? 'Checking saved files' : `${agentArtifacts.length} saved ${agentArtifacts.length === 1 ? 'file' : 'files'}`}
+              </div>
+            </div>
+            <div className="p-3">
+              {agentArtifactsLoading ? (
+                <div className="space-y-2">
+                  {[0, 1, 2].map((index) => (
+                    <div key={index} className="h-11 rounded-md bg-app-muted/45 animate-pulse" />
+                  ))}
+                </div>
+              ) : agentArtifacts.length > 0 ? (
+                <div className="max-h-[45vh] space-y-2 overflow-y-auto pr-1">
+                  {agentArtifacts.slice(0, 6).map((artifact) => (
+                    <AgentArtifactRow
+                      key={artifact.artifactId}
+                      artifact={artifact}
+                      onOpen={() => void openAgentArtifact(artifact)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-md border border-dashed border-app bg-app px-3 py-3 text-[12px] text-theme-muted">
+                  No files saved for this run yet.
+                </div>
+              )}
             </div>
           </section>
 
@@ -2774,24 +2814,6 @@ export default function ExecutionDetailPage() {
   const selectedState = selectedNode ? nodeStates.get(selectedNode) : undefined;
   const isPaused = execution.status === 'waiting_for_input' && !latestInputEvent;
 
-  // Count learnings from logs
-  const learningCounts = (() => {
-    let injected = 0;
-    let extracted = 0;
-    for (const log of logs) {
-      const msg = typeof log.message === 'string' ? log.message : '';
-      if (msg.includes('[learning] Injected')) {
-        const m = msg.match(/Injected (\d+)/);
-        if (m) injected += parseInt(m[1], 10);
-      }
-      if (msg.includes('[learning] Post-execution review extracted')) {
-        const m = msg.match(/extracted (\d+)/);
-        if (m) extracted += parseInt(m[1], 10);
-      }
-    }
-    return { injected, extracted };
-  })();
-
   // Compute total cost from node states (more accurate for live executions)
   const liveCost = (() => {
     let estimated = 0;
@@ -2879,17 +2901,6 @@ export default function ExecutionDetailPage() {
               <span className="text-[12px] text-theme-muted font-mono">{formatDuration(execution.durationMs)}</span>
             )}
             <CostDisplay cost={liveCost} />
-            {(learningCounts.injected > 0 || learningCounts.extracted > 0) && (
-              <Link
-                to={`/learnings?search=${encodeURIComponent(id ?? '')}`}
-                className="flex items-center gap-1 text-[11px] font-mono text-accent-purple hover:opacity-80 transition-opacity"
-                title="Learnings"
-              >
-                <Brain className="w-3 h-3" />
-                {learningCounts.injected > 0 && <span>{learningCounts.injected} in</span>}
-                {learningCounts.extracted > 0 && <span>{learningCounts.extracted} out</span>}
-              </Link>
-            )}
           </div>
 
         <div className="flex items-center gap-2">

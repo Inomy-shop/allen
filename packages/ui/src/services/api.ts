@@ -195,6 +195,12 @@ export type RunPhase =
   | 'failed'
   | 'cancelled';
 
+export interface TokenUsageInfo {
+  inputCachedTokens: number | null;
+  inputNonCachedTokens: number | null;
+  outputTokens: number | null;
+}
+
 export interface RunStatus {
   origin: 'chat' | 'linear' | 'workflow' | 'direct_agent';
   runType: 'workflow' | 'agent';
@@ -222,6 +228,7 @@ export interface RunStatus {
     completedAt?: string | null;
     durationMs?: number | null;
     cost?: { actual: number | null; estimated: number } | null;
+    tokenUsage?: TokenUsageInfo | null;
     currentNodes?: string[];
     completedNodes?: string[];
     failedNode?: string | null;
@@ -334,6 +341,7 @@ export interface RunStatus {
     currentStep?: string | null;
     durationMs?: number | null;
     cost?: { actual: number | null; estimated: number } | null;
+    tokenUsage?: TokenUsageInfo | null;
     errorMessage?: string | null;
   }>;
   workflowSteps: Array<{
@@ -350,6 +358,7 @@ export interface RunStatus {
     completedAt?: string | null;
     durationMs?: number | null;
     cost?: { actual: number | null; estimated: number } | null;
+    tokenUsage?: TokenUsageInfo | null;
     error?: string | null;
     io?: {
       input?: string | null;
@@ -399,6 +408,7 @@ export interface SpawnedChild {
   completedAt: string | null;
   durationMs: number | null;
   cost: { actual: number | null; estimated: number } | null;
+  tokenUsage?: TokenUsageInfo | null;
   failedNode: string | null;
   errorMessage: string | null;
   promptPreview: string;

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import type { NodeDef, AgentDef, EngineEventEmitter } from './types.js';
+import { normalizeCodexUsage, aggregateTokenUsage, type TokenUsageInfo } from './token-usage.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction } from './output-extractor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
@@ -31,6 +32,7 @@ interface CodexResult {
     turns: number;
     method: 'sdk_reported' | 'estimated';
   };
+  tokenUsage?: TokenUsageInfo | null;
   durationMs: number;
   toolCalls?: ToolCallRecord[];
   runtimeContext?: {
@@ -397,6 +399,7 @@ ${context}
     let turns = 0;
     let threadId: string | undefined = isResume ? sessionId : undefined;
     const toolCalls: ToolCallRecord[] = [];
+    const usageAccumulator: { value: TokenUsageInfo | null } = { value: null };
     const pendingTools = new Map<string, PendingCodexTool>();
 
     // Parse JSONL from stdout
@@ -442,7 +445,7 @@ ${context}
 
           handleCodexEvent(event, nodeName, emitter, executionId, (text) => {
             rawResponse += text;
-          }, toolCalls, pendingTools);
+          }, toolCalls, pendingTools, usageAccumulator);
           if (event.type === 'turn.completed') {
             turns++;
           }
@@ -523,6 +526,7 @@ ${context}
             turns: Math.max(turns, 1),
             method: 'estimated',
           },
+          tokenUsage: usageAccumulator.value,
           durationMs: Date.now() - start,
           toolCalls,
           runtimeContext: {
@@ -561,6 +565,7 @@ function handleCodexEvent(
   appendText: (text: string) => void,
   toolCalls: ToolCallRecord[],
   pendingTools: Map<string, PendingCodexTool>,
+  usageAccumulator?: { value: TokenUsageInfo | null },
 ) {
   const type = event.type;
   const item = event.item;
@@ -719,17 +724,68 @@ function handleCodexEvent(
   }
 
   // Turn completed — usage info
-  if (type === 'turn.completed' && event.usage) {
-    emitter.emit({
-      event: 'execution_log',
-      data: {
-        executionId,
-        timestamp: new Date(),
-        level: 'info',
-        category: 'system',
-        node: nodeName,
-        message: `Tokens: ${event.usage.input_tokens} in, ${event.usage.output_tokens} out (${event.usage.cached_input_tokens ?? 0} cached)`,
-      },
-    });
+  if (type === 'turn.completed') {
+    if (event.usage) {
+      const turnUsage = normalizeCodexUsage(event.usage);
+      if (turnUsage) {
+        if (usageAccumulator) {
+          usageAccumulator.value = aggregateTokenUsage(usageAccumulator.value, turnUsage);
+        }
+        const nullFields = Object.entries(turnUsage)
+          .filter(([, v]) => v === null)
+          .map(([k]) => k);
+        if (nullFields.length > 0) {
+          emitter.emit({
+            event: 'execution_log',
+            data: {
+              executionId,
+              timestamp: new Date(),
+              level: 'debug',
+              category: 'system',
+              node: nodeName,
+              message: `[token-usage] partial — Codex turn has null sub-fields: ${nullFields.join(', ')}`,
+            },
+          });
+        }
+        emitter.emit({
+          event: 'execution_log',
+          data: {
+            executionId,
+            timestamp: new Date(),
+            level: 'info',
+            category: 'system',
+            node: nodeName,
+            message: `[token-usage] codex turn — inputCachedTokens: ${turnUsage.inputCachedTokens}, inputNonCachedTokens: ${turnUsage.inputNonCachedTokens}, outputTokens: ${turnUsage.outputTokens}`,
+          },
+        });
+      } else {
+        // usage object present but no expected fields matched
+        const rawSample = JSON.stringify(event.usage).slice(0, 400);
+        emitter.emit({
+          event: 'execution_log',
+          data: {
+            executionId,
+            timestamp: new Date(),
+            level: 'warn',
+            category: 'system',
+            node: nodeName,
+            message: `[token-usage] unrecognized — Codex usage shape has no expected fields: ${rawSample}`,
+          },
+        });
+      }
+    } else {
+      // provider did not report usage for this turn
+      emitter.emit({
+        event: 'execution_log',
+        data: {
+          executionId,
+          timestamp: new Date(),
+          level: 'debug',
+          category: 'system',
+          node: nodeName,
+          message: '[token-usage] absent — Codex turn.completed event has no usage field',
+        },
+      });
+    }
   }
 }

@@ -44,6 +44,7 @@ Responsibilities:
 - Attach artifacts to workflow, chat, and agent roots.
 - Load MCP server definitions and inject allowed environment variables.
 - Run agents through Claude Code CLI or SDK.
+- Capture and aggregate provider-reported token usage (input cached, non-cached, and output tokens) per node attempt and at execution level for both Codex and Claude providers.
 
 Important files:
 
@@ -64,6 +65,7 @@ Important files:
 - `src/paths.ts` - resolves `ALLEN_HOME` and `WORKSPACE_BASE_DIR`.
 - `src/model-alias.ts` - resolves `ALLEN_MODEL_HAIKU/SONNET/OPUS` overrides.
 - `src/validator.ts` and `src/types.ts` - workflow YAML schema and types.
+- `src/token-usage.ts` - normalized token usage type (`TokenUsageInfo`), provider normalization helpers (`normalizeCodexUsage`, `normalizeClaudeUsage`), null-aware aggregation (`aggregateTokenUsage`), and child-execution rollup marker helpers (`attachChildTokenUsageMarkers`, `tokenUsageFromChildMarkers`). Central module imported by the executors, engine, and server. Values are independently nullable per sub-field — `null` means "provider did not report", never `0`.
 - `workflows/*.yml` - eight runnable workflows: `feature-plan-and-implement`, `bug-fix-by-severity`, `tdd-design-by-severity`, `milestone-implementation-from-prd-tdd`, `resolve-pr-reviews`, `self-healing-incident-triage`, `allen-self-healing-monitor-hourly`, `multi-repo-change-orchestration`.
 
 ### `packages/server`
@@ -119,7 +121,7 @@ Important server files:
 - `src/services/workspace-proxy.ts` - workspace preview proxy.
 - `src/services/github-auth.ts` - GitHub token resolution from `.env`.
 - `src/services/linear.service.ts` - Linear GraphQL client, TTL caches, agent/workflow dispatch, and issue fetching.
-- `src/services/chat-tools.ts` — Implements all 16+ MCP tool handlers (`spawn_agent`, `wait_for_execution`, `resume_execution`, `allen_save_artifact`, etc.). `resume_execution` resolves the resumed agent's LLM session ID through a three-layer fallback: (1) `executions.sessions[agentName]`, (2) `output.session_id` from the latest `execution_traces` document (sorted `{ completedAt: -1, createdAt: -1 }`), (3) `exec.input.session_id`. When a session ID is found via layer 2 or 3, it is written back to the sessions map before the spawn so future resumes use the fast primary path. Chat-started workflow executions (`source === 'chat'` with a truthy `workflowId`) are routed to the checkpoint-based workflow-resume path rather than the agent-resume path.
+- `src/services/chat-tools.ts` — Implements all 16+ MCP tool handlers (`spawn_agent`, `wait_for_execution`, `resume_execution`, `allen_save_artifact`, etc.). `resume_execution` resolves the resumed agent's LLM session ID through a three-layer fallback: (1) `executions.sessions[agentName]`, (2) `output.session_id` from the latest `execution_traces` document (sorted `{ completedAt: -1, createdAt: -1 }`), (3) `exec.input.session_id`. When a session ID is found via layer 2 or 3, it is written back to the sessions map before the spawn so future resumes use the fast primary path. Chat-started workflow executions (`source === 'chat'` with a truthy `workflowId`) are routed to the checkpoint-based workflow-resume path rather than the agent-resume path. `spawn_agent` captures provider token usage from Codex `turn.completed` events and Claude SDK `result` messages, aggregates across turns using `aggregateTokenUsage`, and persists the normalized `TokenUsageInfo` onto the execution row.
 - `src/services/chat.service.ts` — `resolveMentions()` resolves `@ENG-123`-style tokens to Linear ticket context and `@name` tokens to workflow/repo/agent context before the LLM call. `ChatSession.source` accepts `'ui' | 'slack' | 'automation'`; automation sessions carry an `automationKey` field used as a deduplication key. `appendAutomationMessage(sessionId, role, content)` inserts a message into an automation thread without starting a live LLM session (content capped at 1 MB, `role:admin` rejected, throws `'Not an automation session'` if `session.source !== 'automation'`).
 - `src/services/cron.service.ts` — Scheduler using `node-cron`. For agent-target jobs where `agentName === job.name`, `ensureLinkedSession()` upserts a persistent `chat_sessions` document keyed by `automationKey` (race-safe via `$setOnInsert` + E11000 fallback), then injects an `AUTOMATION_CONTEXT` block into the agent prompt (`LINKED_CHAT_SESSION_ID`, `AUTOMATION_API_TOKEN`, `AUTOMATION_MESSAGE_URL`) so the agent can POST its output back to the linked thread. The `AUTOMATION_API_TOKEN` is minted with a 5-minute TTL (via `signAccessToken(..., '5m')`) to avoid persisting a long-lived credential in the `chat_messages` collection. A stale-pointer recovery path re-links `cron_jobs.linkedChatSessionId` if the session was deleted and recreated.
 - `src/services/cron-seed.service.ts` — Seeds built-in cron jobs covering repo scans/pulls, PR sync, MCP bundle cleanup, CodeRabbit PR-comment sweeps, and the hourly self-healing monitor. When `SEED_OVERRIDE` is set, display fields and schedules are refreshed on existing rows, but `linkedChatSessionId` is intentionally excluded from the `$set` so any persistent automation chat thread survives restarts.
@@ -140,7 +142,7 @@ Responsibilities:
 - Workflow list and workflow builder.
 - Workflow run dialogs.
 - Paginated activity feed: server-side execution list (50 per page) with status filter, type filter (agent / workflow), and debounced text search. Page position is encoded in `?page=N` URL state and resets to 0 on filter or search changes. The page auto-refreshes every 5 s while running or queued executions are present.
-- Execution timeline, node detail, logs, state, artifacts, checkpoints, and interventions.
+- Execution timeline, node detail, logs, state, artifacts, checkpoints, interventions, and token usage breakdown (cached input, non-cached input, output tokens — omitted when data is unavailable).
 - Workspace list/detail, terminal, file preview, service preview.
 - Repo manager.
 - Ticket and PR views.
@@ -185,7 +187,7 @@ MongoDB stores all operational state. Collections are created and indexed by ser
 
 - **Auth** — `users`, `refresh_tokens` (TTL auto-purge), `bootstrap_locks` (first-admin race guard).
 - **Org** — `teams`, `agents`, `skills`.
-- **Workflows & executions** — `workflows`, `executions`, `execution_traces`, `execution_logs`, `execution_failure_reports`, `checkpoints`.
+- **Workflows & executions** — `workflows`, `executions`, `execution_traces`, `execution_logs`, `execution_failure_reports`, `checkpoints`. Both `executions` and `execution_traces` rows carry an optional `tokenUsage: { inputCachedTokens, inputNonCachedTokens, outputTokens }` field (each sub-field is `number | null`) that is populated when the provider reports usage data. Old rows without this field render and behave normally.
 - **Chat** — `chat_sessions` (automation sessions carry a sparse-unique `automationKey`; the linked `_id` is stored as `cron_jobs.linkedChatSessionId` and never overwritten by seed updates), `chat_messages`, `agent_conversations` (delegation threads), `agent_activity` (7-day TTL).
 - **Docs & checkpoints** — `design_docs` (PRD/HLD/TDD), `workflow_interventions`.
 - **Repos & workspaces** — `repos`, `repo_contexts`, `pull_requests`, `workspaces`, `workspace_configs`.

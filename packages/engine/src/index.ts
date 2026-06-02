@@ -53,3 +53,11 @@ export {
 export {
   type ToolCallRecord, describeTool, truncatePayload, buildToolCallRecord,
 } from './tool-call.js';
+export {
+  normalizeCodexUsage,
+  normalizeClaudeUsage,
+  aggregateTokenUsage,
+  tokenUsageFromChildMarkers,
+  attachChildTokenUsageMarkers,
+  type TokenUsageInfo,
+} from './token-usage.js';

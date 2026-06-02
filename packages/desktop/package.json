@@ -6,7 +6,7 @@
   "main": "./dist/main.js",
   "scripts": {
     "build": "tsc",
-    "dev": "npm --workspace @allen/ui run build && npm --workspace @allen/server run build && npm --workspace @allen/desktop run build && electron ./dist/main.js",
+    "dev": "npm --workspace @allen/engine run build && npm --workspace @allen/ui run build && npm --workspace @allen/server run build && npm --workspace @allen/desktop run build && electron ./dist/main.js",
     "package:prepare": "npm --workspace @allen/engine run build && npm --workspace @allen/server run build && npm --workspace @allen/ui run build && npm --workspace @allen/desktop run build",
     "preseed:mongo": "node ./scripts/preseed-mongo.mjs",
     "dist:mac": "npm run package:prepare && npm run preseed:mongo && cd ../.. && electron-builder --projectDir . --config packages/desktop/electron-builder.yml --mac",

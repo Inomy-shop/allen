@@ -8,6 +8,7 @@ import type {
   BuiltInFunction,
   ExecutionLog,
 } from './types.js';
+import { normalizeClaudeUsage, aggregateTokenUsage, tokenUsageFromChildMarkers, type TokenUsageInfo } from './token-usage.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction, outputKeys } from './output-extractor.js';
 import { evaluateCondition } from './condition-parser.js';
@@ -181,6 +182,9 @@ export interface NodeResult {
    */
   sessionKey?: string;
   cost: CostInfo;
+  /** Aggregate token usage for this node across all turns.
+   *  Null when the provider did not report usage data. */
+  tokenUsage?: TokenUsageInfo | null;
   durationMs: number;
   /** Per-tool-call log captured during the node's agent turn(s). Empty
    *  for non-agent node types. See tool-call.ts for record shape. */
@@ -594,6 +598,7 @@ ${context}
   let sessionId: string | undefined;
   let turns = 0;
   let actualCost: number | null = null;
+  let executionTokenUsage: TokenUsageInfo | null = null;
 
   // Throttle agent text logs: buffer text and emit when >= 100 chars or every 5th chunk
   let agentTextBuffer = '';
@@ -716,6 +721,7 @@ ${context}
     text: string;
     sessionId?: string;
     cost: number | null;
+    usage: TokenUsageInfo | null;
     turns: number;
     toolCalls: ToolCallRecord[];
   };
@@ -724,6 +730,7 @@ ${context}
     let localSessionId: string | undefined;
     let localTurns = 0;
     let localCost: number | null = null;
+    let localUsage: TokenUsageInfo | null = null;
     const localToolCalls: ToolCallRecord[] = [];
     const pendingTools = new Map<string, { tool: string; args: Record<string, unknown>; startedAt: Date; startMs: number }>();
 
@@ -952,6 +959,37 @@ ${context}
         localSessionId = (message as any).session_id;
         localCost = (message as any).total_cost_usd ?? null;
         localTurns = (message as any).num_turns ?? localTurns;
+        const rawUsage = (message as any).usage ?? null;
+        localUsage = normalizeClaudeUsage(rawUsage);
+        // REQ-009 observability logs
+        if (rawUsage == null) {
+          emitLog(deps, nodeName, {
+            level: 'debug',
+            category: 'system',
+            message: '[token-usage] absent — Claude SDK result message has no usage field',
+          });
+        } else if (localUsage === null) {
+          const rawSample = JSON.stringify(rawUsage).slice(0, 400);
+          emitLog(deps, nodeName, {
+            level: 'warn',
+            category: 'system',
+            message: `[token-usage] unrecognized — Claude usage shape has no expected fields: ${rawSample}`,
+          });
+        } else {
+          const nullFields = Object.entries(localUsage).filter(([, v]) => v === null).map(([k]) => k);
+          if (nullFields.length > 0) {
+            emitLog(deps, nodeName, {
+              level: 'debug',
+              category: 'system',
+              message: `[token-usage] partial — Claude usage has null sub-fields: ${nullFields.join(', ')}`,
+            });
+          }
+          emitLog(deps, nodeName, {
+            level: 'debug',
+            category: 'system',
+            message: `[token-usage] claude result — inputCachedTokens: ${localUsage.inputCachedTokens}, inputNonCachedTokens: ${localUsage.inputNonCachedTokens}, outputTokens: ${localUsage.outputTokens}`,
+          });
+        }
       } else if ((message as any).type === 'system' && (message as any).subtype === 'init') {
         // Capture the list of tools the agent was spawned with on first
         // init. Subsequent retries (JSON-extraction re-prompt, agent-
@@ -1015,7 +1053,7 @@ ${context}
       }));
     }
 
-    return { text, sessionId: localSessionId, cost: localCost, turns: localTurns, toolCalls: localToolCalls };
+    return { text, sessionId: localSessionId, cost: localCost, usage: localUsage, turns: localTurns, toolCalls: localToolCalls };
   };
 
   // Accumulator for every tool call across the main turn + any extraction
@@ -1097,6 +1135,7 @@ ${context}
   rawResponse = initial.text;
   sessionId = initial.sessionId;
   actualCost = initial.cost;
+  executionTokenUsage = aggregateTokenUsage(executionTokenUsage, initial.usage);
   turns = initial.turns;
 
   // Flush remaining agent text buffer
@@ -1186,6 +1225,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
 
         if (retry.sessionId) sessionId = retry.sessionId;
         if (retry.cost != null) actualCost = (actualCost ?? 0) + retry.cost;
+        executionTokenUsage = aggregateTokenUsage(executionTokenUsage, retry.usage);
         turns += retry.turns;
         allToolCalls.push(...retry.toolCalls);
 
@@ -1368,6 +1408,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
       turns,
       method: actualCost != null ? 'sdk_reported' : 'estimated',
     },
+    tokenUsage: executionTokenUsage,
     durationMs: Date.now() - start,
     toolCalls: allToolCalls,
     // Enrichments
@@ -1504,6 +1545,14 @@ async function executeWorkflowNode(
   // For now, estimate based on outputs presence
   const childCostEstimated = (childOutput.__cost_estimated as number) ?? 0;
   const childCostActual = (childOutput.__cost_actual as number | null) ?? null;
+  const childTokenUsage = tokenUsageFromChildMarkers(childOutput as Record<string, unknown>);
+  if (childTokenUsage) {
+    emitLog(deps, nodeName, {
+      level: 'debug',
+      category: 'system',
+      message: `[token-usage] rollup — read child token markers: inputCachedTokens=${childTokenUsage.inputCachedTokens}, inputNonCachedTokens=${childTokenUsage.inputNonCachedTokens}, outputTokens=${childTokenUsage.outputTokens}`,
+    });
+  }
 
   return {
     outputs,
@@ -1512,6 +1561,7 @@ async function executeWorkflowNode(
       estimated: childCostEstimated,
       method: childCostActual != null ? 'sdk_reported' : 'estimated',
     },
+    tokenUsage: childTokenUsage,
     durationMs: Date.now() - start,
   };
 }

@@ -19,6 +19,7 @@ import type {
   HumanResumeInput,
   ResumeContext,
 } from './types.js';
+import { aggregateTokenUsage, attachChildTokenUsageMarkers } from './token-usage.js';
 import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-executor.js';
 import { evaluateCondition } from './condition-parser.js';
 import { renderTemplate, renderTemplateWithBindings, collectPlaceholders } from './template.js';
@@ -207,6 +208,7 @@ export class AllenEngine {
       // Inject cost info into result so parent workflow nodes can access it
       result.__cost_estimated = exec.cost.estimated;
       result.__cost_actual = exec.cost.actual;
+      attachChildTokenUsageMarkers(result, exec.tokenUsage);
 
       return result;
     } catch (err: unknown) {
@@ -1522,6 +1524,9 @@ ${lines.join('\n')}
         exec.cost.actual = (exec.cost.actual ?? 0) + result.cost.actual;
       }
 
+      // Update token usage (per-field null-aware aggregation)
+      exec.tokenUsage = aggregateTokenUsage(exec.tokenUsage, result.tokenUsage);
+
       exec.completedNodes.push(nodeName);
 
       // Save trace.
@@ -1571,6 +1576,7 @@ ${lines.join('\n')}
         agentOverrides: resultExt.agentOverrides,
         toolsAvailable: resultExt.toolsAvailable,
         tokenUsagePerTool: resultExt.tokenUsagePerTool,
+        tokenUsage: resultExt.tokenUsage ?? null,
         gateDecision: resultExt.gateDecision,
       };
 
@@ -1599,10 +1605,14 @@ ${lines.join('\n')}
       });
 
       const costStr = result.cost.actual != null ? `$${result.cost.actual.toFixed(4)}` : `~$${result.cost.estimated.toFixed(4)}`;
+      const nodeTokenUsage = result.tokenUsage;
+      const tokenStr = nodeTokenUsage
+        ? ` — tokens: ${nodeTokenUsage.inputCachedTokens ?? '—'} in cached · ${nodeTokenUsage.inputNonCachedTokens ?? '—'} in fresh · ${nodeTokenUsage.outputTokens ?? '—'} out`
+        : '';
       this.log(exec.id, {
         category: 'system',
         node: nodeName,
-        message: `Node completed in ${(result.durationMs / 1000).toFixed(1)}s — cost: ${costStr}`,
+        message: `Node completed in ${(result.durationMs / 1000).toFixed(1)}s — cost: ${costStr}${tokenStr}`,
       });
 
       // Log extracted outputs
@@ -2091,6 +2101,7 @@ ${lines.join('\n')}
       if (br.result.cost.actual != null) {
         exec.cost.actual = (exec.cost.actual ?? 0) + br.result.cost.actual;
       }
+      exec.tokenUsage = aggregateTokenUsage(exec.tokenUsage, br.result.tokenUsage);
       exec.completedNodes.push(br.node);
 
       // Save trace for each parallel branch
@@ -2119,6 +2130,7 @@ ${lines.join('\n')}
         agentOverrides: resultExt.agentOverrides,
         toolsAvailable: resultExt.toolsAvailable,
         tokenUsagePerTool: resultExt.tokenUsagePerTool,
+        tokenUsage: resultExt.tokenUsage ?? null,
         gateDecision: resultExt.gateDecision,
       };
       await this.stateManager.saveTrace({ ...trace, executionId: exec.id });

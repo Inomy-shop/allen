@@ -1,3 +1,13 @@
+// ── Token Usage ─────────────────────────────────────────────────────────────
+
+/**
+ * Normalized token usage across providers (Codex, Claude SDK).
+ * Re-exported from token-usage.ts for consumers that import from types.ts.
+ * Each sub-field is independently nullable — null means "not reported by
+ * provider", NOT zero. Never substitute null with 0.
+ */
+export type { TokenUsageInfo } from './token-usage.js';
+
 // ── Node Types ──────────────────────────────────────────────────────────────
 
 export type NodeType = 'agent' | 'code' | 'human' | 'workflow' | 'condition';
@@ -590,6 +600,10 @@ export interface NodeTrace {
     estimatedCost: number;
   }>;
 
+  /** Aggregate token usage for this node attempt across all turns.
+   *  Null when the provider did not report usage data. */
+  tokenUsage?: import('./token-usage.js').TokenUsageInfo | null;
+
   /** Populated on failed/cancelled traces — short error message so the UI
    *  can show "why this node stopped" without needing a separate log lookup.
    *  Always undefined on completed traces. */
@@ -658,6 +672,9 @@ export interface ExecutionState {
   failedNode?: string;
   errorMessage?: string;
   cost: { actual: number | null; estimated: number };
+  /** Aggregate token usage across all completed nodes in this execution.
+   *  Null when no provider reported usage data. */
+  tokenUsage?: import('./token-usage.js').TokenUsageInfo | null;
   durationMs: number;
   worktreePath?: string;
   startedAt: Date;

@@ -16,7 +16,6 @@ import Select from '../common/Select';
 import NodeInspector from './NodeInspector';
 import { CopyButton, DownloadButton } from '../common/CopyDownload';
 import TemplateBindingsTable from './TemplateBindingsTable';
-import StateDiffModal from './StateDiffModal';
 
 // ── Direct Monaco inline viewer ────────────────────────────────────────
 
@@ -791,8 +790,6 @@ export default function NodeDetail({
 }: Props) {
   const [formData, setFormData] = useState<Record<string, unknown>>({});
   const [expandViewer, setExpandViewer] = useState<{ title: string; content: string; mode?: ViewerMode } | null>(null);
-  /** When set, opens StateDiffModal comparing two attempts' inputState+output. */
-  const [compareAttempts, setCompareAttempts] = useState<[number, number] | null>(null);
 
   // Deep-link attempt + tab via URL params. `?attempt=N` and `?tab=Y`
   // survive reload + let users share a link to a specific view.
@@ -1001,7 +998,7 @@ export default function NodeDetail({
         </div>
       )}
 
-      {/* Attempt tabs + "Compare attempts" button when there are >1 */}
+      {/* Attempt tabs when there are >1 */}
       {hasMultipleAttempts && (
         <div className="flex items-center gap-1 px-4 py-2 border-b border-app shrink-0 bg-app-card/50">
           <span className="overline mr-2">Attempt:</span>
@@ -1021,15 +1018,6 @@ export default function NodeDetail({
               {t.status === 'failed' && <span className="ml-1 text-accent-red">✗</span>}
             </button>
           ))}
-          {dedupedTraces.length >= 2 && (
-            <button
-              onClick={() => setCompareAttempts([dedupedTraces[0].attempt, dedupedTraces[dedupedTraces.length - 1].attempt])}
-              className="ml-auto text-[11px] font-mono px-2 py-0.5 rounded-sm border border-app text-theme-secondary hover:bg-surface-200 transition-colors"
-              title="Compare first vs latest attempt's state"
-            >
-              Compare first ↔ latest
-            </button>
-          )}
         </div>
       )}
 
@@ -1299,25 +1287,6 @@ export default function NodeDetail({
         />
       )}
 
-      {/* Attempt-to-attempt state diff modal */}
-      {compareAttempts && (() => {
-        const [a1, a2] = compareAttempts;
-        const t1 = dedupedTraces.find((t) => t.attempt === a1);
-        const t2 = dedupedTraces.find((t) => t.attempt === a2);
-        if (!t1 || !t2) { setCompareAttempts(null); return null; }
-        // Combine inputState + output into a single snapshot per attempt so
-        // the diff reflects the full post-node state the downstream saw.
-        const snap = (t: typeof t1) => ({ ...(t.inputState ?? {}), ...(t.output ?? {}) });
-        return (
-          <StateDiffModal
-            titleLeft={`attempt #${a1}`}
-            titleRight={`attempt #${a2}`}
-            left={snap(t1)}
-            right={snap(t2)}
-            onClose={() => setCompareAttempts(null)}
-          />
-        );
-      })()}
     </div>
   );
 }

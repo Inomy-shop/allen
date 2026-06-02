@@ -10,6 +10,8 @@ import {
   type EngineConfig,
   type ExecutionState,
   type WorkflowFeedbackEntry,
+  aggregateTokenUsage,
+  type TokenUsageInfo,
 } from '@allen/engine';
 import { createSSEEmitter } from './stream.service.js';
 import {
@@ -320,6 +322,7 @@ function decorateChildRow(
     completedAt: row.completedAt ?? null,
     durationMs: row.durationMs ?? null,
     cost: row.cost ?? null,
+    tokenUsage: row.tokenUsage ?? null,
     failedNode: row.failedNode ?? null,
     errorMessage: row.errorMessage ?? null,
     currentStep: Array.isArray(row.currentNodes) && row.currentNodes.length > 0
@@ -1077,6 +1080,7 @@ export class ExecutionService {
         completedAt: exec.completedAt ?? null,
         durationMs: exec.durationMs,
         cost: exec.cost,
+        tokenUsage: exec.tokenUsage ?? null,
         currentNodes: exec.currentNodes ?? [],
         completedNodes: exec.completedNodes ?? [],
         failedNode: exec.failedNode ?? null,
@@ -2255,6 +2259,7 @@ export class ExecutionService {
       currentStep: child.currentStep ?? null,
       durationMs: child.durationMs ?? null,
       cost: child.cost ?? null,
+      tokenUsage: child.tokenUsage ?? null,
       failedNode: child.failedNode ?? null,
       errorMessage: child.errorMessage ?? null,
       promptPreview: child.promptPreview ?? '',
@@ -2338,6 +2343,13 @@ export class ExecutionService {
         if (actual != null) total.actual = (total.actual ?? 0) + actual;
         return total;
       }, { estimated: 0, actual: null });
+
+      // Compute aggregate tokenUsage across node traces (per-field null-aware sum)
+      let stepTokenUsage: TokenUsageInfo | null = null;
+      for (const trace of nodeTraces) {
+        const tu = (trace.tokenUsage && typeof trace.tokenUsage === 'object' ? trace.tokenUsage : null) as TokenUsageInfo | null;
+        if (tu) stepTokenUsage = aggregateTokenUsage(stepTokenUsage, tu);
+      }
       const elapsedDurationMs = (() => {
         if (!startedAt) return null;
         const startMs = new Date(startedAt as string | Date).getTime();
@@ -2375,6 +2387,7 @@ export class ExecutionService {
         completedAt,
         durationMs: tracedDurationMs > 0 ? tracedDurationMs : elapsedDurationMs,
         cost: cost.estimated > 0 || cost.actual != null ? cost : null,
+        tokenUsage: stepTokenUsage,
         error: lastTrace?.error ?? (failedNode === nodeName ? exec.errorMessage : null),
         io: {
           input: stepInput ?? null,

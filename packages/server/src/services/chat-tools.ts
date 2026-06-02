@@ -21,7 +21,7 @@ import { ContextEvaluationService } from './context/evaluation/context-evaluatio
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
-import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload, type MaterializedAgentFileMetadata } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload, type MaterializedAgentFileMetadata, normalizeClaudeUsage, normalizeCodexUsage, aggregateTokenUsage, type TokenUsageInfo } from '@allen/engine';
 import {
   getRuntimeApiBaseUrl,
   getRuntimeJwtAccessSecret,
@@ -1334,6 +1334,7 @@ async function markSpawnCompletedUnlessTerminal(
   costUsd: number,
   durationMs: number,
   sessionId?: string,
+  tokenUsage?: TokenUsageInfo | null,
 ): Promise<boolean> {
   const completionFields: Record<string, unknown> = {
     status: 'completed',
@@ -1343,6 +1344,7 @@ async function markSpawnCompletedUnlessTerminal(
     durationMs,
     completedAt: new Date(),
   };
+  if (tokenUsage != null) completionFields.tokenUsage = tokenUsage;
   if (sessionId) completionFields[`sessions.${agentName}`] = sessionId;
 
   const result = await db.collection('executions').updateOne(
@@ -1650,6 +1652,7 @@ async function runSpawnInBackground(
     try {
       let response = '';
       let costUsd = 0;
+      let spawnTokenUsage: TokenUsageInfo | null = null;
       let sessionId: string | undefined = currentResumeSession;
 
     // On retry, update prompt to "continue"
@@ -1870,6 +1873,19 @@ async function runSpawnInBackground(
                 if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'thinking' });
                 persistSpawnActivity('thinking', {});
                 liveLog({ type: 'thinking' });
+              }
+              // Capture token usage from Codex turn events
+              if (evt.type === 'turn.completed') {
+                if (evt.usage) {
+                  const turnUsage = normalizeCodexUsage(evt.usage);
+                  spawnTokenUsage = aggregateTokenUsage(spawnTokenUsage, turnUsage);
+                  if (turnUsage === null) {
+                    const rawSample = JSON.stringify(evt.usage).slice(0, 400);
+                    logger.warn('[token-usage] unrecognized', { executionId, agentName, rawSample });
+                  }
+                } else {
+                  logger.debug('[token-usage] absent', { executionId, agentName, provider: 'codex' });
+                }
               }
             } catch {}
           }
@@ -2245,6 +2261,21 @@ async function runSpawnInBackground(
 
         if (msg.type === 'result') {
           costUsd = (msg as any).total_cost_usd ?? 0;
+          const rawClaudeUsage = (msg as any).usage ?? null;
+          const turnUsage = normalizeClaudeUsage(rawClaudeUsage);
+          spawnTokenUsage = aggregateTokenUsage(spawnTokenUsage, turnUsage);
+          if (rawClaudeUsage == null) {
+            logger.debug('[token-usage] absent', { executionId, agentName, provider: 'claude' });
+          } else if (turnUsage === null) {
+            const rawSample = JSON.stringify(rawClaudeUsage).slice(0, 400);
+            logger.warn('[token-usage] unrecognized', { executionId, agentName, rawSample });
+          } else {
+            const nullFields = Object.entries(turnUsage).filter(([, v]) => v === null).map(([k]) => k);
+            if (nullFields.length > 0) {
+              logger.debug('[token-usage] partial', { executionId, agentName, nullFields });
+            }
+            logger.debug('[token-usage] claude result', { executionId, agentName, inputCachedTokens: turnUsage.inputCachedTokens, inputNonCachedTokens: turnUsage.inputNonCachedTokens, outputTokens: turnUsage.outputTokens });
+          }
           if ((msg as any).subtype === 'success' && (msg as any).result) response = (msg as any).result;
           if ((msg as any).session_id) { sessionId = (msg as any).session_id; currentResumeSession = sessionId; }
         }
@@ -2264,6 +2295,7 @@ async function runSpawnInBackground(
       costUsd,
       durationMs,
       sessionId,
+      spawnTokenUsage,
     );
     if (!markedCompleted) {
       logger.info('[spawn] completion skipped because execution is already terminal', { executionId, agentName });
@@ -2341,6 +2373,7 @@ async function runSpawnInBackground(
       contextEvaluationId,
       runtimeContext: buildSpawnRuntimeContext(),
       cost: { actual: costUsd, estimated: costUsd, model, method: 'sdk_reported' as const },
+      tokenUsage: spawnTokenUsage ?? null,
       durationMs, startedAt: new Date(startMs), completedAt: new Date(),
     });
     // Success — break out of retry loop

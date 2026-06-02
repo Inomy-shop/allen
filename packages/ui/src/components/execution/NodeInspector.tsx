@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   ChevronDown, ChevronRight, AlertCircle, CheckCircle, XCircle, Info,
-  Settings, GitBranch, Zap, BookOpen, Wrench, Eye,
+  Settings, GitBranch, Zap, BookOpen, Wrench, Cpu,
 } from 'lucide-react';
 import { authHeaders } from '../../services/api';
 
@@ -219,6 +219,7 @@ interface Trace {
     sources: Record<string, string>;
   };
   tokenUsagePerTool?: Array<{ toolUseId: string; tool: string; inputTokens: number; outputTokens: number; estimatedCost: number }>;
+  tokenUsage?: { inputCachedTokens: number | null; inputNonCachedTokens: number | null; outputTokens: number | null } | null;
 }
 
 export type ContextLifecycleAttemptSummary = NonNullable<Trace['contextLifecycleAttempt']>;
@@ -235,13 +236,7 @@ interface Props {
  * Phase-2 enrichment field as a collapsible section. All sections are
  * self-hiding when their data is absent (older traces, non-agent nodes, etc).
  */
-export default function NodeInspector({ trace, workflowEdges, contextEngineEnabled = true }: Props) {
-  // State diff: keys added/modified by this node's output vs the pre-run state.
-  const stateDiff = diffState(trace.inputState ?? {}, trace.output ?? {});
-
-  const upstream = workflowEdges ? getUpstreamNodes(workflowEdges, trace.node) : [];
-  const downstream = workflowEdges ? getDownstreamNodes(workflowEdges, trace.node) : [];
-
+export default function NodeInspector({ trace, contextEngineEnabled = true }: Props) {
   const toolsUsed = new Set((trace.toolCalls ?? []).map((tc) => tc.tool));
   const contextAttempt = trace.contextLifecycleAttempt;
 
@@ -421,50 +416,24 @@ export default function NodeInspector({ trace, workflowEdges, contextEngineEnabl
         ) : <Empty>No template bindings (node has no prompt template, or pre-Phase-2 trace).</Empty>}
       </Section>
 
-      <Section icon={GitBranch} title="DAG edges">
-        <div className="space-y-1.5 text-xs">
-          <div>
-            <span className="overline">Upstream</span>
-            <div className="font-mono text-[11px] text-theme-secondary mt-0.5">
-              {upstream.length > 0 ? upstream.join(' · ') : '(none — this is an entry node)'}
+      {trace.tokenUsage && (
+        <Section icon={Cpu} title="Token usage">
+          <div className="text-xs font-mono">
+            <div className="flex justify-between py-0.5">
+              <span className="text-theme-secondary">Cached input</span>
+              <span className="tabular-nums">{formatCompactTokenCount(trace.tokenUsage.inputCachedTokens)}</span>
+            </div>
+            <div className="flex justify-between py-0.5">
+              <span className="text-theme-secondary">Non-cached input</span>
+              <span className="tabular-nums">{formatCompactTokenCount(trace.tokenUsage.inputNonCachedTokens)}</span>
+            </div>
+            <div className="flex justify-between py-0.5">
+              <span className="text-theme-secondary">Output</span>
+              <span className="tabular-nums">{formatCompactTokenCount(trace.tokenUsage.outputTokens)}</span>
             </div>
           </div>
-          <div>
-            <span className="overline">Downstream</span>
-            <div className="font-mono text-[11px] text-theme-secondary mt-0.5">
-              {downstream.length > 0 ? downstream.join(' · ') : '(none — terminal node)'}
-            </div>
-          </div>
-        </div>
-      </Section>
-
-      <Section icon={Eye} title={`State diff · +${stateDiff.added.length} ~${stateDiff.modified.length}`}>
-        {stateDiff.added.length === 0 && stateDiff.modified.length === 0 ? (
-          <Empty>No state changes (node produced no new/modified keys).</Empty>
-        ) : (
-          <div className="space-y-1.5">
-            {stateDiff.added.map((k) => (
-              <div key={k} className="text-[11px] font-mono border-l-2 border-accent-green/40 pl-2">
-                <span className="text-accent-green">+ {k}</span>
-                <div className="text-theme-subtle pl-2 break-all whitespace-pre-wrap">
-                  {previewValue((trace.output as Record<string, unknown>)[k])}
-                </div>
-              </div>
-            ))}
-            {stateDiff.modified.map((k) => (
-              <div key={k} className="text-[11px] font-mono border-l-2 border-amber-400/40 pl-2">
-                <span className="text-accent-yellow">~ {k}</span>
-                <div className="text-theme-subtle pl-2 break-all whitespace-pre-wrap">
-                  <span className="text-accent-red">− </span>{previewValue((trace.inputState as Record<string, unknown>)[k])}
-                </div>
-                <div className="text-theme-subtle pl-2 break-all whitespace-pre-wrap">
-                  <span className="text-accent-green">+ </span>{previewValue((trace.output as Record<string, unknown>)[k])}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
+        </Section>
+      )}
 
       {trace.tokenUsagePerTool && trace.tokenUsagePerTool.length > 0 && (
         <Section icon={Wrench} title="Token usage per tool">
@@ -742,7 +711,7 @@ function Section({
 }: { icon: typeof Settings; title: string; children: React.ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border border-app rounded-lg bg-app-muted/50 overflow-hidden">
+    <div className="border border-app rounded-md bg-app-muted/50 overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
         className="w-full flex items-center gap-2 px-3 py-2 hover:bg-app-muted"
@@ -1229,40 +1198,21 @@ function RoutingDecisionBanner({ r }: { r: NonNullable<Trace['routingDecision']>
   );
 }
 
-function diffState(before: Record<string, unknown>, after: Record<string, unknown>): {
-  added: string[]; modified: string[];
-} {
-  const added: string[] = [];
-  const modified: string[] = [];
-  for (const k of Object.keys(after)) {
-    if (!(k in before)) added.push(k);
-    else if (JSON.stringify(before[k]) !== JSON.stringify(after[k])) modified.push(k);
-  }
-  return { added, modified };
-}
-
-function getUpstreamNodes(edges: NonNullable<Props['workflowEdges']>, node: string): string[] {
-  const up = new Set<string>();
-  for (const e of edges) {
-    const tos = Array.isArray(e.to) ? e.to : [e.to];
-    if (tos.includes(node)) up.add(e.from);
-  }
-  return Array.from(up);
-}
-
-function getDownstreamNodes(edges: NonNullable<Props['workflowEdges']>, node: string): string[] {
-  const down = new Set<string>();
-  for (const e of edges) {
-    if (e.from === node) {
-      const tos = Array.isArray(e.to) ? e.to : [e.to];
-      tos.forEach((t) => down.add(t));
-    }
-  }
-  return Array.from(down);
-}
-
 function formatScore(value?: number): string | undefined {
   return typeof value === 'number' ? `${Math.round(value * 100)}%` : undefined;
+}
+
+const compactTokenFormatter = new Intl.NumberFormat('en-US', {
+  maximumFractionDigits: 1,
+  minimumFractionDigits: 0,
+});
+
+function formatCompactTokenCount(value: number | null | undefined): string {
+  if (value == null) return '—';
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${compactTokenFormatter.format(value / 1_000_000)}M`;
+  if (abs >= 1_000) return `${compactTokenFormatter.format(value / 1_000)}K`;
+  return compactTokenFormatter.format(value);
 }
 
 function firstText(...values: unknown[]): string | undefined {

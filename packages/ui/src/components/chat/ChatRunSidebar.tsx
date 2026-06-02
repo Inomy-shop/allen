@@ -37,6 +37,7 @@ import { XTerminal } from '../workspace/XTerminal';
 import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
 import { renderMarkdown } from './ChatMessageList';
 import ChatContextPanel from './ChatContextPanel';
+import TokenUsageDisplay from '../common/TokenUsageDisplay';
 
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
@@ -910,6 +911,11 @@ function ExecutionStep({
               <SidebarApprovalButton run={run} onAnswer={onAnswerWorkflowIntervention} className="cr-approval-button" />
             </div>
             <div className="mt-1 font-mono text-[10.5px] text-theme-muted">{runKindLabel(context, run)} · {cost} · {expectedOutcome(context)}</div>
+            {context?.execution.tokenUsage && (
+              <div className="mt-0.5">
+                <TokenUsageDisplay tokenUsage={context.execution.tokenUsage} />
+              </div>
+            )}
           </div>
           <StatusBadge status={context?.status ?? run.status} />
         </div>
@@ -1851,6 +1857,11 @@ function ExecutionDetailInline({
             {renderHeaderAction?.(run)}
           </span>
           <span className="cr-list-sub">{runTypeName(context, run)} · {isActive ? 'Active' : humanLabel(status)} · {formatCost(context?.execution.cost)}</span>
+          {context?.execution.tokenUsage && (
+            <span className="cr-list-sub">
+              <TokenUsageDisplay tokenUsage={context.execution.tokenUsage} />
+            </span>
+          )}
           <button
             type="button"
             className="cr-exec-id"
