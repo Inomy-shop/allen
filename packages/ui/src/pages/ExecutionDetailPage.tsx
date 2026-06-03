@@ -1,7 +1,7 @@
-import { useState, useCallback, useEffect, useRef, useMemo, type MouseEvent } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo, type MouseEvent } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, X, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
+  ArrowLeft, ArrowDown, X, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
   RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
   ArrowRight, AlertTriangle, Save, Activity,
@@ -15,7 +15,6 @@ import { executions as api, authHeaders, interventions as interventionsApi, repo
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
 import TokenUsageDisplay from '../components/common/TokenUsageDisplay';
-import Select from '../components/common/Select';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
@@ -296,6 +295,128 @@ function WorkflowTraceTable({
   );
 }
 
+const LOG_PAGE_SIZE = 250;
+
+function normalizeLogTimestamp(log: any): any {
+  return {
+    ...log,
+    timestamp: log.timestamp instanceof Date ? log.timestamp : new Date(log.timestamp ?? Date.now()),
+  };
+}
+
+function logIdentity(log: any, fallbackExecutionId: string): string {
+  const ts = log.timestamp instanceof Date ? log.timestamp.getTime() : new Date(log.timestamp ?? 0).getTime();
+  const rowId = log._id ? String(log._id) : '';
+  return rowId || [
+    log.executionId ?? fallbackExecutionId,
+    ts,
+    log.category ?? log.type ?? '',
+    log.node ?? '',
+    log.tool ?? '',
+    log.message ?? log.content ?? '',
+  ].join('|');
+}
+
+function usePagedExecutionLogs({
+  executionId,
+  enabled,
+  liveLogs,
+  includeDescendants = true,
+}: {
+  executionId: string;
+  enabled: boolean;
+  liveLogs: any[];
+  includeDescendants?: boolean;
+}) {
+  const [history, setHistory] = useState<any[]>([]);
+  const [nextOffset, setNextOffset] = useState(0);
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingInitial, setLoadingInitial] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const loadingRef = useRef(false);
+
+  const loadPage = useCallback(async (offset: number, replace: boolean) => {
+    if (!enabled || !executionId || loadingRef.current) return;
+    loadingRef.current = true;
+    if (replace) setLoadingInitial(true);
+    else setLoadingOlder(true);
+    setError(null);
+    try {
+      const result = await api.logsPage(executionId, {
+        limit: LOG_PAGE_SIZE,
+        offset,
+        include_descendants: includeDescendants,
+      });
+      const items = (result.items ?? []).map(normalizeLogTimestamp);
+      setHistory(prev => {
+        const combined = replace ? items : [...items, ...prev];
+        const seen = new Set<string>();
+        const merged: any[] = [];
+        for (const log of combined) {
+          const k = logIdentity(log, executionId);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          merged.push(normalizeLogTimestamp(log));
+        }
+        merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+        return merged;
+      });
+      setNextOffset(offset + items.length);
+      setHasOlder(Boolean(result.hasMore));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load logs');
+    } finally {
+      loadingRef.current = false;
+      if (replace) setLoadingInitial(false);
+      else setLoadingOlder(false);
+    }
+  }, [enabled, executionId, includeDescendants]);
+
+  useEffect(() => {
+    setHistory([]);
+    setNextOffset(0);
+    setHasOlder(false);
+    setError(null);
+    loadingRef.current = false;
+    if (enabled && executionId) void loadPage(0, true);
+  }, [enabled, executionId, includeDescendants, loadPage]);
+
+  const loadOlder = useCallback(async () => {
+    if (!hasOlder || loadingRef.current) return;
+    await loadPage(nextOffset, false);
+  }, [hasOlder, loadPage, nextOffset]);
+
+  const visibleLogs = useMemo(() => {
+    const latestHistoryTime = history.length > 0
+      ? history[history.length - 1].timestamp.getTime()
+      : Number.NEGATIVE_INFINITY;
+    const liveTail = liveLogs
+      .map(normalizeLogTimestamp)
+      .filter(log => history.length === 0 || log.timestamp.getTime() >= latestHistoryTime);
+    const seen = new Set<string>();
+    const merged: any[] = [];
+    for (const log of [...history, ...liveTail]) {
+      const k = logIdentity(log, executionId);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      merged.push(normalizeLogTimestamp(log));
+    }
+    merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    return merged;
+  }, [executionId, history, liveLogs]);
+
+  return {
+    visibleLogs,
+    loadedCount: history.length,
+    hasOlder,
+    loadingInitial,
+    loadingOlder,
+    error,
+    loadOlder,
+  };
+}
+
 function ExecutionLogsOverlay({
   open,
   executionId,
@@ -315,84 +436,15 @@ function ExecutionLogsOverlay({
   onClose: () => void;
   onNodeFilterChange: (node: string | null) => void;
 }) {
-  const [pageSize, setPageSize] = useState(50);
-  const [offset, setOffset] = useState(0);
-  const [page, setPage] = useState<{ items: any[]; limit: number; offset: number; hasMore: boolean } | null>(null);
-  const [loadingPage, setLoadingPage] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    setOffset(0);
-    setPage(null);
-    setPageError(null);
-  }, [open, executionId, pageSize]);
-
-  useEffect(() => {
-    if (!open || !executionId) return;
-    let cancelled = false;
-    setLoadingPage(true);
-    setPageError(null);
-    api.logsPage(executionId, {
-      limit: pageSize,
-      offset,
-      include_descendants: true,
-    })
-      .then((result) => {
-        if (cancelled) return;
-        setPage({
-          ...result,
-          items: result.items.map((log: any) => ({
-            ...log,
-            timestamp: new Date(log.timestamp),
-          })),
-        });
-      })
-      .catch((err) => {
-        if (!cancelled) setPageError(err instanceof Error ? err.message : 'Failed to load logs');
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingPage(false);
-      });
-    return () => { cancelled = true; };
-  }, [open, executionId, offset, pageSize]);
-
-  const isLatestPage = (page?.offset ?? offset) === 0;
-  const visibleLogs = useMemo(() => {
-    const history = page?.items ?? [];
-    const liveLogs = isLatestPage ? logs : [];
-    const seen = new Set<string>();
-    const merged: any[] = [];
-    const key = (log: any) => {
-      const ts = log.timestamp instanceof Date ? log.timestamp.getTime() : new Date(log.timestamp).getTime();
-      const id = log._id ? String(log._id) : '';
-      return id || `${log.executionId ?? executionId}|${ts}|${log.category ?? ''}|${log.node ?? ''}|${log.message ?? ''}`;
-    };
-    for (const log of [...history, ...liveLogs]) {
-      const k = key(log);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      merged.push({
-        ...log,
-        timestamp: log.timestamp instanceof Date ? log.timestamp : new Date(log.timestamp),
-      });
-    }
-    merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-    return merged;
-  }, [executionId, isLatestPage, logs, page]);
-
-  const pageOffset = page?.offset ?? offset;
-  const currentPage = Math.floor(pageOffset / pageSize) + 1;
-  const pageStart = pageOffset + 1;
-  const pageEnd = pageOffset + (page?.items.length ?? visibleLogs.length);
-  const canPrevPage = pageOffset > 0 && !loadingPage;
-  const canNextPage = Boolean(page?.hasMore) && !loadingPage;
-  const pageNumbers = (() => {
-    const nums = new Set<number>([1, currentPage]);
-    if (currentPage > 1) nums.add(currentPage - 1);
-    if (page?.hasMore) nums.add(currentPage + 1);
-    return [...nums].filter(n => n >= 1).sort((a, b) => a - b);
-  })();
+  const {
+    visibleLogs,
+    loadedCount,
+    hasOlder,
+    loadingInitial,
+    loadingOlder,
+    error,
+    loadOlder,
+  } = usePagedExecutionLogs({ executionId, enabled: open, liveLogs: logs, includeDescendants: true });
 
   if (!open) return null;
   return (
@@ -403,71 +455,20 @@ function ExecutionLogsOverlay({
           <div>
             <div className="text-[13px] font-semibold text-theme-primary">Logs</div>
             <div className="font-mono text-[10px] text-theme-muted">
-              {loadingPage && !page ? 'Loading history...' : `Page ${currentPage} · rows ${pageStart}-${pageEnd} from latest`}
-              {isLatestPage && logs.length > 0 ? ' · live tail merged' : ''}
+              {loadingInitial ? 'Loading latest logs...' : `${visibleLogs.length} shown · latest ${Math.min(loadedCount || LOG_PAGE_SIZE, LOG_PAGE_SIZE)} by default`}
+              {logs.length > 0 ? ' · live tail merged' : ''}
             </div>
           </div>
-          <div className="ml-auto flex items-center gap-2">
-            <Select
-              value={String(pageSize)}
-              onChange={(value) => setPageSize(Number(value))}
-              options={[
-                { value: '50', label: '50/page' },
-                { value: '100', label: '100/page' },
-                { value: '250', label: '250/page' },
-                { value: '500', label: '500/page' },
-              ]}
-              className="w-28"
-            />
-            <button
-              type="button"
-              disabled={!canPrevPage}
-              onClick={() => setOffset(Math.max(offset - pageSize, 0))}
-              className="btn-ghost text-[10px] disabled:opacity-40"
-              title="Previous page"
-            >
-              Prev
-            </button>
-            {pageNumbers.map((pageNumber, index) => {
-              const prevNumber = pageNumbers[index - 1];
-              const showGap = prevNumber != null && pageNumber - prevNumber > 1;
-              const active = pageNumber === currentPage;
-              return (
-                <span key={pageNumber} className="inline-flex items-center gap-1">
-                  {showGap && <span className="font-mono text-[10px] text-theme-subtle">...</span>}
-                  <button
-                    type="button"
-                    disabled={loadingPage || active}
-                    onClick={() => setOffset((pageNumber - 1) * pageSize)}
-                    className={`rounded px-2 py-1 font-mono text-[10px] transition-colors disabled:cursor-default ${
-                      active
-                        ? 'bg-accent-soft text-accent'
-                        : 'text-theme-muted hover:bg-app-muted hover:text-theme-primary disabled:opacity-40'
-                    }`}
-                    title={pageNumber === 1 ? 'Latest page' : `Page ${pageNumber}`}
-                  >
-                    {pageNumber}
-                  </button>
-                </span>
-              );
-            })}
-            <button
-              type="button"
-              disabled={!canNextPage}
-              onClick={() => setOffset(offset + pageSize)}
-              className="btn-ghost text-[10px] disabled:opacity-40"
-              title="Next page"
-            >
-              Next
-            </button>
+          <div className="ml-auto font-mono text-[10px] text-theme-muted">
+            {hasOlder ? 'Scroll up loads 250 older' : 'Full history loaded'}
           </div>
           <button type="button" onClick={onClose} className="rounded p-1.5 text-theme-muted hover:bg-app-muted hover:text-theme-primary" aria-label="Close logs">
             <X className="h-4 w-4" />
           </button>
         </div>
-        {pageError && (
+        {error && (
           <div className="border-b border-accent-red/30 bg-accent-red/10 px-4 py-2 font-mono text-[11px] text-accent-red">
-            {pageError}
+            {error}
           </div>
         )}
         <div className="min-h-0 flex-1">
@@ -476,6 +477,9 @@ function ExecutionLogsOverlay({
             nodeFilter={logFilter}
             onNodeFilterChange={onNodeFilterChange}
             workflowNodes={workflowNodes}
+            hasOlderLogs={hasOlder}
+            loadingOlderLogs={loadingOlder}
+            onLoadOlderLogs={loadOlder}
             traces={traces}
           />
         </div>
@@ -499,77 +503,15 @@ function ExecutionLogsPanel({
   traces: any[];
   onNodeFilterChange: (node: string | null) => void;
 }) {
-  const [pageSize, setPageSize] = useState(100);
-  const [offset, setOffset] = useState(0);
-  const [page, setPage] = useState<{ items: any[]; limit: number; offset: number; hasMore: boolean } | null>(null);
-  const [loadingPage, setLoadingPage] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setOffset(0);
-    setPage(null);
-    setPageError(null);
-  }, [executionId, pageSize]);
-
-  useEffect(() => {
-    if (!executionId) return;
-    let cancelled = false;
-    setLoadingPage(true);
-    setPageError(null);
-    api.logsPage(executionId, {
-      limit: pageSize,
-      offset,
-      include_descendants: true,
-    })
-      .then((result) => {
-        if (cancelled) return;
-        setPage({
-          ...result,
-          items: result.items.map((log: any) => ({
-            ...log,
-            timestamp: new Date(log.timestamp),
-          })),
-        });
-      })
-      .catch((err) => {
-        if (!cancelled) setPageError(err instanceof Error ? err.message : 'Failed to load logs');
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingPage(false);
-      });
-    return () => { cancelled = true; };
-  }, [executionId, offset, pageSize]);
-
-  const isLatestPage = (page?.offset ?? offset) === 0;
-  const visibleLogs = useMemo(() => {
-    const history = page?.items ?? [];
-    const liveLogs = isLatestPage ? logs : [];
-    const seen = new Set<string>();
-    const merged: any[] = [];
-    const key = (log: any) => {
-      const ts = log.timestamp instanceof Date ? log.timestamp.getTime() : new Date(log.timestamp).getTime();
-      const rowId = log._id ? String(log._id) : '';
-      return rowId || `${log.executionId ?? executionId}|${ts}|${log.category ?? ''}|${log.node ?? ''}|${log.message ?? ''}`;
-    };
-    for (const log of [...history, ...liveLogs]) {
-      const k = key(log);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      merged.push({
-        ...log,
-        timestamp: log.timestamp instanceof Date ? log.timestamp : new Date(log.timestamp),
-      });
-    }
-    merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-    return merged;
-  }, [executionId, isLatestPage, logs, page]);
-
-  const pageOffset = page?.offset ?? offset;
-  const currentPage = Math.floor(pageOffset / pageSize) + 1;
-  const pageStart = visibleLogs.length === 0 ? 0 : pageOffset + 1;
-  const pageEnd = pageOffset + (page?.items.length ?? visibleLogs.length);
-  const canPrevPage = pageOffset > 0 && !loadingPage;
-  const canNextPage = Boolean(page?.hasMore) && !loadingPage;
+  const {
+    visibleLogs,
+    loadedCount,
+    hasOlder,
+    loadingInitial,
+    loadingOlder,
+    error,
+    loadOlder,
+  } = usePagedExecutionLogs({ executionId, enabled: Boolean(executionId), liveLogs: logs, includeDescendants: true });
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-app-card">
@@ -578,44 +520,18 @@ function ExecutionLogsPanel({
           <div className="min-w-0">
             <div className="text-[12px] font-semibold text-theme-primary">Logs</div>
             <div className="truncate font-mono text-[10px] text-theme-muted">
-              {loadingPage && !page ? 'Loading history...' : `Page ${currentPage} · rows ${pageStart}-${pageEnd}`}
-              {isLatestPage && logs.length > 0 ? ' · live tail' : ''}
+              {loadingInitial ? 'Loading latest logs...' : `${visibleLogs.length} shown · latest ${Math.min(loadedCount || LOG_PAGE_SIZE, LOG_PAGE_SIZE)} by default`}
+              {logs.length > 0 ? ' · live tail' : ''}
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            <Select
-              value={String(pageSize)}
-              onChange={(value) => setPageSize(Number(value))}
-              options={[
-                { value: '50', label: '50' },
-                { value: '100', label: '100' },
-                { value: '250', label: '250' },
-                { value: '500', label: '500' },
-              ]}
-              className="w-20"
-            />
-            <button
-              type="button"
-              disabled={!canPrevPage}
-              onClick={() => setOffset(Math.max(offset - pageSize, 0))}
-              className="btn-ghost px-2 py-1 text-[10px] disabled:opacity-40"
-            >
-              Prev
-            </button>
-            <button
-              type="button"
-              disabled={!canNextPage}
-              onClick={() => setOffset(offset + pageSize)}
-              className="btn-ghost px-2 py-1 text-[10px] disabled:opacity-40"
-            >
-              Next
-            </button>
+          <div className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] text-theme-muted">
+            {hasOlder ? 'Scroll up loads 250 older' : 'Full history loaded'}
           </div>
         </div>
       </div>
-      {pageError && (
+      {error && (
         <div className="shrink-0 border-b border-accent-red/30 bg-accent-red/10 px-3 py-2 font-mono text-[11px] text-accent-red">
-          {pageError}
+          {error}
         </div>
       )}
       <div className="min-h-0 flex-1">
@@ -624,6 +540,9 @@ function ExecutionLogsPanel({
           nodeFilter={logFilter}
           onNodeFilterChange={onNodeFilterChange}
           workflowNodes={workflowNodes}
+          hasOlderLogs={hasOlder}
+          loadingOlderLogs={loadingOlder}
+          onLoadOlderLogs={loadOlder}
           traces={traces}
         />
       </div>
@@ -891,16 +810,67 @@ function resolveToolCallForLog(log: any, toolCalls: ToolCall[]): ToolCall | unde
 function AgentLogsDrawer({
   open,
   onClose,
+  executionId,
   logs,
   toolCalls,
   executionStatus,
 }: {
   open: boolean;
   onClose: () => void;
+  executionId: string;
   logs: any[];
   toolCalls: ToolCall[];
   executionStatus: string;
 }) {
+  const {
+    visibleLogs,
+    loadedCount,
+    hasOlder,
+    loadingInitial,
+    loadingOlder,
+    error,
+    loadOlder,
+  } = usePagedExecutionLogs({ executionId, enabled: open, liveLogs: logs, includeDescendants: true });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const loadOlderInFlight = useRef(false);
+  const prependAnchor = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+
+  useEffect(() => {
+    if (!open) setAutoScroll(true);
+  }, [open]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !autoScroll) return;
+    el.scrollTop = el.scrollHeight;
+  }, [autoScroll, visibleLogs.length]);
+
+  useLayoutEffect(() => {
+    const anchor = prependAnchor.current;
+    const el = containerRef.current;
+    if (!anchor || !el) return;
+    el.scrollTop = anchor.scrollTop + Math.max(0, el.scrollHeight - anchor.scrollHeight);
+    prependAnchor.current = null;
+  }, [visibleLogs.length]);
+
+  const handleScroll = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    setAutoScroll(atBottom);
+    if (el.scrollTop < 80 && hasOlder && !loadingOlder && !loadOlderInFlight.current) {
+      loadOlderInFlight.current = true;
+      prependAnchor.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
+      Promise.resolve(loadOlder()).finally(() => {
+        loadOlderInFlight.current = false;
+        requestAnimationFrame(() => {
+          if (prependAnchor.current) prependAnchor.current = null;
+        });
+      });
+    }
+  };
+
   if (!open) return null;
   return (
       <aside className="fixed bottom-0 right-0 top-0 z-50 flex w-[34rem] max-w-[calc(100vw-2rem)] flex-col border-l border-app bg-app-card shadow-[-24px_0_60px_rgba(0,0,0,0.28)]" aria-label="Agent logs">
@@ -908,25 +878,55 @@ function AgentLogsDrawer({
           <div>
             <div className="text-[13px] font-semibold text-theme-primary">Logs</div>
             <div className="font-mono text-[10px] text-theme-muted">
-              {logs.length} entries
+              {loadingInitial ? 'Loading latest logs...' : `${visibleLogs.length} shown · latest ${Math.min(loadedCount || LOG_PAGE_SIZE, LOG_PAGE_SIZE)} by default`}
               {executionStatus === 'running' ? ' · live tail' : ''}
             </div>
+          </div>
+          <div className="ml-auto font-mono text-[10px] text-theme-muted">
+            {hasOlder ? 'Scroll up loads 250 older' : 'Full history loaded'}
           </div>
           <button type="button" onClick={onClose} className="rounded p-1.5 text-theme-muted hover:bg-app-muted hover:text-theme-primary" aria-label="Close logs">
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto bg-[rgb(var(--color-editor-background))] p-4">
-          {logs.length === 0 && executionStatus === 'running' && (
+        {error && (
+          <div className="border-b border-accent-red/30 bg-accent-red/10 px-4 py-2 font-mono text-[11px] text-accent-red">
+            {error}
+          </div>
+        )}
+        <div
+          ref={containerRef}
+          className="min-h-0 flex-1 overflow-y-auto bg-[rgb(var(--color-editor-background))] p-4"
+          onScroll={handleScroll}
+        >
+          {(hasOlder || loadingOlder) && (
+            <div className="px-2 pb-3 text-center font-mono text-[10px] text-theme-muted">
+              {loadingOlder ? 'Loading older logs...' : 'Scroll up for older logs'}
+            </div>
+          )}
+          {visibleLogs.length === 0 && executionStatus === 'running' && (
             <div className="text-xs text-theme-subtle font-mono py-3 animate-pulse">Waiting for activity...</div>
           )}
-          {logs.length === 0 && executionStatus !== 'running' && (
+          {visibleLogs.length === 0 && executionStatus !== 'running' && (
             <div className="text-xs text-theme-muted font-mono">No logs captured for this run.</div>
           )}
-          {logs.map((log: any, index: number) => (
-            <LogRow key={index} log={log} toolCall={resolveToolCallForLog(log, toolCalls)} />
+          {visibleLogs.map((log: any, index: number) => (
+            <LogRow key={logIdentity(log, executionId) || index} log={log} toolCall={resolveToolCallForLog(log, toolCalls)} />
           ))}
         </div>
+        {!autoScroll && visibleLogs.length > 0 && (
+          <button
+            type="button"
+            title="Scroll to latest"
+            onClick={() => {
+              setAutoScroll(true);
+              if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight;
+            }}
+            className="absolute bottom-3 right-3 z-10 btn-primary inline-flex items-center gap-1 px-2 py-1 text-[10px] shadow-lg"
+          >
+            <ArrowDown className="h-3 w-3" /> Latest
+          </button>
+        )}
       </aside>
   );
 }
@@ -2410,6 +2410,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
       <AgentLogsDrawer
         open={logsOpen}
         onClose={() => setLogsOpen(false)}
+        executionId={id ?? execution.id}
         logs={allLogs}
         toolCalls={toolCalls as ToolCall[]}
         executionStatus={execution.status}
@@ -3115,11 +3116,6 @@ export default function ExecutionDetailPage() {
 	                  className={`inline-flex items-center gap-1 rounded px-3 py-1.5 text-[11px] font-mono transition-colors ${mainView === 'logs' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
 	                >
 	                  Logs
-	                  {logs.length > 0 && (
-	                    <span className="ml-0.5 rounded-sm bg-accent-soft px-1 py-px text-[10px] font-mono tabular-nums text-accent">
-	                      {logs.length}
-	                    </span>
-	                  )}
 	                </button>
 	              </div>
               <div className="flex items-center gap-3">

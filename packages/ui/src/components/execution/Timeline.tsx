@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ExecutionLog } from '../../hooks/useExecution';
 import Select from '../common/Select';
@@ -46,6 +46,9 @@ interface TimelineProps {
   nodeFilter: string | null;
   onNodeFilterChange: (node: string | null) => void;
   workflowNodes: string[];
+  hasOlderLogs?: boolean;
+  loadingOlderLogs?: boolean;
+  onLoadOlderLogs?: () => Promise<void> | void;
   /** Persisted per-node traces. When provided, tool rows in the log become
    *  expandable and show the full args + result from the matching
    *  ToolCallRecord. Matched by toolUseId (exact) or tool+timestamp (±5s
@@ -53,7 +56,16 @@ interface TimelineProps {
   traces?: any[];
 }
 
-export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflowNodes, traces = [] }: TimelineProps) {
+export default function Timeline({
+  logs,
+  nodeFilter,
+  onNodeFilterChange,
+  workflowNodes,
+  hasOlderLogs = false,
+  loadingOlderLogs = false,
+  onLoadOlderLogs,
+  traces = [],
+}: TimelineProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState('');
@@ -63,6 +75,8 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const isUserScrolling = useRef(false);
+  const loadOlderInFlight = useRef(false);
+  const prependAnchor = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
 
   // Build a tool-call lookup from every trace's toolCalls array so log rows
   // can resolve to their full input/output record on expand.
@@ -114,6 +128,16 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
     }
   }, [logs.length, autoScroll]);
 
+  useLayoutEffect(() => {
+    const anchor = prependAnchor.current;
+    const el = containerRef.current;
+    if (!anchor || !el) return;
+    const delta = el.scrollHeight - anchor.scrollHeight;
+    el.scrollTop = anchor.scrollTop + Math.max(0, delta);
+    setScrollTop(el.scrollTop);
+    prependAnchor.current = null;
+  }, [logs.length]);
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -133,6 +157,23 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
     if (!atBottom) isUserScrolling.current = true;
     else isUserScrolling.current = false;
     setAutoScroll(atBottom);
+
+    if (
+      el.scrollTop < 80
+      && hasOlderLogs
+      && !loadingOlderLogs
+      && !loadOlderInFlight.current
+      && onLoadOlderLogs
+    ) {
+      loadOlderInFlight.current = true;
+      prependAnchor.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
+      Promise.resolve(onLoadOlderLogs()).finally(() => {
+        loadOlderInFlight.current = false;
+        requestAnimationFrame(() => {
+          if (prependAnchor.current) prependAnchor.current = null;
+        });
+      });
+    }
   };
 
   const filterOptions = [
@@ -211,6 +252,11 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
           </div>
         ) : (
           <>
+          {(hasOlderLogs || loadingOlderLogs) && (
+            <div className="px-3 py-1.5 text-center font-mono text-[10px] text-theme-muted">
+              {loadingOlderLogs ? 'Loading older logs...' : 'Scroll up for older logs'}
+            </div>
+          )}
           <div style={{ height: topSpacer }} />
           {virtualRows.map((log, virtualIndex) => {
             const i = virtualStart + virtualIndex;
@@ -222,11 +268,6 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
               childParentCaller: string | null;
               childDepth: number;
             }) : null;
-            // Indent child rows by depth so nested spawn trees render as
-            // a visible hierarchy — grandchildren sit further to the right
-            // than their direct parents.
-            const indentPx = child ? Math.min(child.childDepth, 4) * 16 : 0;
-
             // Tool rows: expandable with full input/output panel.
             const isToolRow = log.category === 'tool';
             const rowKey = `${log.executionId}-${i}`;
@@ -247,8 +288,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
             return (
               <div key={rowKey} className={`${isError ? 'bg-accent-red/5' : ''} ${child ? 'bg-accent-purple/[0.03]' : ''}`}>
                 <div
-                  className={`flex items-start gap-1.5 px-3 py-0.5 hover:bg-accent-blue/5 text-xs transition-colors ${isToolRow ? 'cursor-pointer' : ''}`}
-                  style={{ paddingLeft: 12 + indentPx }}
+                  className={`grid grid-cols-[14px_112px_58px_172px_minmax(0,1fr)] items-start gap-x-2 gap-y-1 px-2 py-0.5 hover:bg-accent-blue/5 text-xs transition-colors ${isToolRow ? 'cursor-pointer' : ''}`}
                   onClick={isToolRow ? toggle : undefined}
                 >
                   {/* Chevron column — only shown for expandable tool rows */}
@@ -259,37 +299,35 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                   ) : <span className="w-3 shrink-0" />}
 
                   {/* Timestamp */}
-                  <span className="text-[10px] text-theme-muted font-mono mt-px shrink-0 w-28 tabular-nums">
+                  <span
+                    className="text-[10px] text-theme-muted font-mono mt-px tabular-nums"
+                    title={new Date(log.timestamp).toLocaleString()}
+                  >
                     {formatTime(new Date(log.timestamp))}
                   </span>
 
                   {/* Category badge */}
-                  <span className={`text-[9px] font-mono uppercase px-1 py-px rounded shrink-0 w-14 text-center ${catClass}`}>
+                  <span className={`text-[9px] font-mono uppercase px-1 py-px rounded text-center ${catClass}`}>
                     {log.category}
                   </span>
 
-                  {/* Node badge (optional) */}
-                  {log.node ? (
-                    <span className="text-[10px] font-mono text-accent-blue/60 shrink-0 w-20 truncate">
-                      {log.node}
-                    </span>
-                  ) : (
-                    <span className="shrink-0 w-20" />
-                  )}
-
-                  {/* Spawned-agent origin tag. Replaces the blank space of a
-                      normal log row with a clickable [agent-name] chip that
-                      opens the child's own execution detail page. */}
-                  {child && (
+                  {/* Node / spawned-agent badge */}
+                  {child ? (
                     <Link
                       to={`/executions/${child.childExecutionId}`}
                       onClick={e => e.stopPropagation()}
-                      className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-mono px-1 py-px rounded bg-accent-purple/10 text-accent-purple hover:bg-accent-purple/20 transition-colors max-w-[120px] truncate"
-                      title={`Spawned by ${child.childParentCaller ?? 'unknown'} — click to open child execution`}
+                      className="inline-flex min-w-0 items-center gap-0.5 truncate text-[10px] font-mono text-accent-purple transition-colors hover:text-accent-purple/80"
+                      title={`${log.node ?? child.childParentCaller ?? 'node'}:${child.childAgentName} — spawned by ${child.childParentCaller ?? 'unknown'}`}
                     >
-                      <span className="truncate">{child.childAgentName}</span>
+                      <span className="truncate">{log.node ?? child.childParentCaller ?? 'node'}:{child.childAgentName}</span>
                       <ExternalLink className="w-2.5 h-2.5 shrink-0 opacity-60" />
                     </Link>
+                  ) : log.node ? (
+                    <span className="truncate text-[10px] font-mono text-accent-blue/60">
+                      {log.node}
+                    </span>
+                  ) : (
+                    <span />
                   )}
 
                   {/* Message */}
@@ -305,7 +343,7 @@ export default function Timeline({ logs, nodeFilter, onNodeFilterChange, workflo
                     matching ToolCallRecord, falling back to what the log
                     itself carries. */}
                 {isToolRow && isOpen && (
-                  <div className="space-y-1.5 px-3 py-1.5 bg-app-muted/40" style={{ paddingLeft: 64 + indentPx }}>
+                  <div className="space-y-1.5 bg-app-muted/40 py-1.5 pl-[374px] pr-3">
                     {(() => {
                       const argsObj = toolCall?.args ?? logArgs;
                       if (argsObj && Object.keys(argsObj).length > 0) {
