@@ -78,7 +78,19 @@ mac:
         - arm64
 
 dmg:
-  background: packages/desktop/build/dmg-background.png
+  background: packages/desktop/build/dmg-background.tiff
+  window:
+    width: 660
+    height: 400
+  iconSize: 96
+  contents:
+    - x: 220
+      y: 220
+      type: file
+    - x: 440
+      y: 220
+      type: link
+      path: /Applications
   sign: false
 
 publish:
