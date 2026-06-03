@@ -55,6 +55,7 @@ export async function startManagedMongo(dataDir: string, options: { port?: numbe
       dbName: 'allen_desktop',
       dbPath,
       storageEngine: 'wiredTiger',
+      args: ['--wiredTigerCacheSizeGB', '0.25'],
     },
   });
 

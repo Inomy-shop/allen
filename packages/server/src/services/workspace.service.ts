@@ -119,6 +119,13 @@ type WorkspaceDiffFile = {
   modifiedContent: string;
 };
 
+type WorkspaceDiffOptions = {
+  mode?: WorkspaceDiffMode;
+  anchorToCreation?: boolean;
+  includeContent?: boolean;
+  filePath?: string;
+};
+
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
@@ -707,7 +714,7 @@ export class WorkspaceManager {
     }
   }
 
-  async getDiff(id: string, options: { mode?: WorkspaceDiffMode; anchorToCreation?: boolean } = {}): Promise<{ baseBranch: string; baseCommit?: string; mode: WorkspaceDiffMode; files: { path: string; status: string; additions: number; deletions: number; diff: string; originalContent: string; modifiedContent: string }[] }> {
+  async getDiff(id: string, options: WorkspaceDiffOptions = {}): Promise<{ baseBranch: string; baseCommit?: string; mode: WorkspaceDiffMode; files: WorkspaceDiffFile[] }> {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
 
@@ -800,38 +807,43 @@ export class WorkspaceManager {
     const existingPaths = new Set(files.map(f => f.path));
     for (const f of untracked.trim().split('\n').filter(Boolean)) {
       if (!existingPaths.has(f)) {
-        files.push({ path: f, status: 'added', additions: 0, deletions: 0, diff: '', originalContent: '', modifiedContent: '' });
+        const additions = await exec('wc', ['-l', join(ws.worktreePath, f)])
+          .then(result => parseInt(result.stdout.trim().split(/\s+/)[0] ?? '0', 10) || 0)
+          .catch(() => 0);
+        files.push({ path: f, status: 'added', additions, deletions: 0, diff: '', originalContent: '', modifiedContent: '' });
       }
     }
 
-    // Get full diff + full file contents at HEAD and in working tree so the UI
-    // can render a real file-level diff in Monaco (not just the hunk slice).
-    const { readFileSync: rf } = await import('node:fs');
-    await Promise.all(files.map(async (file) => {
-      try {
-        if (file.status === 'added' && !nameStatus.includes(file.path)) {
-          // Untracked file — no HEAD version, read working copy as modified
-          const content = rf(join(ws.worktreePath, file.path), 'utf-8');
-          file.diff = content.split('\n').map(l => `+${l}`).join('\n');
-          file.additions = content.split('\n').length;
-          file.originalContent = '';
-          file.modifiedContent = content;
-        } else {
-          const [{ stdout: diff }, orig, mod] = await Promise.all([
-            exec('git', ['diff', diffRange, '--', file.path], { cwd: ws.worktreePath }),
-            exec('git', ['show', `${baseRef}:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => ''),
-            (async () => {
-              if (file.status === 'deleted') return '';
-              if (!includeUntracked) return exec('git', ['show', `HEAD:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => '');
-              try { return rf(join(ws.worktreePath, file.path), 'utf-8'); } catch { return ''; }
-            })(),
-          ]);
-          file.diff = diff;
-          file.originalContent = orig;
-          file.modifiedContent = mod;
-        }
-      } catch {}
-    }));
+    if (options.includeContent) {
+      const requestedPath = options.filePath ?? '';
+      const filesToHydrate = requestedPath ? files.filter(file => file.path === requestedPath) : files;
+      const { readFileSync: rf } = await import('node:fs');
+      const trackedPaths = new Set(statusLines.map(line => line.split('\t').slice(1).join('\t')));
+      await Promise.all(filesToHydrate.map(async (file) => {
+        try {
+          if (file.status === 'added' && !trackedPaths.has(file.path)) {
+            const content = rf(join(ws.worktreePath, file.path), 'utf-8');
+            file.diff = content.split('\n').map(l => `+${l}`).join('\n');
+            file.additions = content.split('\n').length;
+            file.originalContent = '';
+            file.modifiedContent = content;
+          } else {
+            const [{ stdout: diff }, orig, mod] = await Promise.all([
+              exec('git', ['diff', diffRange, '--', file.path], { cwd: ws.worktreePath }),
+              exec('git', ['show', `${baseRef}:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => ''),
+              (async () => {
+                if (file.status === 'deleted') return '';
+                if (!includeUntracked) return exec('git', ['show', `HEAD:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => '');
+                try { return rf(join(ws.worktreePath, file.path), 'utf-8'); } catch { return ''; }
+              })(),
+            ]);
+            file.diff = diff;
+            file.originalContent = orig;
+            file.modifiedContent = mod;
+          }
+        } catch {}
+      }));
+    }
 
     return { baseBranch: ws.baseBranch, baseCommit: ws.baseCommit, mode, files };
   }

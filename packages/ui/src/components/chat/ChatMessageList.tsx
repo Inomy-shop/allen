@@ -73,8 +73,11 @@ type ChatDiffFile = {
   additions?: number;
   deletions?: number;
   diff?: string;
+  originalContent?: string;
   modifiedContent?: string;
   workspaceName?: string | null;
+  sourceType?: 'workspace' | 'pull-request';
+  sourceId?: string;
   key?: string;
 };
 
@@ -86,6 +89,19 @@ function diffLineCounts(diff?: string): { additions: number; deletions: number }
     else if (line.startsWith('-')) acc.deletions += 1;
     return acc;
   }, { additions: 0, deletions: 0 });
+}
+
+function hasChangedDiffMetadata(file: ChatDiffFile): boolean {
+  return Boolean(file.path) && (
+    Number(file.additions ?? 0) > 0 ||
+    Number(file.deletions ?? 0) > 0 ||
+    Boolean(file.status) ||
+    Boolean(file.diff?.trim() || file.modifiedContent?.trim())
+  );
+}
+
+function hasDiffContent(file: ChatDiffFile): boolean {
+  return Boolean(file.diff?.trim() || file.originalContent?.trim() || file.modifiedContent?.trim());
 }
 
 type ChatDiffBundle = {
@@ -338,7 +354,7 @@ function parseDiffSummary(code: string) {
 }
 
 function diffText(file: ChatDiffFile): string {
-  return file.diff?.trim() || file.modifiedContent?.trim() || 'No diff available.';
+  return file.diff?.trim() || file.modifiedContent?.trim() || 'Loading diff...';
 }
 
 function diffLineClass(line: string): 'add' | 'del' | 'hunk' | 'meta' | 'ctx' {
@@ -412,13 +428,23 @@ function ChatCodeDiffCard({
   state?: React.ReactNode;
   onOpenAllFiles?: () => void;
 }) {
-  const normalized = files.map((file, index) => ({
-    ...file,
-    key: file.key ?? `${file.workspaceName ?? 'diff'}:${file.path}:${index}`,
-    additions: file.additions ?? 0,
-    deletions: file.deletions ?? 0,
-    status: file.status ?? ((file as ChatDiffFile & { isNew?: boolean }).isNew ? 'added' : 'modified'),
-  }));
+  const [hydratedByKey, setHydratedByKey] = useState<Record<string, ChatDiffFile>>({});
+  const [loadingKeys, setLoadingKeys] = useState<Set<string>>(() => new Set());
+  const loadingKeysRef = useRef<Set<string>>(new Set());
+  const normalized = files.map((file, index) => {
+    const key = file.key ?? `${file.sourceType ?? 'diff'}:${file.sourceId ?? file.workspaceName ?? 'diff'}:${file.path}:${index}`;
+    const hydrated = hydratedByKey[key];
+    return {
+      ...file,
+      ...hydrated,
+      key,
+      additions: hydrated?.additions ?? file.additions ?? 0,
+      deletions: hydrated?.deletions ?? file.deletions ?? 0,
+      status: hydrated?.status ?? file.status ?? ((file as ChatDiffFile & { isNew?: boolean }).isNew ? 'added' : 'modified'),
+      sourceType: hydrated?.sourceType ?? file.sourceType,
+      sourceId: hydrated?.sourceId ?? file.sourceId,
+    };
+  });
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(
     () => new Set(normalized[0]?.key ? [normalized[0].key] : []),
   );
@@ -433,6 +459,64 @@ function ChatCodeDiffCard({
       return next;
     });
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const missing = normalized.filter(file =>
+      expandedFiles.has(file.key) &&
+      !hasDiffContent(file) &&
+      file.sourceType &&
+      file.sourceId &&
+      !loadingKeysRef.current.has(file.key)
+    );
+    if (missing.length === 0) return;
+
+    for (const file of missing) {
+      loadingKeysRef.current.add(file.key);
+      setLoadingKeys(prev => new Set(prev).add(file.key));
+      const request = file.sourceType === 'pull-request'
+        ? pullRequestsApi.getDiffFile(file.sourceId!, file.path)
+        : workspacesApi.getDiffFile(file.sourceId!, file.path, { mode: 'workspace', anchor: 'creation' });
+      request
+        .then(hydrated => {
+          if (cancelled) return;
+          setHydratedByKey(prev => ({
+            ...prev,
+            [file.key]: {
+              ...file,
+              ...hydrated,
+              sourceType: file.sourceType,
+              sourceId: file.sourceId,
+              workspaceName: file.workspaceName,
+            },
+          }));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setHydratedByKey(prev => ({
+            ...prev,
+            [file.key]: {
+              ...file,
+              diff: 'Failed to load diff content.',
+            },
+          }));
+        })
+        .finally(() => {
+          loadingKeysRef.current.delete(file.key);
+          if (cancelled) return;
+          setLoadingKeys(prev => {
+            const next = new Set(prev);
+            next.delete(file.key);
+            return next;
+          });
+        });
+    }
+
+    return () => { cancelled = true; };
+  }, [
+    expandedFiles,
+    normalized.map(file => `${file.key}:${file.sourceType ?? ''}:${file.sourceId ?? ''}:${hasDiffContent(file) ? '1' : '0'}`).join('|'),
+  ]);
 
   if (normalized.length === 0) return null;
 
@@ -472,7 +556,16 @@ function ChatCodeDiffCard({
                 </button>
                 {expanded && (
                   <div className="cc-file-diff">
-                    <DiffCodeView text={diffText(file)} />
+                    {loadingKeys.has(key) && !hasDiffContent(file) ? (
+                      <div className="chat-diff-code">
+                        <div className="chat-diff-line meta">
+                          <span className="ln">1</span>
+                          <code>Loading diff...</code>
+                        </div>
+                      </div>
+                    ) : (
+                      <DiffCodeView text={diffText(file)} />
+                    )}
                   </div>
                 )}
               </div>
@@ -1313,11 +1406,21 @@ function ChatCodeDiffPreview({
     const uniqueRefs = workspaceRefs.filter((ref, index, arr) => arr.findIndex(item => item.id === ref.id) === index);
     const uniquePrRefs = pullRequestRefs.filter((ref, index, arr) => arr.findIndex(item => item.id === ref.id) === index);
     const snapshotBundles = (snapshots: ChatDiffSnapshot[]): ChatDiffBundle[] => snapshots
-      .map(snapshot => ({
-        workspaceId: snapshot.workspaceId,
-        workspaceName: snapshot.workspaceName,
-        files: ((snapshot.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim()),
-      }))
+      .map(snapshot => {
+        const sourceId = String(snapshot.workspaceId ?? '');
+        const isPrSnapshot = sourceId.startsWith('pr:');
+        return {
+          workspaceId: snapshot.workspaceId,
+          workspaceName: snapshot.workspaceName,
+          files: ((snapshot.files ?? []) as ChatDiffFile[])
+            .filter(hasChangedDiffMetadata)
+            .map(file => ({
+              ...file,
+              sourceType: isPrSnapshot ? 'pull-request' as const : 'workspace' as const,
+              sourceId: isPrSnapshot ? sourceId.slice(3) : sourceId,
+            })),
+        };
+      })
       .filter(bundle => bundle.files.length > 0);
     setLoading(true);
     (async () => {
@@ -1332,7 +1435,9 @@ function ChatCodeDiffPreview({
       const live = await Promise.all(uniqueRefs.map(async (ref) => {
         try {
           const result = await workspacesApi.getDiff(ref.id, { mode: 'workspace', anchor: 'creation' });
-          const files = ((result.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+          const files = ((result.files ?? []) as ChatDiffFile[])
+            .filter(hasChangedDiffMetadata)
+            .map(file => ({ ...file, sourceType: 'workspace' as const, sourceId: ref.id }));
           return { workspaceId: ref.id, workspaceName: ref.name, files };
         } catch {
           return { workspaceId: ref.id, workspaceName: ref.name, files: [] };
@@ -1359,14 +1464,16 @@ function ChatCodeDiffPreview({
         try {
           const result = await pullRequestsApi.getDiff(ref.id);
           const files = ((result.files ?? []) as Array<{ path: string; diff?: string; originalContent?: string; modifiedContent?: string }>)
-            .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
+            .filter(file => hasChangedDiffMetadata(file as ChatDiffFile))
             .map(file => {
               const counts = diffLineCounts(file.diff);
               return {
                 ...file,
-                status: file.diff?.includes('new file mode') ? 'added' : file.diff?.includes('deleted file mode') ? 'deleted' : 'modified',
-                additions: counts.additions,
-                deletions: counts.deletions,
+                status: (file as any).status ?? (file.diff?.includes('new file mode') ? 'added' : file.diff?.includes('deleted file mode') ? 'deleted' : 'modified'),
+                additions: (file as any).additions ?? counts.additions,
+                deletions: (file as any).deletions ?? counts.deletions,
+                sourceType: 'pull-request' as const,
+                sourceId: ref.id,
               } as ChatDiffFile;
             });
           return { workspaceId: `pr:${ref.id}`, workspaceName: ref.name, files };
@@ -1882,6 +1989,21 @@ function activityRowsForRun(run: SpawnedAgent): Array<{ key: string; text: strin
   });
 }
 
+function archivedActivityRowsForRun(run: SpawnedAgent, count: number): Array<{ key: string; text: string; at: string | number }> {
+  if (count <= 0) return [];
+  try {
+    const raw = sessionStorage.getItem(`allen-run-activity:${run.executionId}`);
+    if (!raw) return [];
+    const items = JSON.parse(raw) as Array<{ type?: string; tool?: string; command?: string; content?: string; timestamp?: number }>;
+    return items
+      .slice(-count)
+      .map(item => activityLine(run, item))
+      .filter((row): row is { key: string; text: string; at: string | number } => Boolean(row));
+  } catch {
+    return [];
+  }
+}
+
 function RunProgressFeed({
   runs,
   renderExecutionHeaderAction,
@@ -1889,13 +2011,21 @@ function RunProgressFeed({
   runs: SpawnedAgent[];
   renderExecutionHeaderAction?: (run: SpawnedAgent) => React.ReactNode;
 }) {
+  const [olderActivityCounts, setOlderActivityCounts] = useState<Record<string, number>>({});
   const activeRuns = runs.filter(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
   if (activeRuns.length === 0) return null;
 
   const heading = activeRuns.length === 1 ? 'Execution running' : `${activeRuns.length} executions running`;
 
   const renderExecutionLogs = (run: SpawnedAgent) => {
-    const logRows = activityRowsForRun(run).slice(-12);
+    const archivedRows = archivedActivityRowsForRun(run, olderActivityCounts[run.executionId] ?? 0);
+    const logRows = [...archivedRows, ...activityRowsForRun(run)].slice(-Math.max(12, 12 + (olderActivityCounts[run.executionId] ?? 0)));
+    const loadOlder = () => {
+      setOlderActivityCounts(prev => ({
+        ...prev,
+        [run.executionId]: Math.min((prev[run.executionId] ?? 0) + 50, 5000),
+      }));
+    };
     return (
       <details className="run-progress-logs">
         <summary>
@@ -1903,7 +2033,18 @@ function RunProgressFeed({
           <span>Logs</span>
           <em>{logRows.length} event{logRows.length === 1 ? '' : 's'}</em>
         </summary>
-        <div className="run-progress-log-list">
+        <div
+          className="run-progress-log-list"
+          onScroll={(event) => {
+            if ((event.currentTarget as HTMLDivElement).scrollTop <= 4) loadOlder();
+          }}
+        >
+          {archivedRows.length > 0 && (
+            <button type="button" className="run-progress-row" onClick={loadOlder}>
+              <span className="run-progress-time">older</span>
+              <span className="run-progress-text">Load earlier activity</span>
+            </button>
+          )}
           {logRows.length > 0 ? logRows.map(row => (
             <div key={row.key} className="run-progress-row">
               <span className="run-progress-time">{formatTime(typeof row.at === 'string' ? row.at : new Date(row.at).toISOString())}</span>

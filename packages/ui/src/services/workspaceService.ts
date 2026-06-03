@@ -29,6 +29,13 @@ export const workspaces = {
     const qs = params.toString();
     return request<any>(`/workspaces/${id}/diff${qs ? `?${qs}` : ''}`);
   },
+  getDiffFile: (id: string, path: string, options?: { mode?: 'auto' | 'working' | 'branch' | 'workspace'; anchor?: 'creation' }) => {
+    const params = new URLSearchParams();
+    if (options?.mode) params.set('mode', options.mode);
+    if (options?.anchor) params.set('anchor', options.anchor);
+    const qs = params.toString();
+    return request<any>(`/workspaces/${id}/diff-file/${encodeFilePath(path)}${qs ? `?${qs}` : ''}`);
+  },
   getFiles: (id: string) => request<any[]>(`/workspaces/${id}/files`),
   getAllFiles: (id: string) => request<any[]>(`/workspaces/${id}/all-files`),
   getFile: (id: string, path: string) => request<any>(`/workspaces/${id}/file/${encodeFilePath(path)}`),
@@ -101,6 +108,7 @@ export const pullRequests = {
       errorCount: number;
     }>('/pull-requests/sync-all', { method: 'POST' }),
   getDiff: (id: string) => request<any>(`/pull-requests/${id}/diff`),
+  getDiffFile: (id: string, path: string) => request<any>(`/pull-requests/${id}/diff-file/${encodeFilePath(path)}`),
   getComments: (id: string) => request<{
     comments: Array<{
       id: string;

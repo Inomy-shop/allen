@@ -77,7 +77,23 @@ export function workspaceRoutes(db: Db): Router {
         ? req.query.mode
         : undefined;
       const anchorToCreation = req.query.anchor === 'creation';
-      res.json(await manager.getDiff(p(req, 'id'), { mode, anchorToCreation }));
+      const includeContent = req.query.includeContent === '1' || req.query.includeContent === 'true';
+      res.json(await manager.getDiff(p(req, 'id'), { mode, anchorToCreation, includeContent }));
+    }
+    catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
+  router.get('/:id/diff-file/*', async (req: Request, res: Response) => {
+    try {
+      const mode = req.query.mode === 'branch' || req.query.mode === 'working' || req.query.mode === 'auto' || req.query.mode === 'workspace'
+        ? req.query.mode
+        : undefined;
+      const anchorToCreation = req.query.anchor === 'creation';
+      const filePath = (req.params as any)[0] ?? '';
+      const diff = await manager.getDiff(p(req, 'id'), { mode, anchorToCreation, includeContent: true, filePath });
+      const file = diff.files.find(item => item.path === filePath);
+      if (!file) return res.status(404).json({ error: 'Diff file not found' });
+      res.json({ ...file, baseBranch: diff.baseBranch, baseCommit: diff.baseCommit, mode: diff.mode });
     }
     catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });

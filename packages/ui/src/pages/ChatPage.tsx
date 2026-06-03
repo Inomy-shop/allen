@@ -95,16 +95,26 @@ function diffLineCounts(diff?: string): { additions: number; deletions: number }
 
 type DiffSummaryFile = {
   path?: string;
+  status?: string;
   diff?: string;
   modifiedContent?: string;
   additions?: number;
   deletions?: number;
 };
 
+function hasChangedDiffMetadata(file: DiffSummaryFile): boolean {
+  return Boolean(file.path) && (
+    Number(file.additions ?? 0) > 0 ||
+    Number(file.deletions ?? 0) > 0 ||
+    Boolean(file.status) ||
+    Boolean(file.diff?.trim() || file.modifiedContent?.trim())
+  );
+}
+
 function summarizeDiffFiles(files: DiffSummaryFile[]): { files: number; additions: number; deletions: number } {
   const byKey = new Map<string, { additions: number; deletions: number }>();
   for (const file of files) {
-    if (!file.diff?.trim() && !file.modifiedContent?.trim()) continue;
+    if (!hasChangedDiffMetadata(file)) continue;
     const counts = file.additions != null || file.deletions != null
       ? { additions: file.additions ?? 0, deletions: file.deletions ?? 0 }
       : diffLineCounts(file.diff);
@@ -981,20 +991,11 @@ export default function ChatPage() {
     const workspaceRefs = workspaceDiffRefs;
     const pullRequestRefs = pullRequestDiffRefs;
     const refreshDiffSummary = async () => {
-      const snapshotPart = activeSessionId
-        ? await chatCodeDiffs.listAll(activeSessionId)
-          .then(result => {
-            const files = (result.snapshots ?? []).flatMap((snapshot: any) => snapshot.files ?? [])
-              .filter((file: any) => file.diff?.trim() || file.modifiedContent?.trim());
-            return summarizeDiffFiles(files);
-          })
-          .catch(() => ({ files: 0, additions: 0, deletions: 0 }))
-        : { files: 0, additions: 0, deletions: 0 };
       const parts = await Promise.all(workspaceRefs.map(async ref => {
         try {
           const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode });
-          const files = ((result.files ?? []) as Array<{ path?: string; additions?: number; deletions?: number; diff?: string; modifiedContent?: string }>)
-            .filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+          const files = ((result.files ?? []) as DiffSummaryFile[])
+            .filter(hasChangedDiffMetadata);
           return files;
         } catch {
           return [];
@@ -1003,16 +1004,36 @@ export default function ChatPage() {
       const prParts = await Promise.all(pullRequestRefs.map(async ref => {
         try {
           const result = await pullRequestsApi.getDiff(ref.id);
-          const files = ((result.files ?? []) as Array<{ path?: string; diff?: string; modifiedContent?: string }>)
-            .filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+          const files = ((result.files ?? []) as DiffSummaryFile[])
+            .filter(hasChangedDiffMetadata);
           return files;
         } catch {
           return [];
         }
       }));
-      if (cancelled) return;
       const liveSummary = summarizeDiffFiles([...parts.flat(), ...prParts.flat()]);
-      const summary = liveSummary.files > 0 ? liveSummary : snapshotPart;
+      if (cancelled) return;
+      if (liveSummary.files > 0) {
+        const nextSignature = `${liveSummary.files}:${liveSummary.additions}:${liveSummary.deletions}`;
+        if (chatDiffSignatureRef.current !== nextSignature) {
+          chatDiffSignatureRef.current = nextSignature;
+          setHiddenDiffSignature(null);
+        }
+        setChatDiffSummary(liveSummary);
+        return;
+      }
+
+      const snapshotPart = activeSessionId
+        ? await chatCodeDiffs.listAll(activeSessionId)
+          .then(result => {
+            const files = (result.snapshots ?? []).flatMap((snapshot: any) => snapshot.files ?? [])
+              .filter(hasChangedDiffMetadata);
+            return summarizeDiffFiles(files);
+          })
+          .catch(() => ({ files: 0, additions: 0, deletions: 0 }))
+        : { files: 0, additions: 0, deletions: 0 };
+      if (cancelled) return;
+      const summary = snapshotPart;
       const next = summary.files > 0 ? summary : null;
       const nextSignature = next ? `${next.files}:${next.additions}:${next.deletions}` : '';
       if (chatDiffSignatureRef.current !== nextSignature) {

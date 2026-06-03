@@ -15,6 +15,9 @@ import { setupMonaco, getMonacoTheme } from '../lib/monaco-theme';
 interface DiffFile {
   path: string;
   diff: string;
+  status?: string;
+  additions?: number;
+  deletions?: number;
   originalContent?: string;
   modifiedContent?: string;
 }
@@ -40,10 +43,13 @@ export default function PullRequestDetailPage() {
   const [loading, setLoading] = useState(true);
   const [diff, setDiff] = useState<{ diff: string; files: DiffFile[] }>({ diff: '', files: [] });
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [diffFileLoading, setDiffFileLoading] = useState(false);
   const [pendingWsId, setPendingWsId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('conversation');
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [commentsLoading, setCommentsLoading] = useState(false);
+  const selectedDiff = diff.files.find(f => f.path === selectedFile);
+  const selectedDiffHasContent = Boolean(selectedDiff?.diff?.trim() || selectedDiff?.originalContent?.trim() || selectedDiff?.modifiedContent?.trim());
 
   useEffect(() => {
     if (!id) return;
@@ -68,6 +74,32 @@ export default function PullRequestDetailPage() {
       .finally(() => setCommentsLoading(false));
   }, [id, tab, comments]);
 
+  useEffect(() => {
+    if (!id || !selectedFile || !selectedDiff || selectedDiffHasContent) return;
+    let cancelled = false;
+    setDiffFileLoading(true);
+    pullRequests.getDiffFile(id, selectedFile)
+      .then(file => {
+        if (cancelled) return;
+        setDiff(current => ({
+          ...current,
+          files: current.files.map(item => item.path === selectedFile ? { ...item, ...file } : item),
+        }));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDiff(current => ({
+            ...current,
+            files: current.files.map(item => item.path === selectedFile ? { ...item, diff: 'Failed to load diff content.' } : item),
+          }));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDiffFileLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [id, selectedFile, selectedDiff?.path, selectedDiffHasContent]);
+
   async function handleCreateWorkspace() {
     if (!id) return;
     try {
@@ -90,8 +122,6 @@ export default function PullRequestDetailPage() {
       <Loader2 className="w-6 h-6 animate-spin text-theme-muted" />
     </div>
   );
-
-  const selectedDiff = diff.files.find(f => f.path === selectedFile);
 
   function detectLanguage(path: string | null): string {
     const ext = path?.split('.').pop()?.toLowerCase() ?? '';
@@ -211,7 +241,12 @@ export default function PullRequestDetailPage() {
             )}
           </div>
           <div className="flex-1 min-h-0 overflow-hidden">
-            {selectedDiff ? (
+            {selectedDiff && diffFileLoading && !selectedDiffHasContent ? (
+              <div className="flex items-center justify-center h-full text-theme-subtle text-sm gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading diff...
+              </div>
+            ) : selectedDiff ? (
               <DiffEditor
                 height="100%"
                 language={detectLanguage(selectedFile)}

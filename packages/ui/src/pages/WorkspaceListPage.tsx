@@ -343,6 +343,7 @@ export default function WorkspaceListPage() {
   const [fileContent, setFileContent] = useState('');
   const [fileDirty, setFileDirty] = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
+  const [diffContentLoading, setDiffContentLoading] = useState(false);
   const [workspaceChats, setWorkspaceChats] = useState<ChatSessionSummary[]>([]);
   const [openChatIds, setOpenChatIds] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState('diff');
@@ -367,6 +368,7 @@ export default function WorkspaceListPage() {
     [workspaceList, activeId],
   );
   const activeDiff = diffFiles.find(file => file.path === activeFile) ?? diffFiles[0] ?? null;
+  const activeDiffHasContent = Boolean(activeDiff?.diff?.trim() || activeDiff?.originalContent?.trim() || activeDiff?.modifiedContent?.trim());
   const fileTree = useMemo(() => buildFileTree(allFiles), [allFiles]);
   const repoById = useMemo(() => new Map(repos.map(repo => [repo._id, repo])), [repos]);
   const workspaceGroups = useMemo(() => {
@@ -529,6 +531,26 @@ export default function WorkspaceListPage() {
     });
     return () => { cancelled = true; };
   }, [activeId]);
+
+  useEffect(() => {
+    if (!activeId || !activeDiff?.path || activeDiffHasContent) return;
+    let cancelled = false;
+    setDiffContentLoading(true);
+    workspaces.getDiffFile(activeId, activeDiff.path, { mode: 'workspace' })
+      .then(file => {
+        if (cancelled) return;
+        setDiffFiles(current => current.map(item => item.path === activeDiff.path ? { ...item, ...file } : item));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDiffFiles(current => current.map(item => item.path === activeDiff.path ? { ...item, diff: 'Failed to load diff content.' } : item));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDiffContentLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [activeId, activeDiff?.path, activeDiffHasContent]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -1047,6 +1069,11 @@ export default function WorkspaceListPage() {
                         <button type="submit" className="btn btn-primary btn-sm">create workspace</button>
                       </div>
                     </form>
+                  ) : activeDiff && diffContentLoading && !activeDiffHasContent ? (
+                    <div className="ws-diff-empty">
+                      <Loader2 className="mx-auto mb-3 h-5 w-5 animate-spin text-theme-subtle" />
+                      <div>loading diff...</div>
+                    </div>
                   ) : activeDiff ? (
                     <div className="ws-monaco-diff">
                       <DiffEditor

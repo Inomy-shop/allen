@@ -1140,6 +1140,8 @@ type PanelDiffFile = {
   modifiedContent?: string;
   workspaceId: string;
   workspaceName?: string | null;
+  sourceType?: 'workspace' | 'pull-request' | 'snapshot';
+  sourceId?: string;
 };
 
 type WorkspaceFileEntry = {
@@ -1319,6 +1321,19 @@ function normalizeFileStatus(status?: string | null): FileTreeStatus | undefined
 
 function changedFileStatus(file: PanelDiffFile): FileTreeStatus {
   return normalizeFileStatus(file.status) ?? (file.diff?.includes('new file mode') ? 'added' : 'modified');
+}
+
+function hasDiffContent(file?: Pick<PanelDiffFile, 'diff' | 'originalContent' | 'modifiedContent'> | null): boolean {
+  return Boolean(file?.diff?.trim() || file?.originalContent?.trim() || file?.modifiedContent?.trim());
+}
+
+function isChangedDiffFile(file: { path?: string; additions?: number; deletions?: number; status?: string; diff?: string; modifiedContent?: string }): boolean {
+  return Boolean(file.path) && (
+    Number(file.additions ?? 0) > 0 ||
+    Number(file.deletions ?? 0) > 0 ||
+    Boolean(file.status) ||
+    hasDiffContent(file)
+  );
 }
 
 function diffLineCounts(diff?: string): { additions: number; deletions: number } {
@@ -2132,6 +2147,7 @@ function FileChangesPanel({
   const [fileLoading, setFileLoading] = useState(false);
   const [browserLoading, setBrowserLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [diffContentLoading, setDiffContentLoading] = useState(false);
   const [fileReloadNonce, setFileReloadNonce] = useState(0);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminals, setTerminals] = useState<Array<{ id: string; label: string }>>([{ id: 'default', label: 'Terminal 1' }]);
@@ -2223,11 +2239,40 @@ function FileChangesPanel({
     const addFiles = (incoming: PanelDiffFile[]) => {
       for (const file of incoming) {
         const key = file.path;
-        if (!byKey.has(key)) byKey.set(key, file);
+        const existing = byKey.get(key);
+        const next = {
+          ...existing,
+          ...file,
+          additions: Math.max(existing?.additions ?? 0, file.additions ?? 0),
+          deletions: Math.max(existing?.deletions ?? 0, file.deletions ?? 0),
+          diff: hasDiffContent(file) ? file.diff : existing?.diff ?? file.diff,
+          originalContent: hasDiffContent(file) ? file.originalContent : existing?.originalContent ?? file.originalContent,
+          modifiedContent: hasDiffContent(file) ? file.modifiedContent : existing?.modifiedContent ?? file.modifiedContent,
+        };
+        byKey.set(key, next);
       }
+    };
+    const publishFiles = () => {
+      if (!cancelled) setFiles(Array.from(byKey.values()));
     };
 
     (async () => {
+      const workspaceGroups = await Promise.all(workspaceRefs.map(async ref => {
+      try {
+        const result = await workspacesApi.getDiff(ref.id, rootType === 'chat'
+          ? { mode: ref.mode, anchor: 'creation' }
+          : { mode: ref.mode });
+        return ((result.files ?? []) as Array<Omit<PanelDiffFile, 'workspaceId' | 'workspaceName'>>)
+          .filter(isChangedDiffFile)
+          .map(file => ({ ...file, workspaceId: ref.id, workspaceName: ref.name, sourceType: 'workspace' as const, sourceId: ref.id }));
+      } catch {
+        return [];
+      }
+      }));
+      addFiles(workspaceGroups.flat());
+      publishFiles();
+      if (workspaceRefs.length > 0 && !cancelled) setLoading(false);
+
       if (rootType === 'chat' && rootId) {
         try {
           const result = await chatCodeDiffs.listAll(rootId);
@@ -2235,40 +2280,35 @@ function FileChangesPanel({
             const sourceId = String(snapshot.workspaceId ?? snapshot._id ?? 'snapshot');
             const sourceName = snapshot.workspaceName ?? snapshot.baseBranch ?? 'saved diff';
             return ((snapshot.files ?? []) as Array<Omit<PanelDiffFile, 'workspaceId' | 'workspaceName'>>)
-              .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
-              .map(file => ({ ...file, workspaceId: sourceId, workspaceName: sourceName }));
+              .filter(isChangedDiffFile)
+              .map(file => ({
+                ...file,
+                workspaceId: sourceId,
+                workspaceName: sourceName,
+                sourceType: sourceId.startsWith('pr:') ? 'pull-request' : 'workspace',
+                sourceId: sourceId.startsWith('pr:') ? sourceId.slice(3) : sourceId,
+              }));
           }));
+          publishFiles();
         } catch {}
       }
-
-      const workspaceGroups = await Promise.all(workspaceRefs.map(async ref => {
-      try {
-        const result = await workspacesApi.getDiff(ref.id, rootType === 'chat'
-          ? { mode: ref.mode, anchor: 'creation' }
-          : { mode: ref.mode });
-        return ((result.files ?? []) as Array<Omit<PanelDiffFile, 'workspaceId' | 'workspaceName'>>)
-          .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
-          .map(file => ({ ...file, workspaceId: ref.id, workspaceName: ref.name }));
-      } catch {
-        return [];
-      }
-      }));
-      addFiles(workspaceGroups.flat());
 
       const prGroups = await Promise.all(pullRequestRefs.map(async ref => {
         try {
           const result = await pullRequestsApi.getDiff(ref.id);
           return ((result.files ?? []) as Array<{ path: string; diff?: string; originalContent?: string; modifiedContent?: string }>)
-            .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
+            .filter(isChangedDiffFile)
             .map(file => {
               const counts = diffLineCounts(file.diff);
               return {
                 ...file,
-                status: file.diff?.includes('new file mode') ? 'added' : file.diff?.includes('deleted file mode') ? 'deleted' : 'modified',
-                additions: counts.additions,
-                deletions: counts.deletions,
+                status: (file as any).status ?? (file.diff?.includes('new file mode') ? 'added' : file.diff?.includes('deleted file mode') ? 'deleted' : 'modified'),
+                additions: (file as any).additions ?? counts.additions,
+                deletions: (file as any).deletions ?? counts.deletions,
                 workspaceId: `pr:${ref.id}`,
                 workspaceName: ref.name,
+                sourceType: 'pull-request' as const,
+                sourceId: ref.id,
               };
             });
         } catch {
@@ -2277,7 +2317,7 @@ function FileChangesPanel({
       }));
       addFiles(prGroups.flat());
 
-      if (!cancelled) setFiles(Array.from(byKey.values()));
+      publishFiles();
     })().finally(() => {
       if (!cancelled) setLoading(false);
     });
@@ -2311,6 +2351,37 @@ function FileChangesPanel({
       setActiveDiffPath('');
     }
   }, [files, activeDiffPath]);
+
+  useEffect(() => {
+    if (!activeDiff || hasDiffContent(activeDiff)) return;
+    const sourceType = activeDiff.sourceType;
+    const sourceId = activeDiff.sourceId;
+    if (!sourceType || !sourceId) return;
+    let cancelled = false;
+    setDiffContentLoading(true);
+    (async () => {
+      try {
+        const hydrated = sourceType === 'pull-request'
+          ? await withTimeout('pullRequests.getDiffFile', pullRequestsApi.getDiffFile(sourceId, activeDiff.path))
+          : await withTimeout('workspaces.getDiffFile', workspacesApi.getDiffFile(sourceId, activeDiff.path, rootType === 'chat'
+            ? { mode: 'workspace', anchor: 'creation' }
+            : { mode: 'workspace' }));
+        if (cancelled) return;
+        setFiles(current => current.map(file => file.path === activeDiff.path && file.sourceId === sourceId
+          ? { ...file, ...hydrated, sourceType, sourceId, workspaceId: file.workspaceId, workspaceName: file.workspaceName }
+          : file));
+      } catch {
+        if (!cancelled) {
+          setFiles(current => current.map(file => file.path === activeDiff.path && file.sourceId === sourceId
+            ? { ...file, diff: 'Failed to load diff content.' }
+            : file));
+        }
+      } finally {
+        if (!cancelled) setDiffContentLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeDiff?.path, activeDiff?.sourceId, activeDiff?.sourceType, rootType]);
 
   useEffect(() => {
     if (view !== 'files') return;
@@ -2521,7 +2592,9 @@ function FileChangesPanel({
         </div>
       </div>
       <div className="ws-diff-body">
-        {file ? (
+        {file && diffContentLoading && !hasDiffContent(file) ? (
+          <div className="cr-loading-state"><Loader2 className="h-4 w-4 animate-spin" /><span>Loading diff...</span></div>
+        ) : file ? (
           <div className="cr-file-detail-diff browse-diff">
             {diffMode === 'split'
               ? <SplitDiffView key={`${file.path}:split`} file={file} />

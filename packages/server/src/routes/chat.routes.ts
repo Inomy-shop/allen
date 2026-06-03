@@ -20,6 +20,24 @@ const _automationMsgRateLimit = new Map<string, { count: number; windowStart: nu
 const AUTOMATION_MSG_RATE_LIMIT = 60;
 const AUTOMATION_MSG_RATE_WINDOW_MS = 60_000;
 
+function diffFileMetadata(file: unknown): unknown {
+  if (!file || typeof file !== 'object' || Array.isArray(file)) return file;
+  const row = file as Record<string, unknown>;
+  return {
+    ...row,
+    diff: '',
+    originalContent: '',
+    modifiedContent: '',
+  };
+}
+
+function diffSnapshotMetadata(snapshot: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...snapshot,
+    files: Array.isArray(snapshot.files) ? snapshot.files.map(diffFileMetadata) : snapshot.files,
+  };
+}
+
 function checkAutomationMsgRateLimit(userId: string): boolean {
   const now = Date.now();
   // Evict stale entries (older than 2× the window) to prevent unbounded growth
@@ -320,7 +338,7 @@ export function chatRoutes(db: Db): Router {
         .find(filter)
         .sort({ createdAt: 1 })
         .toArray();
-      const responseSnapshots: Record<string, unknown>[] = snapshots.map(snapshot => ({ ...snapshot }));
+      const responseSnapshots: Record<string, unknown>[] = snapshots.map(snapshot => diffSnapshotMetadata({ ...snapshot }));
       if (!messageId && ObjectId.isValid(sessionId)) {
         const session = await db.collection('chat_sessions').findOne(
           { _id: new ObjectId(sessionId) },
@@ -368,7 +386,7 @@ export function chatRoutes(db: Db): Router {
         if (diffRepoPath && diffBranch && diffBaseBranch) {
           const prDiff = await new PullRequestService(db).getDiff(String(diffRepoPath), String(diffBranch), String(diffBaseBranch));
           const files = (prDiff.files ?? [])
-            .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
+            .filter(file => file.path && ((file.additions ?? 0) > 0 || (file.deletions ?? 0) > 0 || file.status))
             .map(file => {
               const counts = file.diff.split('\n').reduce((acc, line) => {
                 if (line.startsWith('+++') || line.startsWith('---')) return acc;
@@ -378,9 +396,9 @@ export function chatRoutes(db: Db): Router {
               }, { additions: 0, deletions: 0 });
               return {
                 ...file,
-                status: file.diff.includes('new file mode') ? 'added' : file.diff.includes('deleted file mode') ? 'deleted' : 'modified',
-                additions: counts.additions,
-                deletions: counts.deletions,
+                status: file.status ?? (file.diff.includes('new file mode') ? 'added' : file.diff.includes('deleted file mode') ? 'deleted' : 'modified'),
+                additions: file.additions ?? counts.additions,
+                deletions: file.deletions ?? counts.deletions,
               };
             });
           if (files.length > 0) {
@@ -399,7 +417,7 @@ export function chatRoutes(db: Db): Router {
           }
         }
       }
-      res.json({ snapshots: responseSnapshots });
+      res.json({ snapshots: responseSnapshots.map(snapshot => diffSnapshotMetadata(snapshot)) });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -429,11 +447,11 @@ export function chatRoutes(db: Db): Router {
       for (const ref of workspaceRefs) {
         const existing = await collection.findOne({ chatSessionId: sessionId, parentMessageId, workspaceId: ref.id });
         if (existing) {
-          snapshots.push(existing);
+          snapshots.push(diffSnapshotMetadata(existing as Record<string, unknown>));
           continue;
         }
         const diff = await workspaceManager.getDiff(ref.id, { mode: requestedMode, anchorToCreation: requestedMode === 'workspace' });
-        const files = diff.files.filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+        const files = diff.files.filter(file => file.path && (file.additions > 0 || file.deletions > 0 || file.status));
         if (files.length === 0) continue;
         const now = new Date();
         const snapshot = {
@@ -450,7 +468,7 @@ export function chatRoutes(db: Db): Router {
           updatedAt: now,
         };
         const result = await collection.insertOne(snapshot);
-        snapshots.push({ ...snapshot, _id: result.insertedId });
+        snapshots.push(diffSnapshotMetadata({ ...snapshot, _id: result.insertedId }));
       }
       res.json({ snapshots });
     } catch (err: unknown) {

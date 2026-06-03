@@ -63,6 +63,17 @@ export function pullRequestRoutes(db: Db): Router {
     } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
   });
 
+  router.get('/:id/diff-file/*', async (req: Request, res: Response) => {
+    try {
+      const pr = await prService.get(p(req, 'id'));
+      if (!pr) return res.status(404).json({ error: 'PR not found' });
+      const filePath = (req.params as any)[0] ?? '';
+      const file = await prService.getDiffFile(pr.repoPath, pr.branch, pr.baseBranch, filePath);
+      if (!file) return res.status(404).json({ error: 'Diff file not found' });
+      res.json(file);
+    } catch (err: unknown) { res.status(500).json({ error: (err as Error).message }); }
+  });
+
   // Get PR conversation — top-level comments, review submissions, and
   // review comments (inline). Pulled live from GitHub via `gh pr view`.
   router.get('/:id/comments', async (req: Request, res: Response) => {

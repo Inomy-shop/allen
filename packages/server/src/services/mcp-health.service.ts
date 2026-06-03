@@ -51,6 +51,12 @@ export interface HealthCheckResult {
 // finish() adds durationMs from the closure, so its callers pass everything except that.
 type PartialResult = Omit<HealthCheckResult, 'durationMs'>;
 
+function redactLogArg(arg: string): string {
+  return arg
+    .replace(/\/\/([^/\s:@]+):([^@\s/]+)@/g, '//[redacted]:[redacted]@')
+    .replace(/([?&](?:password|token|api[_-]?key|secret|access_token)=)[^&\s]+/gi, '$1[redacted]');
+}
+
 async function checkStdioServer(server: McpServerRecord, db: Db): Promise<HealthCheckResult> {
   const startMs = Date.now();
 
@@ -77,7 +83,7 @@ async function checkStdioServer(server: McpServerRecord, db: Db): Promise<Health
   const cwd = spawnCfg.cwd as string | undefined;
 
   // Log the spawn command for diagnostics — NEVER log env values (may contain secrets)
-  console.log(`[mcp-health] stdio check: server="${server.name}" cmd="${command}" args=[${args.map(a => JSON.stringify(a)).join(', ')}]`);
+  console.log(`[mcp-health] stdio check: server="${server.name}" cmd="${command}" args=[${args.map(a => JSON.stringify(redactLogArg(a))).join(', ')}]`);
 
   return new Promise<HealthCheckResult>((resolve) => {
     let proc: ReturnType<typeof spawn> | null = null;

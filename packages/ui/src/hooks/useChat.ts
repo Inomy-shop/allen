@@ -4,6 +4,38 @@ import { useAuthStore, type AuthUser } from '../stores/authStore';
 
 /** Maximum number of automatic reconnect attempts on a transient stream error. */
 export const MAX_RECONNECT_ATTEMPTS = 3;
+const MAX_LIVE_ACTIVITY_ITEMS = 300;
+const MAX_AGENT_REPORTS = 100;
+const MAX_LIVE_TOOL_CALLS = 100;
+const MAX_ARCHIVED_ACTIVITY_ITEMS = 5000;
+
+function appendCapped<T>(items: T[] | undefined, item: T, max: number): T[] {
+  const next = [...(items ?? []), item];
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
+function runActivityArchiveKey(executionId: string): string {
+  return `allen-run-activity:${executionId}`;
+}
+
+function archiveRunActivity(executionId: string, items: SpawnedAgent['activity']): void {
+  if (items.length === 0) return;
+  try {
+    const key = runActivityArchiveKey(executionId);
+    const existing = JSON.parse(sessionStorage.getItem(key) ?? '[]') as SpawnedAgent['activity'];
+    const next = [...existing, ...items].slice(-MAX_ARCHIVED_ACTIVITY_ITEMS);
+    sessionStorage.setItem(key, JSON.stringify(next));
+  } catch {
+    // Best effort: keeping React state capped is the important part.
+  }
+}
+
+function appendRunActivity(run: SpawnedAgent, item: SpawnedAgent['activity'][number]): SpawnedAgent['activity'] {
+  const next = [...run.activity, item];
+  if (next.length <= MAX_LIVE_ACTIVITY_ITEMS) return next;
+  archiveRunActivity(run.executionId, next.slice(0, next.length - MAX_LIVE_ACTIVITY_ITEMS));
+  return next.slice(-MAX_LIVE_ACTIVITY_ITEMS);
+}
 
 /**
  * Check whether the backend session is still streaming.
@@ -565,11 +597,11 @@ export function useChat() {
         break;
 
       case 'tool_start':
-        setActiveToolCalls(prev => mergeToolStart(prev, data));
+        setActiveToolCalls(prev => mergeToolStart(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
         break;
 
       case 'tool_result':
-        setActiveToolCalls(prev => mergeToolResult(prev, data));
+        setActiveToolCalls(prev => mergeToolResult(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
         {
           const run = toolRunFromResult(data.tool, data.result);
           if (run) {
@@ -619,12 +651,12 @@ export function useChat() {
         break;
 
       case 'agent_report':
-        setAgentReports(prev => [...prev, {
+        setAgentReports(prev => appendCapped(prev, {
           agent: data.agent as string,
           message: data.message as string,
           status: data.status as string,
           timestamp: data.timestamp as string,
-        }]);
+        }, MAX_AGENT_REPORTS));
         break;
 
       case 'spawn_started':
@@ -658,7 +690,7 @@ export function useChat() {
       case 'spawn_activity':
         setSpawnedAgents(prev => prev.map(s =>
           s.executionId === data.executionId
-            ? { ...s, activity: [...s.activity, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, content: data.content as string | undefined, timestamp: Date.now() }] }
+            ? { ...s, activity: appendRunActivity(s, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, content: data.content as string | undefined, timestamp: Date.now() }) }
             : s,
         ));
         break;
@@ -841,7 +873,7 @@ export function useChat() {
                   if (data.toolUseId ?? data.tool_use_id) {
                     activeToolArgs.set(data.toolUseId ?? data.tool_use_id, data.args ?? {});
                   }
-                  setActiveToolCalls(prev => mergeToolStart(prev, data));
+                  setActiveToolCalls(prev => mergeToolStart(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
                   break;
 
                 case 'tool_result': {
@@ -856,7 +888,7 @@ export function useChat() {
                   };
                   collectedToolCalls.push(toolRecord);
                   if (toolUseId) activeToolArgs.delete(toolUseId);
-                  setActiveToolCalls(prev => mergeToolResult(prev, data));
+                  setActiveToolCalls(prev => mergeToolResult(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
                   const run = toolRunFromResult(data.tool, data.result);
                   if (run) {
                     run.sourceMessageId = data.messageId || assistantMsgId;
@@ -910,12 +942,12 @@ export function useChat() {
                   break;
 
                 case 'agent_report':
-                  setAgentReports(prev => [...prev, {
+                  setAgentReports(prev => appendCapped(prev, {
                     agent: data.agent as string,
                     message: data.message as string,
                     status: data.status as string,
                     timestamp: data.timestamp as string,
-                  }]);
+                  }, MAX_AGENT_REPORTS));
                   break;
 
                 case 'spawn_started':
@@ -949,7 +981,7 @@ export function useChat() {
                 case 'spawn_activity':
                   setSpawnedAgents(prev => prev.map(s =>
                     s.executionId === data.executionId
-                      ? { ...s, activity: [...s.activity, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, content: data.content as string | undefined, timestamp: Date.now() }] }
+                      ? { ...s, activity: appendRunActivity(s, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, content: data.content as string | undefined, timestamp: Date.now() }) }
                       : s,
                   ));
                   break;
