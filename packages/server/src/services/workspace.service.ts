@@ -1145,6 +1145,8 @@ export class WorkspaceManager {
 
   async linkChat(id: string, chatSessionId: string): Promise<void> {
     const { ObjectId } = await import('mongodb');
+    // Fetch workspace to snapshot its metadata onto the chat session
+    const ws = await this.col.findOne({ _id: new ObjectId(id) }) as Workspace | null;
     await this.col.updateOne(
       { _id: new ObjectId(id) },
       {
@@ -1154,7 +1156,19 @@ export class WorkspaceManager {
     );
     await this.db.collection('chat_sessions').updateOne(
       { _id: new ObjectId(chatSessionId) },
-      { $set: { workspaceId: id, updatedAt: new Date() } },
+      {
+        $set: {
+          workspaceId: id,
+          workspaceName: ws?.name ?? undefined,
+          workspaceRepoId: ws?.repoId ?? undefined,
+          workspaceRepoName: ws?.repoName ?? undefined,
+          workspaceBranch: ws?.branch ?? undefined,
+          workspaceBaseBranch: ws?.baseBranch ?? undefined,
+          workspacePrNumber: ws?.prNumber ?? undefined,
+          workspacePrUrl: ws?.prUrl ?? undefined,
+          updatedAt: new Date(),
+        },
+      },
     );
   }
 }

@@ -10,7 +10,9 @@ import ChatRunSidebar, { type ChatRunPanelTab } from '../components/chat/ChatRun
 import { ToolCallLog } from '../components/common/ToolCallLog';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, type ChatQueueItem } from '../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
-import { BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, X } from 'lucide-react';
+import WorkspaceChatTabs, { type WorkspaceChatTab, getTabKey } from '../components/chat/WorkspaceChatTabs';
+import { BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Terminal, X } from 'lucide-react';
+import { XTerminal } from '../components/workspace/XTerminal';
 
 type PendingSendOptions = {
   provider?: string | null;
@@ -116,10 +118,21 @@ function summarizeDiffFiles(files: DiffSummaryFile[]): { files: number; addition
   }), { files: 0, additions: 0, deletions: 0 });
 }
 
+function workspaceChatToTab(chat: any): WorkspaceChatTab {
+  return {
+    id: { kind: 'session' as const, sessionId: chat._id },
+    title: chat.title || 'chat',
+    isTemp: false,
+    titleSource: chat.titleSource,
+    lastMessageAt: chat.lastMessageAt,
+  };
+}
+
 export default function ChatPage() {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const urlWorkspaceId = searchParams.get('workspaceId');
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
   const [cmdPaletteAnchor, setCmdPaletteAnchor] = useState<DOMRect | null>(null);
   const [logsOpen, setLogsOpen] = useState(false);
@@ -154,6 +167,18 @@ export default function ChatPage() {
   const queuedMessagesRef = useRef<ChatQueueItem[]>([]);
   const editingQueuedIdRef = useRef<string | null>(null);
   const chatDiffSignatureRef = useRef('');
+  const wsLoadedForSessionRef = useRef<string | null>(null);
+  const pendingWorkspaceTempTabRef = useRef<{ workspaceId: string; tab: WorkspaceChatTab } | null>(null);
+  const workspaceTabsWorkspaceIdRef = useRef<string | null>(null);
+
+  // Workspace mode state
+  const [activeWorkspace, setActiveWorkspace] = useState<any | null>(null);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [workspaceChats, setWorkspaceChats] = useState<any[]>([]);
+  const [openWorkspaceTabs, setOpenWorkspaceTabs] = useState<WorkspaceChatTab[]>([]);
+  const [activeWorkspaceTabKey, setActiveWorkspaceTabKey] = useState<string | null>(null);
+  const [tempTabCounter, setTempTabCounter] = useState(0);
+  const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null);
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
@@ -285,6 +310,285 @@ export default function ChatPage() {
     }
   }, [activeSessionId]);
 
+  // ── Workspace mode: primary bootstrap (triggered by ?workspaceId in URL) ──
+  useEffect(() => {
+    if (!urlWorkspaceId) return;
+
+    let cancelled = false;
+    workspaceTabsWorkspaceIdRef.current = null;
+
+    async function loadWorkspace() {
+      try {
+        const ws = await workspacesApi.get(urlWorkspaceId!);
+        if (cancelled) return;
+        setActiveWorkspace(ws);
+        setActiveWorkspaceId(urlWorkspaceId);
+        setWorkspaceLoadError(null);
+
+        const chats = await workspacesApi.listChats(urlWorkspaceId!);
+        if (cancelled) return;
+        setWorkspaceChats(chats);
+
+        // Try to restore tabs from localStorage (best-effort)
+        let hasStoredTabState = false;
+        let restoredOpenIds: string[] = [];
+        let restoredActiveId: string | null = null;
+        let restoredActiveTabKey: string | null = null;
+        let restoredTerminalOpen = false;
+        try {
+          const stored = localStorage.getItem(`allen-ws-chat-tabs:${urlWorkspaceId}`);
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed.openSessionIds)) {
+              hasStoredTabState = true;
+              restoredOpenIds = parsed.openSessionIds;
+            }
+            restoredActiveId = typeof parsed.activeSessionId === 'string' ? parsed.activeSessionId : null;
+            restoredActiveTabKey = typeof parsed.activeTabKey === 'string' ? parsed.activeTabKey : null;
+            restoredTerminalOpen = parsed.openTerminal === true && parsed.terminalWorkspaceId === urlWorkspaceId;
+          }
+        } catch {}
+
+        const pendingTemp = pendingWorkspaceTempTabRef.current?.workspaceId === urlWorkspaceId
+          ? pendingWorkspaceTempTabRef.current.tab
+          : null;
+        const restoredTerminalTab: WorkspaceChatTab | null = restoredTerminalOpen
+          ? { id: { kind: 'terminal' }, title: 'Terminal', isTemp: false }
+          : null;
+
+        if (chats.length === 0) {
+          const tempTab: WorkspaceChatTab = pendingTemp ?? {
+            id: { kind: 'temp', tempId: `temp-${Date.now()}` },
+            title: 'New chat',
+            isTemp: true,
+            tempIndex: 0,
+          };
+          const tabs = restoredTerminalTab && getTabKey(tempTab) !== 'terminal'
+            ? [tempTab, restoredTerminalTab]
+            : [tempTab];
+          const activeKey = pendingTemp
+            ? getTabKey(pendingTemp)
+            : restoredActiveTabKey === 'terminal' && restoredTerminalTab
+              ? 'terminal'
+              : getTabKey(tempTab);
+          workspaceTabsWorkspaceIdRef.current = urlWorkspaceId;
+          setOpenWorkspaceTabs(tabs);
+          setActiveWorkspaceTabKey(activeKey);
+          switchSession('');
+          if (pendingTemp) pendingWorkspaceTempTabRef.current = null;
+        } else {
+          const tabSessionIds = hasStoredTabState
+            ? restoredOpenIds.filter(id => chats.some((c: any) => c._id === id))
+            : (chats[0]?._id ? [chats[0]._id] : []);
+
+          const tabs: WorkspaceChatTab[] = tabSessionIds.map(sid => {
+            const chat = chats.find((c: any) => c._id === sid);
+            return workspaceChatToTab(chat ?? { _id: sid });
+          });
+
+          const finalTabs = tabs.length > 0 ? tabs : [workspaceChatToTab(chats[0])];
+
+          const tabsWithTerminal = restoredTerminalTab && !finalTabs.some(t => getTabKey(t) === 'terminal')
+            ? [...finalTabs, restoredTerminalTab]
+            : finalTabs;
+
+          const tabsWithPending = pendingTemp && !tabsWithTerminal.some(t => getTabKey(t) === getTabKey(pendingTemp))
+            ? [...tabsWithTerminal, pendingTemp]
+            : tabsWithTerminal;
+
+          if (tabsWithPending.length === 0) {
+            const recentTab = workspaceChatToTab(chats[0]);
+            const recentSessionId = recentTab.id.kind === 'session' ? recentTab.id.sessionId : '';
+            workspaceTabsWorkspaceIdRef.current = urlWorkspaceId;
+            setOpenWorkspaceTabs([recentTab]);
+            setActiveWorkspaceTabKey(getTabKey(recentTab));
+            switchSession(recentSessionId);
+            if (pendingTemp) pendingWorkspaceTempTabRef.current = null;
+            return;
+          }
+
+          workspaceTabsWorkspaceIdRef.current = urlWorkspaceId;
+          setOpenWorkspaceTabs(tabsWithPending);
+
+          const restoredActiveStillOpen = restoredActiveId && tabsWithPending.some(t => getTabKey(t) === restoredActiveId);
+          const restoredActiveTabStillOpen = restoredActiveTabKey && tabsWithPending.some(t => getTabKey(t) === restoredActiveTabKey);
+          const activeKey = pendingTemp
+            ? getTabKey(pendingTemp)
+            : restoredActiveTabStillOpen
+              ? restoredActiveTabKey
+              : restoredActiveStillOpen
+              ? restoredActiveId
+              : getTabKey(tabsWithPending[0]);
+          setActiveWorkspaceTabKey(activeKey);
+
+          const firstTab = tabsWithPending.find(t => getTabKey(t) === activeKey);
+          if (firstTab && firstTab.id.kind === 'session') {
+            switchSession(firstTab.id.sessionId);
+          } else {
+            switchSession('');
+          }
+          if (pendingTemp) pendingWorkspaceTempTabRef.current = null;
+        }
+      } catch (err: unknown) {
+        if (cancelled) return;
+        console.error('Failed to load workspace:', err);
+        setWorkspaceLoadError('Workspace not found. Opening regular chat.');
+        setActiveWorkspace(null);
+        setActiveWorkspaceId(null);
+        setSearchParams(prev => {
+          const next = new URLSearchParams(prev.toString());
+          next.delete('workspaceId');
+          return next;
+        });
+      }
+    }
+
+    void loadWorkspace();
+    return () => { cancelled = true; };
+  }, [urlWorkspaceId]);
+
+  // ── Workspace mode: Path B — /chat/:sessionId where session has workspaceId ──
+  useEffect(() => {
+    if (!urlSessionId || urlWorkspaceId) return; // Only when no ?workspaceId in URL
+
+    const routeSessionId = urlSessionId;
+    let cancelled = false;
+
+    async function loadWorkspaceForSession() {
+      let session = sessions.find(s => s._id === routeSessionId);
+      if (!session?.workspaceId) {
+        try {
+          session = await chatApi.getSession(routeSessionId);
+        } catch {
+          return;
+        }
+      }
+      if (cancelled || !session?.workspaceId) return;
+
+      const routeSessionTitle = session.title || 'chat';
+      const wsId = session.workspaceId;
+      const loadKey = `${wsId}:${routeSessionId}`;
+      const routeSessionAlreadyOpen = openWorkspaceTabs.some(t => getTabKey(t) === routeSessionId);
+
+      // Skip only when this exact dashboard/deep-linked session is already open.
+      // Same-workspace links still need to restore a closed tab and force it active.
+      if (wsLoadedForSessionRef.current === loadKey && activeWorkspaceId === wsId && routeSessionAlreadyOpen) {
+        setActiveWorkspaceTabKey(routeSessionId);
+        return;
+      }
+
+      try {
+        const ws = await workspacesApi.get(wsId);
+        if (cancelled) return;
+        wsLoadedForSessionRef.current = loadKey;
+        workspaceTabsWorkspaceIdRef.current = null;
+        setActiveWorkspace(ws);
+        setActiveWorkspaceId(wsId);
+
+        const chats = await workspacesApi.listChats(wsId);
+        if (cancelled) return;
+        setWorkspaceChats(chats);
+
+        let hasStoredTabState = false;
+        let restoredOpenIds: string[] = [];
+        let restoredTerminalOpen = false;
+        try {
+          const stored = localStorage.getItem(`allen-ws-chat-tabs:${wsId}`);
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed.openSessionIds)) {
+              hasStoredTabState = true;
+              restoredOpenIds = parsed.openSessionIds;
+            }
+            restoredTerminalOpen = parsed.openTerminal === true && parsed.terminalWorkspaceId === wsId;
+          }
+        } catch {}
+
+        const tabSessionIds = hasStoredTabState
+          ? restoredOpenIds.filter(id => chats.some((c: any) => c._id === id))
+          : [];
+
+        const tabs: WorkspaceChatTab[] = tabSessionIds.map(sid => {
+          const chat = chats.find((c: any) => c._id === sid);
+          return workspaceChatToTab(chat ?? { _id: sid });
+        });
+
+        // Ensure the clicked session is in the tabs
+        if (!tabs.some(t => getTabKey(t) === routeSessionId)) {
+          tabs.push({ id: { kind: 'session' as const, sessionId: routeSessionId }, title: routeSessionTitle, isTemp: false });
+        }
+
+        if (restoredTerminalOpen && !tabs.some(t => getTabKey(t) === 'terminal')) {
+          tabs.push({ id: { kind: 'terminal' as const }, title: 'Terminal', isTemp: false });
+        }
+
+        workspaceTabsWorkspaceIdRef.current = wsId;
+        setOpenWorkspaceTabs(tabs);
+        setActiveWorkspaceTabKey(routeSessionId); // EC-06: force clicked session active
+      } catch {
+        // Silently fail — workspace may be deleted/archived
+      }
+    }
+
+    void loadWorkspaceForSession();
+    return () => { cancelled = true; };
+  }, [urlSessionId, urlWorkspaceId, sessions, activeWorkspaceId, openWorkspaceTabs]);
+
+  // ── Workspace mode: clear when navigating to a non-workspace session ──
+  useEffect(() => {
+    if (urlWorkspaceId) return; // Workspace bootstrap handles this
+    if (!urlSessionId) return; // Blank chat — may be a temp tab, don't clear
+    const session = sessions.find(s => s._id === urlSessionId);
+    if (!session) return; // Not loaded yet
+    if (session.workspaceId) return; // Path B will handle
+    if (activeWorkspaceId) {
+      setActiveWorkspace(null);
+      setActiveWorkspaceId(null);
+      setWorkspaceChats([]);
+      setOpenWorkspaceTabs([]);
+      setActiveWorkspaceTabKey(null);
+      wsLoadedForSessionRef.current = null;
+      workspaceTabsWorkspaceIdRef.current = null;
+    }
+  }, [urlSessionId, urlWorkspaceId, sessions]);
+
+  // ── Workspace mode: sync tab titles when sessions refresh (AC-07) ──
+  useEffect(() => {
+    if (!activeWorkspaceId || openWorkspaceTabs.length === 0) return;
+    setOpenWorkspaceTabs(prev =>
+      prev.map(tab => {
+        if (tab.id.kind !== 'session') return tab;
+        const tabSessionId = tab.id.sessionId;
+        const session = sessions.find(s => s._id === tabSessionId);
+        if (!session) return tab;
+        const newTitle = session.title || tab.title;
+        const newSource = (session as any).titleSource as 'default' | 'auto' | 'user' | undefined;
+        if (newTitle === tab.title && newSource === tab.titleSource) return tab;
+        return { ...tab, title: newTitle, titleSource: newSource };
+      })
+    );
+  }, [sessions, activeWorkspaceId]);
+
+  // ── Workspace mode: persist open tabs to localStorage (OQ-01) ──
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    if (workspaceTabsWorkspaceIdRef.current !== activeWorkspaceId) return;
+    const openSessionIds = openWorkspaceTabs
+      .filter(t => t.id.kind === 'session')
+      .map(t => (t.id as { kind: 'session'; sessionId: string }).sessionId);
+    const activeSessionIdForStorage = (openWorkspaceTabs.find(t => getTabKey(t) === activeWorkspaceTabKey)?.id as any)?.sessionId ?? null;
+    const openTerminal = openWorkspaceTabs.some(t => t.id.kind === 'terminal');
+    try {
+      localStorage.setItem(`allen-ws-chat-tabs:${activeWorkspaceId}`, JSON.stringify({
+        openSessionIds,
+        activeSessionId: activeSessionIdForStorage,
+        activeTabKey: activeWorkspaceTabKey,
+        openTerminal,
+        terminalWorkspaceId: openTerminal ? activeWorkspaceId : null,
+      }));
+    } catch {}
+  }, [activeWorkspaceId, openWorkspaceTabs, activeWorkspaceTabKey]);
+
   async function refreshQueue(sessionId = activeSessionId): Promise<void> {
     if (!sessionId) {
       setQueuedMessages([]);
@@ -316,13 +620,34 @@ export default function ChatPage() {
       const effectivePendingOverrides = options?.agentOverrides ?? pendingOverrides;
       if (effectivePendingOverrides.reasoningEffort != null) overrides.reasoningEffort = effectivePendingOverrides.reasoningEffort;
       if (effectivePendingOverrides.planMode != null) overrides.planMode = effectivePendingOverrides.planMode;
+
+      // Workspace mode: link new session to workspace when sending from a temp tab
+      const activeTab = openWorkspaceTabs.find(t => getTabKey(t) === activeWorkspaceTabKey);
+      const isActiveTempTab = activeTab?.isTemp ?? false;
+      const wsIdToLink = isActiveTempTab ? activeWorkspaceId : undefined;
+
       const session = await createSession(
         options?.provider ?? selectedProvider,
         (options?.model ?? selectedModel) || undefined,
         Object.keys(overrides).length > 0 ? overrides : undefined,
         (options?.repoId ?? selectedRepo?._id) || undefined,
+        wsIdToLink || undefined, // NEW: workspace linkage
       );
       navigate(`/chat/${session._id}`, { replace: true });
+
+      // If we were in a temp tab, replace it with the real session tab
+      if (isActiveTempTab && activeTab) {
+        const tempKey = getTabKey(activeTab);
+        setOpenWorkspaceTabs(prev =>
+          prev.map(t =>
+            getTabKey(t) === tempKey
+              ? { ...t, id: { kind: 'session' as const, sessionId: session._id }, isTemp: false, title: session.title || t.title }
+              : t
+          )
+        );
+        setActiveWorkspaceTabKey(session._id);
+      }
+
       sendMessage(content, session._id, agentName ?? undefined, agentCwd ?? undefined);
       // Server auto-summarizes the title from the first message; pull
       // a fresh sessions list shortly after so the sidebar shows the
@@ -499,13 +824,134 @@ export default function ChatPage() {
     openSidePanel(tab);
   }
 
+  // ── Workspace tab event handlers ──
+
+  function handleWorkspaceTabSelect(key: string) {
+    setActiveWorkspaceTabKey(key);
+    const tab = openWorkspaceTabs.find(t => getTabKey(t) === key);
+    if (!tab) return;
+    if (tab.id.kind === 'session') {
+      switchSession(tab.id.sessionId);
+      navigate(`/chat/${tab.id.sessionId}`, { replace: true });
+    } else if (tab.id.kind === 'terminal') {
+      if (activeWorkspaceId) {
+        pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab };
+      }
+      switchSession('');
+      navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+    } else {
+      // Temp tab: clear active session (blank chat)
+      switchSession('');
+      navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+    }
+  }
+
+  function handleWorkspaceTabClose(key: string) {
+    const next = openWorkspaceTabs.filter(t => getTabKey(t) !== key);
+    if (next.length === 0) {
+      const recentChat = workspaceChats[0];
+      if (recentChat?._id) {
+        const recentTab = workspaceChatToTab(recentChat);
+        const recentSessionId = recentTab.id.kind === 'session' ? recentTab.id.sessionId : '';
+        setOpenWorkspaceTabs([recentTab]);
+        setActiveWorkspaceTabKey(getTabKey(recentTab));
+        switchSession(recentSessionId);
+        navigate(`/chat/${recentSessionId}`, { replace: true });
+        return;
+      }
+
+      // No workspace chat history yet: open a blank new chat tab.
+      const tempTab: WorkspaceChatTab = {
+        id: { kind: 'temp', tempId: `temp-${Date.now()}` },
+        title: 'New chat',
+        isTemp: true,
+        tempIndex: 0,
+      };
+      setOpenWorkspaceTabs([tempTab]);
+      setActiveWorkspaceTabKey(getTabKey(tempTab));
+      switchSession('');
+      return;
+    }
+    setOpenWorkspaceTabs(next);
+    // Select nearest remaining tab if the closed tab was active
+    if (activeWorkspaceTabKey === key) {
+      const closedIdx = openWorkspaceTabs.findIndex(t => getTabKey(t) === key);
+      const nextTab = next[Math.max(0, closedIdx - 1)] ?? next[0];
+      setActiveWorkspaceTabKey(getTabKey(nextTab));
+      if (nextTab.id.kind === 'session') switchSession(nextTab.id.sessionId);
+      else {
+        switchSession('');
+        navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+      }
+    }
+  }
+
+  function handleWorkspaceNewTab() {
+    const newCounter = tempTabCounter + 1;
+    setTempTabCounter(newCounter);
+    const tempTab: WorkspaceChatTab = {
+      id: { kind: 'temp', tempId: `temp-${Date.now()}` },
+      title: newCounter === 1 && openWorkspaceTabs.filter(t => t.isTemp).length === 0 ? 'New chat' : `New chat ${newCounter}`,
+      isTemp: true,
+      tempIndex: newCounter,
+    };
+    if (activeWorkspaceId) {
+      pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab: tempTab };
+    }
+    setOpenWorkspaceTabs(prev => [...prev, tempTab]);
+    setActiveWorkspaceTabKey(getTabKey(tempTab));
+    switchSession('');
+    if (activeWorkspaceId) navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+  }
+
+  function handleWorkspaceTabRestore(sessionId: string) {
+    const chat = workspaceChats.find((c: any) => c._id === sessionId);
+    if (!chat) return;
+    const newTab: WorkspaceChatTab = {
+      id: { kind: 'session', sessionId },
+      title: chat.title || 'chat',
+      isTemp: false,
+      titleSource: chat.titleSource,
+      lastMessageAt: chat.lastMessageAt,
+    };
+    const alreadyOpen = openWorkspaceTabs.some(t => getTabKey(t) === sessionId);
+    if (!alreadyOpen) {
+      setOpenWorkspaceTabs(prev => [...prev, newTab]);
+    }
+    setActiveWorkspaceTabKey(sessionId);
+    switchSession(sessionId);
+    navigate(`/chat/${sessionId}`, { replace: true });
+  }
+
+  function handleWorkspaceTerminalTab() {
+    if (!activeWorkspaceId) return;
+    const terminalTab: WorkspaceChatTab = {
+      id: { kind: 'terminal' },
+      title: 'Terminal',
+      isTemp: false,
+    };
+    pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab: terminalTab };
+    setOpenWorkspaceTabs(prev => prev.some(tab => getTabKey(tab) === 'terminal') ? prev : [...prev, terminalTab]);
+    setActiveWorkspaceTabKey('terminal');
+    switchSession('');
+    navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+  }
+
+  const linkedWorkspaceId = activeWorkspaceId ?? activeSession?.workspaceId ?? null;
+  const linkedWorkspaceBrowseSource = linkedWorkspaceId
+    ? {
+      id: linkedWorkspaceId,
+      name: activeWorkspace?.name ?? activeSession?.repoName ?? 'Workspace',
+      repoId: activeWorkspace?.repoId ?? activeSession?.repoId ?? null,
+    }
+    : null;
   const workspaceDiffRefs = spawnedAgents.reduce<Array<{ id: string; mode: 'workspace' }>>((acc, run) => {
     const id = run.runContext?.workspace?.id;
     if (!id) return acc;
     const existing = acc.find(item => item.id === id);
     if (!existing) acc.push({ id, mode: 'workspace' });
     return acc;
-  }, []);
+  }, linkedWorkspaceId ? [{ id: linkedWorkspaceId, mode: 'workspace' as const }] : []);
   const pullRequestDiffRefs = spawnedAgents.reduce<Array<{ id: string }>>((acc, run) => {
     const id = run.runContext?.pullRequest?.id;
     if (id && !acc.some(item => item.id === id)) acc.push({ id });
@@ -580,7 +1026,24 @@ export default function ChatPage() {
     return () => { cancelled = true; };
   }, [diffSourceSignature, diffRefreshSignature, activeSessionId]);
 
-  const showResourceRail = Boolean(activeSessionId) || spawnedAgents.length > 0;
+  const showResourceRail = Boolean(activeSessionId) || spawnedAgents.length > 0 || Boolean(activeWorkspaceId);
+
+  // Workspace mode: chats not currently open in tabs (for the restore dropdown)
+  const openTabSessionIds = new Set(
+    openWorkspaceTabs
+      .filter(t => t.id.kind === 'session')
+      .map(t => (t.id as { kind: 'session'; sessionId: string }).sessionId)
+  );
+  const availablePreviousChats = workspaceChats.filter((c: any) => !openTabSessionIds.has(c._id));
+  const displayWorkspaceTabs = openWorkspaceTabs.map(tab => {
+    if (tab.id.kind !== 'session') return tab;
+    const tabSessionId = tab.id.sessionId;
+    const session = sessions.find(s => s._id === tabSessionId);
+    if (!session?.title) return tab;
+    return { ...tab, title: session.title, titleSource: (session as any).titleSource ?? tab.titleSource };
+  });
+  const activeWorkspaceTab = openWorkspaceTabs.find(tab => getTabKey(tab) === activeWorkspaceTabKey) ?? null;
+  const workspaceTerminalActive = activeWorkspaceTab?.id.kind === 'terminal';
   const archivedWorkspace = activeSession?.archivedWorkspace;
   const repoBrowseSource = archivedWorkspace?.repoId
     ? { id: archivedWorkspace.repoId, name: archivedWorkspace.repoName ?? archivedWorkspace.name, path: archivedWorkspace.repoPath }
@@ -593,8 +1056,32 @@ export default function ChatPage() {
   return (
     <div className={`chat-page-shell ${sidePanelOpen ? 'with-run-sidebar' : ''}`}>
       <div className="chat-main-shell">
+      {/* Workspace tab strip (only in workspace mode) */}
+      {activeWorkspace && openWorkspaceTabs.length > 0 && (
+        <WorkspaceChatTabs
+          tabs={displayWorkspaceTabs}
+          activeTabKey={activeWorkspaceTabKey}
+          onSelect={handleWorkspaceTabSelect}
+          onClose={handleWorkspaceTabClose}
+          onNewTab={handleWorkspaceNewTab}
+          availablePreviousChats={availablePreviousChats}
+          onRestore={handleWorkspaceTabRestore}
+        />
+      )}
+
+      {/* Workspace load error toast (EC-02) */}
+      {workspaceLoadError && (
+        <div className="p-3 text-sm text-yellow-700 bg-yellow-50 border-b border-yellow-200">
+          {workspaceLoadError}
+        </div>
+      )}
+
       {/* Messages */}
-      {loadingMessages && messages.length === 0 && !streaming ? (
+      {workspaceTerminalActive && activeWorkspaceId ? (
+        <div className="flex-1 min-h-0">
+          <XTerminal workspaceId={activeWorkspaceId} terminalId={`chat-tab-${activeWorkspaceId}`} className="h-full" />
+        </div>
+      ) : loadingMessages && messages.length === 0 && !streaming ? (
         <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
       ) : messages.length === 0 && !activeSessionId && !streaming ? (
         <div className="chat-empty-stream" aria-label="New conversation" />
@@ -604,7 +1091,7 @@ export default function ChatPage() {
       {floatingPullRequest && <FloatingPullRequestCard pullRequest={floatingPullRequest} />}
 
       {/* Input */}
-      <div className="chat-input-dock">
+      {!workspaceTerminalActive && <div className="chat-input-dock">
         {archivedWorkspace && (
           <div className="chat-archived-workspace-note">
             <div>
@@ -798,7 +1285,7 @@ export default function ChatPage() {
             );
           })()}
         />
-      </div>
+      </div>}
 
       <CommandPalette
         open={cmdPaletteOpen}
@@ -845,6 +1332,11 @@ export default function ChatPage() {
           <button type="button" className={sidePanelOpen && sidePanelTab === 'changes' ? 'active' : ''} onClick={() => openSidePanel('changes', 'changes')} title="Code changes" data-tooltip="Code changes">
             <Code2 className="h-4 w-4" />
           </button>
+          {activeWorkspaceId && (
+            <button type="button" className={activeWorkspaceTabKey === 'terminal' ? 'active' : ''} onClick={handleWorkspaceTerminalTab} title="Terminal" data-tooltip="Terminal">
+              <Terminal className="h-4 w-4" />
+            </button>
+          )}
           <button type="button" className={sidePanelOpen && sidePanelTab === 'context' ? 'active' : ''} onClick={() => openSidePanel('context')} title="Context" data-tooltip="Context">
             <BookOpen className="h-4 w-4" />
           </button>
@@ -854,6 +1346,7 @@ export default function ChatPage() {
         runs={spawnedAgents}
         rootType="chat"
         rootId={activeSessionId}
+        workspaceBrowseSource={linkedWorkspaceBrowseSource}
         repoBrowseSource={repoBrowseSource}
         open={sidePanelOpen}
         activeTab={sidePanelTab}

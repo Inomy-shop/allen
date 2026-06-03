@@ -6,7 +6,7 @@ import ShortcutKey from './components/common/ShortcutKey';
 import {
   CirclePlay, GitBranch, GitPullRequest, History, LayoutDashboard, Settings,
   FolderGit2, TicketCheck, Workflow,
-  ChevronRight,
+  ChevronRight, Plus,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
   SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain,
 } from 'lucide-react';
@@ -21,6 +21,7 @@ import {
 } from './services/api';
 import { workspaces as workspacesApi } from './services/workspaceService';
 import { usePanelLayout } from './hooks/usePanelLayout';
+import { WorkspaceCreateDialog, type WorkspaceCreateRepo } from './components/workspace/WorkspaceCreateDialog';
 
 interface NavItem {
   to: string;
@@ -457,9 +458,11 @@ function isNavItemActive(
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
-  const title = routeTitle(location.pathname, location.search);
+  const routeBaseTitle = routeTitle(location.pathname, location.search);
   const [chatTopbarTitle, setChatTopbarTitle] = useState<string | null>(null);
-  const detail = routeDetail(location.pathname, chatTopbarTitle);
+  const [chatSessionWorkspaceId, setChatSessionWorkspaceId] = useState<string | null>(null);
+  const [activeWorkspaceName, setActiveWorkspaceName] = useState<string | null>(null);
+  const routeBaseDetail = routeDetail(location.pathname, chatTopbarTitle);
   const [commandOpen, setCommandOpen] = useState(false);
   const [liveCount, setLiveCount] = useState(0);
   const [approvalCount, setApprovalCount] = useState(0);
@@ -468,6 +471,7 @@ export default function App() {
   const [workspaceSearch, setWorkspaceSearch] = useState('');
   const [sidebarWorkspaces, setSidebarWorkspaces] = useState<SidebarWorkspace[]>([]);
   const [sidebarWorkspacesLoading, setSidebarWorkspacesLoading] = useState(false);
+  const [workspaceCreateRepo, setWorkspaceCreateRepo] = useState<WorkspaceCreateRepo | null>(null);
   const [collapsedWorkspaceRepos, setCollapsedWorkspaceRepos] = useState<Set<string>>(() => loadCollapsedWorkspaceRepos());
   const sidebarGestureLockRef = useRef(false);
   const sidebarWheelGestureActiveRef = useRef(false);
@@ -491,7 +495,13 @@ export default function App() {
   const setColorMode = useSettingsStore((s) => s.setColorMode);
   const resolvedMode = resolveColorMode(colorMode);
   const toggleColorMode = () => setColorMode(resolvedMode === 'dark' ? 'light' : 'dark');
-  const activeWorkspaceId = location.pathname.match(/^\/workspaces\/([^/]+)/)?.[1] ?? null;
+  // Matches: /workspaces/:id route (legacy), /chat?workspaceId=X query, /chat/:sid where session has workspaceId
+  const workspaceIdFromPath = location.pathname.match(/^\/workspaces\/([^/]+)/)?.[1] ?? null;
+  const workspaceIdFromSearch = new URLSearchParams(location.search).get('workspaceId');
+  const activeWorkspaceId = workspaceIdFromPath ?? workspaceIdFromSearch ?? chatSessionWorkspaceId;
+  const isWorkspaceChatRoute = location.pathname.startsWith('/chat') && Boolean(activeWorkspaceId);
+  const title = isWorkspaceChatRoute ? 'workspace' : routeBaseTitle;
+  const detail = isWorkspaceChatRoute ? activeWorkspaceName ?? 'Workspace' : routeBaseDetail;
   const workspaceGroups = useMemo(() => {
     const query = workspaceSearch.trim().toLowerCase();
     const visible = sidebarWorkspaces
@@ -519,6 +529,15 @@ export default function App() {
 
     return Array.from(groups.values()).sort((a, b) => b.latest - a.latest);
   }, [sidebarWorkspaces, workspaceSearch]);
+
+  function openCreateWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
+    if (!repo) return;
+    setWorkspaceCreateRepo(repo);
+  }
+
+  function prependSidebarWorkspace(workspace: SidebarWorkspace) {
+    setSidebarWorkspaces(prev => [workspace, ...prev.filter(item => item._id !== workspace._id)]);
+  }
 
   useEffect(() => {
     const index = window.history.state?.idx;
@@ -552,6 +571,7 @@ export default function App() {
     const match = location.pathname.match(/^\/chat\/([^/]+)/);
     if (!match) {
       setChatTopbarTitle(null);
+      setChatSessionWorkspaceId(null);
       return;
     }
     let cancelled = false;
@@ -559,7 +579,10 @@ export default function App() {
     const loadTitle = () => {
       chatApi.getSession(sessionId)
         .then((session) => {
-          if (!cancelled) setChatTopbarTitle(session?.title ?? null);
+          if (!cancelled) {
+            setChatTopbarTitle(session?.title ?? null);
+            setChatSessionWorkspaceId(session?.workspaceId ?? null);
+          }
         })
         .catch(() => {
           if (!cancelled) setChatTopbarTitle(null);
@@ -618,6 +641,32 @@ export default function App() {
       cancelled = true;
     };
   }, [sidebarPanel]);
+
+  useEffect(() => {
+    if (!isWorkspaceChatRoute || !activeWorkspaceId) {
+      setActiveWorkspaceName(null);
+      return;
+    }
+
+    const cached = sidebarWorkspaces.find(workspace => workspace._id === activeWorkspaceId)?.name;
+    if (cached) {
+      setActiveWorkspaceName(cached);
+      return;
+    }
+
+    let cancelled = false;
+    setActiveWorkspaceName(null);
+    workspacesApi.get(activeWorkspaceId)
+      .then((workspace) => {
+        if (!cancelled) setActiveWorkspaceName(workspace?.name ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setActiveWorkspaceName(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, isWorkspaceChatRoute, sidebarWorkspaces]);
 
   useEffect(() => {
     return () => {
@@ -884,18 +933,33 @@ export default function App() {
                       const collapsed = collapsedWorkspaceRepos.has(group.key);
                       const hasActive = group.items.some((workspace) => workspace._id === activeWorkspaceId);
                       const showItems = !collapsed || hasActive;
+                      const repoWorkspace = group.items.find((workspace) => workspace.repoId) ?? group.items[0];
+                      const repo = repoWorkspace?.repoId
+                        ? { _id: repoWorkspace.repoId, name: group.label, path: repoWorkspace.repoPath }
+                        : null;
                       return (
                         <div key={group.key}>
-                          <button
-                            type="button"
-                            onClick={() => toggleWorkspaceRepo(group.key)}
-                            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-theme-secondary transition-colors hover:bg-app-muted hover:text-theme-primary"
-                          >
-                            <ChevronRight className={`h-3 w-3 shrink-0 text-theme-subtle transition-transform ${showItems ? 'rotate-90' : ''}`} />
-                            <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-theme-muted" />
-                            <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{group.label}</span>
-                            <span className="font-mono text-[10px] text-theme-subtle">{group.items.length}</span>
-                          </button>
+                          <div className="mb-1 flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => toggleWorkspaceRepo(group.key)}
+                              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-theme-secondary transition-colors hover:bg-app-muted hover:text-theme-primary"
+                            >
+                              <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-theme-muted" />
+                              <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{group.label}</span>
+                              <ChevronRight className={`h-3 w-3 shrink-0 text-theme-subtle transition-transform ${showItems ? 'rotate-90' : ''}`} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openCreateWorkspaceForRepo(repo)}
+                              disabled={!repo}
+                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                              title={`New workspace in ${group.label}`}
+                              aria-label={`New workspace in ${group.label}`}
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                           {showItems && (
                             <div className="mt-1 space-y-1">
                               {group.items.map((workspace) => {
@@ -904,21 +968,14 @@ export default function App() {
                                   <button
                                     key={workspace._id}
                                     type="button"
-                                    onClick={() => navigate(`/workspaces/${workspace._id}`)}
-                                    className={`group flex w-full items-start rounded-md border px-2.5 py-2 text-left transition-colors ${
+                                    onClick={() => navigate(`/chat?workspaceId=${workspace._id}`)}
+                                    className={`group flex w-full items-center rounded-md border px-2.5 py-1.5 text-left transition-colors ${
                                       active
-                                        ? 'border-app bg-app-card text-theme-primary'
+                                        ? 'border-accent/30 bg-accent-soft text-accent'
                                         : 'border-transparent text-theme-secondary hover:bg-app-muted hover:text-theme-primary'
                                     }`}
                                   >
-                                    <span className="min-w-0 flex-1">
-                                      <span className="block truncate text-[12.5px] font-medium leading-tight">{workspace.name}</span>
-                                      <span className="mt-1 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-theme-subtle">
-                                        {workspace.branch && <span className="truncate">{workspace.branch}</span>}
-                                        {workspace.source === 'pr' && workspace.prNumber && <span>PR #{workspace.prNumber}</span>}
-                                        {workspace.status && <span>{workspace.status}</span>}
-                                      </span>
-                                    </span>
+                                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-5">{workspace.name}</span>
                                   </button>
                                 );
                               })}
@@ -1034,6 +1091,19 @@ export default function App() {
         onClose={() => setCommandOpen(false)}
         onNavigate={(to) => navigate(to)}
       />
+      {workspaceCreateRepo && (
+        <WorkspaceCreateDialog
+          repo={workspaceCreateRepo}
+          onClose={() => setWorkspaceCreateRepo(null)}
+          onCreatedPending={(workspace) => prependSidebarWorkspace(workspace as SidebarWorkspace)}
+          onCreated={(workspace) => {
+            prependSidebarWorkspace(workspace as SidebarWorkspace);
+            setWorkspaceCreateRepo(null);
+            setActiveWorkspaceName(workspace.name ?? null);
+            navigate(`/chat?workspaceId=${workspace._id}`);
+          }}
+        />
+      )}
     </div>
   );
 }

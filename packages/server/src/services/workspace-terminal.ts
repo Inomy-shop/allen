@@ -64,9 +64,19 @@ interface TerminalSession {
   workspaceId: string;
   pty: any; // IPty
   ws: Set<WebSocket>;
+  buffer: string;
 }
 
 const sessions = new Map<string, TerminalSession>();
+const MAX_TERMINAL_BUFFER_CHARS = 500_000;
+const TERMINAL_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
+
+function appendTerminalBuffer(session: TerminalSession, data: string): void {
+  session.buffer += data;
+  if (session.buffer.length > MAX_TERMINAL_BUFFER_CHARS) {
+    session.buffer = session.buffer.slice(session.buffer.length - MAX_TERMINAL_BUFFER_CHARS);
+  }
+}
 
 export interface TerminalWebSocketServerOptions {
   host?: string;
@@ -381,11 +391,12 @@ async function handleConnection(
       return;
     }
 
-    session = { id: terminalId, workspaceId: sourceId, pty: term, ws: new Set() };
+    session = { id: terminalId, workspaceId: sourceId, pty: term, ws: new Set(), buffer: '' };
     sessions.set(key, session);
 
     // PTY output → broadcast to all connected WebSockets
     term.onData((data: string) => {
+      appendTerminalBuffer(session!, data);
       for (const client of session!.ws) {
         if (client.readyState === WebSocket.OPEN) {
           client.send(data);
@@ -401,6 +412,9 @@ async function handleConnection(
 
   // Add this WebSocket to the session
   session.ws.add(ws);
+  if (session.buffer && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'replay', data: session.buffer }));
+  }
 
   // WebSocket input → PTY
   ws.on('message', (msg) => {
@@ -431,7 +445,7 @@ async function handleConnection(
           s.pty.kill();
           sessions.delete(key);
         }
-      }, 300_000); // 5 min
+      }, TERMINAL_IDLE_TIMEOUT_MS);
     }
   });
 }

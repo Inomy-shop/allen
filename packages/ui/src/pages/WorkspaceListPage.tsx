@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Check, ChevronDown, ChevronRight, Copy, ExternalLink, FileText, FolderGit2, GitBranch,
   GitPullRequest, Loader2, MessageSquare, Play, Plus, RefreshCw, RotateCw,
@@ -332,6 +332,7 @@ function WorkspaceFileTreeNode({
 export default function WorkspaceListPage() {
   const { id: routeWorkspaceId } = useParams<{ id?: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [repos, setRepos] = useState<any[]>([]);
   const [workspaceList, setWorkspaceList] = useState<Workspace[]>([]);
   const [activeId, setActiveId] = useState('');
@@ -358,6 +359,8 @@ export default function WorkspaceListPage() {
   const [configRepoId, setConfigRepoId] = useState<string | null>(null);
   const [deletingWorkspace, setDeletingWorkspace] = useState<{ id: string; name: string } | null>(null);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const createRequested = searchParams.get('create') === '1';
+  const createRepoId = searchParams.get('repoId') ?? '';
 
   const active = useMemo(
     () => workspaceList.find(ws => ws._id === activeId) ?? null,
@@ -394,6 +397,21 @@ export default function WorkspaceListPage() {
     setWorkspaceUi(workspaceUiRef.current);
   }, []);
 
+  useEffect(() => {
+    if (!createRequested) return;
+    setCreating(true);
+    setActiveTab('diff');
+    if (!createRepoId) return;
+
+    const repo = repos.find(r => r._id === createRepoId);
+    setForm(f => ({
+      ...f,
+      repoId: createRepoId,
+      repoPath: repo?.path ?? f.repoPath,
+      repoName: repo?.name ?? f.repoName,
+    }));
+  }, [createRepoId, createRequested, repos]);
+
   function showWorkspaceTab(tab: string) {
     setActiveTab(tab);
     if (!activeId) return;
@@ -429,10 +447,15 @@ export default function WorkspaceListPage() {
     switchWorkspace(workspaceId);
   }
 
-  function startCreateWorkspace() {
+  function startCreateWorkspace(repoId?: string) {
     setCreating(true);
     setActiveTab('diff');
-    navigate('/workspaces');
+    navigate(`/workspaces?create=1${repoId ? `&repoId=${encodeURIComponent(repoId)}` : ''}`);
+  }
+
+  function cancelCreateWorkspace() {
+    setCreating(false);
+    if (createRequested) navigate('/workspaces', { replace: true });
   }
 
   function changeDiffMode(mode: 'unified' | 'split') {
@@ -514,6 +537,7 @@ export default function WorkspaceListPage() {
       const ws = await workspaces.create(form);
       setCreating(false);
       setPendingWsId(ws._id);
+      if (createRequested) navigate('/workspaces', { replace: true });
       await loadWorkspaces();
     } catch (err: any) {
       alert(err.message);
@@ -711,7 +735,7 @@ export default function WorkspaceListPage() {
             </IconTooltipButton>
             <button
               className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
-              onClick={startCreateWorkspace}
+              onClick={() => startCreateWorkspace()}
               type="button"
             >
               <Plus className="h-3.5 w-3.5" /> New workspace
@@ -734,7 +758,7 @@ export default function WorkspaceListPage() {
             <div className="mt-4 text-[15px] font-semibold text-theme-primary">No workspaces yet</div>
             <p className="mt-1 text-[13px] text-theme-muted">Create an isolated worktree when Allen needs to edit code.</p>
             <button
-              onClick={startCreateWorkspace}
+              onClick={() => startCreateWorkspace()}
               className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
               type="button"
             >
@@ -1019,7 +1043,7 @@ export default function WorkspaceListPage() {
                             <Settings className="w-3 h-3" /> configure
                           </button>
                         )}
-                        <button type="button" onClick={() => setCreating(false)} className="btn btn-secondary btn-sm">cancel</button>
+                        <button type="button" onClick={cancelCreateWorkspace} className="btn btn-secondary btn-sm">cancel</button>
                         <button type="submit" className="btn btn-primary btn-sm">create workspace</button>
                       </div>
                     </form>

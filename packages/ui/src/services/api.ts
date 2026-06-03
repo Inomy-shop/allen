@@ -874,7 +874,7 @@ export const chat = {
     const qs = params ? '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => Boolean(v)) as Array<[string, string]>).toString() : '';
     return request<any[]>(`/chat/slash-commands${qs}`);
   },
-  createSession: (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string) =>
+  createSession: (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string, workspaceId?: string) =>
     request<any>('/chat/sessions', {
       method: 'POST',
       body: JSON.stringify({
@@ -882,6 +882,7 @@ export const chat = {
         model,
         ...(agentOverrides ? { agentOverrides } : {}),
         ...(repoId ? { repoId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
       }),
     }),
   getSession: (id: string) => request<any>(`/chat/sessions/${id}`),

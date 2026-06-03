@@ -46,7 +46,7 @@ input:
     required: true
     widget: repo_picker
     label: Target repo
-    description: The registered repo where the feature will be implemented.
+    description: Where the feature gets implemented. Pass your current worktree path if working inside a workspace/worktree; otherwise pass the registered repo root.
   trusted_mode:
     type: boolean
     required: false

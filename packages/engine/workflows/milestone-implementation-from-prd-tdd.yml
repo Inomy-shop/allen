@@ -54,7 +54,7 @@ input:
     required: true
     widget: repo_picker
     label: Target repo
-    description: Registered repo where implementation should happen.
+    description: Where the milestones get implemented. Pass your current worktree path if working inside a workspace/worktree; otherwise pass the registered repo root.
   prd_artifact_url:
     type: string
     required: false

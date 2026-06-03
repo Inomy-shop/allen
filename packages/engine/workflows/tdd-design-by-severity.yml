@@ -59,7 +59,7 @@ input:
     required: true
     widget: repo_picker
     label: Target repo
-    description: Required. Codebase to ground the design in. The codebase_grounding node surveys this repo first; every drafter must fetch the survey via mcp__allen__allen_get_artifact before drafting.
+    description: Required. The codebase the design is grounded in. Pass your current worktree path if working inside a workspace/worktree; otherwise pass the registered repo root. The codebase_grounding node surveys this codebase first; every drafter must fetch the survey via mcp__allen__allen_get_artifact before drafting.
   product_context:
     type: string
     required: false

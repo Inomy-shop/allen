@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  Plus, FolderGit2, GitBranch, Search,
+  Plus, FolderGit2, Search,
   PanelLeftClose, PanelLeftOpen, ChevronRight, ChevronDown,
 } from 'lucide-react';
 import { workspaces as wsApi } from '../../services/workspaceService';
+import { WorkspaceCreateDialog, type WorkspaceCreateRepo } from './WorkspaceCreateDialog';
 
 const COLLAPSED_REPOS_KEY = 'allen-ws-sidebar-collapsed-repos';
 
@@ -20,15 +21,6 @@ function saveCollapsedRepos(set: Set<string>) {
   try { localStorage.setItem(COLLAPSED_REPOS_KEY, JSON.stringify(Array.from(set))); } catch { /* ignore */ }
 }
 
-const STATUS_BADGE: Record<string, string> = {
-  creating: 'badge-warn',
-  setting_up: 'badge-warn',
-  active: 'badge-ok',
-  running: 'badge-info',
-  archiving: 'badge-muted',
-  failed: 'badge-err',
-};
-
 interface Workspace {
   _id: string;
   name: string;
@@ -40,6 +32,7 @@ interface Workspace {
   prNumber?: number;
   repoId?: string;
   repoName?: string;
+  repoPath?: string;
 }
 
 interface Props {
@@ -64,6 +57,7 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
   const [collapsedRepos, setCollapsedRepos] = useState<Set<string>>(() => loadCollapsedRepos());
+  const [workspaceCreateRepo, setWorkspaceCreateRepo] = useState<WorkspaceCreateRepo | null>(null);
 
   function toggleRepo(repoKey: string) {
     setCollapsedRepos((prev) => {
@@ -72,6 +66,15 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
       saveCollapsedRepos(next);
       return next;
     });
+  }
+
+  function createWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
+    if (!repo) return;
+    setWorkspaceCreateRepo(repo);
+  }
+
+  function prependWorkspace(workspace: Workspace) {
+    setList(prev => [workspace, ...prev.filter(item => item._id !== workspace._id)]);
   }
 
   useEffect(() => {
@@ -170,20 +173,36 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
           // toggle the active row would be hidden after a sidebar reload.
           const hasActive = group.items.some((w) => w._id === activeId);
           const showItems = !isRepoCollapsed || hasActive;
+          const repoWorkspace = group.items.find((w) => w.repoId) ?? group.items[0];
+          const repo = repoWorkspace?.repoId
+            ? { _id: repoWorkspace.repoId, name: group.repoName, path: repoWorkspace.repoPath }
+            : null;
           return (
           <div key={repoKey}>
-            <button
-              onClick={() => toggleRepo(repoKey)}
-              className="w-full flex items-center gap-1.5 px-2 mb-1 py-1 rounded hover:bg-app-muted text-left"
-              title={isRepoCollapsed ? 'Expand' : 'Collapse'}
-            >
-              {isRepoCollapsed
-                ? <ChevronRight className="w-3 h-3 text-theme-subtle shrink-0" />
-                : <ChevronDown className="w-3 h-3 text-theme-subtle shrink-0" />}
-              <FolderGit2 className="w-3 h-3 text-theme-muted shrink-0" />
-              <span className="text-[11px] font-medium text-theme-secondary truncate flex-1">{group.repoName}</span>
-              <span className="text-[10px] font-mono text-theme-subtle">{group.items.length}</span>
-            </button>
+            <div className="mb-1 flex items-center gap-1">
+              <button
+                onClick={() => toggleRepo(repoKey)}
+                className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-2 py-1 text-left hover:bg-app-muted"
+                title={isRepoCollapsed ? 'Expand' : 'Collapse'}
+                type="button"
+              >
+                <FolderGit2 className="w-3 h-3 text-theme-muted shrink-0" />
+                <span className="text-[11px] font-medium text-theme-secondary truncate flex-1">{group.repoName}</span>
+                {isRepoCollapsed
+                  ? <ChevronRight className="w-3 h-3 text-theme-subtle shrink-0" />
+                  : <ChevronDown className="w-3 h-3 text-theme-subtle shrink-0" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => createWorkspaceForRepo(repo)}
+                disabled={!repo}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                title={`New workspace in ${group.repoName}`}
+                aria-label={`New workspace in ${group.repoName}`}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
             {showItems && group.items.map((w) => {
               const isActive = w._id === activeId;
               return (
@@ -191,43 +210,27 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
                   key={w._id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => navigate(`/workspaces/${w._id}`)}
+                  onClick={() => navigate(`/chat?workspaceId=${w._id}`)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      navigate(`/workspaces/${w._id}`);
+                      navigate(`/chat?workspaceId=${w._id}`);
                     }
                   }}
-                  className={`group flex items-start gap-2 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors ${
+                  className={`group flex items-center gap-2 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors ${
                     isActive
-                      ? 'bg-app-card border border-border shadow-sm'
+                      ? 'border border-accent/30 bg-accent-soft shadow-sm'
                       : 'hover:bg-app-muted border border-transparent'
                   }`}
                   title={w.name}
                 >
-                  <GitBranch
-                    className={`w-3 h-3 mt-[3px] shrink-0 ${isActive ? 'text-accent' : 'text-theme-muted'}`}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div
-                      className={`text-[12.5px] font-mono truncate leading-snug ${
-                        isActive ? 'text-theme-primary font-medium' : 'text-theme-secondary group-hover:text-theme-primary'
-                      }`}
-                    >
-                      {w.name}
-                    </div>
-                    <div className="flex items-center gap-1.5 mt-0.5 text-[10.5px] font-mono">
-                      <span className={`badge ${STATUS_BADGE[w.status] ?? 'badge-muted'} !text-[9.5px] !px-1.5 !py-0`}>
-                        {w.status}
-                      </span>
-                      {w.basePort && (
-                        <span className="text-theme-subtle">:{w.basePort}</span>
-                      )}
-                      {w.source === 'pr' && (
-                        <span className="text-accent-purple">PR #{w.prNumber}</span>
-                      )}
-                    </div>
-                  </div>
+                  <span
+                    className={`min-w-0 flex-1 truncate text-[12.5px] font-mono leading-5 ${
+                      isActive ? 'text-accent font-medium' : 'text-theme-secondary group-hover:text-theme-primary'
+                    }`}
+                  >
+                    {w.name}
+                  </span>
                 </div>
               );
             })}
@@ -235,6 +238,18 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
           );
         })}
       </div>
+      {workspaceCreateRepo && (
+        <WorkspaceCreateDialog
+          repo={workspaceCreateRepo}
+          onClose={() => setWorkspaceCreateRepo(null)}
+          onCreatedPending={(workspace) => prependWorkspace(workspace as Workspace)}
+          onCreated={(workspace) => {
+            prependWorkspace(workspace as Workspace);
+            setWorkspaceCreateRepo(null);
+            navigate(`/chat?workspaceId=${workspace._id}`);
+          }}
+        />
+      )}
     </aside>
   );
 }

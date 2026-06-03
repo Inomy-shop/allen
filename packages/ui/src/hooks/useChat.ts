@@ -697,8 +697,8 @@ export function useChat() {
   }, [streamText, thinkingText]);
 
   const createSession = useCallback(
-    async (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string) => {
-      const session = await api.createSession(provider, model, agentOverrides, repoId);
+    async (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string, workspaceId?: string) => {
+      const session = await api.createSession(provider, model, agentOverrides, repoId, workspaceId);
       setSessions(prev => [session, ...prev]);
       setActiveSessionId(session._id);
       setMessages([]);

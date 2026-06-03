@@ -45,7 +45,7 @@ input:
     required: true
     widget: repo_picker
     label: Target repo
-    description: The registered repo where the bug lives.
+    description: Where the bug lives. Pass your current worktree path if working inside a workspace/worktree; otherwise pass the registered repo root.
   chat_session_id:
     type: string
     required: false

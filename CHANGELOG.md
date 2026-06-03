@@ -4,6 +4,21 @@ This file tracks notable Allen changes.
 
 Allen is currently pre-release, so behavior can change between commits. Versioned release notes will start when public tags are created.
 
+## [Unreleased]
+
+### Added
+
+- **Workspace-linked chat** (`packages/ui`, `packages/server`): clicking a workspace in the sidebar now opens `ChatPage` in workspace mode (`/chat?workspaceId=…`) instead of the workspace IDE page.
+  - `ChatPage` bootstraps a browser-style tab strip of the workspace's linked chat sessions (recent-first). Selecting a tab navigates to `/chat/<sessionId>`; the workspace context bar and tabs are preserved.
+  - New `WorkspaceChatContextBar` component — shows workspace name, repo, branch, and worktree path with a quick-action button (Open workspace); renders an archived-workspace banner when the workspace is no longer active.
+  - New `WorkspaceChatTabs` component — horizontal tab strip with `+ New Chat`, close (`x`), and a **Previous chats ▾** restore dropdown (recent-first, capped at 50 items). Close is confirmed when the target tab is streaming. Tab labels truncate with a full-title tooltip.
+  - `POST /api/chat/sessions` now accepts an optional `workspaceId` body field. When supplied, the server atomically calls `WorkspaceManager.linkChat` and returns the session with workspace metadata already populated — replacing the previous two-call round-trip.
+  - `WorkspaceManager.linkChat` snapshots workspace fields (`workspaceName`, `workspaceRepoId`, `workspaceRepoName`, `workspaceBranch`, `workspaceBaseBranch`, `workspacePrNumber`, `workspacePrUrl`) onto the `chat_sessions` document when linking a chat session.
+  - New MongoDB indexes: `workspaces.{ chatSessionId: 1 }` (agent cwd resolution), `chat_sessions.{ workspaceId: 1, lastMessageAt: -1 }` (tab ordering and previous-chat dropdown).
+  - Navigating directly to `/chat/<sessionId>` where the session has a `workspaceId` also bootstraps workspace mode, enabling Dashboard-driven resumption with the correct tab active.
+  - Sidebar `activeWorkspaceId` now matches `/chat?workspaceId=…` and `/chat/:sessionId` (when the session is workspace-linked) in addition to the existing `/workspaces/:id` path.
+  - Tab titles update live when the server generates or renames the chat title (`titleSource` transitions from `default` → `auto`/`user`). Tab state is persisted best-effort in `localStorage` keyed by workspace ID.
+
 ## [0.1.0] - 2026-05-21
 
 First public alpha release.

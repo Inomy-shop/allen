@@ -1568,7 +1568,22 @@ User: ${userMessage.slice(0, 500)}`;
       let workspaceContext = '';
       let resolvedCwd: string | undefined;
       try {
-        const linkedWs = await this.db.collection('workspaces').findOne({ chatSessionId: sessionId, status: { $nin: ['archived', 'failed'] } });
+        let linkedWs = await this.db.collection('workspaces').findOne({ chatSessionId: sessionId, status: { $nin: ['archived', 'failed'] } });
+        // Fallback: session may be in chatSessionIds[] without being the latest chatSessionId.
+        // In that case linkChat already set session.workspaceId — use it for CWD resolution.
+        // REQ-13, AC-14
+        if (!linkedWs && session?.workspaceId && ObjectId.isValid(session.workspaceId as string)) {
+          linkedWs = await this.db.collection('workspaces').findOne({
+            _id: new ObjectId(session.workspaceId as string),
+            status: { $nin: ['archived', 'failed'] },
+          });
+          if (linkedWs) {
+            console.info(
+              { via: 'workspaceId', chatSessionId: sessionId, workspaceId: session.workspaceId, worktreePath: linkedWs.worktreePath },
+              'allen.chat.workspace.cwd_resolved',
+            );
+          }
+        }
         if (linkedWs) {
           workspaceContext = `\n[WORKSPACE: ${linkedWs.name}] Path: ${linkedWs.worktreePath}\nBranch: ${linkedWs.branch} → ${linkedWs.baseBranch}\nRepo: ${linkedWs.repoName}\nYou are working inside this workspace. All file paths are relative to: ${linkedWs.worktreePath}\n`;
           resolvedCwd = linkedWs.worktreePath as string;

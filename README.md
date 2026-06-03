@@ -157,7 +157,7 @@ See [`docs/first-workflow.md`](docs/first-workflow.md) for a step-by-step walkth
 
 **Visual workflow builder.** Build workflows in the UI (`/workflows/new`) by wiring agent/condition/parallel/human nodes, or check YAML into `packages/engine/workflows/`. The engine validates structure on load and renders a Mermaid graph.
 
-**Workspaces.** Each coding task gets a git worktree under `<ALLEN_HOME>/worktrees/`. The Workspaces page gives you a live terminal (real PTY over WebSocket), a file browser with live diffs, an embedded chat, and a reverse proxy so you can preview a dev server the agent started.
+**Workspaces.** Each coding task gets a git worktree under `<ALLEN_HOME>/worktrees/`. Clicking a workspace in the sidebar opens it in a **workspace-mode chat** (`/chat?workspaceId=…`): a browser-style tab strip of linked chats with `+ New Chat`, close/restore, and a context bar showing the repo, branch, and worktree path. Agents in a workspace-linked chat automatically run with `cwd` set to the worktree. The Workspaces page (accessible from the context bar) still gives you the live terminal, file browser, and dev-server preview proxy.
 
 **Executions & traces.** The Executions page lists running and recent runs (paginated, filterable). Drill into any execution for the node timeline, per-node logs, tool calls with payloads, token usage breakdown (cached input, non-cached input, output — per-node and execution totals), cost accounting, checkpoints, and artifacts.
 

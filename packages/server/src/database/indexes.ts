@@ -167,6 +167,8 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Workspaces
   await db.collection('workspaces').createIndex({ status: 1, updatedAt: -1 });
   await db.collection('workspaces').createIndex({ updatedAt: -1 });
+  // CWD resolution: findOne({ chatSessionId: sessionId }) in chat.service.ts (TDD §1.1)
+  await db.collection('workspaces').createIndex({ chatSessionId: 1 });
 
   // Alerts
   await db.collection('alerts').createIndex({ read: 1, createdAt: -1 });
@@ -203,6 +205,8 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { automationKey: 1 },
     { unique: true, sparse: true, name: 'automationKey_unique_sparse' },
   );
+  // Workspace-linked chat lookups and tab ordering (REQ-04, REQ-13)
+  await db.collection('chat_sessions').createIndex({ workspaceId: 1, lastMessageAt: -1 });
 
   // Chat Messages
   await db.collection('chat_messages').createIndex({ sessionId: 1, createdAt: 1 });

@@ -21,6 +21,41 @@ type RuntimeInfo = Awaited<ReturnType<NonNullable<typeof window.allenDesktop>['g
 const MAX_RECONNECT_ATTEMPTS = 20;
 const BASE_DELAY_MS = 500;
 const MAX_DELAY_MS = 10_000;
+const MAX_TERMINAL_BUFFER_CHARS = 500_000;
+const terminalBuffers = new Map<string, string>();
+
+function terminalBufferKey(sourceType: 'workspace' | 'repo', sourceId: string, terminalId: string): string {
+  return `allen-terminal-buffer:${sourceType}:${sourceId}:${terminalId}`;
+}
+
+function readTerminalBuffer(key: string): string {
+  const cached = terminalBuffers.get(key);
+  if (cached != null) return cached;
+  try {
+    const stored = sessionStorage.getItem(key) ?? '';
+    if (stored) terminalBuffers.set(key, stored);
+    return stored;
+  } catch {
+    return '';
+  }
+}
+
+function writeTerminalBuffer(key: string, value: string): void {
+  const next = value.length > MAX_TERMINAL_BUFFER_CHARS
+    ? value.slice(value.length - MAX_TERMINAL_BUFFER_CHARS)
+    : value;
+  terminalBuffers.set(key, next);
+  try {
+    sessionStorage.setItem(key, next);
+  } catch {
+    // Best effort: the in-memory cache still covers tab switches.
+  }
+}
+
+function appendTerminalBuffer(key: string, value: string): void {
+  if (!value) return;
+  writeTerminalBuffer(key, `${readTerminalBuffer(key)}${value}`);
+}
 
 function terminalWebSocketUrl(sourceType: 'workspace' | 'repo', sourceId: string, terminalId: string, runtimeInfo: RuntimeInfo | null): string {
   const sourceSegment = sourceType === 'repo' ? 'repos' : 'workspaces';
@@ -36,9 +71,11 @@ function terminalWebSocketUrl(sourceType: 'workspace' | 'repo', sourceId: string
   return `${protocol}//${window.location.host}${path}`;
 }
 
-function writeTerminalPayload(term: XTerm, payload: unknown): void {
+function writeTerminalPayload(term: XTerm, payload: unknown, bufferKey: string): void {
   if (typeof payload !== 'string') {
-    term.write(String(payload));
+    const text = String(payload);
+    term.write(text);
+    appendTerminalBuffer(bufferKey, text);
     return;
   }
   try {
@@ -47,10 +84,18 @@ function writeTerminalPayload(term: XTerm, payload: unknown): void {
       term.write(`\r\n\x1b[31m${String(parsed.data ?? 'Terminal error')}\x1b[0m\r\n`);
       return;
     }
+    if (parsed?.type === 'replay') {
+      const replay = String(parsed.data ?? '');
+      term.reset();
+      term.write(replay);
+      writeTerminalBuffer(bufferKey, replay);
+      return;
+    }
   } catch {
     // Regular terminal bytes.
   }
   term.write(payload);
+  appendTerminalBuffer(bufferKey, payload);
 }
 
 export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'workspace', className, initialCommand }: XTerminalProps) {
@@ -133,6 +178,12 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
     termRef.current = term;
     fitRef.current = fitAddon;
 
+    const bufferKey = terminalBufferKey(sourceType, workspaceId, terminalId);
+    const restoredBuffer = readTerminalBuffer(bufferKey);
+    if (restoredBuffer) {
+      term.write(restoredBuffer);
+    }
+
     // xterm should own keyboard input while focused. This lets terminal
     // shortcuts reach the PTY without triggering surrounding app shortcuts
     // such as command palettes, panel toggles, or canvas/editor hotkeys.
@@ -191,7 +242,7 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
         }
       };
 
-      ws.onmessage = (evt) => { writeTerminalPayload(term, evt.data); };
+      ws.onmessage = (evt) => { writeTerminalPayload(term, evt.data, bufferKey); };
 
       ws.onerror = () => { /* let onclose drive the reconnect */ };
 

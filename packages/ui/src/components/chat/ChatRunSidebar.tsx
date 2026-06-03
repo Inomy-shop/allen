@@ -53,6 +53,11 @@ type RepoBrowseSource = {
   name?: string | null;
   path?: string | null;
 };
+type WorkspaceBrowseSource = {
+  id?: string | null;
+  name?: string | null;
+  repoId?: string | null;
+};
 type SidebarWorkflowStep = NonNullable<RunStatus['workflowSteps']>[number];
 
 function humanLabel(value?: string | null): string {
@@ -2090,6 +2095,7 @@ function FileChangesPanel({
   runs,
   rootType,
   rootId,
+  workspaceBrowseSource,
   repoBrowseSource,
   activeView,
   viewRequest,
@@ -2097,6 +2103,7 @@ function FileChangesPanel({
   runs: SpawnedAgent[];
   rootType?: 'chat' | 'workflow' | 'agent';
   rootId?: string | null;
+  workspaceBrowseSource?: WorkspaceBrowseSource | null;
   repoBrowseSource?: RepoBrowseSource | null;
   activeView: FilePanelView;
   viewRequest?: { view: FilePanelView; nonce: number };
@@ -2151,11 +2158,24 @@ function FileChangesPanel({
         name: repoBrowseSource.name ?? null,
         path: repoBrowseSource.path ?? null,
       } : null,
+      workspaceBrowseSource: workspaceBrowseSource?.id ? {
+        id: workspaceBrowseSource.id,
+        name: workspaceBrowseSource.name ?? null,
+        repoId: workspaceBrowseSource.repoId ?? null,
+      } : null,
     });
-  }, [activeView, view, rootType, rootId, runs.length, repoBrowseSource?.id, repoBrowseSource?.name, repoBrowseSource?.path]);
+  }, [activeView, view, rootType, rootId, runs.length, repoBrowseSource?.id, repoBrowseSource?.name, repoBrowseSource?.path, workspaceBrowseSource?.id, workspaceBrowseSource?.name, workspaceBrowseSource?.repoId]);
 
   const workspaceRefs = useMemo(() => {
     const refs: Array<{ id: string; name?: string | null; repoId?: string | null; mode: 'workspace' }> = [];
+    if (workspaceBrowseSource?.id) {
+      refs.push({
+        id: workspaceBrowseSource.id,
+        name: workspaceBrowseSource.name ?? 'Workspace',
+        repoId: workspaceBrowseSource.repoId ?? null,
+        mode: 'workspace',
+      });
+    }
     for (const run of runs) {
       const id = run.runContext?.workspace?.id;
       if (!id) continue;
@@ -2171,7 +2191,7 @@ function FileChangesPanel({
       if (!existing) acc.push(ref);
       return acc;
     }, []);
-  }, [runs]);
+  }, [runs, workspaceBrowseSource?.id, workspaceBrowseSource?.name, workspaceBrowseSource?.repoId]);
 
   const pullRequestRefs = useMemo(() => {
     const refs: Array<{ id: string; name?: string | null }> = [];
@@ -2772,6 +2792,7 @@ export default function ChatRunSidebar({
   runs,
   rootType,
   rootId,
+  workspaceBrowseSource,
   repoBrowseSource,
   open,
   activeTab,
@@ -2783,6 +2804,7 @@ export default function ChatRunSidebar({
   runs: SpawnedAgent[];
   rootType?: 'chat' | 'workflow' | 'agent';
   rootId?: string | null;
+  workspaceBrowseSource?: WorkspaceBrowseSource | null;
   repoBrowseSource?: RepoBrowseSource | null;
   open: boolean;
   activeTab: ChatRunPanelTab;
@@ -2881,6 +2903,7 @@ export default function ChatRunSidebar({
             runs={allRuns}
             rootType={rootType}
             rootId={rootId}
+            workspaceBrowseSource={workspaceBrowseSource}
             repoBrowseSource={repoBrowseSource}
             activeView={visibleTab}
             viewRequest={filesViewRequest}

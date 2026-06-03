@@ -96,7 +96,7 @@ Routes (registered in `packages/server/src/app.ts`):
 - `/api/executions` - execution records and SSE streams.
 - `/api/repos` - repo registration.
 - `/api/workspaces` - workspaces, terminals, file watch, preview proxy.
-- `/api/chat` - chat sessions and messages. Includes `POST /sessions/:id/automation-message` (JWT-guarded) for automation agents to append a message to a linked automation thread.
+- `/api/chat` - chat sessions and messages. `POST /sessions` accepts an optional `workspaceId` body field; when supplied, the server calls `WorkspaceManager.linkChat` atomically and returns the session with workspace snapshot fields populated. Includes `POST /sessions/:id/automation-message` (JWT-guarded) for automation agents to append a message to a linked automation thread.
 - `/api/mcp` - MCP server registry. Includes `GET /servers/discover/:repoId` (scan a repo for Python and Node MCP entry files) and `POST /servers/:id/reinstall` (bust the install cache and re-run `npm install`; Python MCPs return a skip response instead).
 - `/api/linear` - Linear integration.
 - `/api/slack` - Slack integration (raw body, signature-verified).
@@ -143,7 +143,7 @@ Responsibilities:
 - Workflow run dialogs.
 - Paginated activity feed: server-side execution list (50 per page) with status filter, type filter (agent / workflow), and debounced text search. Page position is encoded in `?page=N` URL state and resets to 0 on filter or search changes. The page auto-refreshes every 5 s while running or queued executions are present.
 - Execution timeline, node detail, logs, state, artifacts, checkpoints, interventions, and token usage breakdown (cached input, non-cached input, output tokens — omitted when data is unavailable).
-- Workspace list/detail, terminal, file preview, service preview.
+- Workspace list/detail, terminal, file preview, service preview. Clicking a workspace in the sidebar opens `ChatPage` in workspace mode (`/chat?workspaceId=…`) rather than the workspace IDE page, giving a browser-style chat tab strip scoped to that workspace.
 - Repo manager.
 - Ticket and PR views.
 - Settings for agents, MCP (including preset and repo-based registration with Python MCP support), integrations, and users.
@@ -156,6 +156,8 @@ Key chat UI components:
 
 - `src/components/chat/ChatInput.tsx` - message composer with model/effort/plan/repo selectors, file attachments, and @mention detection.
 - `src/components/chat/MentionAutocomplete.tsx` - autocomplete dropdown with two modes: **default** (workflows, repos, agents filtered by query) and **linear** (activated by `@linear`, shows the user's assigned active tickets with priority dots and state badges).
+- `src/components/chat/WorkspaceChatContextBar.tsx` - context bar rendered in workspace-mode chat. Shows workspace name, repo, branch, baseBranch, and worktree path; quick-action button (Open workspace); archived-workspace banner when `status === 'archived'`; hidden in non-workspace chat.
+- `src/components/chat/WorkspaceChatTabs.tsx` - horizontal browser-style tab strip for workspace-linked chats. Supports open/close/restore tabs, `+ New Chat` button, and a **Previous chats ▾** dropdown (recent-first, capped at 50 items). Tab labels truncate with a tooltip showing the full title; a streaming indicator appears on live tabs. Close confirmation is shown when the target tab is streaming.
 - `src/services/api.ts` `linear` object - typed wrappers for all `/api/linear/*` endpoints including the `assignee: 'me'` filter shorthand.
 
 ## The Seeded Org
@@ -188,7 +190,7 @@ MongoDB stores all operational state. Collections are created and indexed by ser
 - **Auth** — `users`, `refresh_tokens` (TTL auto-purge), `bootstrap_locks` (first-admin race guard).
 - **Org** — `teams`, `agents`, `skills`.
 - **Workflows & executions** — `workflows`, `executions`, `execution_traces`, `execution_logs`, `execution_failure_reports`, `checkpoints`. Both `executions` and `execution_traces` rows carry an optional `tokenUsage: { inputCachedTokens, inputNonCachedTokens, outputTokens }` field (each sub-field is `number | null`) that is populated when the provider reports usage data. Old rows without this field render and behave normally.
-- **Chat** — `chat_sessions` (automation sessions carry a sparse-unique `automationKey`; the linked `_id` is stored as `cron_jobs.linkedChatSessionId` and never overwritten by seed updates), `chat_messages`, `agent_conversations` (delegation threads), `agent_activity` (7-day TTL).
+- **Chat** — `chat_sessions` (automation sessions carry a sparse-unique `automationKey`; the linked `_id` is stored as `cron_jobs.linkedChatSessionId` and never overwritten by seed updates; workspace-linked sessions carry `workspaceId` plus snapshot fields `workspaceName`, `workspaceRepoId`, `workspaceRepoName`, `workspaceBranch`, `workspaceBaseBranch`, `workspacePrNumber`, `workspacePrUrl` written by `WorkspaceManager.linkChat`), `chat_messages`, `agent_conversations` (delegation threads), `agent_activity` (7-day TTL).
 - **Docs & checkpoints** — `design_docs` (PRD/HLD/TDD), `workflow_interventions`.
 - **Repos & workspaces** — `repos`, `repo_contexts`, `pull_requests`, `workspaces`, `workspace_configs`.
 - **MCP & secrets** — `mcp_servers`, `secrets`.
@@ -222,6 +224,8 @@ Typical flow:
 5. Terminal and file watch WebSockets attach to the workspace.
 6. Preview proxy routes expose workspace services in the UI.
 7. Stale PIDs are cleaned up on server boot.
+
+**Workspace-linked chat.** Clicking a workspace in the sidebar navigates to `/chat?workspaceId=<id>`. `ChatPage` bootstraps in workspace mode: it fetches the workspace document and its linked chat sessions, opens them as a browser-style tab strip (recent-first), and selects the most recently active tab. If no chats exist, a `New chat` temp tab is created. Sending the first message from a temp tab calls `POST /api/chat/sessions` with `workspaceId`, which links the new session and snapshots workspace metadata in one round-trip. The session's `workspaceId` is used by the agent cwd resolver so all agents in that chat run with `cwd = workspace.worktreePath`. Navigating to a `/chat/:sessionId` URL whose session has a `workspaceId` also bootstraps workspace mode and forces that session active, enabling Dashboard-driven resumption.
 
 Defaults:
 

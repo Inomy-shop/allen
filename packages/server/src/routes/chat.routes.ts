@@ -255,11 +255,30 @@ export function chatRoutes(db: Db): Router {
     try {
       const { provider, model, agentOverrides } = req.body ?? {};
       const repoId = typeof req.body?.repoId === 'string' ? req.body.repoId : undefined;
+      const workspaceId = typeof req.body?.workspaceId === 'string' ? req.body.workspaceId.trim() : undefined;
+      // Validate workspaceId BEFORE creating the session to avoid orphaned sessions
+      if (workspaceId && !ObjectId.isValid(workspaceId)) {
+        return res.status(400).json({ error: 'Invalid workspaceId' });
+      }
       const sender = await readSender(req);
       const owner = sender
         ? { userId: sender.userId, name: sender.name, email: sender.email }
         : undefined;
       const session = await chatService.createSession(provider, model, 'ui', undefined, agentOverrides, repoId, owner);
+      if (workspaceId) {
+        // ObjectId.isValid already checked above
+        try {
+          const ws = await workspaceManager.get(workspaceId);
+          if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+          await workspaceManager.linkChat(workspaceId, session._id!.toString());
+          // Re-fetch session to include snapshot fields
+          const linked = await chatService.getSession(session._id!.toString());
+          return res.status(201).json(linked);
+        } catch (linkErr) {
+          // Log but don't fail — session is created, workspace linking is best-effort
+          console.error('Failed to link workspace to session:', linkErr);
+        }
+      }
       res.status(201).json(session);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
