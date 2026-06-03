@@ -1,6 +1,11 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
+import { readFileSync } from 'fs';
+
+const rootPackage = JSON.parse(
+  readFileSync(resolve(__dirname, '../../package.json'), 'utf8'),
+) as { version?: string };
 
 export default defineConfig(({ mode }) => {
   // Load .env from monorepo root
@@ -11,6 +16,9 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    define: {
+      __ALLEN_APP_VERSION__: JSON.stringify(rootPackage.version ?? '0.0.0'),
+    },
     resolve: {
       alias: {
         '@': resolve(__dirname, './src'),

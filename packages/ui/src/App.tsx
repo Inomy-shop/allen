@@ -473,6 +473,7 @@ export default function App() {
   const [sidebarWorkspacesLoading, setSidebarWorkspacesLoading] = useState(false);
   const [workspaceCreateRepo, setWorkspaceCreateRepo] = useState<WorkspaceCreateRepo | null>(null);
   const [collapsedWorkspaceRepos, setCollapsedWorkspaceRepos] = useState<Set<string>>(() => loadCollapsedWorkspaceRepos());
+  const [appVersion, setAppVersion] = useState(__ALLEN_APP_VERSION__);
   const sidebarGestureLockRef = useRef(false);
   const sidebarWheelGestureActiveRef = useRef(false);
   const sidebarWheelCanRearmRef = useRef(true);
@@ -538,6 +539,20 @@ export default function App() {
   function prependSidebarWorkspace(workspace: SidebarWorkspace) {
     setSidebarWorkspaces(prev => [workspace, ...prev.filter(item => item._id !== workspace._id)]);
   }
+
+  useEffect(() => {
+    let cancelled = false;
+    window.allenDesktop?.getRuntimeInfo?.()
+      .then((info) => {
+        if (!cancelled && info?.appVersion) setAppVersion(info.appVersion);
+      })
+      .catch(() => {
+        // Web/dev mode uses the build-time fallback.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const index = window.history.state?.idx;
@@ -891,7 +906,7 @@ export default function App() {
               </div>
               <span className="brand-name">{BRAND_NAME}</span>
             </NavLink>
-            <span className="brand-sub">v0.1.0</span>
+            <span className="brand-sub">v{appVersion}</span>
           </div>
 
           <div

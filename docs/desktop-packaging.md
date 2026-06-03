@@ -47,6 +47,10 @@ bumps and synchronizes the root and desktop package versions, runs the macOS
 release build, verifies the code signature, checks Gatekeeper assessment, and
 validates the stapled notarization ticket.
 
+The packaged app excludes the `@anthropic-ai/claude-code` JetBrains plugin
+vendor bundle because its nested JAR contains unsigned native libraries that are
+not needed by Allen Desktop and are rejected by Apple notarization.
+
 ## Local Package Smoke
 
 After producing the local `--dir` package, validate the packaged runtime with:

@@ -1,6 +1,8 @@
 export {};
 
 declare global {
+  const __ALLEN_APP_VERSION__: string;
+
   interface Window {
     allenDesktop?: {
       getRuntimeInfo(): Promise<{

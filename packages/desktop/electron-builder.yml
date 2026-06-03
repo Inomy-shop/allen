@@ -33,6 +33,7 @@ files:
   - '!**/*.test.*'
   - '!**/*.spec.*'
   - '!**/node_modules/.cache/**/*'
+  - '!**/node_modules/@anthropic-ai/claude-code/vendor/claude-code-jetbrains-plugin/**/*'
   - '!node_modules/@allen/desktop/**/*'
   - '!packages/desktop/release/**/*'
   - '!packages/desktop/assets/mongo-binaries/.gitkeep'
