@@ -364,7 +364,7 @@ export async function buildSingleServerConfig(
 // list silently returned null and dropped Allen MCP from every agent spawn.
 // See the 2026-05-24 ENG-1737 incident: the `bug-investigator` ran for 7
 // minutes, then logged "The artifact MCP tool isn't available in this
-// environment" — every workflow / delegation agent that day was missing
+  // environment" — every workflow / spawned agent that day was missing
 // `mcp__allen__*` for the same reason.
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 

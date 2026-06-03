@@ -11,7 +11,6 @@ import { logger } from '../logger.js';
 import { ExecutionService } from './execution.service.js';
 import { InterventionService } from './intervention.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
-import { AgentConversationService } from './agent-conversation.service.js';
 import { AgentActivityService } from './agent-activity.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
 import { monitoringAgentTools } from './monitoring-agent-tools.js';
@@ -20,7 +19,6 @@ import { RepoContextPacketService } from './context/core/repo-context-packet.ser
 import { ContextEvaluationService } from './context/evaluation/context-evaluation.service.js';
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
-import { MonitoringService } from './self-healing-monitor.service.js';
 import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload, type MaterializedAgentFileMetadata, normalizeClaudeUsage, normalizeCodexUsage, aggregateTokenUsage, type TokenUsageInfo } from '@allen/engine';
 import {
   getRuntimeApiBaseUrl,
@@ -356,23 +354,19 @@ function resolveExecutionMode(_cwd: string | undefined): 'sdk' | 'cli' {
 
 // ── Active Session Registry ──────────────────────────────────────────────────
 // When chat.service starts processing a message, it registers the session context.
-// delegation tools (delegate_to_agent, report_to_user) read from this registry
-// to know which session they're running in, even when called via MCP → API chain.
+// chat-scoped tools read from this registry to know which session they're
+// running in, even when called via MCP → API chain.
 
 export interface ActiveSessionContext {
   chatSessionId: string;
   parentMessageId: string;
   /** Which agent is currently responding (undefined = Allen Assistant) */
   currentAgent?: string;
-  /** Current delegation depth (0 = top-level chat, 1+ = delegated) */
-  delegationDepth: number;
-  /** Current conversation ID (for tracking parent-child delegation chains) */
-  currentConversationId?: string;
   /** Broadcast SSE events to the chat listeners */
   broadcastEvent: (event: string, data: Record<string, unknown>) => void;
-  /** Number of background tasks (delegations/spawns) still running */
+  /** Number of background spawns still running */
   pendingBackgroundTasks: number;
-  /** Resolved working directory — set by chat.service.ts, inherited by all spawned/delegated agents */
+  /** Resolved working directory — set by chat.service.ts, inherited by spawned agents */
   resolvedCwd?: string;
 }
 
@@ -389,7 +383,7 @@ export function unregisterActiveSession(sessionId: string): void {
   activeSessions.delete(sessionId);
 }
 
-/** Get the active context for a session (used by delegation tools) */
+/** Get the active context for a session (used by chat tools and spawned agents) */
 export function getActiveSession(sessionId: string): ActiveSessionContext | undefined {
   return activeSessions.get(sessionId);
 }
@@ -447,8 +441,6 @@ function toolDescription(tool: string, args: Record<string, unknown>): string {
     if (fn === 'list_repos') return 'List repos';
     if (fn === 'wait_for_execution') return `Get execution ${(args.execution_id as string ?? '').slice(0, 12)}`;
     if (fn === 'spawn_agent') return `Spawn ${args.agent_name ?? 'agent'}`;
-    if (fn === 'delegate_to_agent') return `Delegate to ${args.agent_name ?? 'agent'}: ${(args.task as string ?? '').slice(0, 80)}`;
-    if (fn === 'wait_for_delegation') return `Wait for delegation ${(args.conversation_id as string ?? '').slice(0, 12)}`;
     if (fn === 'run_workflow') return `Run workflow ${args.workflow_name ?? args.workflow_id ?? ''}`;
     if (fn === 'save_learning') return `Save learning: ${(args.content as string ?? '').slice(0, 60)}`;
     if (fn === 'query_database') return `Query: ${(args.query as string ?? '').slice(0, 80)}`;
@@ -512,7 +504,7 @@ export interface ChatTool {
 
 /** Tools that mutate state — require approval in guided mode */
 export const DESTRUCTIVE_TOOLS = new Set([
-  'run_workflow', 'cancel_execution', 'spawn_agent', 'submit_execution_input', 'delegate_to_agent',
+  'run_workflow', 'cancel_execution', 'spawn_agent', 'submit_execution_input',
   // MCP tools that mutate (linear create/edit/delete)
   'mcp__linear__linear_create_issue', 'mcp__linear__linear_edit_issue',
   'mcp__linear__linear_delete_issue', 'mcp__linear__linear_create_comment',
@@ -790,7 +782,7 @@ const runWorkflow: ChatTool = {
 
 const getExecution: ChatTool = {
   name: 'wait_for_execution',
-  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion (like wait_for_delegation). If status="waiting", call again. When completed, includes the agent's response. Also returns recent_activity, top_logs, and activity_summary since activity_since so the caller can narrate what is happening inside the execution — pass the returned activity_cursor back as activity_since on the next call to stream forward.`,
+  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion. If status="waiting", call again. When completed, includes the agent's response. Also returns recent_activity, top_logs, and activity_summary since activity_since so the caller can narrate what is happening inside the execution — pass the returned activity_cursor back as activity_since on the next call to stream forward.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -929,7 +921,7 @@ const getExecution: ChatTool = {
 
     // Still running after 90s — return "waiting" so LLM calls again.
     // Include the latest activity window so the caller can narrate what
-    // the delegated agent is doing instead of silently polling.
+    // the spawned agent is doing instead of silently polling.
     const waitingActivity = await readActivity();
     return {
       id: executionId,
@@ -1393,7 +1385,7 @@ async function runSpawnInBackground(
   // Persist spawn activity to agent_activity so the wait tools can return
   // a `recent_activity` cursor and the UI replay route can hydrate this
   // execution's event log on refresh. Fire-and-forget — failures here
-  // must never stall the delegation stream.
+  // must never stall the spawn activity stream.
   const activityService = new AgentActivityService(db);
   const persistSpawnActivity = (
     rawType: 'tool_start' | 'tool_done' | 'thinking' | 'text',
@@ -3376,374 +3368,7 @@ const saveLearning: ChatTool = {
   },
 };
 
-// ── Delegation Tools ──────────────────────────────────────────────────────────
-
-const delegateToAgent: ChatTool = {
-  name: 'delegate_to_agent',
-  description: `Delegate a task to another team agent. Returns immediately with a conversation_id. Then call wait_for_delegation(conversation_id) which BLOCKS until the agent finishes — no polling loop needed.
-
-WORKFLOW:
-1. delegate_to_agent(agent_name="engineer", task="Analyze feasibility") → { conversation_id: "abc" }
-2. wait_for_delegation(conversation_id="abc") → WAITS → { status: "completed", response: "..." }
-3. Optional follow-up: delegate_to_agent(agent_name="engineer", task="What about CSS?", conversation_id="abc")
-4. wait_for_delegation(conversation_id="abc") → WAITS → { status: "completed", response: "..." }
-
-CRITICAL RULES:
-- ALWAYS call wait_for_delegation after delegate_to_agent.
-- If wait_for_delegation returns status="waiting", call it again immediately. Keep calling until "completed" or "failed".
-- NEVER respond to the user before ALL delegations are complete.
-- NEVER give up — the agent WILL finish. Just keep calling wait_for_delegation.
-- After getting "completed", you MAY send follow-ups via delegate_to_agent(conversation_id=...) then wait_for_delegation again.
-- Only after ALL delegation results are in, synthesize and respond to the user.`,
-  destructive: true,
-  inputSchema: {
-    type: 'object',
-    properties: {
-      agent_name: { type: 'string', description: 'Name of the agent to delegate to (e.g., "engineer", "qa-engineer", "data-analyst")' },
-      task: { type: 'string', description: 'The task, question, or follow-up message for the target agent' },
-      context: { type: 'object', description: 'Any relevant context (repo path, ticket info, etc.)', additionalProperties: true },
-      conversation_id: { type: 'string', description: 'ID of an existing conversation to continue (for multi-turn). Omit for new delegation.' },
-    },
-    required: ['agent_name', 'task'],
-  },
-  async execute(args, db, toolContext) {
-    const targetName = args.agent_name as string;
-    const task = args.task as string;
-    const context = (args.context as Record<string, unknown>) ?? {};
-    const continueConvId = args.conversation_id as string | undefined;
-    const conversationService = new AgentConversationService(db);
-
-    // Find the target agent
-    const targetAgent = await db.collection('agents').findOne({ name: targetName });
-    if (!targetAgent) {
-      return { error: `Agent "${targetName}" not found. Use list_agents to see available agents.` };
-    }
-
-    const activeCtx = resolveActiveSession(toolContext);
-    const chatSessionId = activeCtx?.chatSessionId ?? toolContext?.chatSessionId;
-    if (!chatSessionId) {
-      return { error: 'Missing chat session context. Delegation must be started from a chat session.' };
-    }
-    const parentMessageId = activeCtx?.parentMessageId ?? 'unknown';
-    const fromAgent = activeCtx?.currentAgent ?? 'assistant';
-    const currentDepth = (activeCtx?.delegationDepth ?? 0) + 1;
-    const onEvent = activeCtx?.broadcastEvent;
-
-    if (!chatSessionId || !parentMessageId) {
-      return {
-        error: 'delegate_to_agent requires an active chat context with a parent message id. Refusing to create or reuse an unscoped delegation thread.',
-      };
-    }
-
-    // Resolve cwd: explicit context > session cwd > workspace linked to
-    // session > target agent's sourceRepoPath. See spawn_agent for the full
-    // rationale. This fallback makes imported Claude agents "just work"
-    // without every caller having to look up their source repo.
-    let delegationCwd = context.repo_path as string | undefined;
-    if (!delegationCwd) {
-      delegationCwd = activeCtx?.resolvedCwd ?? await resolveWorkspacePath(db, chatSessionId) ?? undefined;
-    }
-    if (!delegationCwd && typeof targetAgent.sourceRepoPath === 'string' && targetAgent.sourceRepoPath) {
-      delegationCwd = targetAgent.sourceRepoPath;
-      // Mirror into context so the receiving agent's prompt includes the
-      // same repo_path it will actually run in.
-      if (!context.repo_path) context.repo_path = delegationCwd;
-    }
-
-    // ── Continue existing conversation (explicit ID or auto-find) ──
-    let existingConvId = continueConvId;
-    if (!existingConvId) {
-      // Auto-find active conversation between caller and target
-      const existing = await conversationService.findActiveConversation(chatSessionId, fromAgent, targetName);
-      if (existing) existingConvId = existing._id!.toString();
-    }
-
-    if (existingConvId) {
-      const existing = await conversationService.get(existingConvId);
-      if (!existing) return { error: `Conversation "${existingConvId}" not found.` };
-
-      // Flip the conversation back to `active` and anchor it to the current
-      // assistant message before kicking off the background run. Without
-      // this, wait_for_delegation sees the prior turn's `completed` status
-      // and returns the stale response/summary/cost/duration immediately —
-      // the caller thinks the continuation finished instantly with the
-      // previous turn's output. parentMessageIds also lets the UI render
-      // the thread card under every assistant message that touched it.
-      await conversationService.markContinuation(existingConvId, parentMessageId);
-
-      await conversationService.addMessage(existingConvId, { agent: fromAgent, type: 'message', content: task, timestamp: new Date() });
-      if (onEvent) onEvent('thread_message', { conversationId: existingConvId, agent: fromAgent, type: 'message', content: task.slice(0, 200) });
-
-      // Get the target agent's session for resume
-      const targetSessionId = existing.sessions?.[targetName];
-
-      // Run in background — return immediately
-      runDelegationInBackground(db, targetAgent, task, existingConvId, targetSessionId, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd, chatSessionId).catch(() => {});
-
-      return { conversation_id: existingConvId, status: 'started', turn: 'continue', message: `Message sent to ${targetName}. Use wait_for_delegation to check the response.` };
-    }
-
-    // ── New conversation ──
-    if (!conversationService.canDelegate(currentDepth - 1)) {
-      return { error: `Delegation depth limit reached (max ${conversationService.maxDepth}). Respond directly.` };
-    }
-
-    // Delegation is intentionally unrestricted: any agent can delegate to any
-    // other agent regardless of canDelegateTo lists or team boundaries.
-    // The team isolation and canDelegateTo checks were removed so that
-    // orchestrators are never blocked by allowlist mismatches (ENG-1469).
-
-    const conversation = await conversationService.create({ chatSessionId, parentMessageId, fromAgent, toAgent: targetName, task, context, depth: currentDepth, parentConversationId: activeCtx?.currentConversationId });
-    const convId = conversation._id!.toString();
-
-    if (onEvent) onEvent('thread_created', { conversationId: convId, fromAgent, toAgent: targetName, task: task.slice(0, 200), depth: currentDepth, parentConversationId: activeCtx?.currentConversationId });
-    await conversationService.addMessage(convId, { agent: fromAgent, type: 'message', content: task, timestamp: new Date() });
-
-    // Auto-inject workspace context
-    if (!context.repo_path) {
-      const wsPath = await resolveWorkspacePath(db, chatSessionId);
-      if (wsPath) {
-        context.repo_path = wsPath;
-        try {
-          const ws = await db.collection('workspaces').findOne({ worktreePath: wsPath, status: { $nin: ['archived', 'failed'] } });
-          if (ws?.branch) context.workspace_branch = ws.branch as string;
-        } catch {}
-      }
-    }
-
-    let fullPrompt = task;
-    if (Object.keys(context).length > 0) fullPrompt = `CONTEXT:\n${JSON.stringify(context, null, 2)}\n\nTASK:\n${task}`;
-
-    // Run in background — return immediately so MCP doesn't timeout
-    runDelegationInBackground(db, targetAgent, fullPrompt, convId, undefined, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd, chatSessionId).catch(() => {});
-
-    return { conversation_id: convId, status: 'started', agent: targetName, depth: currentDepth, message: `Delegation started. Use wait_for_delegation(conversation_id="${convId}") to get the response.` };
-  },
-};
-
-/** Run delegation in background — decoupled from MCP tool call timeout */
-async function runDelegationInBackground(
-  db: Db, targetAgent: Record<string, unknown>, prompt: string, convId: string,
-  resumeSessionId: string | undefined, conversationService: AgentConversationService,
-  onEvent: ((event: string, data: Record<string, unknown>) => void) | undefined,
-  activeCtx: ActiveSessionContext | undefined, currentDepth: number,
-  fromAgent: string, targetName: string, cwd?: string, chatSessionId?: string,
-): Promise<void> {
-  if (activeCtx) activeCtx.pendingBackgroundTasks++;
-  const startMs = Date.now();
-  try {
-    const result = await runAgentTurn(db, targetAgent, prompt, convId, resumeSessionId, conversationService, onEvent, activeCtx, currentDepth, cwd, chatSessionId);
-    logger.info('[delegation] completed', { convId, targetName, responseLen: result.responseText.length, toolCalls: result.toolCalls.length });
-    await conversationService.addMessage(convId, { agent: targetName, type: 'message', content: result.responseText, toolCalls: result.toolCalls, timestamp: new Date() });
-    await conversationService.addCost(convId, result.costUsd);
-    if (result.sessionId) await conversationService.saveSessionId(convId, targetName, result.sessionId);
-
-    const durationMs = Date.now() - startMs;
-    const summary = result.responseText.split('\n').find(l => l.trim().length > 10)?.trim().slice(0, 150) ?? result.responseText.slice(0, 150);
-    await conversationService.complete(convId, result.responseText, summary, result.costUsd);
-    if (onEvent) onEvent('thread_completed', { conversationId: convId, fromAgent, toAgent: targetName, summary, costUsd: result.costUsd, durationMs });
-  } catch (err) {
-    const durationMs = Date.now() - startMs;
-    const errorMsg = (err as Error).message;
-    await conversationService.fail(convId, errorMsg);
-    new MonitoringService(db).handleEvent({
-      sourceType: 'delegation',
-      sourceId: convId,
-      title: `Delegation failed: ${fromAgent} -> ${targetName}`,
-      error: errorMsg,
-      rootCauseArea: 'agent_prompt',
-      severity: 'high',
-      confidence: 0.80,
-      failureMode: 'delegation_failed',
-      relatedIds: {
-        conversationId: convId,
-        chatSessionId,
-        fromAgent,
-        toAgent: targetName,
-      },
-    }).catch(() => {});
-    if (onEvent) onEvent('thread_completed', { conversationId: convId, fromAgent, toAgent: targetName, summary: `Failed: ${errorMsg}`, costUsd: 0, durationMs, error: true });
-  } finally {
-    if (activeCtx) activeCtx.pendingBackgroundTasks--;
-  }
-}
-
-/** Wait for delegation result — handles active, waiting_for_answer, completed, failed */
-const getDelegationResult: ChatTool = {
-  name: 'wait_for_delegation',
-  description: `Wait for a delegation to complete. Blocks up to 90 seconds per call.
-
-Possible return statuses:
-- "waiting" → agent still working. Call wait_for_delegation again.
-- "question" → agent is asking YOU a question. Read the question, then call answer_delegator(conversation_id, answer).
-  After answering, call wait_for_delegation again to wait for the agent to finish.
-- "completed" → agent finished. Response is in the result.
-- "failed" → agent errored.
-
-RULES:
-- If "waiting": call wait_for_delegation again immediately. NEVER give up.
-- If "question": answer it via answer_delegator, then call wait_for_delegation again.
-- If you can't answer the question yourself, use ask_delegator to escalate to YOUR caller.
-- NEVER respond to the user before status is "completed" or "failed".
-
-Also returns recent_activity and activity_summary (human-readable progress lines since the activity_since cursor) so you can describe what the delegated agent is doing rather than polling silently — pass the returned activity_cursor back on the next call to stream forward.`,
-  inputSchema: {
-    type: 'object',
-    properties: {
-      conversation_id: { type: 'string', description: 'Conversation ID from delegate_to_agent' },
-      activity_since: { type: 'string', description: 'ISO timestamp cursor. Pass activity_cursor from the previous wait_for_delegation response to fetch only newer events.' },
-    },
-    required: ['conversation_id'],
-  },
-  async execute(args, db) {
-    const convId = args.conversation_id as string;
-    const activitySince = typeof args.activity_since === 'string' ? new Date(args.activity_since) : undefined;
-    const conversationService = new AgentConversationService(db);
-    const { AgentActivityService } = await import('./agent-activity.service.js');
-    const activityService = new AgentActivityService(db);
-    const readActivity = async () => {
-      const rows = await activityService.recent(convId, { since: activitySince, limit: 10 });
-      const activitySummary = rows
-        .map((row) => formatActivityForCaller(row as unknown as Record<string, unknown>))
-        .filter((line): line is string => Boolean(line))
-        .slice(-8);
-      const activityCursor = rows.length > 0 ? rows[rows.length - 1].at : activitySince?.toISOString();
-      return {
-        recent_activity: rows,
-        activity_summary: activitySummary,
-        progress_message: activitySummary.length > 0 ? activitySummary[activitySummary.length - 1] : undefined,
-        activity_cursor: activityCursor,
-      };
-    };
-
-    let waitMs = 5000;
-    const maxWaitMs = 30000;
-    const maxTotalMs = 90_000; // 90s per call (MCP safe)
-    const startMs = Date.now();
-
-    while (Date.now() - startMs < maxTotalMs) {
-      const conv = await conversationService.get(convId);
-      if (!conv) return { error: `Conversation "${convId}" not found.` };
-
-      // Agent asked a question — return immediately so caller can answer
-      if (conv.status === 'waiting_for_answer' && conv.pendingQuestion?.status === 'pending') {
-        const qActivity = await readActivity();
-        return {
-          conversation_id: convId,
-          status: 'question',
-          question: conv.pendingQuestion.question,
-          from_agent: conv.pendingQuestion.fromAgent,
-          message: `${conv.toAgent} is asking: "${conv.pendingQuestion.question}". Answer via answer_delegator(conversation_id, answer).`,
-          ...qActivity,
-        };
-      }
-
-      // Completed or failed — return result
-      if (conv.status === 'completed' || conv.status === 'failed') {
-        const finalActivity = await readActivity();
-        return {
-          conversation_id: convId,
-          status: conv.status,
-          agent: conv.toAgent,
-          response: conv.response ?? conv.summary ?? '',
-          summary: conv.summary,
-          cost_usd: conv.costUsd,
-          duration_ms: conv.durationMs,
-          turn_count: conv.turnCount,
-          hint: conv.status === 'completed' ? `To continue, call delegate_to_agent with conversation_id="${convId}"` : undefined,
-          ...finalActivity,
-        };
-      }
-
-      // Still active — wait
-      await new Promise(r => setTimeout(r, waitMs));
-      waitMs = Math.min(waitMs * 1.3, maxWaitMs);
-    }
-
-    // Timed out — include activity so the caller can narrate progress
-    // rather than silently re-polling.
-    const waitingActivity = await readActivity();
-    return { conversation_id: convId, status: 'waiting', message: 'Agent is still working. Call wait_for_delegation again.', ...waitingActivity };
-  },
-};
-
-/** Answer a question from a delegated agent */
-const answerQuestion: ChatTool = {
-  name: 'answer_delegator',
-  description: 'Answer a question from an agent you delegated to. Use when wait_for_delegation returns status="question". After answering, call wait_for_delegation again to wait for the agent to continue.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      conversation_id: { type: 'string', description: 'Conversation ID' },
-      answer: { type: 'string', description: 'Your answer to the agent\'s question' },
-    },
-    required: ['conversation_id', 'answer'],
-  },
-  async execute(args, db, context) {
-    const convId = args.conversation_id as string;
-    const answer = args.answer as string;
-    const conversationService = new AgentConversationService(db);
-    const activeCtx = resolveActiveSession(context);
-    const fromAgent = activeCtx?.currentAgent ?? 'assistant';
-
-    const conv = await conversationService.get(convId);
-    if (!conv) return { error: `Conversation "${convId}" not found.` };
-    if (conv.status !== 'waiting_for_answer') return { error: `Conversation is not waiting for an answer (status: ${conv.status}).` };
-
-    await conversationService.answerQuestion(convId, fromAgent, answer);
-
-    // Emit SSE
-    activeCtx?.broadcastEvent?.('thread_answer', {
-      conversationId: convId, fromAgent, answer: answer.slice(0, 200),
-    });
-
-    return { answered: true, conversation_id: convId };
-  },
-};
-
-/** Ask the caller (agent who delegated to you) a question. Blocks until they answer. */
-const askCaller: ChatTool = {
-  name: 'ask_delegator',
-  description: 'Ask a question to the agent who delegated this task to you. Use when you need clarification, context, or a decision before you can proceed. Your execution pauses until they answer. Do NOT guess — ask.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      question: { type: 'string', description: 'Your question for the caller' },
-    },
-    required: ['question'],
-  },
-  async execute(args, db, context) {
-    const question = args.question as string;
-    const activeCtx = resolveActiveSession(context);
-    const currentAgent = activeCtx?.currentAgent ?? 'unknown';
-    // Accept conversation_id from API route (when called via MCP → HTTP) or from active context
-    const convId = (args._conversation_id as string) ?? activeCtx?.currentConversationId;
-
-    if (!convId) return { error: 'No active conversation context. ask_delegator can only be used by a delegated agent.' };
-
-    const conversationService = new AgentConversationService(db);
-
-    // Write question and set status to waiting_for_answer
-    await conversationService.askQuestion(convId, currentAgent, question);
-
-    // Emit SSE
-    activeCtx?.broadcastEvent?.('thread_question', {
-      conversationId: convId, fromAgent: currentAgent, question: question.slice(0, 300),
-    });
-
-    // Block: poll until the caller answers
-    let waitMs = 3000;
-    const maxWaitMs = 30000;
-    while (true) {
-      const { answered, answer } = await conversationService.isQuestionAnswered(convId);
-      if (answered && answer) {
-        return { answer };
-      }
-      await new Promise(r => setTimeout(r, waitMs));
-      waitMs = Math.min(waitMs * 1.3, maxWaitMs);
-    }
-  },
-};
+// ── Chat Communication Tools ─────────────────────────────────────────────────
 
 /** Ask the user a question directly. Only for the top-level team agent. Blocks until user answers. */
 const askUser: ChatTool = {
@@ -3806,557 +3431,9 @@ const askUser: ChatTool = {
   },
 };
 
-/**
- * Run a single turn of an agent conversation.
- * Streams thinking, text, tool calls, and tool results to the UI in real-time.
- * No timeout — agents run until they finish.
- */
-async function runAgentTurn(
-  db: Db,
-  targetAgent: Record<string, unknown>,
-  prompt: string,
-  convId: string,
-  resumeSessionId: string | undefined,
-  conversationService: AgentConversationService,
-  onEvent: ((event: string, data: Record<string, unknown>) => void) | undefined,
-  activeCtx: ActiveSessionContext | undefined,
-  currentDepth: number,
-  cwd?: string,
-  chatSessionId?: string,
-): Promise<{ responseText: string; costUsd: number; sessionId?: string; toolCalls: { tool: string; args: Record<string, unknown> }[] }> {
-  const targetName = targetAgent.name as string;
-  const provider = targetAgent.provider ?? 'claude';
-  const model = normalizeModelAlias((targetAgent.model as string | undefined) ?? 'sonnet') ?? 'sonnet';
-  // Capture fromAgent BEFORE mutating activeCtx (fixes stale context bug)
-  const fromAgent = activeCtx?.currentAgent ?? 'assistant';
-
-  let responseText = '';
-  let costUsd = 0;
-  let sessionId: string | undefined = resumeSessionId;
-  const toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown> }[] = [];
-  const activeMcpCalls = new Map<string, { tool: string; startMs: number }>();
-  const MAX_RETRIES = 3;
-
-  // Persist delegation activity to agent_activity for refresh replay and
-  // for the main agent's wait_for_delegation `recent_activity` cursor.
-  // Same pattern as runSpawnInBackground's persistSpawnActivity — a
-  // fire-and-forget write that cannot stall the thread stream.
-  const activityService = new AgentActivityService(db);
-
-  /** Emit a thread event to the UI */
-  // Text events in runAgentTurn carry `text.slice(-300)` — the tail of
-  // the cumulative response. Consecutive emits often repeat content (the
-  // tail window barely moves between stream chunks), so de-dupe here to
-  // stop the activity log filling with near-identical rows.
-  let lastPersistedText: string | undefined;
-  function emit(type: string, data: Record<string, unknown>) {
-    if (onEvent) onEvent('thread_message', { conversationId: convId, agent: targetName, ...data, type });
-    // runAgentTurn emits these types verbatim — keep this list in sync
-    // with the emit() call sites below. Anything else (status, warn,
-    // follow_up, response) is UI-only and does not need persisting.
-    const allowed: ReadonlyArray<'text' | 'thinking' | 'tool_call' | 'tool_result'> =
-      ['text', 'thinking', 'tool_call', 'tool_result'];
-    if (!allowed.includes(type as (typeof allowed)[number])) {
-      logger.debug('[delegation:emit] skip (not persisted)', { type, conv: convId.slice(0, 8) });
-      return;
-    }
-    const activityType = type as 'text' | 'thinking' | 'tool_call' | 'tool_result';
-
-    const content = typeof data.content === 'string' ? (data.content as string) : undefined;
-    if (activityType === 'text') {
-      if (!content || content === lastPersistedText) {
-        logger.debug('[delegation:emit] skip text (dedupe)', { conv: convId.slice(0, 8) });
-        return;
-      }
-      lastPersistedText = content;
-    }
-
-    logger.debug('[delegation:emit] persist', { activityType, tool: data.tool ?? '-', conv: convId.slice(0, 8), contentLen: content?.length ?? 0 });
-    void activityService.record({
-      scope: 'delegation',
-      refId: convId,
-      chatSessionId,
-      agent: targetName,
-      type: activityType,
-      tool: typeof data.tool === 'string' ? (data.tool as string) : undefined,
-      content,
-      toolUseId: typeof data.toolUseId === 'string' ? (data.toolUseId as string) : undefined,
-      durationMs: typeof data.durationMs === 'number' ? (data.durationMs as number) : undefined,
-    });
-  }
-
-  // Save/restore context for nested delegation
-  const prevCtx = activeCtx ? { ...activeCtx } : undefined;
-  if (activeCtx) { activeCtx.currentAgent = targetName; activeCtx.delegationDepth = currentDepth; activeCtx.currentConversationId = convId; }
-
-  const contextEngineEnabled = isContextEngineEnabled();
-  const baseSystemPrompt = buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth, cwd);
-  let systemPrompt = resumeSessionId ? undefined : (contextEngineEnabled ? withRepoContextLoadingGuidance(baseSystemPrompt) : baseSystemPrompt);
-
-  // Inject the deep repo context block (skip for the scanner itself).
-  // buildDelegationPrompt already appended the WORKSPACE CONSTRAINT section at the
-  // tail when cwd is set, so we splice the repo context in right before it to
-  // preserve ordering: base → repoContext → workspaceConstraint.
-  if (contextEngineEnabled && systemPrompt && cwd && targetName !== 'repo-scanner' && isEphemeralCwd(cwd)) {
-    try {
-      const repoContextBlock = await buildRepoContextBlock(db, cwd);
-      if (repoContextBlock) {
-        const wcMarker = '\nWORKSPACE CONSTRAINT:';
-        const wcIdx = systemPrompt.indexOf(wcMarker);
-        if (wcIdx !== -1) {
-          systemPrompt = systemPrompt.slice(0, wcIdx) + repoContextBlock + systemPrompt.slice(wcIdx);
-        } else {
-          systemPrompt += repoContextBlock;
-        }
-      }
-    } catch (err) {
-      logger.error('[delegation] failed to build repo context block', { targetName, convId, error: (err as Error).message });
-    }
-  }
-
-  // Append agent-scoped learnings to the system prompt
-  if (systemPrompt) {
-    try {
-      const agentLearnings = await db.collection('learnings')
-        .find({ status: 'active', $or: [
-          { 'scope.level': 'agent', 'scope.agentName': targetName },
-          { 'scope.level': 'global' },
-        ]})
-        .sort({ confidence: -1 })
-        .limit(5)
-        .toArray();
-      if (agentLearnings.length > 0) {
-        const items = agentLearnings.map((l: any) => `- [${l.type}] ${l.content}`).join('\n');
-        systemPrompt += `\n\nMemory from past work:\n${items}`;
-      }
-    } catch {}
-    // Artifacts guidance for the delegated agent — same block spawned agents get.
-    systemPrompt += ARTIFACTS_GUIDANCE;
-  }
-
-  // Retry loop — if CLI times out, resume the same session and continue
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      // This is a retry — resume the session with "continue" prompt.
-      logger.info('[delegation] Auto-retry', { targetName, convId, attempt, session: sessionId?.slice(0, 12) });
-      emit('text', { content: `Reconnecting to ${targetName} (retry ${attempt}/${MAX_RETRIES})...` });
-      prompt = 'Continue from where you left off. Complete your task and provide the final response.';
-    }
-
-  try {
-    if (provider === 'codex') {
-      // ── Codex CLI with MCP ──
-      // Note: no per-call syncMcpToCodex — sync runs once on boot to avoid
-      // races between parallel agent spawns rewriting Codex's config.
-      const { spawn } = await import('node:child_process');
-
-      // Per-call MCP env overrides — codex stores the Allen MCP entry
-      // with only registration-time env vars and does NOT forward its
-      // own runtime env to MCP children. Without these `-c` overrides
-      // the delegated agent's allen_save_artifact would fail with
-      // "ALLEN_ARTIFACT_ROOT_TYPE / ROOT_ID env vars not set" — same
-      // mechanism as the codex chat provider in chat-providers.ts.
-      const mcpEnvOverrides: string[] = [];
-      if (chatSessionId) {
-        mcpEnvOverrides.push(
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_TYPE="chat"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_ID="${chatSessionId}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_AGENT_NAME="${targetName}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_PARENT_ID="${convId}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_CHAT_SESSION_ID="${chatSessionId}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="${getRuntimeApiBaseUrl()}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${getRuntimeJwtAccessSecret()}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${getRuntimePublicBaseUrl()}"`,
-        );
-      }
-
-      const args: string[] = ['exec'];
-      if (resumeSessionId) {
-        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
-        if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
-        args.push('--', resumeSessionId, prompt);
-      } else {
-        args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
-        if (model) args.push('-c', `model="${model}"`);
-        if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
-        args.push(`${systemPrompt}\n\n${prompt}`);
-      }
-
-      const result = await new Promise<{ text: string; threadId?: string; costUsd: number }>((resolveP, rejectP) => {
-        // Artifact-root env for the delegated agent's Allen MCP subprocess.
-        // Without these, `allen_save_artifact` inside the delegated agent
-        // fails with "ALLEN_ARTIFACT_ROOT_TYPE / ROOT_ID env vars not set".
-        // Rooting at the chat session (not the delegation id) makes saved
-        // files appear in this chat's Artifacts panel — same behaviour as
-        // spawn_agent spawns.
-        const cleanEnv: NodeJS.ProcessEnv = { ...process.env };
-        delete cleanEnv.PORT; // Don't leak host server port
-        if (chatSessionId) {
-          cleanEnv.ALLEN_ARTIFACT_ROOT_TYPE = 'chat';
-          cleanEnv.ALLEN_ARTIFACT_ROOT_ID = chatSessionId;
-          cleanEnv.ALLEN_ARTIFACT_AGENT_NAME = targetName;
-          cleanEnv.ALLEN_ARTIFACT_PARENT_ID = convId;
-          // Session marker so the delegated agent's MCP subprocess
-          // forwards x-allen-chat-session-id on outbound chat-tool
-          // calls. Without it, tools called by this delegated agent
-          // cannot be attached to a chat session.
-          cleanEnv.ALLEN_CHAT_SESSION_ID = chatSessionId;
-        }
-        const proc = spawn('codex', args, { cwd: resolveAgentCwd(cwd), env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
-        const spawnStartMs = Date.now();
-        let text = '';
-        let threadId: string | undefined = resumeSessionId;
-        let buf = '';
-        let stderrTail = '';
-        let settled = false;
-        let idleTimer: NodeJS.Timeout | undefined;
-        let totalTimer: NodeJS.Timeout | undefined;
-        let killTimer: NodeJS.Timeout | undefined;
-
-        const clearTimers = () => {
-          if (idleTimer) { clearTimeout(idleTimer); idleTimer = undefined; }
-          if (totalTimer) { clearTimeout(totalTimer); totalTimer = undefined; }
-          if (killTimer) { clearTimeout(killTimer); killTimer = undefined; }
-        };
-
-        // Persist threadId to outer-scope sessionId as soon as it's observed
-        // so the retry loop can resume even when this spawn is killed by a
-        // watchdog. (See identical pattern in the chat-tools spawn path.)
-        const settle = (action: () => void) => {
-          if (settled) return;
-          settled = true;
-          clearTimers();
-          if (threadId) sessionId = threadId;
-          action();
-        };
-
-        const escalateKill = (reason: string) => {
-          try { proc.kill('SIGTERM'); } catch {}
-          if (killTimer) clearTimeout(killTimer);
-          killTimer = setTimeout(() => {
-            logger.error('[codex-delegation] sigkill', { convId, targetName, pid: proc.pid ?? '?', reason });
-            try { proc.kill('SIGKILL'); } catch {}
-          }, CODEX_KILL_GRACE_MS);
-        };
-
-        const resetIdleTimer = () => {
-          if (idleTimer) clearTimeout(idleTimer);
-          idleTimer = setTimeout(() => {
-            logger.error('[codex-delegation] timeout-idle', { convId, targetName, pid: proc.pid ?? '?', idleSec: CODEX_STREAM_IDLE_MS / 1000, thread: threadId?.slice(0, 12) ?? 'none' });
-            escalateKill('idle');
-            settle(() => rejectP(new Error(`codex stream idle for ${CODEX_STREAM_IDLE_MS / 1000}s (timeout)${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
-          }, CODEX_STREAM_IDLE_MS);
-        };
-
-        proc.on('error', (err) => {
-          logger.error('[codex-delegation] spawn error', { convId, targetName, pid: proc.pid ?? '?', error: err.message });
-          settle(() => rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)));
-        });
-        proc.stdin.end();
-        // Register PID for cancel — use convId as key for delegations
-        if (proc.pid) registerExecutionProcess(convId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
-        logger.info('[codex-delegation] start', { convId, targetName, pid: proc.pid ?? '?', resume: resumeSessionId ? resumeSessionId.slice(0, 12) : 'new' });
-
-        totalTimer = setTimeout(() => {
-          logger.error('[codex-delegation] timeout-total', { convId, targetName, pid: proc.pid ?? '?', totalSec: CODEX_TOTAL_TIMEOUT_MS / 1000, thread: threadId?.slice(0, 12) ?? 'none' });
-          escalateKill('total-timeout');
-          settle(() => rejectP(new Error(`codex exceeded ${CODEX_TOTAL_TIMEOUT_MS / 1000}s total timeout${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
-        }, CODEX_TOTAL_TIMEOUT_MS);
-        resetIdleTimer();
-
-        // Drain stderr so codex doesn't block on a full pipe buffer (default
-        // 64 KiB on Linux); keep a bounded tail for diagnostics on failure.
-        proc.stderr.on('data', (chunk: Buffer) => {
-          stderrTail += chunk.toString();
-          if (stderrTail.length > CODEX_STDERR_TAIL_BYTES) stderrTail = stderrTail.slice(-CODEX_STDERR_TAIL_BYTES);
-        });
-
-        proc.stdout.on('data', (chunk: Buffer) => {
-          resetIdleTimer();
-          buf += chunk.toString();
-          const lines = buf.split('\n');
-          buf = lines.pop() ?? '';
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-              const evt = JSON.parse(line);
-              if (evt.type === 'thread.started' && evt.thread_id) {
-                threadId = evt.thread_id;
-                // Persist to outer-scope sessionId so retry-on-timeout can
-                // resume even when this spawn is killed by a watchdog.
-                sessionId = evt.thread_id;
-                logger.info('[codex-delegation] thread.started', { convId, targetName, pid: proc.pid ?? '?', thread: String(evt.thread_id).slice(0, 12) });
-              }
-              // Text output
-              if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
-                const t = evt.item.text ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('') ?? '';
-                if (t) { text = t; emit('text', { content: t.slice(-300) }); }
-              }
-              // MCP / collab tool calls (Codex uses 'collab_tool_call' in exec mode)
-              if (evt.type === 'item.started' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
-                const server = evt.item.server ?? evt.item.serverLabel ?? '';
-                const tool = evt.item.tool ?? evt.item.name ?? '';
-                const fullName = server ? `mcp__${server}__${tool}` : tool;
-                toolCalls.push({ tool: fullName, args: evt.item.arguments ?? evt.item.input ?? {} });
-                emit('tool_call', { tool: fullName });
-              }
-              if (evt.type === 'item.completed' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
-                const server = evt.item.server ?? evt.item.serverLabel ?? '';
-                const tool = evt.item.tool ?? evt.item.name ?? '';
-                const fullName = server ? `mcp__${server}__${tool}` : tool;
-                // Capture result
-                const resultContent = evt.item.result?.content ?? evt.item.output;
-                if (resultContent) {
-                  const lastTc = [...toolCalls].reverse().find((tc: any) => tc.tool === fullName && !tc.result);
-                  if (lastTc) {
-                    try {
-                      const text = Array.isArray(resultContent) ? resultContent.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('') : String(resultContent);
-                      lastTc.result = JSON.parse(text);
-                    } catch { lastTc.result = { raw: String(resultContent).slice(0, 500) }; }
-                  }
-                }
-                emit('tool_result', { tool: fullName });
-              }
-              // Function calls
-              if (evt.type === 'item.completed' && evt.item?.type === 'function_call') {
-                toolCalls.push({ tool: evt.item.name ?? 'unknown', args: {} });
-                emit('tool_call', { tool: evt.item.name ?? 'unknown' });
-              }
-              // Bash commands
-              if (evt.type === 'item.completed' && evt.item?.type === 'command_execution') {
-                toolCalls.push({ tool: 'Bash', args: { command: evt.item.command ?? '' } });
-                emit('tool_call', { tool: 'Bash' });
-              }
-            } catch {}
-          }
-        });
-        proc.on('close', (code, signal) => {
-          const durationMs = Date.now() - spawnStartMs;
-          if (code != null && code !== 0) {
-            logger.error('[codex-delegation] non-zero-exit', { convId, targetName, pid: proc.pid ?? '?', code, signal: signal ?? 'null', durationMs, textBytes: text.length });
-            settle(() => rejectP(new Error(`codex exited code=${code} signal=${signal ?? 'null'}${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
-            return;
-          }
-          logger.info('[codex-delegation] close', { convId, targetName, pid: proc.pid ?? '?', code: code ?? 'null', signal: signal ?? 'null', durationMs, textBytes: text.length, thread: threadId?.slice(0, 12) ?? 'none' });
-          settle(() => resolveP({ text, threadId, costUsd: 0 }));
-        });
-      });
-
-      responseText = result.text;
-      sessionId = result.threadId;
-      costUsd = result.costUsd;
-
-    } else {
-      // ── Claude provider with MCP — full streaming ──
-      const { query } = await import('@anthropic-ai/claude-code');
-
-      const mcpServers: Record<string, unknown> = {};
-      // Allen MCP — delegation-scoped. Same helper as chat-llm.ts so path
-      // resolution stays in one place. Previously this branch hardcoded
-      // `npx tsx <serverPath.ts>` against a path that only existed in dev
-      // checkouts; in production (where the server ships as .js under
-      // dist/) the subprocess silently failed to start and the delegated
-      // agent saw "No such tool available" for every mcp__allen__* call.
-      const allenConfig = getAllenMcpConfig(
-        chatSessionId
-          ? {
-              ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
-              ALLEN_ARTIFACT_ROOT_ID: chatSessionId,
-              ALLEN_ARTIFACT_AGENT_NAME: targetName,
-              ALLEN_ARTIFACT_PARENT_ID: convId,
-              // Session marker — see Codex delegation path above.
-              ALLEN_CHAT_SESSION_ID: chatSessionId,
-            }
-          : undefined,
-      );
-      if (allenConfig) mcpServers[MCP_SERVER_NAME] = allenConfig;
-      const { loadExternalMcpServers } = await import('./chat-mcp.js');
-      const externalMcpServers = externalMcpServersForAgent(targetAgent as Record<string, unknown>);
-      const disabledMcpTools = disabledMcpToolsForAgent(targetAgent as Record<string, unknown>);
-      const disallowedMcpToolNames = Object.entries(disabledMcpTools).flatMap(([server, tools]) =>
-        tools.map((tool) => tool.startsWith('mcp__') ? tool : `mcp__${server}__${tool}`),
-      );
-      Object.assign(mcpServers, await loadExternalMcpServers(db, externalMcpServers));
-
-      const abortController = new AbortController();
-      const sdkOptions: Record<string, unknown> = {
-        model,
-        permissionMode: 'bypassPermissions',
-        cwd: resolveAgentCwd(cwd),
-        mcpServers,
-        abortController,
-        ...(disallowedMcpToolNames.length > 0 ? { disallowedTools: disallowedMcpToolNames } : {}),
-      };
-      if (resumeSessionId) sdkOptions.resume = resumeSessionId;
-      else if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPrompt;
-      else sdkOptions.appendSystemPrompt = systemPrompt;
-      registerExecutionProcess(convId, process.pid, () => abortController.abort());
-
-      const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
-      let messageStream: AsyncIterable<any>;
-      if (useCliMode) {
-        const { queryViaCli } = await import('@allen/engine');
-        let discoveredMcpTools: string[] = [];
-        try {
-          const { loadMcpTools } = await import('./chat-mcp-client.js');
-          discoveredMcpTools = (await loadMcpTools(db, { externalServerNames: externalMcpServers })).map(t => t.fullName);
-        } catch (err) {
-          logger.warn('[delegation] MCP tool discovery failed (allowlist will lack mcp__* entries)', { convId, targetName, error: (err as Error).message });
-        }
-        messageStream = queryViaCli({
-          agent: {
-            name: targetName,
-            description: targetAgent.description as string | undefined,
-            system: systemPrompt ?? String(targetAgent.system ?? ''),
-            model,
-            tools: Array.isArray(targetAgent.tools) ? targetAgent.tools as string[] : undefined,
-            mcpToolNames: discoveredMcpTools,
-            disabledMcpTools,
-          },
-          prompt,
-          cwd: sdkOptions.cwd as string | undefined,
-          model,
-          resume: sdkOptions.resume as string | undefined,
-          permissionMode: 'bypassPermissions',
-          env: sdkOptions.env as NodeJS.ProcessEnv | undefined,
-          mcpServers: sdkOptions.mcpServers as Record<string, unknown> | undefined,
-          abortSignal: abortController.signal,
-          stderr: (chunk) => emit('tool_call', { tool: 'claude-cli stderr', content: chunk.slice(0, 4000) }),
-          onPid: (pid: number) => {
-            db.collection('agent_conversations').updateOne(
-              { _id: new ObjectId(convId) },
-              { $set: { 'meta.pid': pid } },
-            ).catch(() => {});
-          },
-        });
-      } else {
-        messageStream = query({ prompt, options: sdkOptions as any });
-      }
-
-      for await (const message of messageStream) {
-        if ('session_id' in message && message.session_id) sessionId = message.session_id as string;
-        if (message.type === 'assistant') {
-          const blocks = (message as any).message.content as Array<{ type: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string }>;
-          const text = blocks.filter((b: any) => b.type === 'text').map((b: any) => b.text || '').join('');
-          if (text && text !== responseText) { responseText = text; emit('text', { content: text.slice(-300) }); }
-          for (const block of blocks) {
-            if (block.type === 'thinking' && (block.thinking || block.text)) emit('thinking', { content: (block.thinking || block.text || '').slice(0, 200) });
-            if (block.type === 'tool_use' && block.name && block.id) {
-              toolCalls.push({ tool: block.name, args: (block.input as Record<string, unknown>) ?? {} });
-              activeMcpCalls.set(block.id, { tool: block.name, startMs: Date.now() });
-              emit('tool_call', { tool: block.name, toolUseId: block.id });
-            }
-          }
-        }
-        if (message.type === 'user') {
-          const content = (message as any).message?.content;
-          if (Array.isArray(content)) {
-            for (const block of content) {
-              if (block.type === 'tool_result' && block.tool_use_id) {
-                const pending = activeMcpCalls.get(block.tool_use_id);
-                if (pending) { emit('tool_result', { tool: pending.tool, toolUseId: block.tool_use_id, durationMs: Date.now() - pending.startMs }); activeMcpCalls.delete(block.tool_use_id); }
-              }
-            }
-          }
-        }
-        if (message.type === 'result') {
-          costUsd = (message as any).total_cost_usd ?? 0;
-          if ((message as any).subtype === 'success' && (message as any).result) responseText = (message as any).result;
-          if ((message as any).session_id) sessionId = (message as any).session_id;
-        }
-      }
-    }
-  } catch (err) {
-    const errorMsg = (err as Error).message ?? String(err);
-    const isTimeout = errorMsg.toLowerCase().includes('timed out') || errorMsg.toLowerCase().includes('timeout');
-
-    // If timeout and we have a session to resume, retry
-    if (isTimeout && sessionId && attempt < MAX_RETRIES) {
-      logger.info('[delegation] timed out, will retry', { convId, targetName, attempt: attempt + 1, session: sessionId.slice(0, 12) });
-      continue; // next iteration of retry loop
-    }
-
-    // Not a timeout or out of retries — restore context and re-throw
-    if (activeCtx && prevCtx) { activeCtx.currentAgent = prevCtx.currentAgent; activeCtx.delegationDepth = prevCtx.delegationDepth; activeCtx.currentConversationId = prevCtx.currentConversationId; }
-    throw err;
-  }
-
-  // Success — break out of retry loop
-  break;
-  } // end retry loop
-
-  // Restore context after success
-  if (activeCtx && prevCtx) { activeCtx.currentAgent = prevCtx.currentAgent; activeCtx.delegationDepth = prevCtx.delegationDepth; activeCtx.currentConversationId = prevCtx.currentConversationId; }
-
-  return { responseText, costUsd, sessionId, toolCalls };
-}
-
-function buildDelegationPrompt(
-  targetAgent: Record<string, unknown>,
-  fromAgent: string,
-  depth: number,
-  maxDepth: number,
-  cwd?: string,
-): string {
-  const systemBase = (targetAgent.system as string) ?? '';
-  const personality = (targetAgent.personality as string) ?? '';
-  const canDelegateTo = (targetAgent.canDelegateTo as string[]) ?? [];
-  const canTrigger = (targetAgent.canTrigger as string[]) ?? [];
-
-  const parts = [systemBase];
-
-  if (personality) parts.push(`\nYour personality: ${personality}`);
-
-  parts.push(`\nYou were delegated a task by ${fromAgent}. Respond with a clear, actionable answer.`);
-
-  // ask_delegator — always available to delegated agents
-  parts.push(`
-ASKING QUESTIONS:
-- If you need clarification, context, or a decision from ${fromAgent}, use ask_delegator(question).
-- Your execution pauses until ${fromAgent} answers, then you continue with the answer.
-- Do NOT guess when you're unsure — ASK.`);
-
-  if (canDelegateTo.length > 0 && depth < maxDepth) {
-    parts.push(`\nYou can delegate sub-tasks to: ${canDelegateTo.join(', ')} using delegate_to_agent.
-When wait_for_delegation returns "question", answer it via answer_delegator, then call wait_for_delegation again.`);
-  } else if (depth >= maxDepth) {
-    parts.push(`\nYou are at the maximum delegation depth (${depth}/${maxDepth}). Do NOT delegate further — respond directly.`);
-  }
-
-  if (canTrigger.length > 0) {
-    parts.push(`You can trigger these workflows: ${canTrigger.join(', ')} using run_workflow.`);
-  }
-
-  // Team agents should delegate, not do hands-on work
-  const agentType = (targetAgent.type as string) ?? 'technical';
-  if (agentType === 'team') {
-    parts.push(`
-YOU MUST call spawn_agent before making any claims about code. You have no filesystem access.
-Available technical agents: coding-investigator, coding-planner, coding-reviewer, coding-developer, coding-tester, coding-writer, git-ops.
-Pick the right agent for each sub-task. Call spawn_agent(agent_name, prompt_with_repo_path), then wait_for_execution to wait.
-NEVER fabricate analysis. Every technical claim must come from an agent's actual response.`);
-  }
-
-  parts.push(`\nBe concise. You are collaborating with another agent. Use structured output with headers and bullets.`);
-
-  if (cwd && cwd !== '/tmp/allen') {
-    parts.push(`
-WORKSPACE CONSTRAINT:
-Your working directory is: ${cwd}
-CRITICAL: ALL file operations (Read, Write, Edit, Grep, Glob, Bash) MUST use paths within this directory.
-- Use relative paths (e.g., "src/app.ts") or absolute paths starting with "${cwd}/"
-- NEVER read, write, or modify files outside this directory
-- If you see paths from search results pointing elsewhere, replace the base path with "${cwd}/"
-- Example: if you find "/original/repo/src/file.ts", use "${cwd}/src/file.ts" instead
-- When writing tests or making HTTP requests, read the .env file in the workspace to get the correct PORT — do NOT use default ports like 4023 or 5173`);
-  }
-
-  return parts.join('\n');
-}
-
 const reportToUser: ChatTool = {
   name: 'report_to_user',
-  description: 'Send a progress update or result to the user during a long-running delegation chain. Use this for intermediate status updates (e.g., "Engineer is analyzing the codebase...") or final results.',
+  description: 'Send a progress update or result to the user during a long-running chat, workflow, or spawned-agent run. Use this for intermediate status updates (e.g., "Engineer is analyzing the codebase...") or final results.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -4484,11 +3561,7 @@ export const chatTools: ChatTool[] = [
   listAgents,
   spawnAgent,
   getLearnings,
-  // Delegation & conversation
-  delegateToAgent,
-  getDelegationResult,
-  answerQuestion,
-  askCaller,
+  // Chat communication
   askUser,
   reportToUser,
   // Advanced queries

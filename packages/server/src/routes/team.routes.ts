@@ -47,7 +47,7 @@ export function teamRoutes(db: Db): Router {
     }
   });
 
-  // GET /api/teams/:name/blueprint — full blueprint (team + members + delegation edges)
+  // GET /api/teams/:name/blueprint — full blueprint (team + members + spawn-target edges)
   router.get('/:name/blueprint', async (req: Request, res: Response) => {
     try {
       const blueprint = await service.getBlueprint(param(req, 'name'));
@@ -114,7 +114,7 @@ export function teamRoutes(db: Db): Router {
     try {
       // Strip immutable & protected fields. leadAgentName is intentionally
       // immutable after team creation — changing it would silently break the
-      // org chart anchoring and `canDelegate` enforcement.
+      // org chart anchoring and team lead ownership.
       const updates = { ...req.body };
       delete updates._id;
       delete updates.name;
@@ -141,7 +141,7 @@ export function teamRoutes(db: Db): Router {
   //   team: { name, displayName, description?, mission?, parentTeamName? }
   //   lead?: { name?, displayName?, model?, reasoningEffort?, system? }  // all optional
   //   memberAgentNames?: string[]  // existing agents to move into the new team
-  //   autoWireDelegation?: boolean // default true — add members to lead.canDelegateTo
+  //   autoWireSpawnTargets?: boolean // default true — add members to lead.spawnTargets
   //
   // Transactional-ish: if any step fails, we best-effort roll back the lead
   // insert so the operator can retry without a dangling agent.
@@ -156,7 +156,7 @@ export function teamRoutes(db: Db): Router {
         system?: string;
       };
       const memberAgentNames = (req.body?.memberAgentNames ?? []) as string[];
-      const autoWire = req.body?.autoWireDelegation !== false;
+      const autoWire = req.body?.autoWireSpawnTargets ?? true;
 
       if (!team.name || !team.displayName) {
         return res.status(400).json({ error: 'team.name and team.displayName are required' });
@@ -216,10 +216,10 @@ export function teamRoutes(db: Db): Router {
         reasoningEffort: (leadSpec.reasoningEffort ?? 'high') as 'off' | 'low' | 'medium' | 'high' | 'max',
         planMode: false,
         tools: [],
-        capabilities: ['coordination', 'delegation'],
-        canDelegateTo: autoWire ? memberAgentNames : [],
+        capabilities: ['coordination', 'spawn-orchestration'],
+        spawnTargets: autoWire ? memberAgentNames : [],
         canTrigger: [],
-        personality: 'Pragmatic coordinator. Breaks work into clear briefs and waits on delegation results.',
+        personality: 'Pragmatic coordinator. Breaks work into clear briefs and waits on spawned-agent results.',
         system: leadSystemPrompt,
         isBuiltIn: false,
         createdBy: 'user',

@@ -4,7 +4,6 @@ export type SkillRoute =
   | 'direct_answer'
   | 'data_query'
   | 'spawn_agent'
-  | 'delegate_to_agent'
   | 'run_workflow';
 
 export interface SkillInput {
@@ -35,7 +34,6 @@ const ROUTES: SkillRoute[] = [
   'direct_answer',
   'data_query',
   'spawn_agent',
-  'delegate_to_agent',
   'run_workflow',
 ];
 

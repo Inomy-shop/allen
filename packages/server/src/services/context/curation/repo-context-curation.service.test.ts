@@ -424,7 +424,7 @@ describe('Repo context curation stage validation', () => {
       category: 'agent_persona',
       inclusion: 'include',
       injectionPolicy: 'snippet',
-      curatedContext: 'You are the backend developer subagent. Use allowed tools and delegate when needed.',
+      curatedContext: 'You are the backend developer subagent. Use allowed tools and spawn agents when needed.',
     });
 
     expect(validation.ok).toBe(false);

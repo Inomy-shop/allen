@@ -23,14 +23,13 @@ export function hasAgentSystemInstructionSignals(text: string): boolean {
     /\ballowed tools\b/i,
     /\bmcp__\w+/i,
     /\bspawn_agent\b/i,
-    /\bdelegate\b|\bdelegation\b/i,
     /\bfinal response\b/i,
     /\bguardrails?\b/i,
     /\brole instructions?\b/i,
     /\bteam role\b/i,
     /\bworkflow node role\b/i,
     /\bdo not (edit|write|commit|push|run)\b/i,
-    /\bmust (call|use|spawn|delegate|respond)\b/i,
+    /\bmust (call|use|spawn|respond)\b/i,
   ]) >= 2;
 }
 

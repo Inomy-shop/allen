@@ -3,10 +3,10 @@
  * injection into agent system prompts at runtime.
  *
  * Why this exists:
- *   Hand-writing each lead's delegation targets into `org-seed.ts` means every
+ *   Hand-writing each lead's spawn targets into `org-seed.ts` means every
  *   org change (add/rename/remove an agent) requires editing every mention of
- *   that agent across every lead prompt. Instead, we keep `canDelegateTo` as
- *   the allowlist in the DB and render the human-readable description block
+ *   that agent across every lead prompt. Instead, we keep `spawnTargets` as
+ *   structured routing data in the DB and render the human-readable description block
  *   from the current agents/teams rows at prompt-build time.
  *
  * Used by:
@@ -18,7 +18,7 @@
 import type { Db } from 'mongodb';
 
 export interface OrgContextOptions {
-  /** Render a per-agent "direct delegation targets" section for this agent. */
+  /** Render a per-agent "suggested spawn targets" section for this agent. */
   forAgent?: string;
   /** Render the full org chart (all teams + members). Default: true. */
   includeFullChart?: boolean;
@@ -31,7 +31,7 @@ export interface OrgContextOptions {
 /**
  * Build a flat, description-rich org chart block for runtime prompt injection.
  * Returns an empty string if both includeFullChart is false and there are no
- * delegation targets to render.
+ * spawn targets to render.
  */
 export async function buildOrgContextBlock(
   db: Db,
@@ -84,14 +84,14 @@ export async function buildOrgContextBlock(
       }
     }
 
-    // ── Per-agent delegation targets ──
+    // ── Per-agent spawn targets ──
     if (options.forAgent) {
       const self = agentByName.get(options.forAgent);
-      const targets = ((self?.canDelegateTo as string[] | undefined) ?? []).filter(Boolean);
+      const targets = ((self?.spawnTargets as string[] | undefined) ?? []).filter(Boolean);
       if (targets.length > 0) {
-        lines.push('## Your delegation targets');
+        lines.push('## Suggested spawn targets');
         lines.push('');
-        lines.push('Call `delegate_to_agent(agent_name, task)` with one of:');
+        lines.push('Call `spawn_agent(agent_name, prompt)` with one of:');
         lines.push('');
         for (const t of targets) {
           const ag = agentByName.get(t);

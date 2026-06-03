@@ -160,7 +160,7 @@ export default function DispatchModal({
         searchHaystack: [s.teamLabel, s.teamName, s.lead!.displayName, s.lead!.name].filter(Boolean).join(' ').toLowerCase(),
       }));
     if (leadEntries.length > 0) {
-      out.push({ label: 'Team leads (delegate to lead)', entries: leadEntries });
+      out.push({ label: 'Team leads (assign to lead)', entries: leadEntries });
     }
 
     for (const s of teamSections) {

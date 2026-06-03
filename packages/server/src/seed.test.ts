@@ -79,7 +79,7 @@ describe('seedDefaultSkills', () => {
     // All domain routing skills (bug-fix-routing, feature-routing, etc.) should
     // have higher priority than the guideline skill.
     const routingSkills = skills.filter((s: any) =>
-      ['bug-fix-routing', 'feature-routing', 'capability-routing', 'review-routing', 'workspace-pr-routing', 'team-delegation-routing'].includes(s.name),
+      ['bug-fix-routing', 'feature-routing', 'capability-routing', 'review-routing', 'workspace-pr-routing', 'team-assignment-routing'].includes(s.name),
     );
     for (const routing of routingSkills) {
       expect(routing.priority).toBeGreaterThan(codingGuidelines.priority);

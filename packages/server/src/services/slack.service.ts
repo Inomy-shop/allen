@@ -575,7 +575,7 @@ function toolProgressLabel(tool: string): string {
   if (tool.includes('run_workflow')) return 'starting a workflow';
   if (tool.includes('wait_for_execution')) return 'waiting for execution progress';
   if (tool.includes('spawn_agent')) return 'assigning an agent';
-  if (tool.includes('wait_for_delegation')) return 'waiting for the agent';
+  if (tool.includes('wait_for_execution')) return 'waiting for the agent';
   if (tool.includes('list_repos')) return 'checking repositories';
   if (tool.includes('linear')) return 'checking Linear';
   return normalized;

@@ -379,7 +379,7 @@ export interface AgentDef {
   displayName?: string;
   personality?: string;
   capabilities?: string[];
-  canDelegateTo?: string[];
+  spawnTargets?: string[];
   canTrigger?: string[];
   /** Default reasoning effort for this agent. Can be overridden per node via `agentOverrides`. */
   reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max';

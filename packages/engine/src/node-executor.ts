@@ -663,7 +663,7 @@ ${context}
     }
   } catch { /* MCP not available — continue without */ }
 
-  // Build the effective system prompt with live org chart + delegation targets
+  // Build the effective system prompt with live org chart + spawn targets
   // appended. Runtime injection keeps chat and workflow agent behavior aligned
   // and avoids prompt drift when agents are added/renamed.
   let effectiveSystem: string | undefined = role?.system;
@@ -692,10 +692,10 @@ ${context}
   const repoContextLoadingGuidancePresent = hasRepoContextLoadingGuidance(effectiveSystem);
   const repoContextLoadingGuidanceInjected =
     !repoContextLoadingGuidanceAlreadyPresent && repoContextLoadingGuidancePresent;
-  // Non-interactive guidance — workflow node runs have no live user and no
-  // delegation thread surface, so ask_user / delegate_to_agent must be
-  // disabled. Goes last so it overrides any "use delegate_to_agent" line
-  // that came in via role.system or the org-chart block above.
+  // Non-interactive guidance — workflow node runs have no live user, so
+  // chat-only ask/input tools must be disabled. Goes last so it overrides
+  // any stale interactive instruction that came in via role.system or the
+  // org-chart block above.
   effectiveSystem = withNonInteractiveGuidance(effectiveSystem);
 
   // Captured across all callAgent invocations for this node. First-seen

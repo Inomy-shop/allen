@@ -92,20 +92,20 @@ function isTerminalStatus(status: string): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'canceled';
 }
 
-function isDelegatedAgentExecution(exec: any): boolean {
+function isSpawnedAgentExecution(exec: any): boolean {
   return exec?.type === 'agent'
     || exec?.source === 'spawn'
     || typeof exec?.workflowName === 'string' && exec.workflowName.includes(':spawn_agent/');
 }
 
 function hasParentExecutionVisible(exec: any, candidates: any[]): boolean {
-  if (!isDelegatedAgentExecution(exec)) return false;
+  if (!isSpawnedAgentExecution(exec)) return false;
   const parentId = exec?.parentExecutionId ? String(exec.parentExecutionId) : null;
   const rootId = exec?.rootExecutionId ? String(exec.rootExecutionId) : null;
   const chatSessionId = exec?.meta?.chatSessionId ? String(exec.meta.chatSessionId) : null;
 
   return candidates.some((candidate) => {
-    if (candidate === exec || isDelegatedAgentExecution(candidate)) return false;
+    if (candidate === exec || isSpawnedAgentExecution(candidate)) return false;
     const candidateId = executionId(candidate);
     const candidateRootId = candidate?.rootExecutionId ? String(candidate.rootExecutionId) : null;
     const candidateChatSessionId = candidate?.meta?.chatSessionId ? String(candidate.meta.chatSessionId) : null;
@@ -117,7 +117,7 @@ function hasParentExecutionVisible(exec: any, candidates: any[]): boolean {
   });
 }
 
-function hideDelegatedChildrenWhenParentVisible(items: any[]): any[] {
+function hideSpawnedChildrenWhenParentVisible(items: any[]): any[] {
   return items.filter((exec) => !hasParentExecutionVisible(exec, items));
 }
 
@@ -125,7 +125,7 @@ function executionSourceLabel(exec: any): string {
   const origin = String(exec?.origin ?? exec?.meta?.origin ?? exec?.source ?? '').toLowerCase();
   if (origin === 'chat' || exec?.meta?.chatSessionId) return 'chat';
   if (origin === 'linear') return 'linear';
-  if (exec?.source === 'spawn' || origin === 'direct_agent' || isDelegatedAgentExecution(exec)) return 'agent';
+  if (exec?.source === 'spawn' || origin === 'direct_agent' || isSpawnedAgentExecution(exec)) return 'agent';
   return 'manual';
 }
 
@@ -370,8 +370,8 @@ export default function ExecutionListPage() {
     { value: 'workflow', label: 'Workflow' },
     { value: 'agent', label: 'Agent' },
   ];
-  const runningNow = hideDelegatedChildrenWhenParentVisible(sorted.filter(exec => isActiveStatus(exec.status)));
-  const recentExecs = hideDelegatedChildrenWhenParentVisible(sorted.filter(exec => isTerminalStatus(exec.status)));
+  const runningNow = hideSpawnedChildrenWhenParentVisible(sorted.filter(exec => isActiveStatus(exec.status)));
+  const recentExecs = hideSpawnedChildrenWhenParentVisible(sorted.filter(exec => isTerminalStatus(exec.status)));
   const activeTab: ActivityTab =
     requestedView === 'running' || requestedView === 'recent'
       ? requestedView

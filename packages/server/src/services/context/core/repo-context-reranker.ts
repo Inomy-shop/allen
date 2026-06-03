@@ -27,7 +27,7 @@ export interface ContextReranker {
 export class ProviderAwareContextReranker implements ContextReranker {
   readonly providerId = 'provider_aware_context_reranker';
 
-  constructor(private delegate: ContextReranker) {}
+  constructor(private wrapped: ContextReranker) {}
 
   async rerank(input: ContextRerankInput): Promise<ContextRerankResult> {
     if (input.candidates.length <= 1) {
@@ -40,7 +40,7 @@ export class ProviderAwareContextReranker implements ContextReranker {
       };
     }
 
-    return this.delegate.rerank(input);
+    return this.wrapped.rerank(input);
   }
 }
 

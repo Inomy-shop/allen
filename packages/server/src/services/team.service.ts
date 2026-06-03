@@ -122,23 +122,23 @@ export class TeamService {
 
   /**
    * Return a team's full blueprint: the team document + all its members + its
-   * delegation edges. Used by the agent-builder/team-builder for context, and
-   * by the UI for the org chart.
+   * spawn-target edges. Used by the agent-builder/team-builder for context,
+   * and by the UI for the org chart.
    */
   async getBlueprint(teamName: string): Promise<{
     team: Team;
     agents: Array<Record<string, unknown>>;
-    delegationEdges: Array<{ from: string; to: string }>;
+    spawnTargetEdges: Array<{ from: string; to: string }>;
   } | null> {
     const team = await this.getByName(teamName);
     if (!team) return null;
     const agents = await this.listMembers(teamName);
     const edges: Array<{ from: string; to: string }> = [];
     for (const a of agents) {
-      const targets = (a.canDelegateTo as string[] | undefined) ?? [];
+      const targets = (a.spawnTargets as string[] | undefined) ?? [];
       for (const t of targets) edges.push({ from: a.name as string, to: t });
     }
-    return { team, agents, delegationEdges: edges };
+    return { team, agents, spawnTargetEdges: edges };
   }
 
   /**
@@ -172,83 +172,4 @@ export class TeamService {
     );
   }
 
-  // ── Phase 2: Team isolation rules ──
-
-  /**
-   * Returns true if `caller` is allowed to delegate to `target` under the team
-   * isolation rules. Both arguments are agent names.
-   *
-   * Rules (per the architecture plan):
-   *   1. Same team — always allowed.
-   *   2. Lead-to-lead — always allowed (any team lead can reach any other team lead).
-   *   3. Worker-to-own-lead — always allowed (escalation never blocked).
-   *   4. Lead delegating UP to parent team's lead — allowed (lead-to-lead, covered by rule 2).
-   *   5. Anything else (worker-to-foreign-anything, lead-to-foreign-worker) — DENIED.
-   *
-   * Returns { allowed, reason } so callers can surface a clear error.
-   */
-  async canDelegate(
-    callerName: string,
-    targetName: string,
-  ): Promise<{ allowed: boolean; reason?: string; hint?: string }> {
-    const agents = this.db.collection('agents');
-    const [caller, target] = await Promise.all([
-      agents.findOne({ name: callerName }),
-      agents.findOne({ name: targetName }),
-    ]);
-
-    if (!caller) return { allowed: false, reason: `Caller agent "${callerName}" not found` };
-    if (!target) return { allowed: false, reason: `Target agent "${targetName}" not found` };
-
-    const callerTeam = caller.teamName as string | undefined;
-    const targetTeam = target.teamName as string | undefined;
-    const callerRole = caller.teamRole as 'lead' | 'member' | undefined;
-    const targetRole = target.teamRole as 'lead' | 'member' | undefined;
-
-    // Backwards-compat: only allow if BOTH sides have no team membership.
-    // That's the legitimate "this DB predates the teams migration" case.
-    // If only one side has a team, that's anomalous (e.g. a custom agent
-    // someone created without going through the team-builder) and we err
-    // on the side of blocking — better a clear error than a silent bypass.
-    if (!callerTeam && !targetTeam) {
-      return { allowed: true };
-    }
-    if (!callerTeam || !targetTeam) {
-      return {
-        allowed: false,
-        reason: `One side has no team membership (caller=${callerTeam ?? 'none'}, target=${targetTeam ?? 'none'}) — cross-boundary delegation blocked`,
-        hint: 'Assign both agents to a team before delegating, or use the team-builder to create them properly.',
-      };
-    }
-
-    // Rule 1: same team
-    if (callerTeam === targetTeam) return { allowed: true };
-
-    // Rule 2: lead-to-lead (cross-team coordination)
-    if (callerRole === 'lead' && targetRole === 'lead') return { allowed: true };
-
-    // Otherwise: blocked. Build a helpful hint.
-    const callerTeamObj = await this.getByName(callerTeam);
-    const callerLead = callerTeamObj?.leadAgentName;
-    let hint: string;
-    if (callerRole === 'member' && callerLead && callerLead !== callerName) {
-      // Worker trying to reach foreign team — must escalate to own lead
-      hint = `As a member of "${callerTeam}", route this through your team lead "${callerLead}", who can delegate cross-team.`;
-    } else if (callerRole === 'lead' && targetRole === 'member') {
-      // Lead trying to reach a foreign worker — go through that team's lead
-      const targetTeamObj = await this.getByName(targetTeam);
-      const targetLead = targetTeamObj?.leadAgentName;
-      hint = targetLead
-        ? `As a team lead, delegate to the "${targetTeam}" lead "${targetLead}" instead, who will route it to "${targetName}".`
-        : `Delegate to the "${targetTeam}" team lead instead.`;
-    } else {
-      hint = `Cross-team delegation must go through team leads.`;
-    }
-
-    return {
-      allowed: false,
-      reason: `"${callerName}" (${callerTeam}/${callerRole ?? 'unknown'}) cannot delegate directly to "${targetName}" (${targetTeam}/${targetRole ?? 'unknown'})`,
-      hint,
-    };
-  }
 }

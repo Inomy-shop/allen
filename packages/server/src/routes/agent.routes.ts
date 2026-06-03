@@ -339,15 +339,15 @@ export function agentRoutes(db: Db): Router {
     }
   });
 
-  // POST /api/agents/bulk-team  { agentNames, teamName, autoWireDelegation? }
+  // POST /api/agents/bulk-team  { agentNames, teamName, autoWireSpawnTargets? }
   // Move many agents into an existing team at once. All moves are members.
-  // Optionally append the moved agent names to the team lead's canDelegateTo
-  // so the new members are reachable via delegation. Default on.
+  // Optionally append the moved agent names to the team lead's spawnTargets
+  // so the new members are reachable as spawn targets. Default on.
   router.post('/bulk-team', async (req: Request, res: Response) => {
     try {
       const agentNames = (req.body?.agentNames ?? []) as string[];
       const teamName = req.body?.teamName as string | undefined;
-      const autoWire = req.body?.autoWireDelegation !== false; // default true
+      const autoWire = req.body?.autoWireSpawnTargets ?? true;
       if (!teamName) return res.status(400).json({ error: 'teamName is required' });
       if (!Array.isArray(agentNames) || agentNames.length === 0) {
         return res.status(400).json({ error: 'agentNames must be a non-empty array' });
@@ -374,24 +374,24 @@ export function agentRoutes(db: Db): Router {
         moved.push(n);
       }
 
-      // Auto-wire delegation: append moved members to the team lead's
-      // canDelegateTo list so the new arrivals are reachable immediately.
+      // Auto-wire spawn targets: append moved members to the team lead's
+      // spawnTargets list so the new arrivals are reachable immediately.
       if (autoWire && team?.leadAgentName && moved.length > 0) {
         const leadName = team.leadAgentName as string;
         const lead = await col.findOne({ name: leadName });
         if (lead) {
-          const existing = (lead.canDelegateTo as string[] | undefined) ?? [];
+          const existing = (lead.spawnTargets as string[] | undefined) ?? [];
           const merged = Array.from(new Set([...existing, ...moved]));
           if (merged.length !== existing.length) {
             await col.updateOne(
               { name: leadName },
-              { $set: { canDelegateTo: merged, updatedAt: new Date() } },
+              { $set: { spawnTargets: merged, updatedAt: new Date() } },
             );
           }
         }
       }
 
-      res.json({ moved, skipped, autoWireDelegation: autoWire });
+      res.json({ moved, skipped, autoWireSpawnTargets: autoWire });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -423,7 +423,7 @@ function buildImportedAgentDoc(
     model: parsed.model ?? defaults.model,
     tools: parsed.tools,
     capabilities: [],
-    canDelegateTo: [],
+    spawnTargets: [],
     canTrigger: [],
     personality: '',
     icon: 'bot',

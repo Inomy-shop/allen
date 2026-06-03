@@ -27,7 +27,7 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
   const navigate = useNavigate();
   const {
     sessions, activeSessionId, messages, streaming, streamText,
-    thinkingText, activeToolCalls, agentThreads, agentReports, threadsByMessage,
+    thinkingText, activeToolCalls, agentReports,
     pendingUserQuestion, answerUserQuestion,
     spawnedAgents, loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
@@ -131,9 +131,7 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
             thinkingText={thinkingText}
             streaming={streaming}
             activeToolCalls={activeToolCalls}
-            agentThreads={agentThreads}
             agentReports={agentReports}
-            threadsByMessage={threadsByMessage}
             spawnedAgents={spawnedAgents}
             pendingUserQuestion={pendingUserQuestion}
             onAnswerUserQuestion={answerUserQuestion}

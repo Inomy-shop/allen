@@ -15,7 +15,7 @@ import {
   ChevronRight, GitBranch, ExternalLink,
   Layers, Tag, FileText, Monitor, Download, ScanSearch, Settings, BookOpen,
 } from 'lucide-react';
-import { DelegationGraph } from '../components/agents/DelegationGraph';
+import { SpawnTargetGraph } from '../components/agents/SpawnTargetGraph';
 import McpServerManager from '../components/settings/McpServerManager';
 import {
   ImportAgentsFromRepoDialog,
@@ -48,7 +48,7 @@ function AgentDetailPanel({
 }) {
   const system = (agent.system as string) ?? '';
   const capabilities = (agent.capabilities as string[] | undefined) ?? [];
-  const delegateTargets = (agent.canDelegateTo as string[] | undefined) ?? [];
+  const spawnTargets = (agent.spawnTargets as string[] | undefined) ?? [];
   const tools = (agent.tools as string[] | undefined) ?? [];
   const externalMcpServers = Array.isArray(agent.externalMcpServers)
     ? agent.externalMcpServers as string[]
@@ -248,10 +248,10 @@ function AgentDetailPanel({
                 </div>
               </DetailSection>
 
-              {delegateTargets.length > 0 && (
-                <DetailSection label={`Delegates to · ${delegateTargets.length}`}>
+              {spawnTargets.length > 0 && (
+                <DetailSection label={`Can spawn · ${spawnTargets.length}`}>
                   <div className="flex flex-col gap-0.5">
-                    {delegateTargets.map(t => (
+                    {spawnTargets.map(t => (
                       <div key={t} className="flex items-center gap-1.5 text-[12px] font-mono text-theme-secondary">
                         <ArrowRight className="w-3 h-3 text-theme-subtle" />
                         {t}
@@ -933,7 +933,7 @@ export default function RoleManagerPage() {
   );
 }
 
-const ROUTE_OPTIONS = ['direct_answer', 'data_query', 'spawn_agent', 'delegate_to_agent', 'run_workflow'];
+const ROUTE_OPTIONS = ['direct_answer', 'data_query', 'spawn_agent', 'run_workflow'];
 
 function csvToArray(value: string): string[] {
   return value.split(',').map(part => part.trim()).filter(Boolean);
@@ -1792,7 +1792,7 @@ function LibraryIntegrationsPane() {
 //   • Breadcrumb + Agents h1 + tab row (Directory / Teams / Graph / Models)
 //   • Directory: 3-col grid of agent cards grouped by team
 //   • Teams: card per team
-//   • Graph: existing DelegationGraph
+//   • Graph: existing SpawnTargetGraph
 //   • Models: provider + model distribution
 
 interface DirectoryShellProps {
@@ -1880,7 +1880,7 @@ function DirectoryShell({
         {([
           { id: 'directory', label: 'Directory' },
           { id: 'teams', label: 'Teams', count: teamsCount },
-          { id: 'graph', label: 'Delegation graph' },
+          { id: 'graph', label: 'Spawn target graph' },
           { id: 'models', label: 'Models' },
         ] as { id: 'directory' | 'teams' | 'graph' | 'models'; label: string; count?: number }[]).map((t) => (
           <button
@@ -1937,10 +1937,10 @@ function DirectoryShell({
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-3">
             <LayoutGrid className="w-4 h-4 text-accent" />
-            <span className="overline">Delegation graph</span>
+            <span className="overline">Spawn target graph</span>
           </div>
           {allAgents.length > 0 ? (
-            <DelegationGraph agents={allAgents} />
+            <SpawnTargetGraph agents={allAgents} />
           ) : (
             <div className="text-[12px] text-theme-muted italic font-body py-8 text-center">
               No agents yet. Create one to get started.
@@ -2251,10 +2251,10 @@ function OverviewContent({
       <div className="rounded-xl border border-app bg-app-muted/40 p-4">
         <div className="flex items-center gap-2 mb-3">
           <LayoutGrid className="w-4 h-4 text-accent-blue" />
-          <span className="overline">Delegation Graph</span>
+          <span className="overline">Spawn Target Graph</span>
         </div>
         {allAgents.length > 0 ? (
-          <DelegationGraph agents={allAgents} />
+          <SpawnTargetGraph agents={allAgents} />
         ) : (
           <div className="text-[11px] text-theme-muted italic font-body py-8 text-center">
             No agents yet. Create one to get started.

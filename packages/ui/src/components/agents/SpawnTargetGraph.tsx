@@ -11,7 +11,7 @@ interface Agent {
   type?: string;
   teamName?: string;
   teamRole?: 'lead' | 'member';
-  canDelegateTo?: string[];
+  spawnTargets?: string[];
   model?: string;
   provider?: string;
   capabilities?: string[];
@@ -47,7 +47,7 @@ interface Props {
  * Each team shows a lead at the top (the "head") and specialists below.
  * Child teams are nested with indentation and tree lines.
  */
-export function DelegationGraph({ agents }: Props) {
+export function SpawnTargetGraph({ agents }: Props) {
   const [allTeams, setAllTeams] = useState<Team[] | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 

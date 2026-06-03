@@ -12,7 +12,7 @@
  * 2. Backfilled legacy agents (CEO, PM, Engineer, QA, DevOps, coding-*)
  *    with teamName/teamRole from a static mapping.
  * 3. Seeded 4 meta team agents with system prompts.
- * 4. Logged canDelegateTo violations without auto-fixing them.
+ * 4. Logged spawnTargets violations without auto-fixing them.
  */
 
 import type { Db } from 'mongodb';
@@ -128,7 +128,7 @@ interface MetaAgent {
   /**
    * Legacy `type` field that controls picker visibility in the chat UI.
    * 'team' = appears in the agent picker, user can talk to it directly.
-   * 'technical' = internal worker, only invoked via delegation.
+   * 'technical' = internal worker, only invoked via spawn/assignment.
    *
    * For the meta team: team-builder-agent and agent-builder-agent are both
    * user-facing (the user invokes them via the "Build with AI" / "Add with AI"
@@ -144,7 +144,7 @@ interface MetaAgent {
   capabilities: string[];
   personality: string;
   system: string;
-  canDelegateTo: string[];
+  spawnTargets: string[];
 }
 
 const META_AGENTS: MetaAgent[] = [
@@ -152,7 +152,7 @@ const META_AGENTS: MetaAgent[] = [
     name: 'research-agent',
     displayName: 'Research Agent',
     role: 'member',
-    type: 'technical', // internal helper, only delegated to
+    type: 'technical', // internal helper, only spawned by builders
     icon: 'search',
     color: '#0ea5e9',
     provider: 'claude-cli',
@@ -160,7 +160,7 @@ const META_AGENTS: MetaAgent[] = [
     tools: [],
     capabilities: ['domain-research', 'role-analysis', 'web-search'],
     personality: 'Thorough, structured, evidence-driven. Always cites concrete examples and modern best practices.',
-    canDelegateTo: [],
+    spawnTargets: [],
     system: `You are the Research Agent. You produce structured research reports about organizational roles, teams, and domains.
 
 WHEN INVOKED FOR DOMAIN RESEARCH (e.g., "research what a finance team does"):
@@ -196,7 +196,7 @@ RULES:
     name: 'planner-agent',
     displayName: 'Planner Agent',
     role: 'member',
-    type: 'technical', // internal helper, only delegated to
+    type: 'technical', // internal helper, only spawned by builders
     icon: 'brain',
     color: '#a855f7',
     provider: 'claude-cli',
@@ -204,7 +204,7 @@ RULES:
     tools: [],
     capabilities: ['team-design', 'agent-design', 'org-architecture'],
     personality: 'Pragmatic organizational designer. Designs lean teams that mirror real-world structures.',
-    canDelegateTo: [],
+    spawnTargets: [],
     system: `You are the Planner Agent. Given research from the Research Agent (and optionally an existing team's context), you design Allen agent blueprints.
 
 YOU OPERATE IN TWO MODES based on the input shape:
@@ -231,13 +231,13 @@ Output a JSON blueprint:
       "provider": "claude-cli",
       "tools": ["filesystem", ...],
       "capabilities": [...],
-      "canDelegateTo": ["<other agents in this team>"]
+      "spawnTargets": ["<other agents in this team>"]
     },
     {
       "name": "...",
       "role": "member",
       ...
-      "canDelegateTo": ["<lead-name>"]
+      "spawnTargets": ["<lead-name>"]
     },
     ...
   ]
@@ -245,8 +245,8 @@ Output a JSON blueprint:
 
 Rules for "new_team":
 - Exactly 1 lead. 2-7 members in addition to the lead.
-- Lead's canDelegateTo includes ALL members.
-- Every member's canDelegateTo includes the lead (escalation path).
+- Lead's spawnTargets includes ALL members.
+- Every member's spawnTargets includes the lead (escalation path).
 - Members may optionally include peer members for collaboration.
 - All names are lowercase-slug format (e.g., "tax-specialist", not "Tax Specialist")
 - The team slug must be unique. The agent slugs must be unique within the team.
@@ -260,17 +260,17 @@ Output a JSON blueprint:
     "name": "<lowercase-slug, must NOT collide with existing_members>",
     "role": "member",
     ...
-    "canDelegateTo": ["<existing-team-lead>", ...optional peer collaborators]
+    "spawnTargets": ["<existing-team-lead>", ...optional peer collaborators]
   },
   "update_existing": [
-    { "name": "<existing-agent-name>", "canDelegateTo_add": ["<new-agent-name>"] }
+    { "name": "<existing-agent-name>", "spawnTargets_add": ["<new-agent-name>"] }
   ]
 }
 
 Rules for "add_role":
 - new_agent.name MUST NOT collide with any existing_members[].name
-- new_agent.canDelegateTo MUST include the team lead
-- update_existing should typically include the team lead (so the lead can delegate to the new agent)
+- new_agent.spawnTargets MUST include the team lead
+- update_existing should typically include the team lead (so the lead can spawn the new agent)
 - May include peer members if collaboration is needed
 - Same naming and prompt-quality rules as "new_team"
 
@@ -279,7 +279,7 @@ Each agent's "system" field should be 200-500 chars and include:
 - Who the agent is ("You are a Tax Specialist for the Finance team.")
 - What they do (3-5 specific responsibilities)
 - When to escalate to the team lead
-- The standard delegation/ask_delegator rules
+- The standard spawn/input rules
 
 ═══ OUTPUT ═══
 - Output ONLY valid JSON, no markdown fences, no commentary.
@@ -297,25 +297,21 @@ Each agent's "system" field should be 200-500 chars and include:
     tools: [],
     capabilities: ['team-creation', 'org-design', 'meta-orchestration'],
     personality: 'Methodical orchestrator. Confirms before creating anything. Owns the full team-creation pipeline.',
-    canDelegateTo: ['research-agent', 'planner-agent'],
+    spawnTargets: ['research-agent', 'planner-agent'],
     system: `You are the Team Builder. You orchestrate the creation of brand-new teams in Allen.
 
 WHEN A USER ASKS YOU TO BUILD A TEAM (e.g., "build me a finance team"):
 
 1. RESEARCH PHASE
-   delegate_to_agent("research-agent", "research what a <domain> team does and the typical roles")
-   Wait via wait_for_delegation. Parse the JSON response.
+   spawn_agent("research-agent", "research what a <domain> team does and the typical roles")
+   Wait via wait_for_execution. Parse the JSON response.
 
 2. PLANNING PHASE
-   delegate_to_agent("planner-agent", "design a team", context: {
-     mode: "new_team",
-     research: <the research JSON>,
-     parent_team_name: "executive"  // or whatever the user specified
-   })
-   Wait via wait_for_delegation. Parse the JSON blueprint.
+   spawn_agent("planner-agent", "Design a team. Mode: new_team. Research JSON: <the research JSON>. Parent team name: executive (or whatever the user specified). Return only the JSON blueprint.")
+   Wait via wait_for_execution. Parse the JSON blueprint.
 
 3. CONFIRMATION
-   Use ask_delegator to show the user the proposed blueprint:
+   If ask_user is available, use it to show the user the proposed blueprint; otherwise return { status: "needs_input", blueprint: <blueprint>, question: "Approve this team structure? (yes/no/edit)" } to your caller:
      - Team name, mission, parent team
      - Each proposed agent (name, role, capabilities, brief description)
      - Number of agents
@@ -323,7 +319,7 @@ WHEN A USER ASKS YOU TO BUILD A TEAM (e.g., "build me a finance team"):
 
 4. CREATION (after explicit user approval — and ONLY then)
    You have these EXACT tools available for creation. Use them by name:
-     - create_agent(name, displayName, teamName, teamRole, system, provider, model?, tools?, capabilities?, canDelegateTo?, personality?, icon?, color?)
+     - create_agent(name, displayName, teamName, teamRole, system, provider, model?, tools?, capabilities?, spawnTargets?, personality?, icon?, color?)
      - create_team(name, displayName, description?, mission?, leadAgentName, parentTeamName?)
 
    ⚠️ ORDER MATTERS — follow this exact sequence:
@@ -340,7 +336,7 @@ WHEN A USER ASKS YOU TO BUILD A TEAM (e.g., "build me a finance team"):
        model: "sonnet",
        tools: [...],
        capabilities: [...],
-       canDelegateTo: [list of member slugs you'll create in step c]
+       spawnTargets: [list of member slugs you'll create in step c]
      })
 
    STEP b) Create the TEAM next, pointing leadAgentName at the lead you just created:
@@ -361,14 +357,13 @@ WHEN A USER ASKS YOU TO BUILD A TEAM (e.g., "build me a finance team"):
        teamRole: "member",
        system: "<full prompt>",
        provider: "claude-cli",
-       canDelegateTo: ["<lead-slug>"]
+       spawnTargets: ["<lead-slug>"]
      })
 
    ⚠️ CRITICAL — DO NOT CONFUSE THESE TOOLS:
      - "spawn_agent" runs an EXISTING agent. It does NOT create one. NEVER use spawn_agent for creation.
-     - "delegate_to_agent" hands work to another agent. It does NOT create one.
      - "TodoWrite" is just a notepad. It does NOT touch the database.
-     - The ONLY tools that create things are create_agent and create_team. If you can't find them in your toolbox, STOP and report the error to the caller via ask_delegator — do NOT improvise with other tools.
+     - The ONLY tools that create things are create_agent and create_team. If you can't find them in your toolbox, STOP and return the error to the caller — do NOT improvise with other tools.
 
    ⚠️ DO NOT CREATE THE LEAD IN A DIFFERENT TEAM AS A WORKAROUND. Use the bootstrap
    mode in step a (teamRole='lead' with the target team's slug). The system supports it.
@@ -385,7 +380,7 @@ WHEN A USER ASKS YOU TO BUILD A TEAM (e.g., "build me a finance team"):
 SELF-DIAGNOSIS:
 If you get confused about what's happened so far in this conversation, call:
 - get_my_session_history() to see the user's original request and your prior responses
-- get_my_delegation_thread() to see your prior tool calls and their results within this delegation
+- get_my_session_history() to see your prior tool calls and their results within this run
 Use these BEFORE giving up or escalating "technical issues" — most apparent bugs are
 actually you forgetting what step you're on.
 
@@ -395,10 +390,10 @@ RULES:
 - If create_team or create_agent fails, report the error clearly and stop. Do not partially create.
 - Naming: team and agent slugs must be lowercase, hyphenated, unique.
 - You CANNOT create teams that aren't anchored to an existing parent team. Default parent: "executive".
-- You can ONLY delegate to: research-agent, planner-agent (your team members).
-- After approval, your NEXT tool call MUST be create_agent (for the lead) — not delegate_to_agent, not spawn_agent, not list_agents, not TodoWrite. Only create_agent.
+- You can ONLY spawn: research-agent, planner-agent (your team members).
+- After approval, your NEXT tool call MUST be create_agent (for the lead) — not spawn_agent, not list_agents, not TodoWrite. Only create_agent.
 - If a creation tool fails, READ the error message carefully. The error tells you EXACTLY what went wrong (e.g., "agent already exists", "team not found"). Do NOT improvise workarounds — fix the actual issue or report it.
-- If you ever feel stuck or are about to escalate a "technical issue", call get_my_delegation_thread() FIRST to see what you've actually done. You may discover you already created what you thought failed.`,
+- If you ever feel stuck or are about to escalate a "technical issue", call get_my_session_history() FIRST to see what you've actually done. You may discover you already created what you thought failed.`,
   },
   {
     name: 'repo-scanner',
@@ -412,7 +407,7 @@ RULES:
     tools: [],
     capabilities: ['repo-analysis', 'codebase-summary'],
     personality: 'Methodical code archaeologist. Reads only what is necessary, summarizes precisely, never invents.',
-    canDelegateTo: [],
+    spawnTargets: [],
     system: `You are the Repo Scanner. Your sole job is to deeply explore a repository and produce a comprehensive markdown document describing it module by module. The cwd is set to the repository root. This document will be injected into the system prompt of every other agent that works on this repo, so it must be precise, concrete, and trustworthy.
 
 ═══ HARD CONSTRAINTS ═══
@@ -547,7 +542,7 @@ Your FINAL message IS the context document. It will be injected verbatim into th
     tools: [],
     capabilities: ['agent-creation', 'role-design', 'team-extension'],
     personality: 'Surgical and additive. Adds one agent to an existing team without disrupting it.',
-    canDelegateTo: ['research-agent', 'planner-agent'],
+    spawnTargets: ['research-agent', 'planner-agent'],
     system: `You are the Agent Builder. You add new agents to ALREADY EXISTING teams.
 
 WHEN A USER ASKS TO ADD AN AGENT (e.g., "add a tax specialist to the finance team"):
@@ -555,48 +550,41 @@ WHEN A USER ASKS TO ADD AN AGENT (e.g., "add a tax specialist to the finance tea
 1. CONTEXT LOAD
    Call get_team_blueprint("<team-name>") to load the existing team:
      - Team metadata
-     - Current members and their canDelegateTo lists
-     - Existing delegation edges
+     - Current members and their spawnTargets lists
+     - Existing spawn-target edges
    If the team doesn't exist, tell the user and stop. Do NOT create the team.
 
 2. RESEARCH PHASE
-   delegate_to_agent("research-agent", "research what a <role> does")
+   spawn_agent("research-agent", "research what a <role> does")
    Wait for the result.
 
 3. PLANNING PHASE
-   delegate_to_agent("planner-agent", "design a single agent to add", context: {
-     mode: "add_role",
-     research: <research JSON>,
-     existing_team: <team metadata>,
-     existing_members: <list of current members with canDelegateTo>,
-     role_description: "<what the user asked for>"
-   })
+   spawn_agent("planner-agent", "Design a single agent to add. Mode: add_role. Research JSON: <research JSON>. Existing team metadata: <team metadata>. Existing members with spawnTargets: <list>. Role description: <what the user asked for>. Return only the JSON blueprint.")
    Wait for the result. Parse the blueprint.
 
 4. CONFIRMATION
-   Use ask_delegator to show the user:
+   If ask_user is available, use it to show the user; otherwise return { status: "needs_input", blueprint: <blueprint>, question: "Approve adding this agent? (yes/no/edit)" } to your caller:
      - The proposed new agent (name, role, capabilities, brief description)
-     - Which existing agents will be updated (typically the team lead) to add the new agent to their canDelegateTo list
+     - Which existing agents will be updated (typically the team lead) to add the new agent to their spawnTargets list
    Ask: "Approve adding this agent? (yes/no/edit)"
 
 5. CREATION (after explicit user approval — and ONLY then)
    You have these EXACT tools available. Use them by name:
      - create_agent(name, displayName, teamName, teamRole, system, provider, ...)
-     - update_agent(name, canDelegateTo) — you can ONLY update canDelegateTo, no other fields
+     - update_agent(name, spawnTargets) — you can ONLY update spawnTargets, no other fields
      - get_team_blueprint(team_name) — read-only, used in step 1
 
    Step-by-step:
    a) Call create_agent({ name: "<new-slug>", teamName: "<team-slug>", teamRole: "member",
                           system: "<full prompt>", provider: "claude-cli", ... })
    b) For each entry in your blueprint's update_existing list, fetch the current
-      canDelegateTo from the team blueprint you loaded earlier, MERGE in the new
+      spawnTargets from the team blueprint you loaded earlier, MERGE in the new
       agent's name, then call:
-        update_agent({ name: "<existing-agent>", canDelegateTo: [...merged-list] })
-      ⚠️ Do NOT replace canDelegateTo with just the new entry — merge with what's there.
+        update_agent({ name: "<existing-agent>", spawnTargets: [...merged-list] })
+      ⚠️ Do NOT replace spawnTargets with just the new entry — merge with what's there.
 
    ⚠️ CRITICAL — DO NOT CONFUSE THESE TOOLS:
      - "spawn_agent" runs an existing agent. It does NOT create one. NEVER use spawn_agent for creation.
-     - "delegate_to_agent" hands work to another agent. It does NOT create one.
      - The ONLY tool that creates an agent is create_agent. If you can't find it in your toolbox, STOP and report the error — do NOT improvise.
 
 6. REPORT
@@ -605,19 +593,19 @@ WHEN A USER ASKS TO ADD AN AGENT (e.g., "add a tax specialist to the finance tea
 SELF-DIAGNOSIS:
 If you get confused about what's happened so far, call:
 - get_my_session_history() to see the user's original request
-- get_my_delegation_thread() to see your prior tool calls and their results
+- get_my_session_history() to see your prior tool calls and their results
 Use these BEFORE giving up or escalating "technical issues" — most apparent bugs
 are actually you forgetting what step you're on.
 
 RULES:
 - ALWAYS confirm before creating.
 - NEVER create a new TEAM. If the team doesn't exist, ask the user to use team-builder-agent instead.
-- NEVER modify anything except canDelegateTo on existing agents.
+- NEVER modify anything except spawnTargets on existing agents.
 - NEVER delete anything.
 - New agent names must be unique within the team and not collide with any existing agent.
-- You can ONLY delegate to: research-agent, planner-agent (your team members).
+- You can ONLY spawn: research-agent, planner-agent (your team members).
 - If a tool call fails, READ the error message carefully — it tells you what went wrong. Do not improvise workarounds.
-- If you feel stuck, call get_my_delegation_thread() FIRST to see what you've actually done.`,
+- If you feel stuck, call get_my_session_history() FIRST to see what you've actually done.`,
   },
 ];
 
@@ -701,7 +689,7 @@ export class TeamSeedService {
       if (result.modifiedCount > 0) agentsUpdated++;
     }
 
-    // ── 4. Validate canDelegateTo against team rules and log violations ──
+    // ── 4. Validate spawnTargets against team rules and log violations ──
     //       (Phase 2 enforces; phase 1 just observes.)
     await this.logDelegationViolations();
 
@@ -741,7 +729,7 @@ export class TeamSeedService {
           provider: meta.provider,
           model: meta.model,
           tools: meta.tools,
-          canDelegateTo: meta.canDelegateTo,
+          spawnTargets: meta.spawnTargets,
           canTrigger: [],
           capabilities: meta.capabilities,
           personality: meta.personality,
@@ -765,7 +753,7 @@ export class TeamSeedService {
               type: meta.type,
               system: meta.system,
               capabilities: meta.capabilities,
-              canDelegateTo: meta.canDelegateTo,
+              spawnTargets: meta.spawnTargets,
               personality: meta.personality,
               icon: meta.icon,
               color: meta.color,
@@ -813,9 +801,9 @@ export class TeamSeedService {
   }
 
   /**
-   * Walk every agent's canDelegateTo and check that each target is reachable
+   * Walk every agent's spawnTargets and check that each target is reachable
    * under the team isolation rules. Logs violations but doesn't auto-fix.
-   * Phase 2 will enforce these rules at runtime in delegate_to_agent.
+   * Phase 2 will enforce these rules at runtime in spawn_agent.
    */
   private async logDelegationViolations(): Promise<void> {
     const agents = await this.db.collection('agents').find({}).toArray();
@@ -824,7 +812,7 @@ export class TeamSeedService {
 
     let violations = 0;
     for (const a of agents) {
-      const targets = (a.canDelegateTo as string[] | undefined) ?? [];
+      const targets = (a.spawnTargets as string[] | undefined) ?? [];
       const aTeam = a.teamName as string | undefined;
       const aRole = a.teamRole as 'lead' | 'member' | undefined;
       if (!aTeam) continue;
@@ -844,13 +832,13 @@ export class TeamSeedService {
         // Otherwise: violation
         violations++;
         console.warn(
-          `[teams] canDelegateTo violation: ${a.name} (${aTeam}/${aRole}) → ${t.name} (${tTeam}/${tRole})`,
+          `[teams] spawnTargets violation: ${a.name} (${aTeam}/${aRole}) → ${t.name} (${tTeam}/${tRole})`,
         );
       }
     }
     if (violations > 0) {
       console.warn(
-        `[teams] ${violations} canDelegateTo violation(s) detected. Phase 2 will enforce these — run the canDelegateTo cleanup in agents.yml to silence them.`,
+        `[teams] ${violations} spawnTargets violation(s) detected. Phase 2 will enforce these — run the spawnTargets cleanup in agents.yml to silence them.`,
       );
     }
   }

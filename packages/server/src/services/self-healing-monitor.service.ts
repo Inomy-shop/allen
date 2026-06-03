@@ -6,7 +6,6 @@ import { assertSelfHealingLinearConfig } from './self-healing-env.js';
 export type MonitoringSourceType =
   | 'chat'
   | 'agent_execution'
-  | 'delegation'
   | 'workflow_execution'
   | 'memory'
   | 'tool_call'
@@ -48,7 +47,6 @@ export interface MonitoringScanArgs {
   stuckThresholds?: {
     chatStreamingMinutes?: number;
     agentRunningMinutes?: number;
-    delegationActiveMinutes?: number;
     workflowRunningMinutes?: number;
     workflowWaitingForInputMinutes?: number;
   };
@@ -106,7 +104,6 @@ const DEFAULT_SCAN_ARGS: Required<Pick<
   stuckThresholds: {
     chatStreamingMinutes: 10,
     agentRunningMinutes: 45,
-    delegationActiveMinutes: 45,
     workflowRunningMinutes: 90,
     workflowWaitingForInputMinutes: 1440,
   },

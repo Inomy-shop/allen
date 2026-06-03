@@ -51,7 +51,7 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
           name: 'engineering-lead',
           displayName: 'Custom Engineering Lead',
           system: 'custom prompt',
-          canDelegateTo: ['ui-copywriter'],
+          spawnTargets: ['ui-copywriter'],
           teamName: 'engineering',
           teamRole: 'lead',
           isBuiltIn: true,
@@ -74,7 +74,7 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
     const team = db.store.teams.find((t: any) => t.name === 'engineering');
     expect(lead.displayName).toBe('Custom Engineering Lead');
     expect(lead.system).toBe('custom prompt');
-    expect(lead.canDelegateTo).toEqual(['ui-copywriter']);
+    expect(lead.spawnTargets).toEqual(['ui-copywriter']);
     expect(team.displayName).toBe('Custom Engineering');
     expect(team.mission).toBe('custom mission');
     expect(db.store.agents.length).toBeGreaterThan(1);
@@ -89,7 +89,7 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
           name: 'engineering-lead',
           displayName: 'Custom Engineering Lead',
           system: 'custom prompt',
-          canDelegateTo: ['ui-copywriter'],
+          spawnTargets: ['ui-copywriter'],
           teamName: 'engineering',
           teamRole: 'lead',
           isBuiltIn: true,

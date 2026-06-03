@@ -157,7 +157,7 @@ export default function ChatPage() {
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
-    thinkingText, activeToolCalls, agentThreads, agentReports, threadsByMessage,
+    thinkingText, activeToolCalls, agentReports,
     spawnedAgents, pendingUserQuestion, answerUserQuestion, answerWorkflowIntervention,
     loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
@@ -599,7 +599,7 @@ export default function ChatPage() {
       ) : messages.length === 0 && !activeSessionId && !streaming ? (
         <div className="chat-empty-stream" aria-label="New conversation" />
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentThreads={agentThreads} agentReports={agentReports} threadsByMessage={threadsByMessage} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} />
+        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentReports={agentReports} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} />
       )}
       {floatingPullRequest && <FloatingPullRequestCard pullRequest={floatingPullRequest} />}
 

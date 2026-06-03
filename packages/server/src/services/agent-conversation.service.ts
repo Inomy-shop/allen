@@ -28,7 +28,7 @@ export interface AgentConversation {
   chatSessionId: string;
   parentMessageId: string;
   /**
-   * Every assistant message that issued or continued this delegation, in order.
+   * Every assistant message that issued or continued this historical conversation, in order.
    * Populated on create and via $addToSet on every continue, so the UI can
    * render the thread card under each turn that touched it instead of only
    * the original anchor. Legacy rows have just `parentMessageId`.
@@ -54,8 +54,6 @@ export interface AgentConversation {
   startedAt: Date;
   completedAt?: Date;
 }
-
-const MAX_DELEGATION_DEPTH = 3;
 
 export class AgentConversationService {
   constructor(private db: Db) {}
@@ -122,7 +120,7 @@ export class AgentConversationService {
   /**
    * Reset a completed/failed conversation back to `active` for a continuation turn.
    * Clears the prior turn's terminal fields (response/summary/cost/duration) so
-   * wait_for_delegation can't short-circuit on stale data, and anchors the thread
+   * status checks can't short-circuit on stale data, and anchors the thread
    * to the current assistant message via parentMessageIds.
    */
   async markContinuation(conversationId: string, parentMessageId: string): Promise<void> {
@@ -245,10 +243,4 @@ export class AgentConversationService {
   async forSession(chatSessionId: string): Promise<AgentConversation[]> {
     return this.col.find({ chatSessionId }).sort({ startedAt: -1 }).limit(50).toArray() as Promise<AgentConversation[]>;
   }
-
-  canDelegate(currentDepth: number): boolean {
-    return currentDepth < MAX_DELEGATION_DEPTH;
-  }
-
-  get maxDepth(): number { return MAX_DELEGATION_DEPTH; }
 }

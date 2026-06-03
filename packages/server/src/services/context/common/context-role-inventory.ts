@@ -24,7 +24,7 @@ const WORKFLOW_ROLE_GUIDANCE: Record<string, { category: string; recommendedMand
   },
   'engineering-lead': {
     category: 'repo-operating',
-    recommendedMandatoryContext: ['implementation workflow guidelines', 'delegation/routing rules', 'planning process rules'],
+    recommendedMandatoryContext: ['implementation workflow guidelines', 'spawn/routing rules', 'planning process rules'],
     notes: 'Map mandatory context only for always-load engineering workflow guidelines; architecture, module ownership, and validation commands are task-specific retrieval context.',
   },
   'qa-lead': {

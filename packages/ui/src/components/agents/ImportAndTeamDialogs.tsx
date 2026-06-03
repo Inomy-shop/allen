@@ -6,7 +6,7 @@
  *   1. ImportAgentsFromRepoDialog — pick a registered repo, preview the
  *      `.claude/agents/*.md` files found in it, and import selected rows.
  *   2. AssignToTeamDialog — move one or more existing agents into an
- *      existing team. Optional auto-wire of the team lead's canDelegateTo.
+ *      existing team. Optional auto-wire of the team lead's spawn targets.
  *   3. CreateTeamFromAgentsDialog — create a brand-new team with an
  *      auto-generated lead. The selected agents become members. Zero
  *      members is also valid (scaffold an empty team and move agents in
@@ -428,7 +428,7 @@ export function AssignToTeamDialog({
         </div>
         <label className="flex cursor-pointer items-center gap-2 font-mono text-[12px] text-theme-muted">
           <input type="checkbox" checked={autoWire} onChange={e => setAutoWire(e.target.checked)} />
-          Also allow the team lead to delegate to these agents
+          Also allow the team lead to spawn these agents
         </label>
       </div>
     </DialogShell>
@@ -499,7 +499,7 @@ export function CreateTeamFromAgentsDialog({
         team: { name, displayName, description, mission, parentTeamName },
         lead: { model: leadModel, reasoningEffort: leadEffort },
         memberAgentNames,
-        autoWireDelegation: true,
+        autoWireSpawnTargets: true,
       });
       toast.success(`Created team "${displayName}" with lead "${leadSlug}"`);
       onCreated();
@@ -539,7 +539,7 @@ export function CreateTeamFromAgentsDialog({
         <div className="rounded-md border border-accent-blue/20 bg-accent-blue/5 p-3 text-[12px] text-theme-muted">
           A lead agent will be created as <span className="font-mono text-accent-blue">{leadSlug}</span>
           {memberAgentNames.length > 0
-            ? <> and will delegate to {memberAgentNames.length} member{memberAgentNames.length === 1 ? '' : 's'}.</>
+            ? <> and can spawn {memberAgentNames.length} member{memberAgentNames.length === 1 ? '' : 's'}.</>
             : <>. You can move agents into this team later.</>}
         </div>
 

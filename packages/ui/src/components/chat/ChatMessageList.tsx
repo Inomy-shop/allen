@@ -5,8 +5,7 @@ import { Bot, AlertCircle, AlertTriangle, Copy, Check, Clock, Wrench, CheckCircl
   ChevronDown, ChevronRight, GitPullRequest, FolderGit2, FileText, PlayCircle, StopCircle, Timer,
   Send, Bookmark, Download, X,
 } from 'lucide-react';
-import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentThread as AgentThreadType, AgentReport, SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
-import { AgentThread } from './AgentThread';
+import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentReport, SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
 import MermaidChatBlock from './MermaidChatBlock';
@@ -30,10 +29,7 @@ interface ChatMessageListProps {
   thinkingText?: string;
   streaming: boolean;
   activeToolCalls?: ActiveToolCall[];
-  agentThreads?: AgentThreadType[];
   agentReports?: AgentReport[];
-  /** Persisted threads keyed by parentMessageId — loaded from DB for historical viewing */
-  threadsByMessage?: Record<string, AgentThreadType[]>;
   /** Pending question from an agent to the user */
   pendingUserQuestion?: { question: string; fromAgent: string } | null;
   onAnswerUserQuestion?: (answer: string) => void;
@@ -1029,10 +1025,6 @@ const TOOL_LABELS: Record<string, { label: string; color: string }> = {
   get_agent: { label: 'Get Agent', color: 'text-accent-purple' },
   spawn_agent: { label: 'Spawn Agent', color: 'text-accent-purple' },
   move_agent_to_team: { label: 'Move Agent', color: 'text-accent-purple' },
-  delegate_to_agent: { label: 'Delegate', color: 'text-accent-cyan' },
-  wait_for_delegation: { label: 'Wait for Delegation', color: 'text-accent-cyan' },
-  answer_delegator: { label: 'Answer Delegator', color: 'text-accent-cyan' },
-  ask_delegator: { label: 'Ask Delegator', color: 'text-accent-cyan' },
   report_to_user: { label: 'Progress Update', color: 'text-accent-green' },
   search_learnings: { label: 'Search Learnings', color: 'text-accent-yellow' },
   // Advanced queries
@@ -1088,7 +1080,7 @@ function argsSummary(args?: Record<string, unknown>): string {
 function resultSummary(result?: Record<string, unknown>): string {
   if (!result) return '';
   if (result.error) return `Error: ${compactValue(result.error)}`;
-  const preferred = ['message', 'summary', 'status', 'title', 'name', 'execution_id', 'conversation_id'];
+  const preferred = ['message', 'summary', 'status', 'title', 'name', 'execution_id'];
   for (const key of preferred) {
     if (result[key] !== undefined) return `${key.replace(/_/g, ' ')}: ${compactValue(result[key])}`;
   }
@@ -1208,23 +1200,16 @@ function ToolCallLine({ call, count, active }: { call: ToolCallRecord | ActiveTo
 }
 
 /**
- * Completed message: threads shown inline, tool calls reduced to latest activity.
+ * Completed message: tool calls reduced to latest activity.
  */
-function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord[]; threads?: AgentThreadType[]; agentMap?: Record<string, { displayName?: string; icon?: string; color?: string }> }) {
+function ToolCallsSection({ calls }: { calls?: ToolCallRecord[] }) {
   const [showTools, setShowTools] = useState(false);
   if (!calls || calls.length === 0) return null;
 
-  // Build thread tree from flat list, then show only root-level threads
-  const rootThreads = threads ? buildThreadTree(threads) : [];
   const latestCall = calls[calls.length - 1];
 
   return (
     <div className="mt-3 space-y-2">
-      {/* Threads — nested tree, primary content */}
-      {rootThreads.map(thread => (
-        <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
-      ))}
-
       {latestCall && (
         <button type="button" className="chat-tool-disclosure" data-expanded={showTools} onClick={() => setShowTools(value => !value)}>
           {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -1245,23 +1230,17 @@ function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord
 }
 
 /**
- * Streaming: threads + running indicator.
+ * Streaming: running tool indicator.
  */
-function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: ActiveToolCall[]; liveThreads?: AgentThreadType[]; agentMap?: Record<string, { displayName?: string; icon?: string; color?: string }> }) {
+function ActiveToolCallsSection({ calls }: { calls: ActiveToolCall[] }) {
   const [showTools, setShowTools] = useState(false);
-  if (calls.length === 0 && (!liveThreads || liveThreads.length === 0)) return null;
+  if (calls.length === 0) return null;
 
-  const rootThreads = buildThreadTree(liveThreads ?? []);
   const runningTool = [...calls].reverse().find(c => (c as ActiveToolCall).status === 'running');
   const latestCall = runningTool ?? calls[calls.length - 1];
 
   return (
     <div className="mt-3 space-y-2">
-      {/* Live threads */}
-      {rootThreads.map(thread => (
-        <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
-      ))}
-
       {latestCall && (
         <button type="button" className="chat-tool-disclosure" data-expanded={showTools} onClick={() => setShowTools(value => !value)}>
           {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -1493,23 +1472,6 @@ function ChatPullRequestCards({ runs }: { runs: SpawnedAgent[] }) {
 /* ── Main component ──────────────────────────────────────────────────────── */
 
 /** Build a tree from a flat thread list using parentConversationId */
-function buildThreadTree(threads: AgentThreadType[]): AgentThreadType[] {
-  const map = new Map<string, AgentThreadType>();
-  for (const t of threads) map.set(t.conversationId, { ...t, children: [] });
-
-  const roots: AgentThreadType[] = [];
-  for (const t of map.values()) {
-    if (t.parentConversationId && map.has(t.parentConversationId)) {
-      const parent = map.get(t.parentConversationId)!;
-      if (!parent.children) parent.children = [];
-      parent.children.push(t);
-    } else {
-      roots.push(t);
-    }
-  }
-  return roots;
-}
-
 function statusTone(status: string): string {
   if (status === 'completed') return 'border-accent-green/35 bg-accent-green/5';
   if (status === 'failed' || status === 'cancelled') return 'border-accent-red/35 bg-accent-red/5';
@@ -2037,7 +1999,7 @@ function WorkflowInterventionPrompt({
   );
 }
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel }: ChatMessageListProps) {
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentReports = [], pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel }: ChatMessageListProps) {
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
   const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
   const hasActiveSpawnedRuns = spawnedAgents.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
@@ -2144,7 +2106,6 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
         const showThinking = msg.role === 'assistant' && msg.thinkingText && timelinePart !== 'response';
         const showResponse = timelinePart !== 'thinking';
         const suppressLinkedRunPanels = item.type === 'message-part';
-        const msgThreads = msg._id ? threadsByMessage[msg._id] : undefined;
         const senderLabel = msg.role === 'user' ? userDisplayName(msg) : '';
         const visibleContent = msg.role === 'assistant' ? sanitizeChatAssistantResponse(msg.content) : msg.content;
         const visibleError = msg.role === 'assistant' ? sanitizeChatAssistantResponse(msg.error) : msg.error;
@@ -2183,7 +2144,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 </div>
               )}
               {showResponse && msg.role === 'assistant' && !messageHasActiveRuns && (
-                <ToolCallsSection calls={msg.toolCalls} threads={msgThreads} agentMap={agentMap} />
+                <ToolCallsSection calls={msg.toolCalls} />
               )}
               {showResponse && visibleError && (
                 <div className="chat-msg-error">
@@ -2236,24 +2197,6 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           />
         )}
 
-        {/* Threads not linked to a tool call (fallback — render below message) */}
-        {msgThreads && msgThreads.length > 0 && (() => {
-          // Only render threads that weren't already rendered inline with tool calls
-          const toolConvIds = new Set(
-            (msg.toolCalls ?? [])
-              .map(tc => (tc.result as Record<string, unknown>)?.conversation_id as string)
-              .filter(Boolean)
-          );
-          const unlinked = msgThreads.filter(t => !toolConvIds.has(t.conversationId));
-          if (unlinked.length === 0) return null;
-          return (
-            <div className="chat-linked-threads">
-              {buildThreadTree(unlinked).map(thread => (
-                <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
-              ))}
-            </div>
-          );
-        })()}
         </React.Fragment>);
       })}
 
@@ -2270,7 +2213,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               </div>
               <div className="ch-msg-text">
               {thinkingText && <ThinkingBlock text={thinkingText} active />}
-              <ActiveToolCallsSection calls={activeToolCalls} liveThreads={agentThreads} agentMap={agentMap} />
+              <ActiveToolCallsSection calls={activeToolCalls} />
               <div className={activeToolCalls.length > 0 || thinkingText ? 'mt-2' : undefined}>
                 {streamText ? (
                   <>
@@ -2311,22 +2254,6 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           })}
         </div>
       )}
-
-      {/* Agent threads — only render orphans not already shown inline with tool calls */}
-      {agentThreads.length > 0 && !streaming && (() => {
-        // During streaming, threads are rendered inline with ActiveToolCallsSection
-        // After completion, they're rendered inline with ToolCallsSection via threadsByMessage
-        // This section only catches threads that somehow aren't linked to either
-        const orphans = agentThreads.filter(t => !t.parentConversationId);
-        if (orphans.length === 0) return null;
-        return (
-          <div className="chat-linked-threads">
-            {buildThreadTree(orphans).map(thread => (
-              <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
-            ))}
-          </div>
-        );
-      })()}
 
       {/* Agent question prompt (ask_user) */}
       {pendingUserQuestion && onAnswerUserQuestion && (

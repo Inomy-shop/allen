@@ -49,7 +49,7 @@ Worker output quality contract:
 - Broad PRDs, architecture docs, historical plans, and large READMEs are usually retrievable references, not mandatory context.
 - Treat agent-adjacent files such as .claude/agents/** and .agents/** as mixed-source files, not automatic include/exclude decisions.
 - Include only source-grounded reusable production learnings from agent-adjacent files: operational facts, module pitfalls, schema notes, incident lessons, known gotchas, DB/query/debug patterns, and durable repo behavior.
-- Exclude persona/system prompt text, role instructions, delegation rules, allowed-tool instructions, team/org design, and agent-framework architecture unless the run is explicitly scoped to agent-system documentation.
+- Exclude persona/system prompt text, role instructions, spawn/routing rules, allowed-tool instructions, team/org design, and agent-framework architecture unless the run is explicitly scoped to agent-system documentation.
 - For mixed files, stage only the production-learning chunks and omit persona/system sections from curatedContext, retrievalText, and chunks.
 - Memory/learnings entries should use production categories such as production_note, historical_note, runbook, source_doc, or module_rule, not agent_persona.
 - Agent personas, generated docs, stale backups, duplicates, dependency docs, and secret-adjacent docs should be excluded or marked never_full_auto when explicitly scoped.
@@ -212,7 +212,7 @@ Rules:
 - You MUST call save_repo_context_curation_stage before final response.
 - Treat agent-adjacent files such as .claude/agents/** and .agents/** as mixed-source files. Do not include or exclude them by path alone.
 - Include only source-grounded reusable production learnings from agent-adjacent files: operational facts, module pitfalls, schema notes, incident lessons, known gotchas, DB/query/debug patterns, and durable repo behavior.
-- Exclude persona/system prompt text, role instructions, delegation rules, allowed-tool instructions, team/org design, and agent-framework architecture unless the assignment explicitly asks for agent-system documentation.
+- Exclude persona/system prompt text, role instructions, spawn/routing rules, allowed-tool instructions, team/org design, and agent-framework architecture unless the assignment explicitly asks for agent-system documentation.
 - For mixed files, stage only the production-learning chunks and omit persona/system sections from curatedContext, retrievalText, and chunks.
 - Memory/learnings entries should use production categories such as production_note, historical_note, runbook, source_doc, or module_rule, not agent_persona.
 

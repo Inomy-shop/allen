@@ -547,7 +547,7 @@ export function executionRoutes(db: Db): Router {
   //
   // Persisted log of intermediate agent events (text / thinking /
   // tool_call / tool_result) for a spawn execution. Mirrors the
-  // delegation-side route at /api/chat/delegations/:conversationId/activity
+  // chat activity routes
   // and exists so the UI can re-hydrate a running spawn's progress view
   // on refresh. Events are returned oldest-first; `since` accepts an ISO
   // timestamp cursor; `limit` defaults to 500, capped at 2000.

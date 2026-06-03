@@ -25,7 +25,7 @@ const PLAN_MODE_OPTIONS = [
 ];
 const ICONS = ['clipboard', 'code', 'eye', 'search', 'flask', 'pen', 'git-branch', 'bar-chart', 'magnifying-glass', 'layout', 'bot'];
 const AGENT_TYPES = [
-  { value: 'team', label: 'Team Agent — coordinates and delegates' },
+  { value: 'team', label: 'Team Agent — coordinates and spawns agents' },
   { value: 'technical', label: 'Technical Agent — executes specific tasks' },
 ];
 const MCP_TOOL_REFRESH_DELAYS = [1_500, 5_000, 10_000, 20_000, 30_000];

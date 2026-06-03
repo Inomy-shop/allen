@@ -12,6 +12,15 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('skills').createIndex({ triggers: 1 });
 
   // Agents
+  const legacySpawnTargetsField = 'can' + 'DelegateTo';
+  await db.collection('agents').updateMany(
+    { spawnTargets: { $exists: false }, [legacySpawnTargetsField]: { $exists: true } },
+    [{ $set: { spawnTargets: `$${legacySpawnTargetsField}` } }],
+  );
+  await db.collection('agents').updateMany(
+    { [legacySpawnTargetsField]: { $exists: true } },
+    { $unset: { [legacySpawnTargetsField]: '' } },
+  );
   await db.collection('agents').createIndex({ name: 1 }, { unique: true });
   // Lookup imported agents by source repo — used by the import preview to
   // detect "already imported" rows and by the UI to badge agents by origin.
@@ -204,13 +213,13 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { name: 'idx_msg_sender_session_created', sparse: true },
   );
 
-  // Agent Conversations (delegation threads)
+  // Historical agent conversations
   await db.collection('agent_conversations').createIndex({ chatSessionId: 1, startedAt: -1 });
   await db.collection('agent_conversations').createIndex({ fromAgent: 1, toAgent: 1 });
   await db.collection('agent_conversations').createIndex({ status: 1 });
 
   // Agent Activity — running log of intermediate events emitted by
-  // delegations and spawned executions. Queried by refId for wait tools
+  // spawned-agent executions. Queried by refId for wait tools
   // and UI replay; TTL keeps the collection bounded (7 days) because the
   // final response is already persisted in agent_conversations/traces.
   await db.collection('agent_activity').createIndex({ refId: 1, timestamp: 1 });

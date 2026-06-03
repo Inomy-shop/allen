@@ -214,86 +214,6 @@ export function chatRoutes(db: Db): Router {
     }
   });
 
-  // POST /api/chat/delegate — Execute delegation tools via API (used by Allen MCP server)
-  router.post('/delegate', async (req: Request, res: Response) => {
-    try {
-      const { tool, agent_name, task, context, conversation_id, answer } = req.body;
-      const ctx = readToolContext(req);
-
-      // Route to the right tool
-      if (tool === 'answer_delegator' || tool === 'answer_question') {
-        if (!conversation_id || !answer) return res.status(400).json({ error: 'conversation_id and answer are required' });
-        const result = await executeChatTool('answer_delegator', { conversation_id, answer }, db, ctx);
-        return res.json(result);
-      }
-
-      // Default: delegate_to_agent
-      if (!agent_name || !task) return res.status(400).json({ error: 'agent_name and task are required' });
-      const result = await executeChatTool('delegate_to_agent', { agent_name, task, context, conversation_id }, db, ctx);
-      res.json(result);
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // GET /api/chat/delegations/:conversationId/activity — Persisted thread-event log
-  // for a delegation, used by useChat.ts on refresh so running delegations
-  // don't lose their visible progress when the client reloads. Returns
-  // oldest-first so the UI can append in natural order. `since` filters to
-  // events after that ISO timestamp; `limit` caps at 2000 (default 500).
-  router.get('/delegations/:conversationId/activity', async (req: Request, res: Response) => {
-    try {
-      const conversationId = param(req, 'conversationId');
-      const sinceRaw = req.query.since as string | undefined;
-      const limitRaw = req.query.limit as string | undefined;
-      const since = sinceRaw ? new Date(sinceRaw) : undefined;
-      const limit = limitRaw ? Math.max(1, Math.min(parseInt(limitRaw, 10) || 500, 2000)) : 500;
-      const { AgentActivityService } = await import('../services/agent-activity.service.js');
-      const service = new AgentActivityService(db);
-      const events = await service.listForRef(conversationId, { since, limit });
-      console.log('[chat/activity] conv', conversationId, 'since', sinceRaw ?? '-', '→', events.length, 'rows');
-      res.json({ events });
-    } catch (err: unknown) {
-      console.error('[chat/activity] failed:', (err as Error).message);
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // GET /api/chat/delegation/:id/status — Quick status check (non-blocking)
-  router.get('/delegation/:id/status', async (req: Request, res: Response) => {
-    try {
-      const { AgentConversationService } = await import('../services/agent-conversation.service.js');
-      const service = new AgentConversationService(db);
-      const conv = await service.get(param(req, 'id'));
-      if (!conv) return res.status(404).json({ error: 'Not found' });
-      if (conv.status === 'active') {
-        return res.json({ conversation_id: conv._id?.toString(), status: 'active', agent: conv.toAgent, turn_count: conv.turnCount });
-      }
-      if (conv.status === 'waiting_for_answer' && conv.pendingQuestion?.status === 'pending') {
-        return res.json({
-          conversation_id: conv._id?.toString(),
-          status: 'waiting_for_answer',
-          agent: conv.toAgent,
-          question: conv.pendingQuestion.question,
-          from_agent: conv.pendingQuestion.fromAgent,
-        });
-      }
-      res.json({
-        conversation_id: conv._id?.toString(),
-        status: conv.status,
-        agent: conv.toAgent,
-        response: conv.response ?? conv.summary ?? '',
-        summary: conv.summary,
-        cost_usd: conv.costUsd,
-        duration_ms: conv.durationMs,
-        turn_count: conv.turnCount,
-        hint: conv.status === 'completed' ? `To continue, call delegate_to_agent with conversation_id` : undefined,
-      });
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
   // GET /api/chat/sessions — List all sessions. Optional ?ownerUserId=<id>
   // to filter by owner, or ?ownerUserId=none for unowned/legacy sessions.
   router.get('/sessions', async (req: Request, res: Response) => {
@@ -709,32 +629,6 @@ export function chatRoutes(db: Db): Router {
       const log = await db.collection('chat_logs').findOne({ _id: new ObjectId(param(req, 'logId')) });
       if (!log) return res.status(404).json({ error: 'Log not found' });
       res.json(log);
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // GET /api/chat/sessions/:id/threads — Get agent-to-agent conversations for a session
-  router.get('/sessions/:id/threads', async (req: Request, res: Response) => {
-    try {
-      const sessionId = param(req, 'id');
-      const { AgentConversationService } = await import('../services/agent-conversation.service.js');
-      const service = new AgentConversationService(db);
-      const threads = await service.forSession(sessionId);
-      res.json(threads);
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // POST /api/chat/ask-caller — Agent asks its caller a question (blocks until answered)
-  router.post('/ask-caller', async (req: Request, res: Response) => {
-    try {
-      const { question, conversation_id } = req.body;
-      if (!question) return res.status(400).json({ error: 'question is required' });
-      // conversation_id can come from the request or from the active session context
-      const result = await executeChatTool('ask_delegator', { question, _conversation_id: conversation_id }, db, readToolContext(req));
-      res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

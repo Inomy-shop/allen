@@ -132,7 +132,6 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
         stuck_thresholds: {
           chatStreamingMinutes: 10,
           agentRunningMinutes: 45,
-          delegationActiveMinutes: 45,
           workflowRunningMinutes: 90,
           workflowWaitingForInputMinutes: 1440,
         },

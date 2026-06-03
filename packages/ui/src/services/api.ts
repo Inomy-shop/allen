@@ -577,11 +577,11 @@ export const executions = {
 };
 
 // ── Agent Activity (shared shape) ─────────────────────────────────────────
-// Row shape returned by both the delegation and execution activity routes.
+// Row shape returned by agent activity routes.
 // See packages/server/src/services/agent-activity.service.ts PersistedActivityRow.
 export interface ActivityEvent {
   id: string;
-  scope: 'delegation' | 'execution';
+  scope: 'execution';
   refId: string;
   agent: string;
   type: 'text' | 'thinking' | 'tool_call' | 'tool_result';
@@ -619,12 +619,12 @@ export const agents = {
       method: 'PATCH',
       body: JSON.stringify({ teamName, teamRole }),
     }),
-  bulkAssignTeam: (agentNames: string[], teamName: string, autoWireDelegation = true) =>
+  bulkAssignTeam: (agentNames: string[], teamName: string, autoWireSpawnTargets = true) =>
     request<{ moved: string[]; skipped: { name: string; reason: string }[] }>(
       '/agents/bulk-team',
       {
         method: 'POST',
-        body: JSON.stringify({ agentNames, teamName, autoWireDelegation }),
+        body: JSON.stringify({ agentNames, teamName, autoWireSpawnTargets }),
       },
     ),
   run: (name: string, body: { prompt: string; repo_path?: string; session_id?: string }) =>
@@ -649,7 +649,7 @@ export const teams = {
     team: { name: string; displayName: string; description?: string; mission?: string; parentTeamName?: string };
     lead?: { name?: string; displayName?: string; model?: string; reasoningEffort?: string; system?: string };
     memberAgentNames?: string[];
-    autoWireDelegation?: boolean;
+    autoWireSpawnTargets?: boolean;
   }) =>
     request<any>('/teams/with-members', {
       method: 'POST',
@@ -905,21 +905,8 @@ export const chat = {
     request<{ title: string }>(`/chat/sessions/${id}/generate-title`, { method: 'POST' }),
   deleteSession: (id: string) =>
     request<void>(`/chat/sessions/${id}`, { method: 'DELETE' }),
-  getThreads: (id: string) =>
-    request<any[]>(`/chat/sessions/${id}/threads`),
   getContextUsage: (id: string) =>
     request<any>(`/chat/sessions/${id}/context-usage`),
-  // Replay persisted activity for a single delegation (conversation).
-  // Called from useChat on initial load to repopulate liveActivity for
-  // still-running threads so a page refresh doesn't erase their visible
-  // progress feed.
-  getDelegationActivity: (conversationId: string, opts?: { since?: string; limit?: number }) => {
-    const params = new URLSearchParams();
-    if (opts?.since) params.set('since', opts.since);
-    if (opts?.limit) params.set('limit', String(opts.limit));
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    return request<{ events: ActivityEvent[] }>(`/chat/delegations/${conversationId}/activity${qs}`);
-  },
   answerAgentQuestion: (id: string, answer: string) =>
     request<any>(`/chat/sessions/${id}/agent-answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
   logs: (params?: Record<string, string>) => {

@@ -39,7 +39,7 @@ const REPO_KNOWLEDGE_FRESHNESS = process.env.ALLEN_REPO_KNOWLEDGE_FRESHNESS || u
 // /api/chat/* calls so the server can route tools to the correct chat /
 // spawn-execution context. Set by whoever spawned this MCP subprocess:
 //   chat-llm.ts        → ALLEN_CHAT_SESSION_ID for main-chat agents
-//   chat-tools.ts      → same for delegation / spawn subprocesses rooted
+//   chat-tools.ts      → same for spawn subprocesses rooted
 //                        in a chat (omitted for workflow-rooted spawns)
 const SPAWN_CHAT_SESSION_ID = process.env.ALLEN_CHAT_SESSION_ID || undefined;
 
@@ -165,9 +165,9 @@ const TOOLS = [
 
   // ── Agents ──
   { name: 'list_agents', description: 'List all agents with minimal info: name, displayName, teamName, type, model, provider. Use get_agent for full details.', params: {} },
-  { name: 'get_agent', description: 'Get full details of a specific agent: system prompt, tools, capabilities, model, provider, canDelegateTo, personality, description.', params: { name: 'string (required) — agent slug' } },
-  { name: 'create_agent', description: 'Create a new agent in a team. Team must exist. The agent slug must be unique system-wide.', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', description: 'string — short description of what the agent does', teamName: 'string (required) — existing team slug', teamRole: 'string (required) — "lead" or "member"', system: 'string (required) — full system prompt', provider: 'string (required) — "claude-cli" or "codex"', model: 'string', tools: 'object — array of tool names', capabilities: 'object — array of capability tags', canDelegateTo: 'object — array of agent names', personality: 'string', icon: 'string', color: 'string' } },
-  { name: 'update_agent', description: 'Update an agent: system prompt, model, provider, tools, capabilities, canDelegateTo, personality, displayName, description.', params: { name: 'string (required)', displayName: 'string', description: 'string', system: 'string', tools: 'object', capabilities: 'object', canDelegateTo: 'object', personality: 'string', model: 'string', provider: 'string' } },
+  { name: 'get_agent', description: 'Get full details of a specific agent: system prompt, tools, capabilities, model, provider, spawnTargets, personality, description.', params: { name: 'string (required) — agent slug' } },
+  { name: 'create_agent', description: 'Create a new agent in a team. Team must exist. The agent slug must be unique system-wide.', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', description: 'string — short description of what the agent does', teamName: 'string (required) — existing team slug', teamRole: 'string (required) — "lead" or "member"', system: 'string (required) — full system prompt', provider: 'string (required) — "claude-cli" or "codex"', model: 'string', tools: 'object — array of tool names', capabilities: 'object — array of capability tags', spawnTargets: 'object — array of agent names this agent can spawn', personality: 'string', icon: 'string', color: 'string' } },
+  { name: 'update_agent', description: 'Update an agent: system prompt, model, provider, tools, capabilities, spawnTargets, personality, displayName, description.', params: { name: 'string (required)', displayName: 'string', description: 'string', system: 'string', tools: 'object', capabilities: 'object', spawnTargets: 'object — array of agent names this agent can spawn', personality: 'string', model: 'string', provider: 'string' } },
   { name: 'delete_agent', description: 'Delete an agent. Refuses built-in agents and team leads. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
   { name: 'move_agent_to_team', description: 'Move one or more agents to a different team. Works for any cross-team move including unassigned → team.', params: { agent_names: 'object — array of agent name strings (required)', team_name: 'string (required) — target team slug' } },
   { name: 'spawn_agent', description: 'Spawn an agent in the background. Returns immediately with execution_id. Pass context_query as structured retrieval-only metadata; do not embed context query XML/JSON in prompt.', params: { agent_name: 'string (required)', prompt: 'string (required)', context_query: 'object — optional structured retrieval query, not sent to the agent prompt', repo_path: 'string — optional repo path', session_id: 'string — session ID from previous spawn to resume' } },
@@ -175,8 +175,8 @@ const TOOLS = [
   // ── Teams ──
   { name: 'list_teams', description: 'List all teams: name, displayName, mission, lead, parent, isBuiltIn.', params: {} },
   { name: 'get_team', description: 'Get a team\'s metadata and member list (names + roles, without system prompts). Use get_team_blueprint for the deep view.', params: { name: 'string (required) — team slug' } },
-  { name: 'get_team_blueprint', description: 'Full team blueprint: metadata, all members WITH system prompts, delegation edges. Use before adding agents.', params: { team_name: 'string (required) — team slug' } },
-  { name: 'list_team_members', description: 'List agents in a team with name, displayName, teamRole, capabilities, tools, canDelegateTo.', params: { team_name: 'string (required) — team slug' } },
+  { name: 'get_team_blueprint', description: 'Full team blueprint: metadata and all members WITH system prompts. Use before adding agents.', params: { team_name: 'string (required) — team slug' } },
+  { name: 'list_team_members', description: 'List agents in a team with name, displayName, teamRole, capabilities, tools, spawnTargets.', params: { team_name: 'string (required) — team slug' } },
   { name: 'create_team', description: 'Create a team. Lead agent must exist first (call create_agent for the lead first).', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', description: 'string', mission: 'string', leadAgentName: 'string (required) — lead agent name', parentTeamName: 'string — optional parent team' } },
   { name: 'update_team', description: 'Update a team\'s displayName, description, mission, or parent. Built-in teams cannot be updated.', params: { name: 'string (required)', displayName: 'string', description: 'string', mission: 'string', parentTeamName: 'string' } },
   { name: 'delete_team', description: 'Delete a team. Refuses if it has members. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
@@ -203,17 +203,12 @@ const TOOLS = [
   { name: 'create_workspace_for_pr', description: 'Create a fresh workspace from a PR branch (Flow B). Used when a PR has no linked workspace. Polls until setup completes. Returns { workspace_id, worktree_path, branch, base_branch }.', params: { pr_url: 'string (required)', repo_id: 'string (required)', branch: 'string (required) — PR head branch', base_branch: 'string (required) — PR base branch', pr_number: 'number (required)', pr_title: 'string — optional display name' } },
   { name: 'create_workspace', description: 'Create an isolated git worktree from a registered repo, on a new branch off the base branch. Use this whenever code changes are needed — every specialist agent you spawn must work inside this worktree. Returns { workspace_id, worktree_path, branch, base_branch }. Engineering-lead orchestrators are the expected caller; never call this from a worker/specialist agent.', params: { repo_path: 'string (required) — absolute path of a registered repo or an existing worktree whose repo will be used as the base', branch_prefix: 'string — short label prepended to the generated branch (e.g. "feature", "fix"). Default: "feature".', task_summary: 'string — one-line intent used inside the generated branch name for human readability', base_branch: 'string — branch to cut from. Defaults to the repo\'s detected default branch (captured at scan time); falls back to "main" only if the repo record has no defaultBranch. Pass this explicitly only when you need to cut from a non-default branch.' } },
 
-  // ── Delegation & Communication ──
-  { name: 'delegate_to_agent', description: 'Delegate a task to another agent. Pass conversation_id to continue an existing thread.', params: { agent_name: 'string (required)', task: 'string (required)', context: 'object — relevant context', conversation_id: 'string — existing conversation ID to continue' } },
-  { name: 'wait_for_delegation', description: 'Wait for a delegated task to finish. Blocks up to 90s. If "waiting" call again. If "question" — answer via answer_delegator then call again.', params: { conversation_id: 'string (required)' } },
-  { name: 'answer_delegator', description: 'Answer a question from an agent you delegated to. Use when wait_for_delegation returns status="question".', params: { conversation_id: 'string (required)', answer: 'string (required)' } },
-  { name: 'ask_delegator', description: 'Ask a question to the agent who delegated this task to you. Blocks until they answer.', params: { question: 'string (required)', conversation_id: 'string — optional, auto-detected from context' } },
+  // ── Communication ──
   { name: 'ask_user', description: 'Ask the user a question directly. Blocks until they answer. Only use when no agent can help.', params: { question: 'string (required)' } },
-  { name: 'report_to_user', description: 'Send a progress update to the user during a delegation chain.', params: { message: 'string (required)', status: 'string — in_progress | completed | needs_input' } },
+  { name: 'report_to_user', description: 'Send a progress update to the user during a long-running chat, workflow, or spawned-agent run.', params: { message: 'string (required)', status: 'string — in_progress | completed | needs_input' } },
 
   // ── Self-introspection ──
   { name: 'get_my_session_history', description: 'Get your own chat session message history. Use to re-read the user\'s original request or see your prior responses.', params: { limit: 'number — max messages (default 30, max 100)' } },
-  { name: 'get_my_delegation_thread', description: 'Get messages in your current delegation thread. Only works for delegated agents.', params: {} },
 
   // ── Chat conversation tracing (arbitrary sessions) ──
   //
@@ -223,12 +218,10 @@ const TOOLS = [
   //   chat_sessions       → provider, model, activeAgent, agentOverrides
   //   chat_messages       → full user/assistant/tool turns + persisted toolCalls
   //   chat_logs           → per-turn trace: provider, model, trace, cost, duration, status
-  //   agent_conversations → agent-to-agent delegation threads spawned from the chat
   { name: 'get_chat_session', description: 'Get chat session metadata for any session id: provider, model, activeAgent, agentOverrides, llmSessionId, userId, createdAt. Use to answer "which provider/model is this chat configured for?".', params: { session_id: 'string (required) — chat_sessions _id' } },
   { name: 'get_chat_messages', description: 'Paginated read of the chat_messages collection for a session. Returns user + assistant turns, including persisted toolCalls on assistant rows. Pass before=<timestamp|id> to page backward.', params: { session_id: 'string (required)', limit: 'number — max messages per page (default 50, max 200)', before: 'string — cursor for older pages' } },
   { name: 'get_chat_logs', description: 'Read the chat_logs collection for a session (full per-turn trace: provider, model, trace, toolCalls, cost, duration, status). Newest-first ordering, then reversed to chronological on return.', params: { session_id: 'string (required)', limit: 'number — max logs (default 50, max 200)' } },
   { name: 'get_chat_log', description: 'Drill into one chat_log row by its Mongo _id. Full trace/toolCalls/prompt, not truncated. Pair with get_chat_logs to locate the id.', params: { log_id: 'string (required) — chat_logs _id' } },
-  { name: 'get_chat_threads', description: 'List agent-to-agent delegation conversations spawned from this chat session. Shows which agents were invoked, their prompts, and statuses.', params: { session_id: 'string (required)' } },
 
   // ── Self-healing monitoring evidence + incident state ──
   { name: 'allen_monitoring_get_scan_cursor', description: 'Read the self-healing monitoring cursor. Use before planning an hourly scan window.', params: { name: 'string — cursor name, default hourly-agent' } },
@@ -920,13 +913,6 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       if (!res.ok) return { error: `chat_log ${lid} not found (${res.status})` };
       return res.json();
     }
-    case 'get_chat_threads': {
-      const sid = args.session_id as string | undefined;
-      if (!sid) return { error: 'session_id is required' };
-      const res = await fetch(`${API_BASE}/api/chat/sessions/${encodeURIComponent(sid)}/threads`);
-      if (!res.ok) return { error: `chat_threads lookup failed (${res.status})` };
-      return res.json();
-    }
     case 'search_executions': {
       const params = new URLSearchParams();
       if (args.status) params.set('status', String(args.status));
@@ -950,61 +936,6 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
           confidence: 0.9,
           status: 'active',
         }),
-      });
-      return res.json();
-    }
-    case 'delegate_to_agent': {
-      const url = `${API_BASE}/api/chat/delegate`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_name: args.agent_name, task: args.task, context: args.context, conversation_id: args.conversation_id }),
-      });
-      return res.json();
-    }
-    case 'wait_for_delegation': {
-      // Chunked long-poll: wait up to 90s (under MCP's 120s transport timeout), then return
-      // If still active, return { status: "waiting" } so the LLM calls again
-      const convId = args.conversation_id;
-      let waitMs = 5000;
-      const maxWait = 30_000;
-      const chunkDeadline = Date.now() + 90_000; // 90s max per call
-      while (Date.now() < chunkDeadline) {
-        const res = await fetch(`${API_BASE}/api/chat/delegation/${convId}/status`);
-        const data = await res.json() as Record<string, unknown>;
-        // Return immediately for anything except 'active' (completed, failed, waiting_for_answer)
-        if (data.status !== 'active') {
-          // Map waiting_for_answer to 'question' for the LLM
-          if (data.status === 'waiting_for_answer') data.status = 'question';
-          return data;
-        }
-        process.stderr.write(`[mcp] waiting for delegation ${convId} (${Math.round(waitMs / 1000)}s interval)\n`);
-        await new Promise(r => setTimeout(r, waitMs));
-        waitMs = Math.min(waitMs * 1.3, maxWait);
-      }
-      // Return "waiting" so the LLM calls wait_for_delegation again
-      return {
-        conversation_id: convId,
-        status: 'waiting',
-        message: 'Agent is still working. Call wait_for_delegation again — it will continue waiting.',
-      };
-    }
-    case 'answer_delegator': {
-      const url = `${API_BASE}/api/chat/delegate`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tool: 'answer_delegator', conversation_id: args.conversation_id, answer: args.answer }),
-      });
-      return res.json();
-    }
-    case 'ask_delegator': {
-      // Blocks server-side until the caller answers
-      const url = `${API_BASE}/api/chat/ask-caller`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversation_id: args.conversation_id, question: args.question }),
       });
       return res.json();
     }
