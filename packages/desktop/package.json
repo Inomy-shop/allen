@@ -11,6 +11,7 @@
     "preseed:mongo": "node ./scripts/preseed-mongo.mjs",
     "dist:mac": "npm run package:prepare && npm run preseed:mongo && cd ../.. && electron-builder --projectDir . --config packages/desktop/electron-builder.yml --mac",
     "dist:mac:unsigned": "npm run package:prepare && npm run preseed:mongo && cd ../.. && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --projectDir . --config packages/desktop/electron-builder.yml --mac",
+    "release:mac:local": "bash ../../scripts/release-mac-local.sh",
     "smoke:packaged": "node ./scripts/smoke-packaged.mjs",
     "smoke:packaged:ui": "node ./scripts/smoke-packaged-ui.mjs",
     "lint": "tsc --noEmit",

@@ -65,6 +65,7 @@ mac:
   category: public.app-category.developer-tools
   hardenedRuntime: true
   gatekeeperAssess: false
+  notarize: true
   entitlements: packages/desktop/build/entitlements.mac.plist
   entitlementsInherit: packages/desktop/build/entitlements.mac.plist
   target:

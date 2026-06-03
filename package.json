@@ -20,6 +20,7 @@
     "build": "npm --workspace @allen/engine run build && npm --workspace @allen/server run build && npm --workspace @allen/ui run build && npm --workspace @allen/desktop run build",
     "lint": "npm --workspace @allen/engine run lint && npm --workspace @allen/server run lint && npm --workspace @allen/ui run lint && npm --workspace @allen/desktop run lint",
     "test": "npm --workspace @allen/engine run test && npm --workspace @allen/server run test && npm --workspace @allen/ui run test && npm --workspace @allen/desktop run test",
+    "release:mac:local": "bash scripts/release-mac-local.sh",
     "dev:web": "concurrently -k -n engine,server,ui -c blue,green,magenta \"npm --workspace @allen/engine run dev\" \"npm --workspace @allen/server run dev\" \"npm --workspace @allen/ui run dev -- --host 127.0.0.1\""
   },
   "packageManager": "npm@10.0.0",

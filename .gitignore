@@ -5,6 +5,7 @@ dist/
 **/.next/
 *.tsbuildinfo
 .env
+.env.signing.local
 secrets.yml
 data/
 uploads/

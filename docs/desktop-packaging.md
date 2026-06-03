@@ -17,6 +17,36 @@ npm --workspace @allen/desktop run dist:mac
 
 The builder config lives in `packages/desktop/electron-builder.yml`.
 
+## Local Signed Release
+
+For a public macOS release built from a local Mac, copy the signing template and
+fill it with the Apple Developer credentials:
+
+```bash
+cp .env.signing.example .env.signing.local
+```
+
+By default, each release run asks whether to use `patch`, `minor`, `major`,
+`none`, or an exact version before building. Set `RELEASE_VERSION_BUMP` in
+`.env.signing.local` to a fixed value like `patch`, `minor`, `major`, `1.2.3`,
+or `none` if you do not want the prompt.
+
+Use either a Keychain-installed `Developer ID Application` identity or a `.p12`
+via `CSC_LINK`. The same env file also supports notarization through an Apple ID
+app-specific password, a stored `notarytool` keychain profile, or an App Store
+Connect API key.
+
+Then run:
+
+```bash
+npm run release:mac:local
+```
+
+The script validates the signing identity, checks notarization credentials,
+bumps and synchronizes the root and desktop package versions, runs the macOS
+release build, verifies the code signature, checks Gatekeeper assessment, and
+validates the stapled notarization ticket.
+
 ## Local Package Smoke
 
 After producing the local `--dir` package, validate the packaged runtime with:
