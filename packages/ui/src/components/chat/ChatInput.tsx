@@ -654,7 +654,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           </div>
         )}
         <div
-          className="pointer-events-none absolute right-2 top-2 hidden items-center gap-1.5 font-mono text-[10px] text-theme-subtle sm:flex"
+          className="pointer-events-none absolute right-2 top-2 hidden items-center gap-1 font-mono text-[9px] text-theme-subtle sm:flex"
           aria-label="Shift Enter for new line"
           title="Shift + Enter for new line"
         >
@@ -676,7 +676,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           placeholder={CHAT_PLACEHOLDER}
           disabled={disabled}
           rows={1}
-          className="w-full resize-none bg-transparent px-2 py-1.5 pr-48 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full resize-none bg-transparent px-2 py-1.5 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ minHeight: `${TEXTAREA_MIN_HEIGHT}px`, maxHeight: `${TEXTAREA_MAX_HEIGHT}px`, overflowY: 'hidden' }}
         />
 

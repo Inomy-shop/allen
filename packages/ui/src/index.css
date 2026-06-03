@@ -10211,10 +10211,16 @@
     width: 100%;
     border: 0;
     background: transparent;
-    padding: 4px 2px;
+    /* Reserve right padding for the Shift+Enter hint (~8px offset + ~76px hint = ~84px).
+       Using explicit per-side padding here because the shorthand would reset padding-right
+       and override any Tailwind utility class (lower specificity) on the textarea element. */
+    padding-top: 4px;
+    padding-bottom: 4px;
+    padding-left: 2px;
+    padding-right: 90px;
     color: rgb(var(--color-text-primary));
     font: inherit;
-    font-size: 14px;
+    font-size: 13px;
     line-height: 1.55;
     outline: none;
     resize: none;
