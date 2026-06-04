@@ -170,8 +170,36 @@ function pickReply(script: Script, node: string, visitCount: number): AgentReply
   return entry[idx];
 }
 
+function applyReply(state: Record<string, unknown>, wf: WorkflowDef, nodeName: string, reply: AgentReply): void {
+  Object.assign(state, reply);
+  const nodes = (state.nodes && typeof state.nodes === 'object' && !Array.isArray(state.nodes))
+    ? state.nodes as Record<string, Record<string, unknown>>
+    : {};
+  nodes[nodeName] = { ...reply };
+  state.nodes = nodes;
+
+  if (wf.nodes[nodeName]?.type !== 'human') return;
+  const human = (state.human && typeof state.human === 'object' && !Array.isArray(state.human))
+    ? state.human as Record<string, { latest?: unknown; events: unknown[] }>
+    : {};
+  const current = human[nodeName] ?? { events: [] };
+  const fields = Object.entries(reply).map(([name, value]) => ({ name, label: name, value }));
+  const decision = reply.approval_decision ?? reply.decision ?? reply.escalation_decision ?? reply.severity;
+  const feedback = reply.approval_feedback ?? reply.feedback ?? reply.escalation_feedback;
+  const latest = {
+    sourceNode: nodeName,
+    kind: 'review',
+    decision,
+    feedback: feedback == null ? undefined : { label: 'Feedback', value: feedback },
+    fields,
+    fieldsByName: Object.fromEntries(fields.map((field) => [field.name, field])),
+  };
+  human[nodeName] = { latest, events: [...current.events, latest] };
+  state.human = human;
+}
+
 function simulate(wf: WorkflowDef, script: Script, initialInput: Record<string, unknown>): SimResult {
-  const state: Record<string, unknown> = { ...initialInput };
+  const state: Record<string, unknown> = { ...initialInput, inputs: { ...initialInput }, nodes: {}, human: {} };
   const visited: string[] = [];
   const visitCounts = new Map<string, number>();
   const retryCounts = new Map<string, number>();
@@ -187,7 +215,7 @@ function simulate(wf: WorkflowDef, script: Script, initialInput: Record<string, 
       const visitCount = visitCounts.get(current) ?? 0;
       visitCounts.set(current, visitCount + 1);
       const reply = pickReply(script, current, visitCount);
-      Object.assign(state, reply);
+      applyReply(state, wf, current, reply);
     }
 
     const fromName = current === 'START' ? 'START' : current;
@@ -241,7 +269,7 @@ function simulate(wf: WorkflowDef, script: Script, initialInput: Record<string, 
             const vc = visitCounts.get(t) ?? 0;
             visitCounts.set(t, vc + 1);
             const reply = pickReply(script, t, vc);
-            Object.assign(state, reply);
+            applyReply(state, wf, t, reply);
           }
           nextNode = tos[tos.length - 1] as string;
         } else {

@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { system } from '../services/api';
+import { useAuthStore } from '../stores/authStore';
 
-type OnboardingStep = 'health' | 'repository' | 'first_workflow';
+type OnboardingStep = 'health' | 'model_defaults' | 'repository' | 'first_workflow';
 
 export function useOnboardingGate(step: OnboardingStep): boolean {
   const navigate = useNavigate();
+  const user = useAuthStore((s) => s.user);
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
@@ -14,6 +16,10 @@ export function useOnboardingGate(step: OnboardingStep): boolean {
     async function check() {
       setChecking(true);
       try {
+        if (user && user.role !== 'admin') {
+          navigate('/', { replace: true });
+          return;
+        }
         const status = await system.onboardingStatus();
         if (cancelled) return;
         if (status.isFirstRun) {
@@ -36,7 +42,7 @@ export function useOnboardingGate(step: OnboardingStep): boolean {
 
     void check();
     return () => { cancelled = true; };
-  }, [navigate, step]);
+  }, [navigate, step, user]);
 
   return checking;
 }

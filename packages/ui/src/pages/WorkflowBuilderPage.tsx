@@ -224,7 +224,7 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
   return (
     <div className="flex flex-col h-full">
       {/* Top bar */}
-      <header className="flex items-center justify-between px-4 py-2.5 border-b border-app shrink-0">
+      <header className={`flex items-center justify-between border-b border-app shrink-0 ${embedded ? 'px-4 py-2.5' : 'px-8 pb-3 pt-8'}`}>
         <div className="flex items-center gap-3">
           <button
             onClick={() => {

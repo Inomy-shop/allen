@@ -1,6 +1,6 @@
 {
-  "name": "allen",
-  "version": "0.1.0",
+  "name": "allen-desktop",
+  "version": "0.1.3",
   "private": true,
   "description": "An agentic operating system for software development — assign, coordinate, observe, and improve AI agents across real engineering workflows.",
   "license": "MIT",
@@ -16,30 +16,22 @@
     "node": ">=22",
     "npm": ">=10"
   },
+  "scripts": {
+    "build": "npm --workspace @allen/engine run build && npm --workspace @allen/server run build && npm --workspace @allen/ui run build && npm --workspace @allen/desktop run build",
+    "lint": "npm --workspace @allen/engine run lint && npm --workspace @allen/server run lint && npm --workspace @allen/ui run lint && npm --workspace @allen/desktop run lint",
+    "test": "npm --workspace @allen/engine run test && npm --workspace @allen/server run test && npm --workspace @allen/ui run test && npm --workspace @allen/desktop run test",
+    "release:mac:local": "bash scripts/release-mac-local.sh",
+    "dev:web": "concurrently -k -n engine,server,ui -c blue,green,magenta \"npm --workspace @allen/engine run dev\" \"npm --workspace @allen/server run dev\" \"npm --workspace @allen/ui run dev -- --host 127.0.0.1\""
+  },
   "packageManager": "npm@10.0.0",
   "workspaces": [
     "packages/*"
   ],
-  "scripts": {
-    "setup": "bash scripts/setup.sh",
-    "setup:context": "bash scripts/setup-context-engine.sh",
-    "health": "npm --workspace @allen/server run health --",
-    "start": "turbo run dev",
-    "dev": "turbo run dev",
-    "build": "turbo run build",
-    "lint": "turbo run lint",
-    "test": "turbo run test",
-    "test:e2e": "playwright install chromium && tsx scripts/e2e-preauth.ts && playwright test",
-    "test:e2e:ui": "playwright install chromium && tsx scripts/e2e-preauth.ts && playwright test --ui",
-    "test:e2e:headed": "playwright install chromium && tsx scripts/e2e-preauth.ts && playwright test --headed",
-    "test:e2e:dev": "tsx scripts/e2e-preauth.ts && E2E_REUSE_DEV_SERVER=1 playwright test",
-    "test:e2e:report": "playwright show-report"
+  "dependencies": {
+    "@allen/desktop": "*"
   },
+  "main": "packages/desktop/dist/main.js",
   "devDependencies": {
-    "@playwright/test": "^1.59.1",
-    "@types/ws": "^8.18.1",
-    "turbo": "^2.4.0",
-    "typescript": "^5.7.0",
-    "vitest": "^2.1.8"
+    "concurrently": "^10.0.0"
   }
 }

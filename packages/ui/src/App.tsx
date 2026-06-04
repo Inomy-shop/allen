@@ -1,38 +1,41 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import NotificationBell from './components/common/NotificationBell';
+import ShortcutKey from './components/common/ShortcutKey';
 import {
-  GitBranch, Play, Users, Settings,
-  FolderGit2, MessageSquare,
-  ChevronRight, ChevronLeft,
-  GitPullRequest, Ticket, LogOut,
-  Sun, Moon, Search, PanelLeft, Command, ArrowRight,
-  Sparkles,
+  CirclePlay, GitBranch, GitPullRequest, History, LayoutDashboard, Settings,
+  FolderGit2, TicketCheck, Workflow,
+  ChevronRight, Plus,
+  Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
+  SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
 import { useAuthStore } from './stores/authStore';
 import { BRAND_NAME } from './lib/brand';
 import {
-  auth as authApi,
   chat as chatApi,
-  dashboard as dashboardApi,
   executions as executionsApi,
   interventions as interventionsApi,
-  linear as linearApi,
 } from './services/api';
-import { pullRequests as pullRequestsApi, workspaces as workspacesApi } from './services/workspaceService';
+import { workspaces as workspacesApi } from './services/workspaceService';
 import { usePanelLayout } from './hooks/usePanelLayout';
+import { WorkspaceCreateDialog, type WorkspaceCreateRepo } from './components/workspace/WorkspaceCreateDialog';
 
 interface NavItem {
   to: string;
   icon: React.ComponentType<{ className?: string }>;
   label: string;
-  badgeKey?: keyof NavCounts;
   activePrefixes?: string[];
   end?: boolean;
-  children?: Array<{ to: string; label: string }>;
+}
+
+interface NavGroup {
+  id: string;
+  label?: string;
+  dividerBefore?: boolean;
+  items: NavItem[];
 }
 
 interface CommandItem {
@@ -43,58 +46,68 @@ interface CommandItem {
   icon: React.ComponentType<{ className?: string }>;
 }
 
-interface NavCounts {
-  mywork?: number;
-  chats?: number;
-  tickets?: number;
-  pulls?: number;
-  workspaces?: number;
-  activity?: number;
+type SidebarPanelId = 'workspaces' | 'navigation';
+
+interface SidebarWorkspace {
+  _id: string;
+  name: string;
+  repoId?: string;
+  repoName?: string;
+  repoPath?: string;
+  branch?: string;
+  status?: string;
+  source?: string;
+  prNumber?: number;
+  updatedAt?: string;
+  createdAt?: string;
 }
 
-// ── Nav Groups (prototype direction: personal work, sources, org) ──
+// ── Nav Groups (Allen design system: flat navigation with subtle dividers) ──
 
-const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
-  { label: '', items: [
-    { to: '/', icon: Sparkles, label: 'new chat', badgeKey: 'mywork', end: true },
-    { to: '/executions', icon: Play, label: 'executions', badgeKey: 'activity', activePrefixes: ['/executions'] },
-    { to: '/chats', icon: MessageSquare, label: 'chats', badgeKey: 'chats', activePrefixes: ['/chats', '/chat'] },
+const NAV_GROUPS: NavGroup[] = [
+  { id: 'primary', items: [
+    { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
+    { to: '/executions', icon: CirclePlay, label: 'Executions', activePrefixes: ['/executions'] },
+    { to: '/chats', icon: History, label: 'History', activePrefixes: ['/chats', '/chat'] },
   ]},
-  { label: 'Sources', items: [
-    { to: '/tickets', icon: Ticket, label: 'tickets', badgeKey: 'tickets' },
-    { to: '/pull-requests', icon: GitPullRequest, label: 'pull requests', badgeKey: 'pulls' },
-    { to: '/workspaces', icon: FolderGit2, label: 'workspaces', badgeKey: 'workspaces' },
+  { id: 'sources', dividerBefore: true, items: [
+    { to: '/tickets', icon: TicketCheck, label: 'Linear' },
+    { to: '/pull-requests', icon: GitPullRequest, label: 'Pull requests' },
+    { to: '/agents?section=repos', icon: GitBranch, label: 'Repositories' },
+    { to: '/workspaces', icon: FolderGit2, label: 'Workspaces' },
   ]},
-  { label: 'Org', items: [
-    {
-      to: '/agents',
-      icon: Users,
-      label: 'library',
-      activePrefixes: ['/agents', '/repos'],
-      children: [
-        { to: '/agents?section=teams-agents', label: 'teams & agents' },
-        { to: '/agents?section=skills', label: 'skills' },
-        { to: '/agents?section=repos', label: 'repos' },
-        { to: '/agents?section=integrations', label: 'integrations' },
-      ],
-    },
-    { to: '/workflows', icon: GitBranch, label: 'workflows', activePrefixes: ['/workflows'] },
+  { id: 'studio', dividerBefore: true, items: [
+    { to: '/agents?section=teams-agents', icon: UsersRound, label: 'Teams & Agents' },
+    { to: '/workflows', icon: Workflow, label: 'Workflows', activePrefixes: ['/workflows'] },
   ]},
-  { label: 'Personal', items: [
-    { to: '/settings', icon: Settings, label: 'settings', activePrefixes: ['/settings'] },
+];
+
+const SETTINGS_NAV_GROUPS: NavGroup[] = [
+  { id: 'settings-primary', items: [
+    { to: '/settings/general', icon: SlidersHorizontal, label: 'General', activePrefixes: ['/settings/general'], end: true },
+    { to: '/settings/runtime', icon: HardDrive, label: 'Runtime', activePrefixes: ['/settings/runtime'] },
+    { to: '/settings/mcp', icon: Server, label: 'MCP Servers', activePrefixes: ['/settings/mcp'] },
+  ]},
+  { id: 'settings-allen', label: 'Allen', items: [
+    { to: '/settings/schedules', icon: CalendarClock, label: 'Schedules', activePrefixes: ['/settings/schedules'] },
+    { to: '/settings/learnings', icon: Brain, label: 'Learnings', activePrefixes: ['/settings/learnings'] },
+    { to: '/settings/team', icon: UsersRound, label: 'Team', activePrefixes: ['/settings/team'] },
+  ]},
+  { id: 'settings-account', label: 'User', items: [
+    { to: '/settings/account', icon: CircleUserRound, label: 'Account', activePrefixes: ['/settings/account'] },
   ]},
 ];
 
 const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
-  { prefix: '/chats', label: 'Chats' },
-  { prefix: '/threads', label: 'Chats' },
+  { prefix: '/chats', label: 'History' },
+  { prefix: '/threads', label: 'History' },
   { prefix: '/chat', label: 'Chat' },
   { prefix: '/interventions', label: 'Interventions' },
-  { prefix: '/tickets', label: 'Tickets' },
+  { prefix: '/tickets', label: 'Linear' },
   { prefix: '/pull-requests', label: 'Pull requests' },
   { prefix: '/repos', label: 'Repositories' },
   { prefix: '/workspaces', label: 'Workspaces' },
-  { prefix: '/agents', label: 'Library' },
+  { prefix: '/agents', label: 'Studio' },
   { prefix: '/workflows', label: 'Workflows' },
   { prefix: '/executions', label: 'Executions' },
   { prefix: '/crons', label: 'Schedules' },
@@ -104,48 +117,118 @@ const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
 ];
 
 const COMMANDS: CommandItem[] = [
-  { id: 'my-work', label: 'Go to new chat', group: 'Navigate', to: '/', icon: Sparkles },
-  { id: 'executions', label: 'Open executions', group: 'Navigate', to: '/executions', icon: Play },
-  { id: 'chats', label: 'Open chats', group: 'Navigate', to: '/chats', icon: MessageSquare },
-  { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: MessageSquare },
-  { id: 'activity', label: 'View execution log', group: 'Executions', to: '/executions', icon: Play },
-  { id: 'running', label: 'View running executions', group: 'Executions', to: '/executions?status=running', icon: Play },
-  { id: 'tickets', label: 'Open Linear tickets', group: 'Sources', to: '/tickets', icon: Ticket },
+  { id: 'dashboard', label: 'Open dashboard', group: 'Navigate', to: '/', icon: LayoutDashboard },
+  { id: 'executions', label: 'Open executions', group: 'Navigate', to: '/executions', icon: CirclePlay },
+  { id: 'chats', label: 'Open history', group: 'Navigate', to: '/chats', icon: History },
+  { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: History },
+  { id: 'activity', label: 'View execution log', group: 'Executions', to: '/executions', icon: CirclePlay },
+  { id: 'running', label: 'View running executions', group: 'Executions', to: '/executions?status=running', icon: CirclePlay },
+  { id: 'tickets', label: 'Open Linear', group: 'Sources', to: '/tickets', icon: TicketCheck },
   { id: 'pulls', label: 'Open pull requests', group: 'Sources', to: '/pull-requests', icon: GitPullRequest },
-  { id: 'workspaces', label: 'Open workspaces', group: 'Code', to: '/workspaces', icon: FolderGit2 },
-  { id: 'schedules', label: 'Open scheduled jobs', group: 'Settings', to: '/settings/schedules', icon: Settings },
-  { id: 'analytics', label: 'Open analytics', group: 'Settings', to: '/settings/analytics', icon: Settings },
-  { id: 'learnings', label: 'Open learnings', group: 'Settings', to: '/settings/learnings', icon: Settings },
-  { id: 'workflows', label: 'Open workflows', group: 'Library', to: '/workflows', icon: GitBranch },
-  { id: 'agents', label: 'Open agents and teams', group: 'Library', to: '/agents', icon: Users },
+  { id: 'repos', label: 'Open repositories', group: 'Sources', to: '/agents?section=repos', icon: GitBranch },
+  { id: 'workspaces', label: 'Open workspaces', group: 'Sources', to: '/workspaces', icon: FolderGit2 },
+  { id: 'settings-general', label: 'Open settings', group: 'Settings', to: '/settings/general', icon: SlidersHorizontal },
+  { id: 'settings-runtime', label: 'Open runtime settings', group: 'Settings', to: '/settings/runtime', icon: HardDrive },
+  { id: 'settings-mcp', label: 'Open MCP servers', group: 'Settings', to: '/settings/mcp', icon: Server },
+  { id: 'settings-schedules', label: 'Open schedules', group: 'Settings', to: '/settings/schedules', icon: CalendarClock },
+  { id: 'settings-learnings', label: 'Open learnings', group: 'Settings', to: '/settings/learnings', icon: Brain },
+  { id: 'workflows', label: 'Open workflows', group: 'Studio', to: '/workflows', icon: Workflow },
+  { id: 'agents', label: 'Open teams & agents', group: 'Studio', to: '/agents?section=teams-agents', icon: UsersRound },
 ];
 
-function routeTitle(pathname: string): string {
-  if (pathname === '/') return 'New Chat';
+const SIDEBAR_PANEL_ORDER: SidebarPanelId[] = ['navigation', 'workspaces'];
+const SIDEBAR_PANEL_LABELS: Record<SidebarPanelId, string> = {
+  workspaces: 'Workspaces',
+  navigation: 'App navigation',
+};
+const WORKSPACE_REPO_COLLAPSE_KEY = 'allen-app-sidebar-collapsed-workspace-repos';
+const SETTINGS_ROUTE_DETAILS: Array<{ prefix: string; label: string }> = [
+  { prefix: '/settings/runtime', label: 'Runtime' },
+  { prefix: '/settings/mcp', label: 'MCP Servers' },
+  { prefix: '/settings/schedules', label: 'Schedules' },
+  { prefix: '/settings/learnings', label: 'Learnings' },
+  { prefix: '/settings/team', label: 'Team' },
+  { prefix: '/settings/account', label: 'Account' },
+  { prefix: '/settings/general', label: 'General' },
+  { prefix: '/settings', label: 'General' },
+];
+
+function loadCollapsedWorkspaceRepos(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = window.localStorage.getItem(WORKSPACE_REPO_COLLAPSE_KEY);
+    return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveCollapsedWorkspaceRepos(value: Set<string>) {
+  try {
+    window.localStorage.setItem(WORKSPACE_REPO_COLLAPSE_KEY, JSON.stringify(Array.from(value)));
+  } catch {
+    // Ignore storage failures; the sidebar still works without persistence.
+  }
+}
+
+function sidebarWorkspaceTime(workspace: SidebarWorkspace): number {
+  const raw = workspace.updatedAt ?? workspace.createdAt ?? '';
+  const time = raw ? new Date(raw).getTime() : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function workspaceRepoLabel(workspace: SidebarWorkspace): string {
+  return workspace.repoName
+    ?? workspace.repoPath?.split('/').filter(Boolean).at(-1)
+    ?? 'Unknown repo';
+}
+
+function routeTitle(pathname: string, search = ''): string {
+  if (pathname === '/') return 'Dashboard';
+  if (pathname.startsWith('/agents')) {
+    const params = new URLSearchParams(search);
+    const section = params.get('section') ?? params.get('tab') ?? 'teams-agents';
+    if (section === 'repos') return 'Repositories';
+    if (section === 'skills') return 'Skills';
+    if (section === 'integrations') return 'Integrations';
+    return 'Teams & Agents';
+  }
   const match = ROUTE_TITLES.find(route => pathname.startsWith(route.prefix));
   return match?.label ?? 'Allen';
+}
+
+function routeDetail(pathname: string, chatTopbarTitle: string | null): string | null {
+  if (/^\/repos\/[^/]+\/context-management/.test(pathname)) return 'Context Management';
+  if (/^\/chat\/[^/]+/.test(pathname)) return chatTopbarTitle;
+  const settingsDetail = SETTINGS_ROUTE_DETAILS.find(route => pathname.startsWith(route.prefix));
+  if (settingsDetail) return settingsDetail.label;
+  return null;
 }
 
 function AppTopbar({
   title,
   detail,
   liveCount,
-  healthy,
+  approvalCount,
   commandOpen,
   onCommandOpen,
   onRunningOpen,
   onSidebarToggle,
+  onBack,
+  canGoBack,
   colorMode,
   onColorModeToggle,
 }: {
   title: string;
   detail?: string | null;
   liveCount: number;
-  healthy: boolean;
+  approvalCount: number;
   commandOpen: boolean;
   onCommandOpen: () => void;
   onRunningOpen: () => void;
   onSidebarToggle: () => void;
+  onBack: () => void;
+  canGoBack: boolean;
   colorMode: 'light' | 'dark';
   onColorModeToggle: () => void;
 }) {
@@ -154,17 +237,28 @@ function AppTopbar({
       <button
         type="button"
         onClick={onSidebarToggle}
-        className="btn ghost sm"
+        className="foot-btn topbar-icon-btn"
         title="Toggle sidebar"
         aria-label="Toggle sidebar"
       >
         <PanelLeft className="h-4 w-4" />
       </button>
 
+      <button
+        type="button"
+        onClick={onBack}
+        disabled={!canGoBack}
+        className="foot-btn topbar-icon-btn disabled:cursor-not-allowed disabled:opacity-40"
+        title="Go back"
+        aria-label="Go back"
+      >
+        <ArrowLeft className="h-4 w-4" />
+      </button>
+
       <div className="crumb">
         <span>allen</span>
         <span className="sep">/</span>
-        <span className="now">{title}</span>
+        <span className={detail ? undefined : 'now'}>{title}</span>
         {detail && (
           <>
             <span className="sep">/</span>
@@ -175,19 +269,22 @@ function AppTopbar({
 
       <div className="spacer" />
 
-      <div className="hidden items-center gap-1.5 md:flex">
+      <div className="topbar-status hidden md:flex">
         <button
           type="button"
           onClick={onRunningOpen}
-          className="chip"
+          className="chip topbar-chip"
           title="Active runs across all workspaces"
         >
           <span className={`dot ${liveCount > 0 ? 'dot-run' : 'dot-idle'} ${liveCount > 0 ? 'animate-pulse' : ''}`} />
-          {liveCount} live
+          {liveCount} running
         </button>
-        <span className={healthy ? 'chip chip-ok' : 'chip chip-warn'}>
-          <span className={healthy ? 'dot dot-ok' : 'dot dot-warn'} />
-          {healthy ? 'healthy' : 'checking'}
+        <span
+          className="chip topbar-chip"
+          title="Pending approvals and questions"
+        >
+          <span className={`dot ${approvalCount > 0 ? 'dot-warn' : 'dot-idle'}`} />
+          {approvalCount} approvals
         </span>
       </div>
 
@@ -199,13 +296,13 @@ function AppTopbar({
       >
         <Search className="h-3.5 w-3.5" />
         <span className="flex-1">Search or run command</span>
-        <kbd>⌘K</kbd>
+        <ShortcutKey value="⌘K" />
       </button>
 
       <button
         type="button"
         onClick={onColorModeToggle}
-        className="btn ghost sm"
+        className="foot-btn topbar-icon-btn"
         title={`Switch to ${colorMode === 'dark' ? 'light' : 'dark'} mode`}
         aria-label="Toggle theme"
       >
@@ -292,7 +389,7 @@ function ShellCommandPalette({
             placeholder="Search navigation and actions..."
             className="flex-1 bg-transparent text-[14px] text-theme-primary outline-none placeholder:text-theme-subtle"
           />
-          <kbd className="rounded border border-app bg-app-muted px-1.5 py-0.5 font-mono text-[10px] text-theme-subtle">esc</kbd>
+          <ShortcutKey value="esc" className="h-5 min-w-[30px]" />
         </div>
         <div className="max-h-[360px] overflow-y-auto py-2">
           {filtered.length === 0 ? (
@@ -331,19 +428,7 @@ function ShellCommandPalette({
   );
 }
 
-function formatNavBadge(value?: number): string | null {
-  if (!value || value <= 0) return null;
-  if (value > 99) return '99+';
-  return String(value);
-}
-
-function isNavItemActive(item: NavItem, pathname: string, isActive: boolean): boolean {
-  if (item.end) return pathname === item.to;
-  if (item.activePrefixes?.some(prefix => pathname.startsWith(prefix))) return true;
-  return isActive;
-}
-
-function isNavChildActive(to: string, location: ReturnType<typeof useLocation>): boolean {
+function navTargetMatches(to: string, location: ReturnType<typeof useLocation>): boolean {
   const [path, query = ''] = to.split('?');
   if (location.pathname !== path) return false;
   if (!query) return true;
@@ -356,43 +441,48 @@ function isNavChildActive(to: string, location: ReturnType<typeof useLocation>):
   return true;
 }
 
+function isNavItemActive(
+  item: NavItem,
+  location: ReturnType<typeof useLocation>,
+  isActive = false,
+): boolean {
+  if (navTargetMatches(item.to, location)) return true;
+  if (item.end) return location.pathname === item.to;
+  if (item.activePrefixes?.some(prefix => location.pathname.startsWith(prefix))) return true;
+  if (item.to.includes('?')) return false;
+  return isActive;
+}
+
 // ── Main App ──
 
 export default function App() {
-  const initSettings = useSettingsStore((s) => s.initFromLocalStorage);
-  const addSystemThemeListener = useSettingsStore((s) => s.addSystemThemeListener);
-  useEffect(() => { initSettings(); }, [initSettings]);
-
-  useEffect(() => {
-    const cleanup = addSystemThemeListener();
-    return cleanup;
-  }, [addSystemThemeListener]);
-
   const location = useLocation();
   const navigate = useNavigate();
-  const title = routeTitle(location.pathname);
-  const [expandedNav, setExpandedNav] = useState<Record<string, boolean>>(() => ({
-    '/agents': location.pathname.startsWith('/agents'),
-  }));
+  const routeBaseTitle = routeTitle(location.pathname, location.search);
   const [chatTopbarTitle, setChatTopbarTitle] = useState<string | null>(null);
+  const [chatSessionWorkspaceId, setChatSessionWorkspaceId] = useState<string | null>(null);
+  const [activeWorkspaceName, setActiveWorkspaceName] = useState<string | null>(null);
+  const routeBaseDetail = routeDetail(location.pathname, chatTopbarTitle);
   const [commandOpen, setCommandOpen] = useState(false);
   const [liveCount, setLiveCount] = useState(0);
-  const [healthKnown, setHealthKnown] = useState(false);
-  const [navCounts, setNavCounts] = useState<NavCounts>({});
+  const [approvalCount, setApprovalCount] = useState(0);
+  const [canGoBack, setCanGoBack] = useState(false);
+  const [sidebarPanel, setSidebarPanel] = useState<SidebarPanelId>('navigation');
+  const [workspaceSearch, setWorkspaceSearch] = useState('');
+  const [sidebarWorkspaces, setSidebarWorkspaces] = useState<SidebarWorkspace[]>([]);
+  const [sidebarWorkspacesLoading, setSidebarWorkspacesLoading] = useState(false);
+  const [workspaceCreateRepo, setWorkspaceCreateRepo] = useState<WorkspaceCreateRepo | null>(null);
+  const [collapsedWorkspaceRepos, setCollapsedWorkspaceRepos] = useState<Set<string>>(() => loadCollapsedWorkspaceRepos());
+  const [appVersion, setAppVersion] = useState(__ALLEN_APP_VERSION__);
+  const sidebarGestureLockRef = useRef(false);
+  const sidebarWheelGestureActiveRef = useRef(false);
+  const sidebarWheelCanRearmRef = useRef(true);
+  const sidebarWheelDirectionRef = useRef<1 | -1 | null>(null);
+  const sidebarWheelGestureTimerRef = useRef<number | null>(null);
+  const sidebarPointerStartRef = useRef<{ x: number; y: number } | null>(null);
+  const sidebarCarouselRef = useRef<HTMLDivElement | null>(null);
 
   const currentUser = useAuthStore((s) => s.user);
-  const refreshToken = useAuthStore((s) => s.refreshToken);
-  const clearAuth = useAuthStore((s) => s.clear);
-
-  async function handleLogout() {
-    try {
-      if (refreshToken) await authApi.logout(refreshToken);
-    } catch {
-      // ignore — clear locally regardless
-    }
-    clearAuth();
-    navigate('/login', { replace: true });
-  }
 
   // Initials for the avatar tile
   const userInitial = currentUser?.name?.charAt(0)?.toUpperCase()
@@ -406,17 +496,82 @@ export default function App() {
   const setColorMode = useSettingsStore((s) => s.setColorMode);
   const resolvedMode = resolveColorMode(colorMode);
   const toggleColorMode = () => setColorMode(resolvedMode === 'dark' ? 'light' : 'dark');
+  // Matches: /workspaces/:id route (legacy), /chat?workspaceId=X query, /chat/:sid where session has workspaceId
+  const workspaceIdFromPath = location.pathname.match(/^\/workspaces\/([^/]+)/)?.[1] ?? null;
+  const workspaceIdFromSearch = new URLSearchParams(location.search).get('workspaceId');
+  const activeWorkspaceId = workspaceIdFromPath ?? workspaceIdFromSearch ?? chatSessionWorkspaceId;
+  const isWorkspaceChatRoute = location.pathname.startsWith('/chat') && Boolean(activeWorkspaceId);
+  const title = isWorkspaceChatRoute ? 'workspace' : routeBaseTitle;
+  const detail = isWorkspaceChatRoute ? activeWorkspaceName ?? 'Workspace' : routeBaseDetail;
+  const workspaceGroups = useMemo(() => {
+    const query = workspaceSearch.trim().toLowerCase();
+    const visible = sidebarWorkspaces
+      .filter((workspace) => {
+        if (!query) return true;
+        return workspace.name.toLowerCase().includes(query)
+          || workspaceRepoLabel(workspace).toLowerCase().includes(query)
+          || (workspace.branch ?? '').toLowerCase().includes(query);
+      })
+      .sort((a, b) => sidebarWorkspaceTime(b) - sidebarWorkspaceTime(a));
+
+    const groups = new Map<string, { key: string; label: string; items: SidebarWorkspace[]; latest: number }>();
+    for (const workspace of visible) {
+      const label = workspaceRepoLabel(workspace);
+      const key = workspace.repoId ?? `repo:${label.toLowerCase()}`;
+      const latest = sidebarWorkspaceTime(workspace);
+      const existing = groups.get(key);
+      if (existing) {
+        existing.items.push(workspace);
+        existing.latest = Math.max(existing.latest, latest);
+      } else {
+        groups.set(key, { key, label, items: [workspace], latest });
+      }
+    }
+
+    return Array.from(groups.values()).sort((a, b) => b.latest - a.latest);
+  }, [sidebarWorkspaces, workspaceSearch]);
+
+  function openCreateWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
+    if (!repo) return;
+    setWorkspaceCreateRepo(repo);
+  }
+
+  function prependSidebarWorkspace(workspace: SidebarWorkspace) {
+    setSidebarWorkspaces(prev => [workspace, ...prev.filter(item => item._id !== workspace._id)]);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    window.allenDesktop?.getRuntimeInfo?.()
+      .then((info) => {
+        if (!cancelled && info?.appVersion) setAppVersion(info.appVersion);
+      })
+      .catch(() => {
+        // Web/dev mode uses the build-time fallback.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const index = window.history.state?.idx;
+    setCanGoBack(typeof index === 'number' ? index > 0 : window.history.length > 1);
+  }, [location.key]);
 
   useEffect(() => {
     let cancelled = false;
     async function loadLiveCount() {
       try {
-        const { count } = await executionsApi.count({ status: ['running', 'queued'] });
+        const [{ count }, pending] = await Promise.all([
+          executionsApi.count({ status: ['running', 'queued'] }),
+          interventionsApi.list({ status: 'pending', limit: 100 }),
+        ]);
         if (cancelled) return;
         setLiveCount(count ?? 0);
-        setHealthKnown(true);
+        setApprovalCount(pending.length ?? 0);
       } catch {
-        if (!cancelled) setHealthKnown(false);
+        // Keep the last visible counts if the poll fails.
       }
     }
     void loadLiveCount();
@@ -431,6 +586,7 @@ export default function App() {
     const match = location.pathname.match(/^\/chat\/([^/]+)/);
     if (!match) {
       setChatTopbarTitle(null);
+      setChatSessionWorkspaceId(null);
       return;
     }
     let cancelled = false;
@@ -438,7 +594,10 @@ export default function App() {
     const loadTitle = () => {
       chatApi.getSession(sessionId)
         .then((session) => {
-          if (!cancelled) setChatTopbarTitle(session?.title ?? null);
+          if (!cancelled) {
+            setChatTopbarTitle(session?.title ?? null);
+            setChatSessionWorkspaceId(session?.workspaceId ?? null);
+          }
         })
         .catch(() => {
           if (!cancelled) setChatTopbarTitle(null);
@@ -455,110 +614,275 @@ export default function App() {
   }, [location.pathname]);
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadNavCounts() {
-      const sessionParams = currentUser?.id ? { ownerUserId: currentUser.id } : undefined;
-      const [
-        pending,
-        sessions,
-        tickets,
-        prs,
-        spaces,
-        recentRuns,
-        activeRuns,
-      ] = await Promise.allSettled([
-        interventionsApi.list({ status: 'pending', limit: 100 }),
-        chatApi.listSessions(sessionParams),
-        linearApi.issues({ limit: 200 }),
-        pullRequestsApi.list(),
-        workspacesApi.list(),
-        executionsApi.listPaged({ limit: 1, offset: 0 }),
-        executionsApi.listPaged({ status: 'running', limit: 100, offset: 0 }),
-      ]);
-      if (cancelled) return;
-
-      const pendingCount = pending.status === 'fulfilled' ? (pending.value ?? []).length : undefined;
-      const activeCount = activeRuns.status === 'fulfilled'
-        ? (activeRuns.value.items ?? []).filter((run: any) => Boolean(run?.meta?.chatSessionId)).length
-        : undefined;
-      const userSessions = sessions.status === 'fulfilled' ? (sessions.value ?? []) : [];
-      setNavCounts({
-        mywork: (pendingCount ?? 0) + (activeCount ?? 0),
-        chats: sessions.status === 'fulfilled' ? userSessions.length : undefined,
-        tickets: tickets.status === 'fulfilled' ? (tickets.value ?? []).length : undefined,
-        pulls: prs.status === 'fulfilled' ? (prs.value ?? []).length : undefined,
-        workspaces: spaces.status === 'fulfilled' ? (spaces.value ?? []).length : undefined,
-        activity: recentRuns.status === 'fulfilled' ? recentRuns.value.total ?? 0 : undefined,
-      });
-    }
-    void loadNavCounts();
-    const interval = setInterval(loadNavCounts, 30000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [currentUser?.id]);
-
-  useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      if (!(event.metaKey || event.ctrlKey)) return;
+
+      const key = event.key.toLowerCase();
+      if (key === 'k') {
         event.preventDefault();
         setCommandOpen(true);
+        return;
+      }
+
+      if (key === 'l') {
+        const isChatInputRoute = location.pathname === '/'
+          || location.pathname === '/chat'
+          || location.pathname.startsWith('/chat/');
+        if (isChatInputRoute) return;
+
+        event.preventDefault();
+        navigate('/', { state: { focusDashboardChat: Date.now() } });
       }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
+  }, [location.pathname, navigate]);
+
+  useEffect(() => {
+    if (sidebarPanel !== 'workspaces') return;
+    let cancelled = false;
+    setSidebarWorkspacesLoading(true);
+    workspacesApi.list()
+      .then((items) => {
+        if (!cancelled) setSidebarWorkspaces((items ?? []) as SidebarWorkspace[]);
+      })
+      .catch(() => {
+        if (!cancelled) setSidebarWorkspaces([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSidebarWorkspacesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sidebarPanel]);
+
+  useEffect(() => {
+    if (!isWorkspaceChatRoute || !activeWorkspaceId) {
+      setActiveWorkspaceName(null);
+      return;
+    }
+
+    const cached = sidebarWorkspaces.find(workspace => workspace._id === activeWorkspaceId)?.name;
+    if (cached) {
+      setActiveWorkspaceName(cached);
+      return;
+    }
+
+    let cancelled = false;
+    setActiveWorkspaceName(null);
+    workspacesApi.get(activeWorkspaceId)
+      .then((workspace) => {
+        if (!cancelled) setActiveWorkspaceName(workspace?.name ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setActiveWorkspaceName(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, isWorkspaceChatRoute, sidebarWorkspaces]);
+
+  useEffect(() => {
+    return () => {
+      if (sidebarWheelGestureTimerRef.current !== null) {
+        window.clearTimeout(sidebarWheelGestureTimerRef.current);
+      }
+    };
   }, []);
 
   const navPanel = usePanelLayout({
     storageKey: 'app-nav',
     direction: 'horizontal',
-    defaultSize: 228,
-    minSize: 180,
-    maxSize: 320,
+    defaultSize: 290,
+    minSize: 260,
+    maxSize: 396,
   });
 
-  const toggleNavSection = (item: NavItem) => {
-    const isActiveSection = isNavItemActive(item, location.pathname, location.pathname === item.to);
-    setExpandedNav(prev => ({ ...prev, [item.to]: !prev[item.to] }));
-    if (!isActiveSection) navigate(item.to);
-  };
+  const isSettingsRoute = location.pathname.startsWith('/settings');
+  const shellNavState = navPanel.collapsed && !isSettingsRoute ? 'nav-collapsed' : 'nav-expanded';
+  const sidebarPanelIndex = Math.max(0, SIDEBAR_PANEL_ORDER.indexOf(sidebarPanel));
+
+  function moveSidebarPanel(direction: -1 | 1, respectTransitionLock = true) {
+    if (respectTransitionLock && sidebarGestureLockRef.current) return;
+
+    let moved = false;
+    setSidebarPanel((currentPanel) => {
+      const currentIndex = SIDEBAR_PANEL_ORDER.indexOf(currentPanel);
+      const nextIndex = Math.max(0, Math.min(SIDEBAR_PANEL_ORDER.length - 1, currentIndex + direction));
+      const nextPanel = SIDEBAR_PANEL_ORDER[nextIndex];
+      if (!nextPanel || nextPanel === currentPanel) return currentPanel;
+      moved = true;
+      return nextPanel;
+    });
+
+    if (moved && respectTransitionLock) {
+      sidebarGestureLockRef.current = true;
+      window.setTimeout(() => {
+        sidebarGestureLockRef.current = false;
+      }, 380);
+    }
+  }
+
+  function handleSidebarCarouselWheel(event: WheelEvent) {
+    if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+    event.preventDefault();
+    const absDeltaX = Math.abs(event.deltaX);
+    const direction = event.deltaX > 0 ? 1 : -1;
+
+    if (sidebarWheelGestureTimerRef.current !== null) {
+      window.clearTimeout(sidebarWheelGestureTimerRef.current);
+    }
+    sidebarWheelGestureTimerRef.current = window.setTimeout(() => {
+      sidebarWheelGestureActiveRef.current = false;
+      sidebarWheelCanRearmRef.current = true;
+      sidebarWheelDirectionRef.current = null;
+      sidebarWheelGestureTimerRef.current = null;
+    }, 100);
+
+    if (absDeltaX <= 4 || direction !== sidebarWheelDirectionRef.current) {
+      sidebarWheelCanRearmRef.current = true;
+    }
+    if (sidebarWheelGestureActiveRef.current && !sidebarWheelCanRearmRef.current) return;
+    if (absDeltaX < 16) return;
+
+    sidebarWheelGestureActiveRef.current = true;
+    sidebarWheelCanRearmRef.current = false;
+    sidebarWheelDirectionRef.current = direction;
+    moveSidebarPanel(direction, false);
+  }
+
+  useEffect(() => {
+    const carousel = sidebarCarouselRef.current;
+    if (!carousel) return;
+    carousel.addEventListener('wheel', handleSidebarCarouselWheel, { passive: false });
+    return () => {
+      carousel.removeEventListener('wheel', handleSidebarCarouselWheel);
+    };
+  }, []);
+
+  function handleSidebarPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.pointerType === 'mouse') return;
+    sidebarPointerStartRef.current = { x: event.clientX, y: event.clientY };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function handleSidebarPointerUp(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.pointerType === 'mouse') return;
+    const start = sidebarPointerStartRef.current;
+    sidebarPointerStartRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (!start) return;
+
+    const deltaX = start.x - event.clientX;
+    const deltaY = start.y - event.clientY;
+    if (Math.abs(deltaX) > 44 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2) {
+      moveSidebarPanel(deltaX > 0 ? 1 : -1);
+    }
+  }
+
+  function toggleWorkspaceRepo(repoKey: string) {
+    setCollapsedWorkspaceRepos((current) => {
+      const next = new Set(current);
+      next.has(repoKey) ? next.delete(repoKey) : next.add(repoKey);
+      saveCollapsedWorkspaceRepos(next);
+      return next;
+    });
+  }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${shellNavState} ${isSettingsRoute ? 'settings-shell' : ''}`}>
       {/* Navigation sidebar — collapsible and resizable */}
-      {navPanel.collapsed ? (
-        <div className="sidebar sidebar-icon">
-          <button
-            onClick={navPanel.toggle}
-            className="brand-mark"
-            title="Expand navigation"
-            aria-label="Expand navigation"
-          >
-            [a]
-          </button>
-          {NAV_GROUPS.flatMap(g => g.items).map(item => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }: { isActive: boolean }) =>
-                `relative rounded-md p-2 transition-colors ${
-                  isNavItemActive(item, location.pathname, isActive)
-                    ? 'border border-accent/20 bg-accent-soft text-accent'
-                    : 'border border-transparent text-theme-muted hover:bg-app-muted hover:text-theme-primary'
-                }`
-              }
-              title={item.label}
-              aria-label={item.label}
+      {isSettingsRoute ? (
+        <nav className="sidebar settings-mode-sidebar !w-[290px] !min-w-[290px] [animation:none]">
+          <div className="settings-mode-head">
+            <button
+              type="button"
+              className="settings-back-button"
+              onClick={() => {
+                setSidebarPanel('navigation');
+                navigate('/');
+              }}
             >
-              <item.icon className="w-4 h-4" />
-              {formatNavBadge(item.badgeKey ? navCounts[item.badgeKey] : undefined) && (
-                <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-accent" />
-              )}
+              <ArrowLeft className="h-4 w-4" />
+              <span>Back to app</span>
+            </button>
+          </div>
+
+          <div className="sidebar-inner settings-mode-inner scroll-hide">
+            {SETTINGS_NAV_GROUPS.map(group => (
+              <div key={group.id} className="settings-mode-group">
+                {group.label && <div className="settings-mode-label">{group.label}</div>}
+                <div className="settings-mode-items">
+                  {group.items
+                    .filter(item => item.to !== '/settings/team' || currentUser?.role === 'admin')
+                    .map(item => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      end={item.end}
+                      className={({ isActive }) =>
+                        `settings-mode-item ${
+                          isNavItemActive(item, location, isActive)
+                          || (item.to === '/settings/general' && location.pathname === '/settings')
+                            ? 'active'
+                            : ''
+                        }`
+                      }
+                    >
+                      <item.icon className="ico" />
+                      <span>{item.label}</span>
+                    </NavLink>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </nav>
+      ) : navPanel.collapsed ? (
+        <div className="sidebar sidebar-icon">
+          <div className="brand brand-collapsed">
+            <button
+              onClick={navPanel.toggle}
+              className="brand-mark"
+              title="Expand navigation"
+              aria-label="Expand navigation"
+            >
+              [a]
+            </button>
+          </div>
+          <div className="sidebar-inner scroll-hide">
+            {NAV_GROUPS.map(group => (
+              <div key={group.id} className={`nav-group ${group.dividerBefore ? 'mt-2 pt-2 before:mx-2 before:mb-2 before:block before:border-t before:border-app before:content-[""]' : ''}`}>
+                <div className="nav-group-items">
+                  {group.items.map(item => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      end={item.end ?? item.to === '/'}
+                      className={({ isActive }) =>
+                        `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`
+                      }
+                      aria-label={item.label}
+                      data-sidebar-tooltip={item.label}
+                    >
+                      <item.icon className="ico" />
+                      <span className="lbl">{item.label}</span>
+                    </NavLink>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="sidebar-foot-wrap sidebar-foot-icon">
+            <NavLink
+              to="/settings/general"
+              className="foot-btn"
+              aria-label="Settings"
+              data-sidebar-tooltip="Settings"
+            >
+              <Settings className="w-4 h-4" />
             </NavLink>
-          ))}
-          <div className="mt-auto">
             <button
               onClick={navPanel.toggle}
               className="foot-btn"
@@ -571,7 +895,9 @@ export default function App() {
         </div>
       ) : (
         /* Expanded: full nav with dynamic width */
-        <nav className="sidebar">
+        <nav
+          className="sidebar !w-[290px] !min-w-[290px] [animation:none]"
+        >
           {/* Workspace switcher pill — with collapse button */}
           <div className="brand">
             <NavLink to="/" className="brand-link">
@@ -580,78 +906,144 @@ export default function App() {
               </div>
               <span className="brand-name">{BRAND_NAME}</span>
             </NavLink>
-            <span className="brand-sub">v0.2</span>
-            <button
-              onClick={navPanel.toggle}
-              className="foot-btn"
-              title="Collapse navigation"
-              aria-label="Collapse navigation"
-            >
-              <ChevronLeft className="w-3.5 h-3.5" />
-            </button>
+            <span className="brand-sub">v{appVersion}</span>
           </div>
 
-          {/* Nav groups */}
-          <div className="sidebar-inner scroll-hide">
-            {NAV_GROUPS.map((group, gi) => (
-              <div key={gi} className="nav-group">
-                {group.label && (
-                  <div className="nav-group-title">{group.label}</div>
-                )}
-                {group.items.map(item => (
-                  <div key={item.to}>
-                    {item.children ? (
-                      <button
-                        type="button"
-                        className={`nav-item nav-accordion ${
-                          isNavItemActive(item, location.pathname, location.pathname === item.to) ? 'active' : ''
-                        }`}
-                        aria-expanded={Boolean(expandedNav[item.to])}
-                        onClick={() => toggleNavSection(item)}
-                      >
-                        <item.icon className="ico" />
-                        <span className="lbl">{item.label}</span>
-                        <ChevronRight className={`nav-caret ${expandedNav[item.to] ? 'open' : ''}`} />
-                      </button>
-                    ) : (
-                      <NavLink
-                        to={item.to}
-                        end={item.end ?? item.to === '/'}
-                        className={({ isActive }) =>
-                          `nav-item ${
-                            isNavItemActive(item, location.pathname, isActive)
-                              ? 'active'
-                              : ''
-                          }`
-                        }
-                      >
-                        <>
-                          <item.icon className="ico" />
-                          <span className="lbl">{item.label}</span>
-                          {formatNavBadge(item.badgeKey ? navCounts[item.badgeKey] : undefined) && (
-                            <span className="badge">
-                              {formatNavBadge(item.badgeKey ? navCounts[item.badgeKey] : undefined)}
-                            </span>
-                          )}
-                        </>
-                      </NavLink>
+          <div
+            ref={sidebarCarouselRef}
+            className="min-h-0 flex-1 overflow-hidden overscroll-contain touch-pan-y"
+            onPointerDown={handleSidebarPointerDown}
+            onPointerUp={handleSidebarPointerUp}
+            onPointerCancel={() => {
+              sidebarPointerStartRef.current = null;
+            }}
+          >
+            <div
+              className="flex h-full transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+              style={{ transform: `translate3d(-${sidebarPanelIndex * 100}%, 0, 0)` }}
+            >
+              <div className="order-2 min-w-0 w-full shrink-0">
+                <div className="flex min-h-0 h-full flex-col">
+                  <div className="px-4 pb-3 pt-2">
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
+                      <input
+                        value={workspaceSearch}
+                        onChange={(event) => setWorkspaceSearch(event.target.value)}
+                        placeholder="Search workspaces"
+                        className="input h-9 w-full pl-8 pr-3 text-[12px]"
+                      />
+                    </div>
+                  </div>
+                  <div className="scroll-hide flex-1 space-y-3 overflow-y-auto px-2 pb-3">
+                    {sidebarWorkspacesLoading && (
+                      <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">Loading workspaces...</div>
                     )}
-                    {item.children && expandedNav[item.to] && (
-                      <div className="nav-sublist">
-                        {item.children.map(child => (
-                          <Link
-                            key={child.to}
-                            to={child.to}
-                            className={`nav-subitem ${isNavChildActive(child.to, location) ? 'active' : ''}`}
-                          >
-                            {child.label}
-                          </Link>
-                        ))}
+                    {!sidebarWorkspacesLoading && workspaceGroups.length === 0 && (
+                      <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">
+                        {workspaceSearch.trim() ? 'No matching workspaces.' : 'No recent workspaces.'}
                       </div>
                     )}
+                    {workspaceGroups.map((group) => {
+                      const collapsed = collapsedWorkspaceRepos.has(group.key);
+                      const hasActive = group.items.some((workspace) => workspace._id === activeWorkspaceId);
+                      const showItems = !collapsed || hasActive;
+                      const repoWorkspace = group.items.find((workspace) => workspace.repoId) ?? group.items[0];
+                      const repo = repoWorkspace?.repoId
+                        ? { _id: repoWorkspace.repoId, name: group.label, path: repoWorkspace.repoPath }
+                        : null;
+                      return (
+                        <div key={group.key}>
+                          <div className="mb-1 flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => toggleWorkspaceRepo(group.key)}
+                              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-theme-secondary transition-colors hover:bg-app-muted hover:text-theme-primary"
+                            >
+                              <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-theme-muted" />
+                              <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{group.label}</span>
+                              <ChevronRight className={`h-3 w-3 shrink-0 text-theme-subtle transition-transform ${showItems ? 'rotate-90' : ''}`} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openCreateWorkspaceForRepo(repo)}
+                              disabled={!repo}
+                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                              title={`New workspace in ${group.label}`}
+                              aria-label={`New workspace in ${group.label}`}
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                          {showItems && (
+                            <div className="mt-1 space-y-1">
+                              {group.items.map((workspace) => {
+                                const active = workspace._id === activeWorkspaceId;
+                                return (
+                                  <button
+                                    key={workspace._id}
+                                    type="button"
+                                    onClick={() => navigate(`/chat?workspaceId=${workspace._id}`)}
+                                    className={`group flex w-full items-center rounded-md border px-2.5 py-1.5 text-left transition-colors ${
+                                      active
+                                        ? 'border-accent/30 bg-accent-soft text-accent'
+                                        : 'border-transparent text-theme-secondary hover:bg-app-muted hover:text-theme-primary'
+                                    }`}
+                                  >
+                                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-5">{workspace.name}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
+                </div>
               </div>
+
+              <div className="order-1 min-w-0 w-full shrink-0">
+                <div className="sidebar-inner scroll-hide">
+                  {NAV_GROUPS.map(group => (
+                    <div key={group.id} className={`nav-group ${group.dividerBefore ? 'mt-2 pt-2 before:mx-3 before:mb-2 before:block before:border-t before:border-app before:content-[""]' : ''}`}>
+                      <div className="nav-group-items">
+                        {group.items.map(item => (
+                          <NavLink
+                            key={item.to}
+                            to={item.to}
+                            end={item.end ?? item.to === '/'}
+                            className={({ isActive }) =>
+                              `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`
+                            }
+                          >
+                            <item.icon className="ico" />
+                            <span className="lbl">{item.label}</span>
+                          </NavLink>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-center gap-2 px-3 py-2">
+            {SIDEBAR_PANEL_ORDER.map((panel) => (
+              <button
+                key={panel}
+                type="button"
+                aria-label={SIDEBAR_PANEL_LABELS[panel]}
+                aria-current={sidebarPanel === panel ? 'true' : undefined}
+                title={SIDEBAR_PANEL_LABELS[panel]}
+                onClick={() => setSidebarPanel(panel)}
+                className={`h-2.5 w-2.5 rounded-full border transition-colors ${
+                  sidebarPanel === panel
+                    ? 'border-accent bg-accent'
+                    : 'border-theme-subtle/40 bg-theme-subtle/35 hover:border-theme-subtle/60 hover:bg-theme-subtle/60'
+                }`}
+              />
             ))}
           </div>
 
@@ -666,14 +1058,23 @@ export default function App() {
                   <div className="nm">{currentUser.name}</div>
                   <div className="em">{currentUser.email}</div>
                 </div>
-                <button
-                  onClick={handleLogout}
+                <NavLink
+                  to="/settings/general"
                   className="foot-btn"
-                  title="Sign out"
+                  title="Settings"
                 >
-                  <LogOut className="w-3.5 h-3.5" />
-                </button>
+                  <Settings className="w-3.5 h-3.5" />
+                </NavLink>
               </div>
+            )}
+            {!currentUser && (
+              <NavLink
+                to="/settings/general"
+                className={({ isActive }) => `nav-item sidebar-settings-link ${isActive ? 'active' : ''}`}
+              >
+                <Settings className="ico" />
+                <span className="lbl">Settings</span>
+              </NavLink>
             )}
           </div>
         </nav>
@@ -682,13 +1083,15 @@ export default function App() {
       <main className="flex-1 min-w-0 bg-app relative flex flex-col overflow-hidden">
         <AppTopbar
           title={title}
-          detail={chatTopbarTitle}
+          detail={detail}
           liveCount={liveCount}
-          healthy={healthKnown}
+          approvalCount={approvalCount}
           commandOpen={commandOpen}
           onCommandOpen={() => setCommandOpen(true)}
           onRunningOpen={() => navigate('/executions?status=running')}
           onSidebarToggle={navPanel.toggle}
+          onBack={() => navigate(-1)}
+          canGoBack={canGoBack}
           colorMode={resolvedMode}
           onColorModeToggle={toggleColorMode}
         />
@@ -703,6 +1106,19 @@ export default function App() {
         onClose={() => setCommandOpen(false)}
         onNavigate={(to) => navigate(to)}
       />
+      {workspaceCreateRepo && (
+        <WorkspaceCreateDialog
+          repo={workspaceCreateRepo}
+          onClose={() => setWorkspaceCreateRepo(null)}
+          onCreatedPending={(workspace) => prependSidebarWorkspace(workspace as SidebarWorkspace)}
+          onCreated={(workspace) => {
+            prependSidebarWorkspace(workspace as SidebarWorkspace);
+            setWorkspaceCreateRepo(null);
+            setActiveWorkspaceName(workspace.name ?? null);
+            navigate(`/chat?workspaceId=${workspace._id}`);
+          }}
+        />
+      )}
     </div>
   );
 }

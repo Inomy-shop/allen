@@ -5,6 +5,7 @@ import { system } from '../../services/api';
 
 const ONBOARDING_STEP_PATHS: Record<string, string> = {
   health: '/onboarding/health',
+  model_defaults: '/onboarding/model-defaults',
   repository: '/onboarding/repository',
   first_workflow: '/onboarding/first-workflow',
 };
@@ -37,6 +38,7 @@ export default function ProtectedRoute({ adminOnly = false }: { adminOnly?: bool
       && Boolean(refreshToken)
       && Boolean(userId)
       && !user?.mustResetPassword
+      && user?.role === 'admin'
       && (!adminOnly || user?.role === 'admin');
     if (!eligible) {
       checkedOnboardingUserRef.current = null;

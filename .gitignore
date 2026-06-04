@@ -5,6 +5,7 @@ dist/
 **/.next/
 *.tsbuildinfo
 .env
+.env.signing.local
 secrets.yml
 data/
 uploads/
@@ -15,3 +16,4 @@ e2e/.auth/
 infra/
 .DS_Store
 **/.DS_Store
+__pycache__/

@@ -164,34 +164,63 @@ export class PullRequestService {
     return { synced, total: prList.length };
   }
 
-  async getDiff(repoPath: string, branch: string, baseBranch: string): Promise<{ diff: string; files: { path: string; diff: string; originalContent: string; modifiedContent: string }[] }> {
+  async getDiff(repoPath: string, branch: string, baseBranch: string): Promise<{ diff: string; files: { path: string; status: string; additions: number; deletions: number; diff: string; originalContent: string; modifiedContent: string }[] }> {
     try {
       await exec('git', ['fetch', 'origin', branch], { cwd: repoPath }).catch(() => {});
       await exec('git', ['fetch', 'origin', baseBranch], { cwd: repoPath }).catch(() => {});
-      const { stdout } = await exec('git', ['diff', `origin/${baseBranch}...origin/${branch}`], { cwd: repoPath });
-      const files: { path: string; diff: string; originalContent: string; modifiedContent: string }[] = [];
-      const fileDiffs = stdout.split(/^diff --git /m).filter(Boolean);
-      // Fetch full file contents at base and head so the UI's DiffEditor can
-      // show real file-level diffs (not just hunks). Parallel for speed.
-      const fileMeta = fileDiffs
-        .map((fd) => ({ fd, match: fd.match(/a\/(.+?) b\//) }))
-        .filter((x) => x.match)
-        .map((x) => ({ fd: x.fd, path: x.match![1] }));
-      const contents = await Promise.all(fileMeta.map(async ({ path }) => {
-        const [orig, mod] = await Promise.all([
-          exec('git', ['show', `origin/${baseBranch}:${path}`], { cwd: repoPath }).then(r => r.stdout).catch(() => ''),
-          exec('git', ['show', `origin/${branch}:${path}`], { cwd: repoPath }).then(r => r.stdout).catch(() => ''),
-        ]);
-        return { path, originalContent: orig, modifiedContent: mod };
-      }));
-      for (let i = 0; i < fileMeta.length; i++) {
-        const { fd, path } = fileMeta[i];
-        const { originalContent, modifiedContent } = contents[i];
-        files.push({ path, diff: 'diff --git ' + fd, originalContent, modifiedContent });
-      }
-      return { diff: stdout, files };
+      const range = `origin/${baseBranch}...origin/${branch}`;
+      const [{ stdout: nameStatus }, { stdout: numstat }] = await Promise.all([
+        exec('git', ['diff', '--name-status', range], { cwd: repoPath }).catch(() => ({ stdout: '' })),
+        exec('git', ['diff', '--numstat', range], { cwd: repoPath }).catch(() => ({ stdout: '' })),
+      ]);
+      const statLines = numstat.trim().split('\n').filter(Boolean);
+      const files = nameStatus.trim().split('\n').filter(Boolean).map((line, index) => {
+        const [statusChar, ...pathParts] = line.split('\t');
+        const path = pathParts.join('\t');
+        const statLine = statLines[index] ?? '';
+        const [add, del] = statLine.split('\t');
+        return {
+          path,
+          status: statusChar === 'A' ? 'added' : statusChar === 'D' ? 'deleted' : 'modified',
+          additions: parseInt(add) || 0,
+          deletions: parseInt(del) || 0,
+          diff: '',
+          originalContent: '',
+          modifiedContent: '',
+        };
+      });
+      return { diff: '', files };
     } catch {
       return { diff: '', files: [] };
+    }
+  }
+
+  async getDiffFile(repoPath: string, branch: string, baseBranch: string, path: string): Promise<{ path: string; status: string; additions: number; deletions: number; diff: string; originalContent: string; modifiedContent: string } | null> {
+    try {
+      await exec('git', ['fetch', 'origin', branch], { cwd: repoPath }).catch(() => {});
+      await exec('git', ['fetch', 'origin', baseBranch], { cwd: repoPath }).catch(() => {});
+      const range = `origin/${baseBranch}...origin/${branch}`;
+      const [{ stdout: nameStatus }, { stdout: numstat }, { stdout: diff }, orig, mod] = await Promise.all([
+        exec('git', ['diff', '--name-status', range, '--', path], { cwd: repoPath }).catch(() => ({ stdout: '' })),
+        exec('git', ['diff', '--numstat', range, '--', path], { cwd: repoPath }).catch(() => ({ stdout: '' })),
+        exec('git', ['diff', range, '--', path], { cwd: repoPath }).catch(() => ({ stdout: '' })),
+        exec('git', ['show', `origin/${baseBranch}:${path}`], { cwd: repoPath }).then(r => r.stdout).catch(() => ''),
+        exec('git', ['show', `origin/${branch}:${path}`], { cwd: repoPath }).then(r => r.stdout).catch(() => ''),
+      ]);
+      if (!nameStatus.trim() && !diff.trim()) return null;
+      const [statusChar] = nameStatus.trim().split('\t');
+      const [add, del] = numstat.trim().split('\t');
+      return {
+        path,
+        status: statusChar === 'A' ? 'added' : statusChar === 'D' ? 'deleted' : 'modified',
+        additions: parseInt(add) || 0,
+        deletions: parseInt(del) || 0,
+        diff,
+        originalContent: orig,
+        modifiedContent: mod,
+      };
+    } catch {
+      return null;
     }
   }
 

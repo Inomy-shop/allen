@@ -4,55 +4,56 @@ export const DEFAULT_COLOR_MODE: ColorMode = 'system';
 
 export const COLOR_MODE_TOKENS = {
   dark: {
-    // Surface & border are null so each theme preset controls its own colors.
-    // The Linear preset provides Linear-night near-black surfaces; legacy
-    // presets keep their custom navy/black/etc.
-    surface: null,
-    surface100: null,
-    surface200: null,
-    border: null,
-    textPrimary: '#dbdee2',
-    textSecondary: '#a7abb1',
-    textMuted: '#70757c',
-    textSubtle: '#494e54',
-    terminalChrome: '#70757c',
-    // Muted gray for all edges so unselected edges recede. On selection
-    // the connected edges switch to the theme accent (Canvas / LiveGraph).
-    flowEdgeDefault: '#494e54',
-    flowEdgeConditional: '#494e54',
-    flowEdgeRetry: '#494e54',
-    editorBackground: '#16171b',
-    editorLineHighlight: '#1c1d22',
-    editorGutter: '#0f1014',
-    mermaidLine: '#5c5d63',
-    mermaidNodeBorder: '#34353c',
-    mermaidClusterBg: '#1c1d22',
-    mermaidMainBg: '#16171b',
-    mermaidEdgeLabelBg: '#16171b',
+    surface: '#0f0d0c',
+    surface100: '#171413',
+    surface200: '#201b19',
+    surface300: '#28221f',
+    border: '#342c28',
+    borderStrong: '#4a4039',
+    textPrimary: '#f0e8df',
+    textSecondary: '#c8bdb1',
+    textMuted: '#94887d',
+    textSubtle: '#685e55',
+    terminalChrome: '#94887d',
+    accent: '#7d9cba',
+    accentSoft: '#161f27',
+    accentHover: '#91afcb',
+    flowEdgeDefault: '#685e55',
+    flowEdgeConditional: '#7d9cba',
+    flowEdgeRetry: '#c86f32',
+    editorBackground: '#171413',
+    editorLineHighlight: '#201b19',
+    editorGutter: '#0f0d0c',
+    mermaidLine: '#685e55',
+    mermaidNodeBorder: '#4a4039',
+    mermaidClusterBg: '#201b19',
+    mermaidMainBg: '#171413',
+    mermaidEdgeLabelBg: '#171413',
   },
   light: {
-    // Surface & border are null so each theme preset controls its own colors.
-    // Only text/editor/flow tokens are overridden to ensure dark-on-light contrast.
-    surface: null,
-    surface100: null,
-    surface200: null,
-    border: null,
-    textPrimary: '#12171b',
-    textSecondary: '#43484e',
-    textMuted: '#767b80',
-    textSubtle: '#a1a5a9',
-    terminalChrome: '#767b80',
-    // Lighter gray for edges on a white surface so they recede by
-    // default. Selection promotes connected edges to the accent.
-    flowEdgeDefault: '#a1a5a9',
-    flowEdgeConditional: '#a1a5a9',
-    flowEdgeRetry: '#a1a5a9',
+    surface: '#fcfdff',
+    surface100: '#ffffff',
+    surface200: '#f4f6fb',
+    surface300: '#f8fafe',
+    border: '#e2e5ed',
+    borderStrong: '#cdd3e0',
+    textPrimary: '#0b1730',
+    textSecondary: '#354158',
+    textMuted: '#6e778a',
+    textSubtle: '#9ca5b8',
+    terminalChrome: '#6e778a',
+    accent: '#4763cf',
+    accentSoft: '#dfe2f7',
+    accentHover: '#5c74d4',
+    flowEdgeDefault: '#9ca5b8',
+    flowEdgeConditional: '#4763cf',
+    flowEdgeRetry: '#de9300',
     editorBackground: '#ffffff',
-    editorLineHighlight: '#f8f9fc',
-    editorGutter: '#fbfaf8',
-    mermaidLine: '#a1a5a9',
-    mermaidNodeBorder: '#e3e1de',
-    mermaidClusterBg: '#f6f5f2',
+    editorLineHighlight: '#f8fafe',
+    editorGutter: '#fcfdff',
+    mermaidLine: '#9ca5b8',
+    mermaidNodeBorder: '#e2e5ed',
+    mermaidClusterBg: '#f4f6fb',
     mermaidMainBg: '#ffffff',
     mermaidEdgeLabelBg: '#ffffff',
   },
@@ -67,22 +68,17 @@ function normalizeHex(hex: string): string {
 }
 
 export function normalizeColorMode(value?: string | null): ColorMode {
-  if (value === 'light') return 'light';
   if (value === 'system') return 'system';
-  return 'dark';
+  if (value === 'dark') return 'dark';
+  return 'light';
 }
 
 export function resolveColorMode(mode: ColorMode): 'light' | 'dark' {
   if (mode === 'system') {
-    if (typeof window === 'undefined') return 'dark';
-    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    if (typeof window === 'undefined') return 'light';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
   return mode;
-}
-
-export function detectSystemThemePreference(): 'light' | 'dark' {
-  if (typeof window === 'undefined') return 'dark';
-  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
 export function hexToRgbChannels(hex: string): string {
@@ -121,5 +117,6 @@ export function applyColorModeClass(mode: ColorMode) {
   const resolvedMode = resolveColorMode(mode);
   document.documentElement.classList.toggle('dark', resolvedMode === 'dark');
   document.documentElement.dataset.colorMode = resolvedMode;
+  document.documentElement.dataset.colorModePreference = mode;
   document.documentElement.style.colorScheme = resolvedMode;
 }

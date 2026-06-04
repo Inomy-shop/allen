@@ -65,7 +65,7 @@ const listTeamsTool: ChatTool = {
 
 const listTeamMembersTool: ChatTool = {
   name: 'list_team_members',
-  description: 'List all agents that belong to a given team. Returns each member with their name, displayName, teamRole, capabilities, tools, and canDelegateTo list.',
+  description: 'List all agents that belong to a given team. Returns each member with their name, displayName, teamRole, capabilities, tools, and spawnTargets list.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -86,7 +86,7 @@ const listTeamMembersTool: ChatTool = {
         teamRole: m.teamRole,
         capabilities: m.capabilities,
         tools: m.tools,
-        canDelegateTo: m.canDelegateTo,
+        spawnTargets: m.spawnTargets,
       })),
     };
   },
@@ -94,7 +94,7 @@ const listTeamMembersTool: ChatTool = {
 
 const getTeamBlueprintTool: ChatTool = {
   name: 'get_team_blueprint',
-  description: 'Return a team\'s full blueprint: team metadata, all member agents (with system prompts), and the internal delegation edges. Use this BEFORE adding a new agent to an existing team so your blueprint integrates with what already exists.',
+  description: 'Return a team\'s full blueprint: team metadata, all member agents (with system prompts), and the internal spawn-target edges. Use this BEFORE adding a new agent to an existing team so your blueprint integrates with what already exists.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -111,7 +111,7 @@ const getTeamBlueprintTool: ChatTool = {
     return {
       team: blueprint.team,
       agents: blueprint.agents,
-      delegationEdges: blueprint.delegationEdges,
+      spawnTargetEdges: blueprint.spawnTargetEdges,
     };
   },
 };
@@ -317,7 +317,7 @@ const createAgentTool: ChatTool = {
       model: { type: 'string', description: 'Model name (e.g. "sonnet", "gpt-5.5")' },
       tools: { type: 'array', items: { type: 'string' }, description: 'Array of tool names this agent can use' },
       capabilities: { type: 'array', items: { type: 'string' }, description: 'Array of capability tags' },
-      canDelegateTo: { type: 'array', items: { type: 'string' }, description: 'Names of agents this agent can delegate to' },
+      spawnTargets: { type: 'array', items: { type: 'string' }, description: 'Names of agents this agent can spawn' },
       personality: { type: 'string', description: 'Brief personality descriptor' },
       icon: { type: 'string', description: 'Icon name for UI' },
       color: { type: 'string', description: 'Hex color for UI' },
@@ -370,7 +370,7 @@ const createAgentTool: ChatTool = {
         model: args.model ?? 'sonnet',
         tools: args.tools ?? [],
         capabilities: args.capabilities ?? [],
-        canDelegateTo: args.canDelegateTo ?? [],
+        spawnTargets: args.spawnTargets ?? [],
         canTrigger: [],
         personality: args.personality,
         icon: args.icon ?? 'bot',
@@ -404,7 +404,7 @@ const updateAgentTool: ChatTool = {
       system: { type: 'string' },
       tools: { type: 'array', items: { type: 'string' } },
       capabilities: { type: 'array', items: { type: 'string' } },
-      canDelegateTo: { type: 'array', items: { type: 'string' } },
+      spawnTargets: { type: 'array', items: { type: 'string' }, description: 'Names of agents this agent can spawn' },
       personality: { type: 'string' },
       model: { type: 'string' },
       provider: { type: 'string', enum: ['claude-cli', 'codex'] },
@@ -427,7 +427,6 @@ const updateAgentTool: ChatTool = {
       'system',
       'tools',
       'capabilities',
-      'canDelegateTo',
       'personality',
       'model',
       'provider',
@@ -437,6 +436,7 @@ const updateAgentTool: ChatTool = {
       'planMode',
     ];
     const updates: Record<string, unknown> = {};
+    if (args.spawnTargets !== undefined) updates.spawnTargets = args.spawnTargets;
     for (const key of allowedKeys) {
       if (args[key] !== undefined) updates[key] = args[key];
     }
@@ -678,7 +678,6 @@ Returns up to 'limit' messages (default 30). Each message has role, content (tru
     return {
       sessionId: ctx.chatSessionId,
       currentAgent: ctx.currentAgent ?? 'assistant',
-      delegationDepth: ctx.delegationDepth,
       messageCount: messages.length,
       messages: messages.map((m: any) => ({
         role: m.role,
@@ -701,59 +700,6 @@ Returns up to 'limit' messages (default 30). Each message has role, content (tru
   },
 };
 
-const getMyDelegationThread: ChatTool = {
-  name: 'get_my_delegation_thread',
-  description: `Return the messages and tool results in your current delegation thread — the multi-turn conversation between you and the agent that delegated to you. Use this when:
-- You have been called multiple times in the same conversation and want to see your prior responses
-- You're partway through a complex task and need to remember what you've already done
-- A user asked for clarification and you want to re-read your prior turns
-
-Returns the conversation metadata (caller, task, status, depth) and the full message log including tool calls. Only useful for delegated agents — returns an error if called from a top-level chat.`,
-  inputSchema: { type: 'object', properties: {} },
-  async execute(_args, db, context) {
-    const ctx = resolveActiveSession(context);
-    if (!ctx?.currentConversationId) {
-      return { error: 'No active delegation conversation — this tool only works for delegated agents (not top-level chat)' };
-    }
-    const { ObjectId } = await import('mongodb');
-    let conv: any;
-    try {
-      conv = await db.collection('agent_conversations').findOne({ _id: new ObjectId(ctx.currentConversationId) });
-    } catch {
-      return { error: `Invalid conversation ID: ${ctx.currentConversationId}` };
-    }
-    if (!conv) return { error: `Delegation conversation ${ctx.currentConversationId} not found` };
-
-    return {
-      conversationId: ctx.currentConversationId,
-      fromAgent: conv.fromAgent,
-      toAgent: conv.toAgent,
-      task: conv.task,
-      depth: conv.depth,
-      status: conv.status,
-      turnCount: conv.turnCount,
-      costUsd: conv.costUsd,
-      messages: ((conv.messages as any[]) ?? []).map((m: any) => ({
-        agent: m.agent,
-        type: m.type,
-        content: typeof m.content === 'string' ? m.content.slice(0, 2000) : '',
-        toolCalls: ((m.toolCalls as any[]) ?? []).map((tc: any) => {
-          const result = tc.result;
-          let resultSummary: string;
-          if (result == null) resultSummary = '(empty)';
-          else if (typeof result === 'string') resultSummary = result.slice(0, 300);
-          else {
-            try { resultSummary = JSON.stringify(result).slice(0, 300); }
-            catch { resultSummary = '(unserializable)'; }
-          }
-          return { tool: tc.tool, result_summary: resultSummary };
-        }),
-        timestamp: m.timestamp,
-      })),
-    };
-  },
-};
-
 // ── Export the meta tool list ────────────────────────────────────────────────
 
 export const metaChatTools: ChatTool[] = [
@@ -766,7 +712,6 @@ export const metaChatTools: ChatTool[] = [
   getSkillTool,
   // Self-introspection (any agent)
   getMySessionHistory,
-  getMyDelegationThread,
   // Team management
   createTeamTool,
   updateTeamTool,

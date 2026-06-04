@@ -7,8 +7,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { Db } from 'mongodb';
-import { buildSingleServerConfig } from '@allen/engine';
+import { buildSingleServerConfig, type BuildMcpConfigOptions } from '@allen/engine';
 import { McpService, type McpServerRecord } from './mcp.service.js';
+import { buildMcpSourceEnvForServer } from '../runtime/mcp-credentials.js';
 
 // ── Types ──
 
@@ -125,7 +126,8 @@ async function connectServer(server: McpServerRecord, db: Db): Promise<McpConnec
     // Resolve via the shared spawn-config resolver so source-based
     // (preset/repo) and legacy bundle records both spawn through a single
     // code path.
-    const cfg = await buildSingleServerConfig(server as unknown as Record<string, unknown>, db);
+    const options = { sourceEnv: await buildMcpSourceEnvForServer(server) } satisfies BuildMcpConfigOptions;
+    const cfg = await buildSingleServerConfig(server as unknown as Record<string, unknown>, db, options);
     if (!cfg) throw new Error(`Could not resolve spawn config for MCP server "${server.name}"`);
     const resolvedArgs = (cfg.args as string[]) ?? [];
     const resolvedEnv = (cfg.env as Record<string, string>) ?? {};

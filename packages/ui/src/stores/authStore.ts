@@ -41,12 +41,37 @@ function loadStored(): StoredSession | null {
   }
 }
 
+function isStoredSession(value: unknown): value is StoredSession {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<StoredSession>;
+  return typeof candidate.accessToken === 'string'
+    && typeof candidate.refreshToken === 'string'
+    && Boolean(candidate.user)
+    && typeof candidate.user === 'object';
+}
+
+async function loadDesktopStored(): Promise<StoredSession | null> {
+  if (typeof window === 'undefined' || !window.allenDesktop?.getAuthSession) return null;
+  try {
+    const stored = await window.allenDesktop.getAuthSession();
+    return isStoredSession(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
 function saveStored(s: StoredSession | null): void {
   if (!s) {
     localStorage.removeItem(STORAGE_KEY);
+    if (typeof window !== 'undefined' && window.allenDesktop?.clearAuthSession) {
+      void window.allenDesktop.clearAuthSession().catch(() => {});
+    }
     return;
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+  if (typeof window !== 'undefined' && window.allenDesktop?.setAuthSession) {
+    void window.allenDesktop.setAuthSession(s).catch(() => {});
+  }
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -61,7 +86,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       user: stored?.user ?? null,
       accessToken: stored?.accessToken ?? null,
       refreshToken: stored?.refreshToken ?? null,
-      hydrated: true,
+    });
+    if (stored || typeof window === 'undefined' || !window.allenDesktop?.getAuthSession) {
+      set({ hydrated: true });
+      return;
+    }
+    void loadDesktopStored().then(desktopStored => {
+      if (desktopStored) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(desktopStored));
+        } catch {
+          // ignore localStorage failures; desktop storage remains authoritative.
+        }
+      }
+      set({
+        user: desktopStored?.user ?? null,
+        accessToken: desktopStored?.accessToken ?? null,
+        refreshToken: desktopStored?.refreshToken ?? null,
+        hydrated: true,
+      });
     });
   },
 

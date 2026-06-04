@@ -17,7 +17,7 @@ export function AgentCard({
   const isLead = agent.teamRole === 'lead';
   const isBuiltIn = !!agent.isBuiltIn;
   const capabilities = (agent.capabilities as string[] | undefined) ?? [];
-  const delegateTargets = (agent.canDelegateTo as string[] | undefined) ?? [];
+  const spawnTargets = (agent.spawnTargets as string[] | undefined) ?? [];
   const fromRepo = !!agent.sourceRepoId;
   const provider = String(agent.provider ?? 'claude');
   const model = String(agent.model ?? 'sonnet');
@@ -107,10 +107,10 @@ export function AgentCard({
               )}
             </div>
           )}
-          {delegateTargets.length > 0 && (
+          {spawnTargets.length > 0 && (
             <div className="flex items-center gap-1 text-[10px] font-mono text-theme-muted mt-2">
               <ArrowRight className="w-3 h-3 text-accent-blue" />
-              delegates to {delegateTargets.length} agent{delegateTargets.length === 1 ? '' : 's'}
+              can spawn {spawnTargets.length} agent{spawnTargets.length === 1 ? '' : 's'}
             </div>
           )}
         </div>

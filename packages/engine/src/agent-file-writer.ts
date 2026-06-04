@@ -16,9 +16,11 @@ import { resolve as resolvePath } from 'node:path';
 import { expandToClaudeTools } from './tool-mapping.js';
 import { ALLEN_MCP_CLAUDE_TOOL_NAMES } from './allen-mcp-tools.js';
 
+const CLAUDE_TOOL_SEARCH = 'ToolSearch';
+
 /**
  * Single source of truth for the artifact-save instruction appended to every
- * agent's system prompt. Exported so the SDK / Codex / delegate paths in the
+ * agent's system prompt. Exported so the SDK / Codex / spawn paths in the
  * server can append it themselves; the CLI path goes through renderAgentFile
  * which appends it idempotently below.
  */
@@ -93,7 +95,6 @@ export const REPO_CONTEXT_LOADING_GUIDANCE = `
     <rule>Use command profile context when the task involves tests, validation, package scripts, CI, Docker, deployment, runtime packaging, or dependency behavior. Do not treat command profiles as universally mandatory for unrelated investigation, design, review, or documentation work.</rule>
     <rule>For file-backed instruction files, context files, docs, runbooks, production notes, and selected Cognee refs, call get_repo_context_body, shown by some clients as mcp__allen__get_repo_context_body.</rule>
     <rule>For skills, call get_repo_skill_body, shown by some clients as mcp__allen__get_repo_skill_body.</rule>
-    <rule>If selected context does not cover the task, call search_repo_knowledge, shown by some clients as mcp__allen__search_repo_knowledge, with the module, file path, domain term, or task concept. Load any relevant returned body before relying on it.</rule>
     <rule>Do this before making code changes, final recommendations, QA conclusions, or review findings that depend on repo-specific practices.</rule>
     <rule>Do not treat a packet summary as sufficient context. The summary only decides whether the full file body needs to be loaded or whether the system-injected body already covers it.</rule>
   </tool_use_rules>
@@ -149,7 +150,7 @@ export function withMandatoryRepoContext(systemPrompt: string | undefined, manda
 
 /**
  * Append ARTIFACTS_GUIDANCE to a system prompt, but only if it isn't already
- * there. Single helper so every agent call site (chat spawn, delegate, workflow
+ * there. Single helper so every agent call site (chat spawn, workflow
  * Claude-CLI / Claude-SDK / Codex, repo scanner, etc.) gets identical behavior
  * without copy-pasting the sentinel literal.
  */
@@ -161,30 +162,30 @@ export function withArtifactsGuidance(systemPrompt: string | undefined): string 
 /**
  * Guidance appended to every NON-CHAT agent run (workflow node, direct agent
  * call, repo scanner, materialized CLI subagent). These contexts have no live
- * user reading the turn output and no delegation thread surface, so the
- * interactive tools (ask_user / delegate_to_agent + their wait/ask/answer
- * companions) cannot resolve and would block or no-op. The agent's authored
+ * user reading the turn output and no chat thread surface, so the
+ * interactive user-input tools (ask_user / submit_execution_input)
+ * cannot resolve and would block or no-op. The agent's authored
  * system prompt and the runtime-injected org chart may both encourage
- * delegation; this block goes LAST so the model takes it as the active rule.
+ * spawning agents; this block goes LAST so the model takes it as the active rule.
  *
  * In chat (chat.service.ts) this guidance is intentionally NOT applied — that
- * path keeps delegate_to_agent / ask_user available because the user is
+ * path keeps ask_user / submit_execution_input available because the user is
  * actively reading.
  */
 export const NON_INTERACTIVE_GUIDANCE = `
 
 # Non-interactive execution — DO NOT use chat-only tools
 
-You are running in a non-interactive context (workflow node, direct agent call, or scan). There is no live user reading your output and no chat thread to surface a delegation through. The following tools WILL NOT WORK here and you MUST NOT call them — they will block, hang, or be silently dropped:
+You are running in a non-interactive context (workflow node, direct agent call, or scan). There is no live user reading your output. The following chat-only tools WILL NOT WORK here and you MUST NOT call them — they will block, hang, or be silently dropped:
 
 - \`ask_user\` (and any \`*ask_user*\` alias)
-- \`delegate_to_agent\`, \`wait_for_delegation\`, \`ask_delegator\`, \`answer_delegator\`
+- \`submit_execution_input\`
 
 If you need information you don't have: include the gap in your final structured output (e.g. \`"missing": "<what you need>"\`) and finish the turn — the workflow / caller will handle it.
 
-If you need work done by another agent: use \`spawn_agent(agent_name, task)\` (one-shot, returns when the spawned agent finishes). Do NOT call \`delegate_to_agent\`.
+If you need work done by another agent: use \`spawn_agent(agent_name, prompt)\`, then \`wait_for_execution(execution_id)\`.
 
-This rule overrides any earlier instruction in this prompt that tells you to delegate or ask the user.
+This rule overrides any earlier instruction in this prompt that tells you to ask the user interactively.
 `;
 
 /** Sentinel for idempotent injection of NON_INTERACTIVE_GUIDANCE. */
@@ -194,7 +195,7 @@ const NON_INTERACTIVE_GUIDANCE_SENTINEL = 'Non-interactive execution — DO NOT 
  * Append NON_INTERACTIVE_GUIDANCE idempotently. Use at every non-chat agent
  * call site (node-executor for Claude SDK + CLI, codex-executor, repo
  * scanner, renderAgentFile). Chat (chat.service.ts) intentionally does NOT
- * call this — the user is live there and delegation/ask_user are valid.
+ * call this — the user is live there and ask_user / submit_execution_input are valid.
  */
 export function withNonInteractiveGuidance(systemPrompt: string | undefined): string {
   const s = systemPrompt ?? '';
@@ -212,6 +213,13 @@ export type MaterializedAgent = {
   byteLength: number;
   /** Whether the rendered body contains Allen's mandatory repo context block. */
   containsMandatoryRepoContext: boolean;
+  /**
+   * Exact tool allowlist written into the YAML frontmatter's `tools:` line.
+   * Persisted on the node trace as the authoritative record of what the
+   * agent file actually contained — independent of the Claude CLI's
+   * (race-prone) `system/init` tools array.
+   */
+  tools: string[];
   /** Timestamp captured immediately after the file body was rendered. */
   createdAt: Date;
   /** idempotent unlink — never throws. */
@@ -266,8 +274,24 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-/** Render the markdown file body (frontmatter + prompt body). */
-export function renderAgentFile(agent: AgentSpec): { subagentName: string; body: string } {
+/**
+ * Render the markdown file body (frontmatter + prompt body).
+ *
+ * Returns `tools` — the exact allowlist that ends up in the `tools:` line of
+ * the YAML frontmatter. Callers (writeAgentFile → MaterializedAgent → the
+ * cli-runner callback → node-executor's runtimeContext) carry this forward so
+ * the trace document can record what we actually wrote to disk, independent
+ * of what the Claude CLI's `system/init` message later reports as available.
+ *
+ * Why both fields matter: the SDK's init `tools` array sometimes lands before
+ * MCP `tools/list` completes (observed on engineering-lead, 7 vs 88 mismatch).
+ * Comparing `materializedAgentFile.tools` to `toolsAvailable` lets the UI
+ * tell that race apart from a real "MCP tool dropped" bug.
+ *
+ * Returns the empty array when no allowlist is emitted (omitted frontmatter
+ * line == Claude treats it as "all tools").
+ */
+export function renderAgentFile(agent: AgentSpec): { subagentName: string; body: string; tools: string[] } {
   const suffix = agent.materializedNameSuffix ? `-${slugify(agent.materializedNameSuffix)}` : '';
   const subagentName = `allen-${slugify(agent.name)}${suffix}`;
   const description = agent.description ?? `Allen agent: ${agent.name}`;
@@ -277,7 +301,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   // us the system body; the sentinel check inside withArtifactsGuidance
   // skips a duplicate append in that case. Same for the non-interactive
   // guidance — materialized CLI subagents are spawned outside chat (workflow
-  // / direct agent CLI), so ask_user / delegate_to_agent must be off-limits.
+  // / direct agent CLI), so ask_user / submit_execution_input must be off-limits.
   const systemWithArtifacts = withArtifactsGuidance(agent.system);
   const systemWithRepoContext = agent.includeRepoContextLoadingGuidance
     ? withRepoContextLoadingGuidance(systemWithArtifacts)
@@ -333,6 +357,10 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
         seen.add(t);
       }
     }
+    if (expandedTools.some((t) => t.startsWith('mcp__')) && !seen.has(CLAUDE_TOOL_SEARCH)) {
+      expandedTools.push(CLAUDE_TOOL_SEARCH);
+      seen.add(CLAUDE_TOOL_SEARCH);
+    }
   // }
   const frontmatter = [
     '---',
@@ -344,7 +372,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
   ].join('\n');
 
   const body = `${frontmatter}\n\n${safeSystem}\n`;
-  return { subagentName, body };
+  return { subagentName, body, tools: expandedTools };
 }
 
 /**
@@ -352,7 +380,7 @@ export function renderAgentFile(agent: AgentSpec): { subagentName: string; body:
  * Always overwrites. Caller must invoke `cleanup()` in a finally block.
  */
 export function writeAgentFile(agent: AgentSpec): MaterializedAgent {
-  const { subagentName, body } = renderAgentFile(agent);
+  const { subagentName, body, tools } = renderAgentFile(agent);
   const outDir = resolvePath(homedir(), '.claude', 'agents');
   mkdirSync(outDir, { recursive: true });
   const path = resolvePath(outDir, `${subagentName}.md`);
@@ -365,6 +393,7 @@ export function writeAgentFile(agent: AgentSpec): MaterializedAgent {
     sha256: createHash('sha256').update(bodyBuffer).digest('hex'),
     byteLength: bodyBuffer.byteLength,
     containsMandatoryRepoContext: hasMandatoryRepoContext(body),
+    tools,
     createdAt: new Date(),
     cleanup() {
       try {

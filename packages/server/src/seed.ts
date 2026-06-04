@@ -12,7 +12,48 @@ import type { SkillInput } from './services/skill.service.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Seed the database with default agents from agents.yml.
+ * Full text of the coding-guidelines skill body. Exported so OrgSeedService can
+ * inline the same content into the system prompts of code-writing and
+ * design/planning specialist agents — keeping the skill row and the inlined
+ * prompt copies in lock-step from a single source.
+ */
+export const CODING_GUIDELINES_BODY = `# Coding Guidelines
+
+These guidelines exist to reduce common failure modes when LLMs write or modify code. Apply them whenever you are editing, creating, or refactoring files — not for routing decisions, planning, or investigation work.
+
+## Think Before Coding
+
+Before touching any file:
+1. **Surface assumptions** — state every assumption explicitly. If you are not sure about scope, intent, or expected behaviour, surface the uncertainty and ask rather than guess.
+2. **Define success criteria** — articulate what "done" looks like in concrete, verifiable terms before you start. "The build passes and the test for AC-003 goes green" is good; "looks right" is not.
+3. **Read the existing code** — always read the files you intend to change before changing them. Match existing conventions, naming patterns, and import style.
+
+## Simplicity First
+
+- **Minimum code** — write the least code that correctly satisfies the requirement. No speculative abstractions, no unused helpers, no "we'll need this later" scaffolding.
+- **No over-engineering** — if a simple imperative block works, prefer it over a generic abstraction. Introduce abstractions only when they directly reduce duplication that exists *today*.
+- **Boring is good** — prefer well-understood patterns and library features over novel or clever constructs.
+
+## Surgical Changes
+
+- **Touch only what you must** — change only the files and lines the task requires. Do not fix style issues, rename symbols, or refactor code that is not in your task unless explicitly asked.
+- **One concern per change** — do not bundle unrelated fixes into a single diff. If you spot a secondary issue, note it in your output but do not change it without instruction.
+- **Match the existing style** — indentation, quote style, import order, line length — match what is already there, even if your preference differs.
+
+## Goal-Driven Execution
+
+- **Every changed line traces to the request** — if you cannot name the requirement, acceptance criterion, or task item that justifies a line of code, remove that line.
+- **Verify before reporting done** — run the build, the lint, and the relevant tests. Report the concrete command output, not "it should work". If a check fails, fix it or escalate; never silently skip it.
+- **Fail loudly** — if a constraint cannot be met (type error, missing dependency, conflicting requirement), surface the exact error and stop rather than working around it silently.`;
+
+/**
+ * Seed the database with agents returned by loadAgents().
+ *
+ * NOTE: loadAgents() no longer reads agents.yml by default — the legacy
+ * fallback was removed in favour of OrgSeedService (org-seed.ts), which is
+ * the authoritative agent seed called at startup. This function is kept for
+ * compatibility but is NOT invoked by app.ts (see the commented-out call
+ * there). Calling it without a customPath argument will produce zero agents.
  */
 export async function seedDefaultAgents(db: Db): Promise<void> {
   const col = db.collection('agents');
@@ -34,7 +75,7 @@ export async function seedDefaultAgents(db: Db): Promise<void> {
       displayName: agent.displayName ?? name,
       personality: agent.personality,
       capabilities: agent.capabilities ?? [],
-      canDelegateTo: agent.canDelegateTo ?? [],
+      spawnTargets: agent.spawnTargets ?? [],
       canTrigger: agent.canTrigger ?? [],
       isBuiltIn: true,
       createdBy: 'seed',
@@ -208,6 +249,8 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
     const yamlChanged = existing.yaml !== content;
     const normalizationChanged =
       JSON.stringify(existing.parsed?.nodes ?? {}) !== JSON.stringify(parsed.nodes ?? {});
+    const validationChanged =
+      JSON.stringify(existing.validation ?? null) !== JSON.stringify(validation);
     if (override && (yamlChanged || normalizationChanged)) {
       await col.updateOne(
         { _id: existing._id },
@@ -223,6 +266,18 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
       );
       updated++;
       console.log(`[seed] Updated built-in workflow: ${parsed.name}`);
+    } else if (validationChanged) {
+      await col.updateOne(
+        { _id: existing._id },
+        {
+          $set: {
+            validation,
+            updatedAt: new Date(),
+          },
+        },
+      );
+      updated++;
+      console.log(`[seed] Refreshed workflow validation: ${parsed.name}`);
     }
   }
 
@@ -237,13 +292,13 @@ Before starting execution that changes state or consumes a specialist/workflow r
 const SKILL_CAPABILITY_DISCOVERY_SECTION = `## Capability discovery
 Before choosing an execution route, inspect the available Allen workflows, specialized team leads/agents, and relevant external MCP tools that could do the job. Prefer the most specific workflow or specialized lead/agent that owns the end-to-end task. Use raw external MCP tools directly only for simple tool-native queries/actions or as evidence for the selected route. Keep skill selection internal; do not mention skill names or skill IDs in user-facing responses unless the user explicitly asks.`;
 
-const SKILL_DELEGATE_TO_SPECIALISTS_SECTION = `## Delegate to specialists
+const SKILL_ASSIGN_TO_AGENTS_SECTION = `## Assign to agents
 Allen's org chart, agent library, and workflow catalog are dynamic — teams, agents, skills, and workflows are added, renamed, retired, and re-scoped over time. Do not assume any specific agent, team, or workflow name exists. Always discover the right target at runtime from the user's intent and the current state of the system.
 
 When the user's request matches a task that an existing workflow, team lead, or specialist owns, route through it. The top-level assistant must not perform the owner's job directly:
 
-- State-changing meta operations (create/edit teams, agents, workflows, skills) → delegate to the meta builder whose description matches the operation. Never call create_team / create_agent / create_workflow / create_skill from the top-level assistant.
-- Code changes (file edits, commits, pushes, PRs) → delegate to the team lead whose team owns the relevant domain, or spawn the specialist whose description matches the change. The top-level assistant must not touch files, branches, or PRs directly.
+- State-changing meta operations (create/edit teams, agents, workflows, skills) → spawn the meta builder whose description matches the operation. Never call create_team / create_agent / create_workflow / create_skill from the top-level assistant.
+- Code changes (file edits, commits, pushes, PRs) → spawn the team lead whose team owns the relevant domain, or spawn the specialist whose description matches the change. The top-level assistant must not touch files, branches, or PRs directly.
 - Test/build/lint authoring or fixes → route through the team or specialist whose mission covers quality and testing.
 - Domain-specific work (data, ops, search, vendor onboarding, product strategy, etc.) → use the team lead or specialist whose mission/description matches the domain rather than acting via raw MCP tools.
 - Multi-step repeatable processes → prefer a registered workflow over hand-orchestrating specialists, when the workflow's description and required inputs match.
@@ -255,9 +310,9 @@ Discovery procedure (run before choosing a target):
 4. Pick the most specific match by description/mission. Prefer a team lead when coordination across specialties is needed; prefer a single specialist for narrow one-shot work; prefer a workflow when the steps are well-defined and inputs are satisfiable.
 5. If no match exists, ask the user how to proceed — register a new agent/workflow via the matching meta-builder, or proceed via raw tools only with explicit user confirmation.
 
-If wait_for_delegation returns "waiting" or appears stale on a continuation, do not bypass by calling the specialist's underlying tools yourself. Continue the loop: delegate_to_agent(conversation_id=…, task="continue") then wait_for_delegation, until status is "completed" or "failed". Bypassing creates race conditions and hides progress from the user.
+If wait_for_execution returns "waiting", keep waiting with wait_for_execution until status is "completed", "failed", "cancelled", or "waiting_for_input". For a follow-up, call spawn_agent again with the prior session_id when available.
 
-Top-level direct tool calls are reserved for: read-only data queries, normal conversation, explanation/brainstorming, and forwarding answers to a delegated specialist's questions.`;
+Top-level direct tool calls are reserved for: read-only data queries, normal conversation, explanation/brainstorming, and forwarding answers to a spawned execution that is waiting for input.`;
 
 function withSkillOperatingRules(body: string): string {
   let next = body.trim();
@@ -268,8 +323,8 @@ function withSkillOperatingRules(body: string): string {
   if (!lower.includes('## capability discovery')) {
     next = `${next}\n\n${SKILL_CAPABILITY_DISCOVERY_SECTION}`;
   }
-  if (!lower.includes('## delegate to specialists')) {
-    next = `${next}\n\n${SKILL_DELEGATE_TO_SPECIALISTS_SECTION}`;
+  if (!lower.includes('## assign to agents')) {
+    next = `${next}\n\n${SKILL_ASSIGN_TO_AGENTS_SECTION}`;
   }
   return next;
 }
@@ -280,10 +335,10 @@ const DEFAULT_SKILLS: SkillInput[] = [
     displayName: 'Capability Routing',
     category: 'routing',
     description: 'General routing fallback for Allen-supported work: discover matching workflows, specialized leads/agents, and external MCP tools before choosing a route.',
-    triggers: ['route', 'which agent', 'what will use', 'who should handle', 'handle this', 'do this', 'run this', 'assign this', 'delegate this', 'execute this'],
+    triggers: ['route', 'which agent', 'what will use', 'who should handle', 'handle this', 'do this', 'run this', 'assign this', 'execute this'],
     excludes: ['hi', 'hello'],
     priority: 92,
-    allowedRoutes: ['direct_answer', 'data_query', 'spawn_agent', 'delegate_to_agent', 'run_workflow'],
+    allowedRoutes: ['direct_answer', 'data_query', 'spawn_agent', 'run_workflow'],
     body: `# Capability Routing
 
 ## When to use
@@ -297,7 +352,7 @@ Inspect available Allen workflows, teams, agents, and relevant external MCP tool
 
 ## Routing
 - If a workflow owns the end-to-end task and required inputs are available or can be clarified, propose that workflow.
-- If a team lead or specialist agent owns the task, propose delegation/spawn through that lead or specialist.
+- If a team lead or specialist agent owns the task, propose spawning that lead or specialist.
 - If an external MCP tool is the best direct fit for a simple query/action, use or propose that tool.
 - If none fit, explain the gap and ask whether to create/update a workflow, agent, or skill.
 
@@ -370,7 +425,7 @@ State the observed status, evidence checked, root cause or likely reason, and th
     triggers: ['linear', 'ticket', 'issue', 'sprint', 'closed today', 'assign ticket', 'dispatch ticket'],
     excludes: ['github pr review'],
     priority: 86,
-    allowedRoutes: ['direct_answer', 'data_query', 'delegate_to_agent', 'run_workflow'],
+    allowedRoutes: ['direct_answer', 'data_query', 'spawn_agent', 'run_workflow'],
     body: `# Linear Management
 
 ## When to use
@@ -385,7 +440,7 @@ Discover available Linear or external issue tools at runtime. Query current tick
 ## Routing
 - Reporting/query requests use direct data query and answer directly.
 - Ticket creation/update uses the available issue-management tool.
-- Ticket asks for implementation: inspect ticket, identify repo, then use bug-fix-routing, feature-routing, review-routing, or team-delegation-routing.
+- Ticket asks for implementation: inspect ticket, identify repo, then use bug-fix-routing, feature-routing, review-routing, or team-assignment-routing.
 
 ## Ticket content requirements (MANDATORY for create AND update)
 Whenever a Linear issue is **created OR updated**, the description MUST capture all investigation done and any artifacts produced **in this session or already known from the conversation context**. Never create or update a ticket with only a title and a one-line summary when richer data is available.
@@ -431,7 +486,7 @@ Return issue identifiers, titles, state, owner, dates, links, and any assumption
     triggers: ['investigate', 'debug', 'root cause', 'why failing', 'is this a bug', 'check issue'],
     excludes: ['add feature', 'create workflow'],
     priority: 84,
-    allowedRoutes: ['direct_answer', 'data_query', 'spawn_agent', 'delegate_to_agent', 'run_workflow'],
+    allowedRoutes: ['direct_answer', 'data_query', 'spawn_agent', 'run_workflow'],
     relatedAgents: ['bug-investigator', 'codebase-navigator', 'engineering-lead'],
     relatedWorkflows: ['bug-fix-by-severity'],
     body: `# Issue Investigation
@@ -449,7 +504,7 @@ Discover available tools at runtime. Choose evidence categories by issue type: r
 - If evidence is enough and no code change was requested, answer directly with findings.
 - If code inspection is needed, spawn a read-only investigator in the correct repo/workspace.
 - If user asks to proceed with a fix, classify with bug-fix-routing.
-- If the issue spans teams or systems, delegate to the relevant lead.
+- If the issue spans teams or systems, spawn the relevant lead.
 
 ## Output
 Return evidence checked, findings, confidence, unknowns, and recommended route if a fix is needed.`,
@@ -462,7 +517,7 @@ Return evidence checked, findings, confidence, unknowns, and recommended route i
     triggers: ['fix bug', 'bug', 'broken', 'regression', 'production issue', 'crash', 'error'],
     excludes: ['add feature', 'new workflow'],
     priority: 82,
-    allowedRoutes: ['spawn_agent', 'delegate_to_agent', 'run_workflow'],
+    allowedRoutes: ['spawn_agent', 'run_workflow'],
     relatedWorkflows: ['bug-fix-by-severity'],
     relatedAgents: ['backend-developer', 'frontend-developer', 'bug-investigator', 'engineering-lead'],
     body: `# Bug Fix Routing
@@ -479,7 +534,7 @@ Confirm repo, reproduction clues, failing behavior, affected surface, and availa
 ## Routing
 - Small, obvious, low-risk bug with narrow files: create/reuse workspace, spawn the right specialist such as backend-developer or frontend-developer, then continue to PR.
 - Bug needing investigation: run bug-fix-by-severity. The investigator classifies severity as small | medium | large and the workflow auto-skips heavier gates for smaller bugs (small skips qa + implementation_validator; medium skips implementation_validator; large runs the full pipeline).
-- Cross-team operational bug: delegate to engineering-lead or devops-engineer.
+- Cross-team operational bug: spawn engineering-lead or devops-engineer.
 
 ## Output
 State selected route, why direct specialist or workflow is appropriate, required inputs, workspace/PR expectation, and any missing context.`,
@@ -492,7 +547,7 @@ State selected route, why direct specialist or workflow is appropriate, required
     triggers: ['build', 'add', 'implement', 'feature', 'revamp', 'redesign', 'enhance', 'pagination'],
     excludes: ['fix bug', 'resolve pr comments'],
     priority: 80,
-    allowedRoutes: ['spawn_agent', 'delegate_to_agent', 'run_workflow', 'direct_answer'],
+    allowedRoutes: ['spawn_agent', 'run_workflow', 'direct_answer'],
     relatedWorkflows: ['feature-plan-and-implement'],
     relatedAgents: ['product-manager', 'engineering-lead', 'backend-developer', 'frontend-developer'],
     body: `# Feature Routing
@@ -510,7 +565,7 @@ Identify repo, affected product area, expected behavior, existing implementation
 - Tiny low-risk tweak: direct specialist in workspace, then PR.
 - Normal or large feature, cross-cutting change, uncertain design, multiple surfaces, or work needing PRD/HLA/TDD/QA/review/PR: run feature-plan-and-implement.
 - Planning-only request: answer directly if no repo grounding is needed.
-- Product-heavy ambiguity: delegate to product-manager or engineering lead.
+- Product-heavy ambiguity: spawn product-manager or engineering lead.
 
 ## Output
 Return selected route, scope classification, required inputs, and whether human approval gates are expected.`,
@@ -523,7 +578,7 @@ Return selected route, scope classification, required inputs, and whether human 
     triggers: ['review', 'pr comments', 'coderabbit', 'pull request', 'code quality', 'security review'],
     excludes: ['build feature from scratch'],
     priority: 78,
-    allowedRoutes: ['direct_answer', 'spawn_agent', 'delegate_to_agent', 'run_workflow'],
+    allowedRoutes: ['direct_answer', 'spawn_agent', 'run_workflow'],
     relatedWorkflows: ['resolve-pr-reviews'],
     relatedAgents: ['code-reviewer', 'qa-lead', 'test-planner', 'test-writer', 'pr-review-bot'],
     body: `# Review Routing
@@ -553,7 +608,7 @@ Return findings by severity, evidence checked, route chosen, and PR/workspace li
     triggers: ['workspace', 'open pr', 'create pr', 'code change', 'commit', 'push', 'local-only'],
     excludes: ['read only', 'explain only'],
     priority: 76,
-    allowedRoutes: ['spawn_agent', 'run_workflow', 'delegate_to_agent'],
+    allowedRoutes: ['spawn_agent', 'run_workflow'],
     relatedAgents: ['pr-creator', 'devops-engineer', 'backend-developer', 'frontend-developer'],
     body: `# Workspace and PR Routing
 
@@ -593,20 +648,20 @@ Return workspace path/link, validation result, PR URL or reason PR was skipped.`
     ],
     excludes: ['run existing workflow', 'run workflow'],
     priority: 86,
-    allowedRoutes: ['delegate_to_agent', 'direct_answer', 'spawn_agent', 'run_workflow'],
+    allowedRoutes: ['spawn_agent', 'direct_answer', 'run_workflow'],
     body: `# Org, Agent, and Workflow Builder
 
 ## When to use
 Use when the user asks to design, create, edit, validate, or explain an Allen **team / org structure**, **agent**, **skill**, or **workflow**. Examples include "build a marketing team", "I want a finance team", "add a tax specialist to the finance team", "I need an SRE in the engineering team", "create a workflow that …", "edit a workflow", and "add/edit a skill for …".
 
 ## When not to use
-Do not use for running an existing workflow, ordinary product feature work, or bug fixes — those route through the matching domain skill (bug-fix-routing, feature-routing, workspace-pr-routing, team-delegation-routing).
+Do not use for running an existing workflow, ordinary product feature work, or bug fixes — those route through the matching domain skill (bug-fix-routing, feature-routing, workspace-pr-routing, team-assignment-routing).
 
 ## Evidence
 Before proposing any change, inspect what already exists in the current system: list_teams, list_agents, list_workflows, list_skills. Avoid duplicate teams/agents/skills/workflows. Confirm the parent team and lead choice are consistent with the existing org chart.
 
 ## Pick the right builder by intent
-The universal "delegate, don't act yourself" rule lives in the operating rules section below. This skill only helps you decide WHICH builder to delegate to — and Allen's builder roster is dynamic, so do not assume any specific agent name exists.
+The universal "spawn the owner, don't act yourself" rule lives in the operating rules section below. This skill only helps you decide WHICH builder to spawn — and Allen's builder roster is dynamic, so do not assume any specific agent name exists.
 
 1. Classify the operation from the user's intent:
    - **Create a new team / org subtree.**
@@ -617,28 +672,47 @@ The universal "delegate, don't act yourself" rule lives in the operating rules s
 2. Discover candidate builders at runtime: run list_agents (and list_teams if helpful), filter by category "meta" or by description text that names the operation (e.g. an agent whose description mentions "creating teams" or "blueprinting org structure" is the right target for new-team work; one whose description mentions "adding agents" fits the agent-add variant; one whose description mentions "workflow" or "skill" authoring fits those variants).
 3. Pick the most specific match by description/mission. If multiple builders look plausible, prefer the one whose category is "meta" and whose mission text most directly names the operation. If only a generic builder exists, use it.
 4. If no matching builder exists at all, ask the user how to proceed — either register a builder agent first (recursive meta-build), or perform the operation directly as a one-off with explicit user confirmation.
-5. For design / explanation only, answer directly with evidence and do not delegate.
+5. For design / explanation only, answer directly with evidence and do not spawn an agent.
 
 ## Confirmation forwarding
-Builder agents typically present a blueprint via ask_delegator before creating anything. When wait_for_delegation returns status: "question", forward the **exact** blueprint to the user via ask_user — do not summarize, reorder, or rewrite it. Pass the user's reply back via answer_delegator and keep waiting until the builder reaches a terminal status.
+Builder agents may pause with waiting_for_input before creating anything. When wait_for_execution returns status: "waiting_for_input", forward the **exact** requested decision or blueprint to the user — do not summarize, reorder, or rewrite it. Pass the user's reply back via submit_execution_input and keep waiting until the builder reaches a terminal status.
 
 ## Output
 Return: the builder agent you chose (as discovered at runtime), the blueprint preview verbatim from the builder when available, the created record IDs and names, and a clickable link to each new team/agent/workflow/skill when the UI route is known. Never paste raw create_* outputs without context.`,
   },
   {
-    name: 'team-delegation-routing',
-    displayName: 'Team Delegation Routing',
+    // ─────────────────────────────────────────────────────────────────────────
+    // IMPLEMENTATION GUIDELINES — secondary behavioural guardrail for
+    // code-writing / file-modifying agents. Purposely low priority (40) so it
+    // never outbids the domain routing skills (72-92). Not in ALWAYS_RESYNC
+    // because operator body edits should survive reboots. Seeded only so the
+    // skill is available in the DB for knowledge-graph indexers and agents that
+    // load it explicitly; it is NOT a top-level routing skill.
+    // ─────────────────────────────────────────────────────────────────────────
+    name: 'coding-guidelines',
+    displayName: 'Coding Guidelines',
+    category: 'implementation-guidelines',
+    description: 'Behavioral guidelines to reduce common LLM coding mistakes: avoid overcomplication, make surgical changes, surface assumptions, and define verifiable success criteria. Use when writing, modifying, or refactoring code — not for routing, planning, or investigation.',
+    triggers: ['coding guidelines', 'implementation guidelines'],
+    excludes: [],
+    priority: 40,
+    allowedRoutes: ['direct_answer'],
+    body: CODING_GUIDELINES_BODY,
+  },
+  {
+    name: 'team-assignment-routing',
+    displayName: 'Team Assignment Routing',
     category: 'coordination',
-    description: 'Choose between lead/team delegation, specialist spawn, direct answer, and workflow execution.',
-    triggers: ['assign', 'delegate', 'route to', 'lead', 'team', '@agent', 'handoff'],
+    description: 'Choose between lead/team agent spawn, specialist spawn, direct answer, and workflow execution.',
+    triggers: ['assign', 'route to', 'lead', 'team', '@agent', 'handoff'],
     excludes: [],
     priority: 72,
-    allowedRoutes: ['delegate_to_agent', 'spawn_agent', 'run_workflow', 'direct_answer'],
+    allowedRoutes: ['spawn_agent', 'run_workflow', 'direct_answer'],
     relatedAgents: ['product-manager', 'engineering-lead', 'qa-lead', 'devops-engineer'],
-    body: `# Team Delegation Routing
+    body: `# Team Assignment Routing
 
 ## When to use
-Use when the user asks to assign, delegate, hand off, route to a team/lead/agent, or mentions an explicit agent.
+Use when the user asks to assign, hand off, route to a team/lead/agent, or mentions an explicit agent. Treat those words as a request to spawn the selected agent.
 
 ## When not to use
 Do not override an explicit valid user target unless it cannot perform the task.
@@ -647,13 +721,13 @@ Do not override an explicit valid user target unless it cannot perform the task.
 List available teams/agents when needed. Check whether the target is a team lead/coordinator or a hands-on specialist.
 
 ## Routing
-- Team lead or coordination request: delegate_to_agent and wait for completion.
+- Team lead or coordination request: spawn_agent and wait for completion.
 - Technical specialist one-shot: spawn_agent, using workspace rules for code work.
 - Repeatable multi-step process: run the matching workflow.
 - Normal answer with no execution: answer directly.
 
 ## Output
-Return target chosen, why, delegation/execution id, status, and final result after waiting.`,
+Return target chosen, why, execution id, status, and final result after waiting.`,
   },
 ];
 
@@ -697,7 +771,7 @@ export async function seedDefaultSkills(db: Db): Promise<void> {
       && (
         !existingLower.includes('## clarify and confirm')
         || !existingLower.includes('## capability discovery')
-        || !existingLower.includes('## delegate to specialists')
+        || !existingLower.includes('## assign to agents')
       )
     ) {
       await col.updateOne(
@@ -716,14 +790,14 @@ export async function seedDefaultSkills(db: Db): Promise<void> {
 
     // Skills whose routing metadata AND body we want to keep in lockstep
     // with the source tree, even when the user hasn't enabled SEED_OVERRIDE.
-    // These contain hard routing rules (which builder/lead to delegate to,
+    // These contain hard routing rules (which builder/lead to spawn,
     // when not to call create_* directly, etc.) — user-side body edits would
     // silently soften them, so the system body wins on every boot.
     const ALWAYS_RESYNC = new Set(['capability-routing', 'agent-workflow-builder']);
     if (existing.createdBy === 'system' && ALWAYS_RESYNC.has(skill.name)) {
       // capability-routing preserves user body edits for backward compat;
       // agent-workflow-builder always overwrites body because it carries
-      // the team/agent/workflow-builder delegation contract.
+      // the team/agent/workflow-builder assignment contract.
       const nextBody = skill.name === 'capability-routing'
         ? withSkillOperatingRules(existingBody || skill.body)
         : withSkillOperatingRules(skill.body);

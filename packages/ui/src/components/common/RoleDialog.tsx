@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Sparkles, FileText, Eye, Columns, Pencil, AlertCircle } from 'lucide-react';
+import { X, Sparkles, FileText, Eye, Columns, Pencil, AlertCircle, Check, ChevronRight } from 'lucide-react';
 import Select from './Select';
 import RoleIcon from './RoleIcon';
 import { renderMarkdown } from '../chat/ChatMessageList';
@@ -25,10 +25,18 @@ const PLAN_MODE_OPTIONS = [
 ];
 const ICONS = ['clipboard', 'code', 'eye', 'search', 'flask', 'pen', 'git-branch', 'bar-chart', 'magnifying-glass', 'layout', 'bot'];
 const AGENT_TYPES = [
-  { value: 'team', label: 'Team Agent — coordinates and delegates' },
+  { value: 'team', label: 'Team Agent — coordinates and spawns agents' },
   { value: 'technical', label: 'Technical Agent — executes specific tasks' },
 ];
 const MCP_TOOL_REFRESH_DELAYS = [1_500, 5_000, 10_000, 20_000, 30_000];
+const TOOL_LABELS: Record<string, string> = {
+  filesystem: 'Files',
+  terminal: 'Terminal',
+  git: 'Git',
+  'web-search': 'Web search',
+  'web-fetch': 'Web fetch',
+  database: 'Database',
+};
 
 function getModelsForProvider(provider: string): string[] {
   return provider === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
@@ -71,11 +79,20 @@ interface RoleDialogProps {
   onClose: () => void;
   onSave: (data: Record<string, unknown>) => Promise<void>;
   role?: Record<string, unknown> | null;
+  teams?: Array<{ name: string; displayName: string }>;
+  initialTeamName?: string;
 }
 
 type EditorMode = 'edit' | 'preview' | 'split';
 
-export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogProps) {
+export default function RoleDialog({
+  open,
+  onClose,
+  onSave,
+  role,
+  teams = [],
+  initialTeamName = '',
+}: RoleDialogProps) {
   const isEdit = !!role;
 
   const [name, setName] = useState('');
@@ -92,10 +109,12 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
   const [icon, setIcon] = useState('clipboard');
   const [color, setColor] = useState('#3b82f6');
   const [agentType, setAgentType] = useState('technical');
+  const [teamName, setTeamName] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [showPreviousPrompt, setShowPreviousPrompt] = useState(false);
   const [editorMode, setEditorMode] = useState<EditorMode>('edit');
+  const [expandedMcpServers, setExpandedMcpServers] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (open && role) {
@@ -124,8 +143,10 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
       setIcon((role.icon as string) ?? 'clipboard');
       setColor((role.color as string) ?? '#3b82f6');
       setAgentType((role.type as string) ?? 'technical');
+      setTeamName((role.teamName as string) ?? initialTeamName);
       setShowPreviousPrompt(false);
       setEditorMode('edit');
+      setExpandedMcpServers(new Set(Object.keys(configuredDisabled)));
     } else if (open) {
       setName('');
       setDisplayName('');
@@ -140,11 +161,13 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
       setIcon('clipboard');
       setColor('#3b82f6');
       setAgentType('technical');
+      setTeamName(initialTeamName);
       setShowPreviousPrompt(false);
       setEditorMode('edit');
+      setExpandedMcpServers(new Set());
     }
     setError('');
-  }, [open, role]);
+  }, [open, role, initialTeamName]);
 
   useEffect(() => {
     if (!open) return;
@@ -200,9 +223,19 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
     });
   }
 
+  function toggleMcpServerExpanded(serverName: string) {
+    setExpandedMcpServers(prev => {
+      const next = new Set(prev);
+      if (next.has(serverName)) next.delete(serverName);
+      else next.add(serverName);
+      return next;
+    });
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) { setError('Name is required'); return; }
+    if (!isEdit && !teamName) { setError('Team is required'); return; }
     if (!system.trim()) { setError('System prompt is required'); return; }
 
     setSaving(true);
@@ -222,6 +255,7 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
         icon,
         color,
         type: agentType,
+        teamName: teamName || undefined,
       });
       onClose();
     } catch (err: unknown) {
@@ -261,220 +295,293 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
   const providerOptions = PROVIDERS.map(p => ({ value: p, label: p }));
   const iconOptions = ICONS.map(i => ({ value: i, label: i }));
   const typeOptions = AGENT_TYPES.map(t => ({ value: t.value, label: t.label }));
+  const teamOptions = teams.map(team => ({
+    value: team.name,
+    label: team.displayName,
+    sublabel: team.name,
+  }));
 
   const wordCount = system.trim() ? system.trim().split(/\s+/).length : 0;
   const charCount = system.length;
   const lineCount = system ? system.split('\n').length : 0;
   const visibleMcpToolGroups = withConfiguredMcpGroups(mcpToolGroups, externalMcpServers, disabledMcpTools);
+  const enabledMcpToolCount = visibleMcpToolGroups.reduce((sum, group) => {
+    const groupEnabled = group.serverName === 'allen' || externalMcpServers.includes(group.serverName);
+    if (!groupEnabled) return sum;
+    const disabled = new Set(disabledMcpTools[group.serverName] ?? []);
+    return sum + group.tools.filter(tool => !disabled.has(tool.name)).length;
+  }, 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-6 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="bg-surface-100 border border-border rounded-lg w-full max-w-6xl max-h-[92vh] overflow-hidden shadow-popover flex flex-col animate-in fade-in zoom-in-95 duration-200"
+        className="flex max-h-[92vh] w-full max-w-[1180px] flex-col overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-app shrink-0">
-          <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-app px-6 py-5">
+          <div className="flex min-w-0 items-start gap-3">
             <div
-              className="w-9 h-9 rounded-lg flex items-center justify-center border border-app"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app"
               style={{ backgroundColor: color + '18' }}
             >
-              <RoleIcon icon={icon} color={color} size={20} />
+              <RoleIcon icon={icon} color={color} size={19} />
             </div>
-            <div>
-              <h2 className="font-heading text-sm font-bold text-theme-primary tracking-widest uppercase">
-                {isEdit ? 'Edit Agent' : 'Create Agent'}
+            <div className="min-w-0">
+              <h2 className="text-[17px] font-semibold tracking-tight text-theme-primary">
+                {isEdit ? 'Edit agent' : 'Create agent'}
               </h2>
-              <div className="text-[10px] font-mono text-theme-subtle">
+              <div className="mt-1 font-mono text-[12px] text-theme-muted">
                 {displayName || name || 'New agent'}
               </div>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors" title="Close">
-            <X className="w-4 h-4" />
+          <button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary" title="Close">
+            <X className="h-4 w-4" />
           </button>
         </div>
 
         <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col">
-          <div className="flex-1 min-h-0 grid grid-cols-[22rem_1fr]">
+          <div className="grid min-h-0 flex-1 grid-cols-[26rem_1fr]">
             {/* ── Left column: metadata fields ───────────────────────────── */}
-            <div className="border-r border-app overflow-y-auto p-5 space-y-4 min-h-0">
+            <div className="min-h-0 space-y-5 overflow-y-auto border-r border-app bg-app-muted/15 p-5">
               {error && (
-                <div className="flex items-start gap-2 text-xs text-accent-red bg-accent-red/10 border border-accent-red/30 rounded-md px-3 py-2">
+                <div className="flex items-start gap-2 rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
               )}
 
-              <div>
-                <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">Agent Type</label>
-                <Select value={agentType} onChange={setAgentType} options={typeOptions} />
-              </div>
-
-              <div>
-                <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">Name (kebab-case)</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  disabled={isEdit}
-                  placeholder="my-agent-name"
-                  className="input w-full disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-              </div>
-
-              <div>
-                <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">Display Name</label>
-                <input
-                  type="text"
-                  value={displayName}
-                  onChange={e => setDisplayName(e.target.value)}
-                  placeholder="My Agent"
-                  className="input w-full"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">Provider</label>
-                  <Select value={provider} onChange={handleProviderChange} options={providerOptions} />
+              <section className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="overline text-theme-muted">Identity</h3>
+                  <span className="font-mono text-[10px] text-theme-subtle">{agentType}</span>
                 </div>
-                <div>
-                  <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">Model</label>
-                  <Select value={model} onChange={setModel} options={modelOptions} />
-                </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">Reasoning</label>
-                  <Select
-                    value={reasoningEffort}
-                    onChange={setReasoningEffort}
-                    options={EFFORT_LEVELS.filter(l => l.value !== 'max' || /opus/i.test(model))}
+                  <label className="mb-1.5 block overline">Agent Type</label>
+                  <Select value={agentType} onChange={setAgentType} options={typeOptions} />
+                </div>
+
+                {!isEdit && (
+                  <div>
+                    <label className="mb-1.5 block overline">Team</label>
+                    <Select
+                      value={teamName}
+                      onChange={setTeamName}
+                      options={teamOptions}
+                      placeholder="Select team..."
+                      searchPlaceholder="Search teams..."
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="mb-1.5 block overline">Name</label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    disabled={isEdit}
+                    placeholder="my-agent-name"
+                    className="input w-full disabled:cursor-not-allowed disabled:opacity-50"
                   />
                 </div>
-                <div>
-                  <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">Plan Mode</label>
-                  {provider === 'claude' ? (
-                    <Select value={planMode} onChange={setPlanMode} options={PLAN_MODE_OPTIONS} />
-                  ) : (
-                    <div className="px-3 py-2 bg-surface-50 border border-app rounded-sm text-[11px] text-theme-subtle">
-                      Claude only
-                    </div>
-                  )}
-                </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">Icon</label>
-                  <div className="flex items-center gap-2">
-                    <Select value={icon} onChange={setIcon} options={iconOptions} className="flex-1" />
-                    <div
-                      className="w-9 h-9 rounded-md flex items-center justify-center border border-app shrink-0"
-                      style={{ backgroundColor: color + '15' }}
-                    >
-                      <RoleIcon icon={icon} color={color} size={18} />
+                  <label className="mb-1.5 block overline">Display Name</label>
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={e => setDisplayName(e.target.value)}
+                    placeholder="My Agent"
+                    className="input w-full"
+                  />
+                </div>
+              </section>
+
+              <section className="space-y-3 border-t border-app pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="overline text-theme-muted">Runtime</h3>
+                  <span className="font-mono text-[10px] text-theme-subtle">{provider} / {model}</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1.5 block overline">Provider</label>
+                    <Select value={provider} onChange={handleProviderChange} options={providerOptions} searchable={false} />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block overline">Model</label>
+                    <Select value={model} onChange={setModel} options={modelOptions} />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block overline">Reasoning</label>
+                    <Select
+                      value={reasoningEffort}
+                      onChange={setReasoningEffort}
+                      options={EFFORT_LEVELS.filter(l => l.value !== 'max' || /opus/i.test(model))}
+                      searchable={false}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block overline">Plan Mode</label>
+                    {provider === 'claude' ? (
+                      <Select value={planMode} onChange={setPlanMode} options={PLAN_MODE_OPTIONS} searchable={false} />
+                    ) : (
+                      <div className="flex h-9 items-center rounded-md border border-app bg-app-muted px-3 text-[12px] text-theme-subtle">
+                        Claude only
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-3 border-t border-app pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="overline text-theme-muted">Appearance</h3>
+                  <div
+                    className="flex h-7 w-7 items-center justify-center rounded-md border border-app"
+                    style={{ backgroundColor: color + '18' }}
+                  >
+                    <RoleIcon icon={icon} color={color} size={15} />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-[1fr_8.75rem] gap-3">
+                  <div>
+                    <label className="mb-1.5 block overline">Icon</label>
+                    <Select value={icon} onChange={setIcon} options={iconOptions} />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block overline">Color</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={color}
+                        onChange={e => setColor(e.target.value)}
+                        className="h-9 w-10 cursor-pointer rounded-md border border-app bg-transparent"
+                      />
+                      <input
+                        type="text"
+                        value={color}
+                        onChange={e => setColor(e.target.value)}
+                        className="input min-w-0 flex-1 font-mono text-xs"
+                        placeholder="#3b82f6"
+                      />
                     </div>
                   </div>
                 </div>
-                <div>
-                  <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">Color</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={color}
-                      onChange={e => setColor(e.target.value)}
-                      className="w-9 h-9 rounded-md border border-app cursor-pointer bg-transparent"
-                    />
-                    <input
-                      type="text"
-                      value={color}
-                      onChange={e => setColor(e.target.value)}
-                      className="input flex-1 font-mono text-xs"
-                      placeholder="#3b82f6"
-                    />
-                  </div>
-                </div>
-              </div>
+              </section>
 
-              <div>
-                <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">Tools</label>
-                <div className="grid grid-cols-2 gap-1.5">
+              <section className="space-y-3 border-t border-app pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="overline text-theme-muted">Permissions</h3>
+                  <span className="font-mono text-[10px] text-theme-subtle">
+                    {tools.length} tools · {enabledMcpToolCount} MCP
+                  </span>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block overline">System Tools</label>
+                  <div className="grid grid-cols-2 gap-1.5">
                   {TOOLS.map(tool => (
-                    <label
+                    <button
                       key={tool}
-                      className={`flex items-center gap-2 text-[11px] font-mono px-2 py-1.5 rounded-md cursor-pointer transition-colors border ${
+                      type="button"
+                      onClick={() => toggleTool(tool)}
+                      className={`flex h-9 items-center gap-2 rounded-md border px-2.5 text-left text-[12px] transition-colors ${
                         tools.includes(tool)
-                          ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/30'
-                          : 'bg-app-muted/50 text-theme-muted border-app hover:bg-app-muted'
+                          ? 'border-accent/35 bg-accent/10 text-theme-primary'
+                          : 'border-app bg-app-muted/40 text-theme-muted hover:bg-app-muted hover:text-theme-primary'
                       }`}
                     >
-                      <input
-                        type="checkbox"
-                        checked={tools.includes(tool)}
-                        onChange={() => toggleTool(tool)}
-                        className="accent-accent-blue"
-                      />
-                      <span>{tool}</span>
-                    </label>
+                      <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                        tools.includes(tool)
+                          ? 'border-accent bg-accent text-white'
+                          : 'border-app-strong bg-app'
+                      }`}
+                      >
+                        {tools.includes(tool) && <Check className="h-3 w-3" />}
+                      </span>
+                      <span className="min-w-0 truncate font-mono">{TOOL_LABELS[tool] ?? tool}</span>
+                    </button>
                   ))}
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label className="font-label text-[10px] font-semibold text-theme-secondary uppercase tracking-widest mb-1.5 block">
-                  MCP Access
-                </label>
-                <div className="space-y-2">
+                <div>
+                  <label className="mb-1.5 block overline">MCP Access</label>
+                  <div className="space-y-2">
                   {visibleMcpToolGroups.map((group) => {
                     const isAllen = group.serverName === 'allen';
                     const enabled = isAllen || externalMcpServers.includes(group.serverName);
                     const disabledForServer = disabledMcpTools[group.serverName] ?? [];
+                    const expanded = expandedMcpServers.has(group.serverName);
+                    const enabledToolCountForServer = group.tools.filter(tool => !disabledForServer.includes(tool.name)).length;
                     return (
-                      <div key={group.serverName} className="border border-app rounded-md bg-app-muted/40">
-                        <label
-                          className={`flex items-center gap-2 text-[11px] font-mono px-2 py-1.5 rounded-t-md cursor-pointer transition-colors ${
-                            enabled ? 'text-accent-blue' : 'text-theme-muted hover:text-theme-primary'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={enabled}
+                      <div key={group.serverName} className="overflow-hidden rounded-md border border-app bg-app-muted/35">
+                        <div className="flex h-10 items-center gap-2 px-2.5">
+                          <button
+                            type="button"
+                            onClick={() => toggleMcpServerExpanded(group.serverName)}
+                            disabled={!enabled}
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:opacity-30"
+                            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.serverName}`}
+                          >
+                            <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                          </button>
+                          <button
+                            type="button"
                             disabled={isAllen}
-                            onChange={() => toggleExternalMcpServer(group.serverName)}
-                            className="accent-accent-blue"
-                          />
-                          <span className="truncate">{group.serverName}</span>
-                          {isAllen && <span className="text-[9px] text-theme-subtle">default</span>}
-                        </label>
-                        {enabled && (
-                          <div className="max-h-44 overflow-y-auto grid grid-cols-1 gap-1 p-1.5 border-t border-app">
+                            onClick={() => toggleExternalMcpServer(group.serverName)}
+                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                              enabled
+                                ? 'border-accent bg-accent text-white'
+                                : 'border-app-strong bg-app text-transparent'
+                            } disabled:cursor-default disabled:opacity-70`}
+                          >
+                            {enabled && <Check className="h-3 w-3" />}
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className={`truncate font-mono text-[12px] ${enabled ? 'text-theme-primary' : 'text-theme-muted'}`}>
+                                {group.serverName}
+                              </span>
+                              {isAllen && <span className="font-mono text-[9px] text-theme-subtle">default</span>}
+                            </div>
+                          </div>
+                          <span className="shrink-0 font-mono text-[10px] text-theme-subtle">
+                            {enabled ? `${enabledToolCountForServer}/${group.tools.length || 0}` : 'off'}
+                          </span>
+                        </div>
+                        {enabled && expanded && (
+                          <div className="grid grid-cols-2 gap-1 border-t border-app p-2">
                             {group.tools.length === 0 ? (
-                              <div className="text-[10px] text-theme-subtle font-mono px-2 py-1.5">
+                              <div className="col-span-2 px-2 py-1.5 font-mono text-[10px] text-theme-subtle">
                                 Tool list loading...
                               </div>
                             ) : group.tools.map((tool) => {
                               const checked = !disabledForServer.includes(tool.name);
                               return (
-                                <label
+                                <button
                                   key={tool.fullName}
-                                  className={`flex items-center gap-2 text-[11px] font-mono px-2 py-1 rounded cursor-pointer transition-colors border ${
+                                  type="button"
+                                  onClick={() => toggleMcpTool(group.serverName, tool.name)}
+                                  className={`flex min-w-0 items-center gap-1.5 rounded border px-2 py-1.5 text-left text-[11px] transition-colors ${
                                     checked
-                                      ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/30'
-                                      : 'bg-surface-200/60 text-theme-muted border-app hover:bg-app-muted'
+                                      ? 'border-accent/25 bg-accent/5 text-theme-secondary'
+                                      : 'border-app bg-app text-theme-subtle hover:bg-app-muted hover:text-theme-primary'
                                   }`}
                                 >
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() => toggleMcpTool(group.serverName, tool.name)}
-                                    className="accent-accent-blue"
-                                  />
-                                  <span className="truncate">{tool.name}</span>
-                                </label>
+                                  <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${
+                                    checked ? 'border-accent bg-accent text-white' : 'border-app-strong bg-app'
+                                  }`}
+                                  >
+                                    {checked && <Check className="h-2.5 w-2.5" />}
+                                  </span>
+                                  <span className="min-w-0 truncate font-mono">{tool.name}</span>
+                                </button>
                               );
                             })}
                           </div>
@@ -482,11 +589,12 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
                       </div>
                     );
                   })}
+                  </div>
+                  <p className="mt-1 text-[10px] font-body leading-relaxed text-theme-subtle">
+                    Allen is always available. Expand a server only when you need to customize individual tools.
+                  </p>
                 </div>
-                <p className="text-[10px] text-theme-subtle font-body leading-relaxed mt-1">
-                  Allen is selected by default. External MCP servers are off until selected.
-                </p>
-              </div>
+              </section>
 
               {/* Previous prompt */}
               {isEdit && !!role?.previousSystemPrompt && (
@@ -519,9 +627,9 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
             </div>
 
             {/* ── Right column: README-style editor ───────────────────────── */}
-            <div className="flex flex-col min-h-0">
+            <div className="flex min-h-0 flex-col">
               {/* Editor tab bar */}
-              <div className="px-5 py-2.5 border-b border-app flex items-center justify-between gap-3 shrink-0 bg-surface-200/10">
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-app bg-app-muted/25 px-5 py-2.5">
                 <div className="flex items-center gap-2">
                   <FileText className="w-3.5 h-3.5 text-accent-blue" />
                   <span className="overline font-semibold">
@@ -575,20 +683,20 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
               </div>
 
               {/* Editor body */}
-              <div className={`flex-1 min-h-0 ${editorMode === 'split' ? 'grid grid-cols-2' : 'flex flex-col'}`}>
+              <div className={`min-h-0 flex-1 ${editorMode === 'split' ? 'grid grid-cols-2' : 'flex flex-col'}`}>
                 {(editorMode === 'edit' || editorMode === 'split') && (
                   <textarea
                     value={system}
                     onChange={e => setSystem(e.target.value)}
                     placeholder={`# Agent Role\n\nDescribe what this agent does, its responsibilities, and how it should behave.\n\n## Responsibilities\n\n- Responsibility 1\n- Responsibility 2\n\n## Examples\n\n\`\`\`\nExample interaction\n\`\`\`\n`}
                     spellCheck={false}
-                    className={`flex-1 min-h-0 w-full px-5 py-4 bg-app-muted/40 border-0 outline-none resize-none text-[13px] text-theme-primary font-mono leading-relaxed placeholder:text-theme-subtle focus:bg-surface-50/70 transition-colors ${
+                    className={`min-h-0 w-full flex-1 resize-none border-0 bg-app-muted/30 px-5 py-4 font-mono text-[13px] leading-relaxed text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:bg-app-muted/45 ${
                       editorMode === 'split' ? 'border-r border-app' : ''
                     }`}
                   />
                 )}
                 {(editorMode === 'preview' || editorMode === 'split') && (
-                  <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 bg-app-muted/30">
+                  <div className="min-h-0 flex-1 overflow-y-auto bg-app-muted/25 px-5 py-4">
                     {system.trim() ? (
                       <div className="text-sm text-theme-secondary leading-relaxed prose-allen">
                         {renderMarkdown(system)}
@@ -605,16 +713,16 @@ export default function RoleDialog({ open, onClose, onSave, role }: RoleDialogPr
           </div>
 
           {/* Footer actions */}
-          <div className="px-5 py-3.5 border-t border-app flex items-center justify-between gap-2 shrink-0 bg-surface-200/10">
-            <div className="text-[10px] font-mono text-theme-subtle">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-app bg-app-muted/25 px-6 py-4">
+            <div className="font-mono text-[11px] text-theme-subtle">
               Tip: Markdown supported — headings, lists, links, code blocks.
             </div>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={onClose} className="btn-ghost text-xs">
+              <button type="button" onClick={onClose} className="btn btn-secondary btn-sm">
                 Cancel
               </button>
-              <button type="submit" disabled={saving} className="btn-primary text-xs disabled:opacity-50">
-                {saving ? 'Saving...' : isEdit ? 'Update Agent' : 'Create Agent'}
+              <button type="submit" disabled={saving} className="btn btn-primary btn-sm disabled:opacity-50">
+                {saving ? 'Saving...' : isEdit ? 'Update agent' : 'Create agent'}
               </button>
             </div>
           </div>

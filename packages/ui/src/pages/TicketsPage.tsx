@@ -13,11 +13,13 @@ import { renderMarkdown } from '../components/chat/ChatMessageList';
 import { type AgentOption, type TeamOption } from '../components/agents/AgentAssignDropdown';
 import DispatchModal, { type DispatchTarget, type WorkflowOption } from '../components/linear/DispatchModal';
 import RunStatusCard from '../components/executions/RunStatusCard';
+import Select from '../components/common/Select';
 import {
   AlertCircle, ChevronDown, ChevronRight, Circle, Clock, ExternalLink,
   FolderGit2, KeyRound, Loader2, MinusCircle, Play, RefreshCw, Search, X, Sparkles, CheckCircle,
-  List as ListIcon, LayoutGrid,
+  List as ListIcon, LayoutGrid, TicketCheck,
 } from 'lucide-react';
+import IconTooltipButton from '../components/common/IconTooltipButton';
 
 type StateType = 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | 'triage';
 
@@ -41,7 +43,7 @@ interface AgentAssignee {
   branch?: string;
 }
 
-interface LinearIssue {
+export interface LinearIssue {
   id: string;
   identifier: string;
   title: string;
@@ -141,6 +143,12 @@ function compareRunRecency(a: LinearIssue, b: LinearIssue): number {
   return bTime - aTime;
 }
 
+function integrationErrorMessage(err: unknown, fallback: string): string {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  if (!message || message === 'fetch failed' || message.includes('Failed to fetch')) return fallback;
+  return message;
+}
+
 function dispatchTargetLabel(target: DispatchTarget | null): string {
   if (!target) return 'auto';
   if (target.kind === 'workflow') return `workflow: ${target.workflowName}`;
@@ -148,7 +156,7 @@ function dispatchTargetLabel(target: DispatchTarget | null): string {
   return `agent: ${target.name}`;
 }
 
-function compactWorkflowInputForPrompt(
+export function compactWorkflowInputForPrompt(
   issue: LinearIssue,
   input?: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -178,7 +186,7 @@ function compactWorkflowInputForPrompt(
   return Object.keys(compact).length > 0 ? compact : undefined;
 }
 
-function buildChatDispatchPrompt(
+export function buildChatDispatchPrompt(
   issue: LinearIssue,
   args: {
     target: DispatchTarget | null;
@@ -191,42 +199,25 @@ function buildChatDispatchPrompt(
   },
 ): string {
   const workflowInputOverrides = compactWorkflowInputForPrompt(issue, args.workflowInput);
-  const lines = [
+  const lines: (string | null | (string | null)[])[] = [
     'Dispatch this Linear ticket through Allen.',
     '',
-    'Ticket:',
-    `- Identifier: ${issue.identifier}`,
-    `- Linear issue id: ${issue.id}`,
-    `- Title: ${issue.title}`,
-    `- URL: ${issue.url}`,
-    `- Current status: ${issue.state?.name ?? 'unknown'} (${issue.state?.type ?? 'unknown'})`,
-    issue.project ? `- Project: ${issue.project.name}` : null,
-    issue.team ? `- Team: ${issue.team.name} (${issue.team.key})` : null,
-    issue.priorityLabel ? `- Priority: ${issue.priorityLabel}` : null,
-    issue.linearAssignee ? `- Linear assignee: ${issue.linearAssignee.name}` : null,
-    issue.labels.length > 0 ? `- Labels: ${issue.labels.map(label => label.name).join(', ')}` : null,
+    `${issue.identifier} · ${issue.title}`,
+    `URL: ${issue.url}`,
+    `Status: ${issue.state?.name ?? 'unknown'}`,
+    issue.priorityLabel ? `Priority: ${issue.priorityLabel}` : null,
+    args.repoName ? `Repo: ${args.repoName}` : null,
+    `Dispatch preference: ${dispatchTargetLabel(args.target)}`,
+    args.extraInstructions ? `Extra instructions: ${args.extraInstructions}` : null,
     '',
     'Description:',
     issue.description?.trim() || '(no description)',
-    '',
-    'User dispatch preference:',
-    `- Selected target: ${dispatchTargetLabel(args.target)}`,
-    `- Target kind: ${args.target?.kind ?? 'auto'}`,
-    args.repoId ? `- Repo id: ${args.repoId}` : '- Repo id: not selected',
-    args.repoName ? `- Repo name: ${args.repoName}` : null,
-    args.repoPath ? `- Repo path: ${args.repoPath}` : null,
-    args.extraInstructions ? `- Extra instructions: ${args.extraInstructions}` : '- Extra instructions: none',
     args.promptTemplate ? ['', 'Target-specific prompt override:', args.promptTemplate] : null,
-    workflowInputOverrides ? ['', 'Workflow input overrides:', '```json', JSON.stringify(workflowInputOverrides, null, 2), '```'] : null,
+    workflowInputOverrides
+      ? ['', 'Workflow input overrides:', '```json', JSON.stringify(workflowInputOverrides, null, 2), '```']
+      : null,
     '',
-    'Instructions:',
-    '1. First update the Linear ticket status from Backlog/Todo/Unstarted to In Progress if it is not already in progress.',
-    '2. Decide the best route. If a target was selected, use it as a preference, but override it if another available workflow, lead agent, or specialist agent is clearly better. If target kind is auto, choose from available workflows, lead agents, and specialists yourself.',
-    '3. Use a matching workflow if available; if the chosen workflow has a workspace/create-workspace step, do not create a separate workspace first. Pass the ticket, repo, and dispatch context into the workflow and let the workflow create or reuse its workspace.',
-    '4. If assigning a lead agent or specialist agent directly and code changes are required, create or reuse a workspace before assigning implementation work.',
-    '5. Otherwise use a lead agent for multi-agent work, or the best specialist agent for single-agent work.',
-    '6. Keep progress visible in this chat with execution, workspace, and PR links when available.',
-    '7. If human input is needed, ask clearly in this chat.',
+    'Please move the issue to In Progress if needed, route to the best workflow/lead/specialist, create or reuse a workspace for code changes, and keep progress visible here with links.',
   ];
   return lines.flat().filter((line): line is string => line != null).join('\n');
 }
@@ -311,7 +302,10 @@ export default function TicketsPage() {
       const s = await linearApi.status();
       setStatus(s);
     } catch (err) {
-      setStatus({ configured: false, error: (err as Error).message });
+      setStatus({
+        configured: false,
+        error: integrationErrorMessage(err, 'Allen could not check the Linear connection.'),
+      });
     } finally {
       setStatusLoading(false);
     }
@@ -325,10 +319,11 @@ export default function TicketsPage() {
       const p = await linearApi.projects();
       setProjects(p ?? []);
     } catch (err) {
-      toast.error(`Failed to load Linear projects: ${(err as Error).message}`);
+      const error = integrationErrorMessage(err, 'Linear could not be reached. Check your network connection or Linear status, then retry.');
+      setStatus(prev => ({ configured: prev?.configured ?? true, workspaceName: prev?.workspaceName, workspaceUrlKey: prev?.workspaceUrlKey, error }));
       setProjects([]);
     }
-  }, [toast]);
+  }, []);
 
   const loadIssues = useCallback(async () => {
     setListLoading(true);
@@ -344,12 +339,13 @@ export default function TicketsPage() {
       // the real API response includes all LinearIssue fields — safe at runtime.
       setIssues((list ?? []) as unknown as LinearIssue[]);
     } catch (err) {
-      toast.error(`Failed to load Linear issues: ${(err as Error).message}`);
+      const error = integrationErrorMessage(err, 'Linear could not be reached. Check your network connection or Linear status, then retry.');
+      setStatus(prev => ({ configured: prev?.configured ?? true, workspaceName: prev?.workspaceName, workspaceUrlKey: prev?.workspaceUrlKey, error }));
       setIssues([]);
     } finally {
       setListLoading(false);
     }
-  }, [projectFilter, stateFilters, search, toast]);
+  }, [projectFilter, stateFilters, search]);
 
   useEffect(() => {
     if (!status?.configured) return;
@@ -401,6 +397,15 @@ export default function TicketsPage() {
     return Array.from(seen.values()).sort((x, y) => x.name.localeCompare(y.name));
   }, [issues]);
 
+  const assigneeOptions = useMemo(
+    () => [
+      { value: 'any', label: 'Any assignee' },
+      { value: 'unassigned', label: 'Unassigned' },
+      ...linearAssignees.map(user => ({ value: user.id, label: user.name })),
+    ],
+    [linearAssignees],
+  );
+
   // Filter projects locally by the sidebar search — so "search projects and issues"
   // narrows both lists at once.
   const filteredProjects = useMemo(() => {
@@ -411,6 +416,18 @@ export default function TicketsPage() {
       || (p.description ?? '').toLowerCase().includes(q),
     );
   }, [projects, search]);
+
+  const projectOptions = useMemo(
+    () => [
+      { value: '', label: 'All projects' },
+      ...filteredProjects.map(project => ({
+        value: project.id,
+        label: project.name,
+        sublabel: project.description || undefined,
+      })),
+    ],
+    [filteredProjects],
+  );
 
   // Group by status type
   const groupedStateSections = useMemo(() => {
@@ -490,39 +507,57 @@ export default function TicketsPage() {
 
   if (statusLoading) {
     return (
-      <div className="p-6 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
-        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking Linear connection…
+      <div className="content scroll-hide !p-0 h-full bg-app" data-screen-label="linear-tickets">
+        <div className="flex h-full w-full items-center justify-center gap-2 px-8 py-8 font-mono text-[11px] text-theme-muted">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking Linear connection...
+        </div>
       </div>
     );
   }
 
   if (!status?.configured) {
+    const statusCheckFailed = Boolean(status?.error);
     return (
-      <div className="flex items-center justify-center h-full p-8">
-        <div className="max-w-md w-full rounded-xl border border-app bg-app-muted/50 p-8 text-center space-y-4">
-          <div className="w-12 h-12 mx-auto rounded-full bg-accent-yellow/10 flex items-center justify-center">
-            <AlertCircle className="w-6 h-6 text-accent-yellow" />
-          </div>
+      <div className="content scroll-hide !p-0 h-full bg-app" data-screen-label="linear-tickets">
+        <div className="flex min-h-full w-full items-center justify-center px-8 py-8">
+        <div className="w-full max-w-[480px] rounded-md border border-app bg-app-card px-6 py-8 text-center">
+          <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-md border border-app bg-app text-accent">
+            <AlertCircle className="h-5 w-5" />
+          </span>
           <div>
-            <h2 className="font-heading text-lg font-bold text-theme-primary tracking-wide">Linear not connected</h2>
-            <p className="text-[12px] text-theme-muted font-body mt-2">
-              Add a Linear API token to Allen's <code className="font-mono">.env</code> under the key:
+            <h2 className="mt-5 text-[17px] font-semibold text-theme-primary">
+              {statusCheckFailed ? 'Could not check Linear' : 'Linear is not connected'}
+            </h2>
+            <p className="mt-2 text-[13px] text-theme-muted">
+              {statusCheckFailed
+                ? status?.error
+                : 'Add a Linear API token to Allen before tickets can be synced and dispatched.'}
             </p>
           </div>
-          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-app-muted border border-app text-[11px] font-mono text-accent">
-            <KeyRound className="w-3.5 h-3.5" /> ALLEN_LINEAR_ACCESS_TOKEN
-          </div>
-          <p className="text-[11px] text-theme-muted font-body">
-            Then restart the Allen server.
-          </p>
-          <div className="flex items-center justify-center gap-2 pt-2">
+          {!statusCheckFailed && (
+            <div className="mt-5 inline-flex items-center gap-2 rounded-md border border-app bg-app px-3 py-2 font-mono text-[11px] text-accent">
+              <KeyRound className="h-3.5 w-3.5" /> ALLEN_LINEAR_ACCESS_TOKEN
+            </div>
+          )}
+          <div className="mt-6 flex items-center justify-center gap-2">
+            {!statusCheckFailed && (
+              <button
+                onClick={() => navigate('/settings/mcp')}
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+                type="button"
+              >
+                Connect Linear
+              </button>
+            )}
             <button
               onClick={loadStatus}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors"
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
+              type="button"
             >
-              <RefreshCw className="w-3 h-3" /> Recheck
+              <RefreshCw className="h-3.5 w-3.5" /> {statusCheckFailed ? 'Retry' : 'Recheck'}
             </button>
           </div>
+        </div>
         </div>
       </div>
     );
@@ -530,17 +565,22 @@ export default function TicketsPage() {
 
   if (status.configured && status.error) {
     return (
-      <div className="flex items-center justify-center h-full p-8">
-        <div className="max-w-md w-full rounded-xl border border-accent-red/30 bg-accent-red/5 p-6 text-center space-y-3">
-          <AlertCircle className="w-6 h-6 text-accent-red mx-auto" />
-          <h2 className="font-heading text-base font-bold text-theme-primary">Couldn't reach Linear</h2>
-          <p className="text-[12px] text-theme-muted font-body">{status.error}</p>
-          <button
-            onClick={loadStatus}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted"
-          >
-            <RefreshCw className="w-3 h-3" /> Retry
-          </button>
+      <div className="content scroll-hide !p-0 h-full bg-app" data-screen-label="linear-tickets">
+        <div className="flex min-h-full w-full items-center justify-center px-8 py-8">
+        <div className="w-full max-w-[480px] rounded-md border border-accent-red/30 bg-accent-red/5 px-6 py-8 text-center">
+          <AlertCircle className="mx-auto h-6 w-6 text-accent-red" />
+          <h2 className="mt-4 text-[17px] font-semibold text-theme-primary">Could not reach Linear</h2>
+          <p className="mt-2 text-[13px] text-theme-muted">{status.error}</p>
+          <div className="mt-5 flex items-center justify-center gap-2">
+            <button
+              onClick={loadStatus}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
+              type="button"
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> Retry
+            </button>
+          </div>
+        </div>
         </div>
       </div>
     );
@@ -551,57 +591,55 @@ export default function TicketsPage() {
   const runningCount = issues.filter(i => isActiveRun(i.agentAssignee) || isCompletedRun(i.agentAssignee)).length;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {/* ── Top bar (matches handoff/pages/remaining.jsx LinearV2) ──────── */}
-      <div className="surface-bar pb-0 shrink-0">
-        <div className="page-crumb">
-          <span>Sources</span>
-          <span className="text-theme-subtle">/</span>
-          <span>Tickets</span>
-        </div>
-        <div className="flex items-center justify-between mb-3">
+    <div className="content scroll-hide !p-0 bg-app" data-screen-label="linear-tickets">
+      <div className="flex h-full w-full flex-col px-8 py-8">
+        <div className="mb-6 flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
-            <h1 className="page-title">Tickets</h1>
-            <div className="flex items-center gap-1.5 text-[11px] font-mono text-theme-muted">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-              {status.workspaceName ?? 'Linear'} · {issues.length} issues
+            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
+              <TicketCheck className="h-[18px] w-[18px]" />
+            </span>
+            <div>
+              <h1 className="text-[24px] font-semibold leading-tight text-theme-primary">Linear</h1>
+              <p className="mt-1 text-[13px] text-theme-muted">
+                {status.workspaceName ?? 'Linear'} tickets ready for triage, dispatch, and follow-up.
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {/* List/Board view toggle */}
-            <div className="flex items-center bg-app-muted rounded-md p-0.5">
+            <div className="flex h-9 items-center rounded-md border border-app bg-app-card p-1">
               <button
                 onClick={() => setViewMode('list')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] transition-colors ${
-                  viewMode === 'list' ? 'bg-app-card text-theme-primary shadow-sm font-medium' : 'text-theme-muted hover:text-theme-primary'
+                className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors ${
+                  viewMode === 'list' ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'
                 }`}
-                title="List view"
+                type="button"
               >
-                <ListIcon className="w-3.5 h-3.5" /> List
+                <ListIcon className="h-3.5 w-3.5" /> List
               </button>
               <button
                 onClick={() => setViewMode('board')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] transition-colors ${
-                  viewMode === 'board' ? 'bg-app-card text-theme-primary shadow-sm font-medium' : 'text-theme-muted hover:text-theme-primary'
+                className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors ${
+                  viewMode === 'board' ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'
                 }`}
-                title="Board view"
+                type="button"
               >
-                <LayoutGrid className="w-3.5 h-3.5" /> Board
+                <LayoutGrid className="h-3.5 w-3.5" /> Board
               </button>
             </div>
             <button
               onClick={() => { void loadStatus(); void loadProjects(); void loadIssues(); }}
               disabled={listLoading}
-              className="btn btn-secondary btn-sm"
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
             >
-              {listLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              {listLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
               Refresh
             </button>
           </div>
         </div>
 
-        {/* Tab row */}
-        <div className="flex items-center gap-1 -mb-px">
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-app bg-app-card px-3 py-2">
+          <div className="flex items-center gap-1">
           {([
             { id: 'all', label: 'All', count: issues.length },
             { id: 'active', label: 'Active', count: activeCount },
@@ -611,64 +649,60 @@ export default function TicketsPage() {
             <button
               key={t.id}
               onClick={() => setTopTab(t.id)}
-              className={`px-2.5 py-1.5 text-[13px] -mb-px transition-colors flex items-center gap-1.5 border-b-2 ${
+              className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12px] font-medium transition-colors ${
                 topTab === t.id
-                  ? 'text-theme-primary font-medium border-accent'
-                  : 'text-theme-muted hover:text-theme-primary border-transparent'
+                  ? 'bg-app-muted text-theme-primary shadow-sm'
+                  : 'text-theme-muted hover:text-theme-primary'
               }`}
+              type="button"
             >
               {t.label}
-              {t.count != null && <span className="text-[11px] text-theme-muted font-mono">{t.count}</span>}
+              {t.count != null && <span className="font-mono text-[11px] text-theme-muted">{t.count}</span>}
             </button>
           ))}
+          </div>
+          <span className="font-mono text-[11px] text-theme-muted">{totalShown} shown</span>
         </div>
-      </div>
 
       {/* ── Filter row + main list ──────────────────────────────────────── */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        <div className="flex-1 overflow-y-auto min-h-0">
-          <div className="px-6 py-4 space-y-3">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        <div className="min-h-0 w-full overflow-y-auto">
+          <div className="space-y-4">
             {/* Filter row */}
-            <div className="flex items-center gap-3 text-[12px] text-theme-muted">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-muted pointer-events-none" />
+            <div className="flex flex-wrap items-center gap-3 rounded-md border border-app bg-app-card px-3 py-3 text-[12px] text-theme-muted">
+              <div className="relative min-w-[260px] flex-1">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
                 <input
                   type="text"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                   placeholder="Search issues…"
-                  className="input pl-8 pr-3 py-1.5 w-64 text-[12px]"
+                  className="h-9 w-full rounded-md border border-app bg-app-muted pl-8 pr-3 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
                 />
               </div>
-              <span>Project:</span>
-              <select
+              <Select
                 value={projectFilter}
-                onChange={e => setProjectFilter(e.target.value)}
-                className="input py-1.5 text-[12px] w-auto"
-              >
-                <option value="">All projects</option>
-                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-              <span>Assignee:</span>
-              <select
+                onChange={setProjectFilter}
+                options={projectOptions}
+                placeholder="All projects"
+                searchPlaceholder="Search projects..."
+                className="w-[220px]"
+              />
+              <Select
                 value={assigneeFilter}
-                onChange={e => setAssigneeFilter(e.target.value)}
-                className="input py-1.5 text-[12px] w-auto"
-              >
-                <option value="any">Any</option>
-                <option value="unassigned">Unassigned</option>
-                {linearAssignees.map(u => (
-                  <option key={u.id} value={u.id}>{u.name}</option>
-                ))}
-              </select>
-              <div className="flex-1" />
-              <span className="text-[11px] font-mono">{totalShown} of {issues.length}</span>
+                onChange={(value) => setAssigneeFilter(value as 'any' | 'unassigned' | string)}
+                options={assigneeOptions}
+                placeholder="Any assignee"
+                searchPlaceholder="Search assignees..."
+                className="w-[200px]"
+              />
+              <span className="ml-auto font-mono text-[11px] text-theme-muted">{totalShown} of {issues.length}</span>
             </div>
 
             {topTab === 'running' ? (
               <div className="space-y-3">
-                <div className="card overflow-hidden">
-                  <div className="flex items-center justify-between gap-2 border-b border-app bg-app-muted px-3.5 py-2">
+                <div className="overflow-hidden rounded-md border border-app bg-app-card">
+                  <div className="flex items-center justify-between gap-2 border-b border-app px-4 py-3">
                     <div>
                       <div className="text-[13px] font-medium text-theme-primary">Running now</div>
                       <div className="text-[10px] font-mono text-theme-muted">Pending and active ticket runs</div>
@@ -693,8 +727,8 @@ export default function TicketsPage() {
                     </div>
                   )}
                 </div>
-                <div className="card overflow-hidden">
-                  <div className="flex items-center justify-between gap-2 border-b border-app bg-accent-green/5 px-3.5 py-2">
+                <div className="overflow-hidden rounded-md border border-app bg-app-card">
+                  <div className="flex items-center justify-between gap-2 border-b border-app px-4 py-3">
                     <div>
                       <div className="text-[13px] font-medium text-theme-primary">Recent completed</div>
                       <div className="text-[10px] font-mono text-theme-muted">Latest successful ticket runs</div>
@@ -727,10 +761,10 @@ export default function TicketsPage() {
                   if (list.length === 0) return null;
                   const collapsed = collapsedGroups.has(g.key);
                   return (
-                    <div key={g.key} className="card overflow-hidden">
+                    <div key={g.key} className="overflow-hidden rounded-md border border-app bg-app-card">
                       <button
                         onClick={() => toggleGroupCollapsed(g.key)}
-                        className="w-full flex items-center gap-2 px-3.5 py-2 text-left bg-app-muted hover:bg-app-muted/80 border-b border-app transition-colors"
+                        className="flex w-full items-center gap-2 border-b border-app px-4 py-3 text-left transition-colors hover:bg-app-muted/40"
                       >
                         {collapsed ? <ChevronRight className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronDown className="w-3.5 h-3.5 text-theme-muted" />}
                         <span
@@ -758,13 +792,13 @@ export default function TicketsPage() {
                   );
                 })}
                 {!listLoading && filteredIssues.length === 0 && (
-                  <div className="rounded-xl border border-dashed border-app p-12 text-center text-[12px] text-theme-muted font-body italic">
+                  <div className="rounded-md border border-dashed border-app bg-app-card p-12 text-center text-[13px] text-theme-muted">
                     No tickets match the current filters.
                   </div>
                 )}
                 {listLoading && issues.length === 0 && (
                   <div className="flex items-center gap-2 text-[11px] font-mono text-theme-muted py-6 px-2">
-                    <Loader2 className="w-3 h-3 animate-spin" /> Loading from Linear…
+                    <Loader2 className="w-3 h-3 animate-spin" /> Loading from Linear...
                   </div>
                 )}
               </div>
@@ -776,8 +810,8 @@ export default function TicketsPage() {
                 {groupedStateSections.map(g => {
                   const list = g.issues;
                   return (
-                    <div key={g.key} className="w-[300px] shrink-0 flex flex-col card overflow-hidden">
-                      <div className="flex items-center gap-2 px-3 py-2 bg-app-muted border-b border-app shrink-0">
+                    <div key={g.key} className="flex w-[300px] shrink-0 flex-col overflow-hidden rounded-md border border-app bg-app-card">
+                      <div className="flex shrink-0 items-center gap-2 border-b border-app px-3 py-2.5">
                         <span className="inline-flex items-center gap-2 text-[13px] font-medium text-theme-primary">
                           <span className="h-2 w-2 rounded-full" style={{ backgroundColor: g.color }} />
                           {g.label}
@@ -804,7 +838,7 @@ export default function TicketsPage() {
                   );
                 })}
                 {!listLoading && filteredIssues.length === 0 && (
-                  <div className="rounded-xl border border-dashed border-app p-12 text-center text-[12px] text-theme-muted font-body italic w-full">
+                  <div className="w-full rounded-md border border-dashed border-app bg-app-card p-12 text-center text-[13px] text-theme-muted">
                     No tickets match the current filters.
                   </div>
                 )}
@@ -813,26 +847,27 @@ export default function TicketsPage() {
           </div>
         </div>
 
-        {/* Drawer */}
-        {selectedId && (
-          <div className="w-[32rem] shrink-0 border-l border-app bg-app-muted/50 overflow-y-auto min-h-0 flex flex-col">
-            {detailLoading && !detail ? (
-              <div className="p-6 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
-                <Loader2 className="w-3 h-3 animate-spin" /> Loading…
-              </div>
-            ) : detail ? (
-              <TicketDrawer
-                issue={detail}
-                onClose={() => { setSelectedId(null); setDetail(null); }}
-                onDispatch={() => setDispatchFor(detail)}
-                navigate={navigate}
-              />
-            ) : (
-              <div className="p-6 text-[12px] text-theme-muted">Not found.</div>
-            )}
-          </div>
-        )}
       </div>
+
+      {/* Drawer */}
+      {selectedId && (
+        <div className="fixed bottom-0 right-0 top-0 z-50 flex w-[32rem] max-w-[calc(100vw-2rem)] flex-col border-l border-app bg-app-card shadow-[-24px_0_60px_rgba(0,0,0,0.28)]">
+          {detailLoading && !detail ? (
+            <div className="p-6 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
+              <Loader2 className="w-3 h-3 animate-spin" /> Loading…
+            </div>
+          ) : detail ? (
+            <TicketDrawer
+              issue={detail}
+              onClose={() => { setSelectedId(null); setDetail(null); }}
+              onDispatch={() => setDispatchFor(detail)}
+              navigate={navigate}
+            />
+          ) : (
+            <div className="p-6 text-[12px] text-theme-muted">Not found.</div>
+          )}
+        </div>
+      )}
 
       {/* Dispatch modal */}
       {dispatchFor && (
@@ -850,6 +885,7 @@ export default function TicketsPage() {
           onSubmit={(args) => handleDispatch(dispatchFor, args)}
         />
       )}
+      </div>
     </div>
   );
 }
@@ -862,7 +898,7 @@ function AssignmentPill({ assignee, onClick }: { assignee: AgentAssignee | null;
     return (
       <button
         onClick={onClick}
-        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-app-muted text-theme-muted hover:bg-accent-green/10 hover:text-accent-green border border-app hover:border-accent-green/40 transition-colors"
+        className="inline-flex h-7 items-center gap-1 rounded-md border border-app bg-app px-2.5 font-mono text-[10.5px] text-theme-muted transition-colors hover:border-accent-green/40 hover:bg-accent-green/10 hover:text-accent-green"
       >
         <Sparkles className="w-3 h-3" /> Dispatch
       </button>
@@ -876,7 +912,7 @@ function AssignmentPill({ assignee, onClick }: { assignee: AgentAssignee | null;
     : status === 'pending' ? 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/30'
     : status === 'failed' ? 'bg-accent-red/10 text-accent-red border-accent-red/30'
     : status === 'completed' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
-    : 'bg-accent-soft text-accent border-accent/30';
+    : 'border-accent/30 bg-accent/10 text-accent';
   const icon =
     status === 'running' ? <Play className="w-3 h-3" />
     : status === 'pending' ? <Loader2 className="w-3 h-3 animate-spin" />
@@ -892,7 +928,7 @@ function AssignmentPill({ assignee, onClick }: { assignee: AgentAssignee | null;
   return (
     <button
       onClick={onClick}
-      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono border transition-colors hover:brightness-110 ${tone}`}
+      className={`inline-flex h-7 items-center gap-1 rounded-md border px-2.5 font-mono text-[10.5px] transition-colors hover:brightness-110 ${tone}`}
       title={status === 'failed' ? (assignee.error ?? undefined) : `${kind === 'workflow' ? 'Workflow' : 'Agent'} ${targetName}${label ? ` · ${label}` : ''}`}
     >
       {icon}
@@ -973,7 +1009,7 @@ function TicketRunSteps({ assignee }: { assignee: AgentAssignee }) {
       ];
 
   return (
-    <div className="space-y-2 rounded-lg border border-app/70 bg-black/5 px-3 py-2">
+    <div className="space-y-2 rounded-md border border-app bg-app px-3 py-2">
       {steps.map(step => (
         <div key={step.label} className="flex items-start gap-2.5">
           <div className="pt-0.5">
@@ -998,7 +1034,7 @@ function TicketRow({
   onDispatch: () => void;
 }) {
   return (
-    <div className={`flex items-center gap-3 px-3 py-2.5 transition-colors cursor-pointer ${active ? 'bg-accent-soft' : 'hover:bg-app-muted/50'}`}>
+    <div className={`flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors ${active ? 'bg-accent/10' : 'hover:bg-app-muted/35'}`}>
       <div className="shrink-0" title={issue.priorityLabel}>
         <PriorityIcon p={issue.priority} />
       </div>
@@ -1010,7 +1046,7 @@ function TicketRow({
       </button>
       <div className="flex items-center gap-1.5 shrink-0">
         <span
-          className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-mono"
+          className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[9.5px]"
           style={{ color: issue.state.color, borderColor: issue.state.color + '60', backgroundColor: issue.state.color + '15' }}
         >
           {issue.state.name}
@@ -1018,7 +1054,7 @@ function TicketRow({
         {issue.labels.slice(0, 2).map(l => (
           <span
             key={l.id}
-            className="text-[9px] font-mono px-1.5 py-0.5 rounded border"
+            className="rounded-md border px-1.5 py-0.5 font-mono text-[9.5px]"
             style={{ color: l.color, borderColor: l.color + '60', backgroundColor: l.color + '15' }}
           >
             {l.name}
@@ -1049,8 +1085,8 @@ function BoardCard({
   return (
     <div
       onClick={onSelect}
-      className={`card-hover p-2.5 cursor-pointer flex flex-col gap-1.5 ${
-        active ? 'border-accent shadow-sm' : ''
+      className={`flex cursor-pointer flex-col gap-2 rounded-md border bg-app px-3 py-3 transition-colors hover:border-app-strong hover:bg-app-muted/25 ${
+        active ? 'border-accent shadow-sm' : 'border-app'
       }`}
     >
       <div className="flex items-center gap-1.5">
@@ -1068,7 +1104,7 @@ function BoardCard({
       </div>
       <div className="flex items-center gap-1.5">
         <span
-          className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-mono"
+          className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[9.5px]"
           style={{ color: issue.state.color, borderColor: issue.state.color + '60', backgroundColor: issue.state.color + '15' }}
         >
           {issue.state.name}
@@ -1079,7 +1115,7 @@ function BoardCard({
           {issue.labels.slice(0, 3).map(l => (
             <span
               key={l.id}
-              className="text-[9px] font-mono px-1.5 py-0.5 rounded border"
+              className="rounded-md border px-1.5 py-0.5 font-mono text-[9.5px]"
               style={{ color: l.color, borderColor: l.color + '60', backgroundColor: l.color + '15' }}
             >
               {l.name}
@@ -1120,7 +1156,7 @@ function TicketDrawer({
     : status === 'pending' ? 'bg-accent-yellow/10 text-accent-yellow border-accent-yellow/30'
     : status === 'failed' ? 'bg-accent-red/10 text-accent-red border-accent-red/30'
     : status === 'completed' ? 'bg-accent-green/10 text-accent-green border-accent-green/30'
-    : 'bg-accent-soft text-accent border-accent/30';
+    : 'border-accent/30 bg-accent/10 text-accent';
 
   const statusLabel =
     status === 'running' ? (isWorkflowRun ? 'Workflow is running' : 'Agent is working')
@@ -1131,33 +1167,33 @@ function TicketDrawer({
 
   return (
     <>
-      <div className="px-5 py-4 border-b border-app flex items-center justify-between shrink-0">
+      <div className="flex shrink-0 items-center justify-between border-b border-app px-5 py-4">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-mono text-theme-subtle">{issue.identifier}</span>
           {issue.project && (
             <span className="text-[11px] font-mono text-theme-muted">· {issue.project.name}</span>
           )}
         </div>
-        <button onClick={onClose} className="p-1.5 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted">
+        <IconTooltipButton label="Close" onClick={onClose} className="h-8 w-8">
           <X className="w-4 h-4" />
-        </button>
+        </IconTooltipButton>
       </div>
-      <div className="px-5 py-4 border-b border-app shrink-0 space-y-3">
-        <h3 className="font-heading text-base font-bold text-theme-primary tracking-wide leading-snug">{issue.title}</h3>
+      <div className="shrink-0 space-y-3 border-b border-app px-5 py-4">
+        <h3 className="text-[16px] font-semibold leading-snug text-theme-primary">{issue.title}</h3>
         <div className="flex items-center gap-2 flex-wrap">
           <span
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono border"
+            className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px]"
             style={{ color: issue.state.color, borderColor: issue.state.color + '60', backgroundColor: issue.state.color + '15' }}
           >
             {issue.state.name}
           </span>
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-app-muted text-theme-muted border border-app">
+          <span className="inline-flex items-center gap-1 rounded-md border border-app bg-app px-2 py-0.5 font-mono text-[10px] text-theme-muted">
             <PriorityIcon p={issue.priority} /> {issue.priorityLabel}
           </span>
           {issue.labels.map(l => (
             <span
               key={l.id}
-              className="text-[9px] font-mono px-1.5 py-0.5 rounded border"
+              className="rounded-md border px-1.5 py-0.5 font-mono text-[9.5px]"
               style={{ color: l.color, borderColor: l.color + '60', backgroundColor: l.color + '15' }}
             >
               {l.name}
@@ -1166,11 +1202,11 @@ function TicketDrawer({
         </div>
       </div>
 
-      <div className="px-5 py-4 border-b border-app shrink-0 space-y-3">
+      <div className="shrink-0 space-y-3 border-b border-app px-5 py-4">
         <div>
-          <div className="overline mb-1.5">Ticket run</div>
+          <div className="mb-1.5 font-mono text-[10.5px] uppercase tracking-[0.16em] text-theme-muted">Ticket run</div>
           {assignee ? (
-            <div className={`rounded-lg border px-3 py-2 space-y-2 ${statusTone}`}>
+            <div className={`space-y-3 rounded-md border px-3 py-3 ${statusTone}`}>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   {status === 'pending' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : status === 'completed' ? <CheckCircle className="w-3.5 h-3.5" /> : status === 'running' ? <Play className="w-3.5 h-3.5" /> : status === 'failed' ? <AlertCircle className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
@@ -1200,7 +1236,7 @@ function TicketDrawer({
                 {assignee.workspaceId && (
                   <button
                     onClick={() => navigate(`/workspaces/${assignee.workspaceId}`)}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/10 px-2.5 py-1 text-[10px] font-mono text-accent transition-colors hover:bg-accent/15 hover:border-accent/40"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-accent/25 bg-accent/10 px-2.5 font-mono text-[10.5px] text-accent transition-colors hover:border-accent/40 hover:bg-accent/15"
                   >
                     <FolderGit2 className="h-3.5 w-3.5" />
                     Open workspace
@@ -1209,7 +1245,7 @@ function TicketDrawer({
                 {assignee.executionId && (
                   <button
                     onClick={() => navigate(`/executions/${assignee.executionId}`)}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-accent-green/30 bg-accent-green/10 px-2.5 py-1 text-[10px] font-mono text-accent-green transition-colors hover:bg-accent-green/15 hover:border-accent-green/45"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-accent-green/30 bg-accent-green/10 px-2.5 font-mono text-[10.5px] text-accent-green transition-colors hover:border-accent-green/45 hover:bg-accent-green/15"
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
                     View {isWorkflowRun ? 'workflow' : 'agent'} execution
@@ -1217,7 +1253,7 @@ function TicketDrawer({
                 )}
                 <button
                   onClick={onDispatch}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-accent-yellow/30 bg-accent-yellow/10 px-2.5 py-1 text-[10px] font-mono text-accent-yellow transition-colors hover:bg-accent-yellow/15 hover:border-accent-yellow/45"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-accent-yellow/30 bg-accent-yellow/10 px-2.5 font-mono text-[10.5px] text-accent-yellow transition-colors hover:border-accent-yellow/45 hover:bg-accent-yellow/15"
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
                   Re-dispatch
@@ -1227,7 +1263,7 @@ function TicketDrawer({
           ) : (
             <button
               onClick={onDispatch}
-              className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-mono bg-accent-green/10 text-accent-green hover:bg-accent-green/20 border border-accent-green/30 transition-colors"
+              className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-md border border-accent-green/30 bg-accent-green/10 px-3 font-mono text-[11px] text-accent-green transition-colors hover:bg-accent-green/20"
             >
               <Sparkles className="w-3 h-3" /> Dispatch to an agent
             </button>
@@ -1235,14 +1271,14 @@ function TicketDrawer({
         </div>
         {issue.linearAssignee && (
           <div>
-            <div className="overline mb-1">Linear assignee</div>
+            <div className="mb-1 font-mono text-[10.5px] uppercase tracking-[0.16em] text-theme-muted">Linear assignee</div>
             <div className="text-[11px] font-mono text-theme-secondary">{issue.linearAssignee.name}{issue.linearAssignee.email ? ` · ${issue.linearAssignee.email}` : ''}</div>
           </div>
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0 px-5 py-4">
-        <div className="overline mb-3">Description</div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        <div className="mb-3 font-mono text-[10.5px] uppercase tracking-[0.16em] text-theme-muted">Description</div>
         {issue.description ? (
           <div className="text-[13px] text-theme-secondary leading-relaxed prose-allen">
             {renderMarkdown(issue.description)}
@@ -1251,7 +1287,7 @@ function TicketDrawer({
           <div className="text-[11px] text-theme-muted italic">No description.</div>
         )}
 
-        <div className="mt-6 overline mb-2">Metadata</div>
+        <div className="mb-2 mt-6 font-mono text-[10.5px] uppercase tracking-[0.16em] text-theme-muted">Metadata</div>
         <div className="space-y-1 text-[11px] font-mono text-theme-muted">
           <div>Team: <span className="text-theme-secondary">{issue.team.name}</span></div>
           {issue.project && <div>Project: <span className="text-theme-secondary">{issue.project.name}</span></div>}
@@ -1261,12 +1297,12 @@ function TicketDrawer({
         </div>
       </div>
 
-      <div className="px-5 py-4 border-t border-app shrink-0 flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2 border-t border-app px-5 py-4">
         <a
           href={issue.url}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-[11px] font-mono bg-app-muted text-theme-muted hover:bg-app-muted transition-colors"
+          className="inline-flex h-9 items-center gap-1.5 rounded-md border border-app bg-app px-3 font-mono text-[11px] text-theme-muted transition-colors hover:border-app-strong hover:text-theme-primary"
         >
           <ExternalLink className="w-3 h-3" /> Open in Linear
         </a>

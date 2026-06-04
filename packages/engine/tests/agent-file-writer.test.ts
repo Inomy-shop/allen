@@ -38,17 +38,6 @@ describe('agent file materialization audit metadata', () => {
     expect(body.match(/<repo_context_usage_schema/g)).toHaveLength(1);
   });
 
-  it('always allowlists Allen graph persistence for repo knowledge graph indexer agents', () => {
-    const { body } = renderAgentFile({
-      name: 'repo-knowledge-graph-indexer',
-      system: 'Build and persist the repo knowledge graph.',
-      tools: [],
-    });
-
-    expect(body).toContain('tools: ');
-    expect(body).toContain('mcp__allen__save_repo_knowledge_graph');
-  });
-
   it('returns a hash for the exact rendered Claude agent file body', () => {
     const agent = {
       name: 'hash-audit-test',

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+  </defs>
+  <rect x="78" y="62" width="868" height="868" rx="184" fill="#11100E"/>
+  <rect x="79" y="63" width="866" height="866" rx="183" fill="none" stroke="#3A3E48" stroke-width="6" stroke-opacity="0.9"/>
+  <text x="508.5" y="634.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Menlo, monospace" font-size="440" font-weight="700" fill="#ffffff" transform="translate(512 496) scale(1 1.05) translate(-512 -496)">[a]</text>
+</svg>

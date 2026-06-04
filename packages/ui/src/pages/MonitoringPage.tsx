@@ -17,6 +17,7 @@ import {
   Zap,
 } from 'lucide-react';
 import StatusBadge from '../components/common/StatusBadge';
+import Select from '../components/common/Select';
 import { executions as executionsApi, monitoring as monitoringApi } from '../services/api';
 import { useToast } from '../components/common/Toast';
 
@@ -223,11 +224,17 @@ export default function MonitoringPage() {
             <p className="sub">cost, runtime, and run health across the org</p>
           </div>
           <div className="row gap-2">
-            <select className="lrn-select min-w-[140px]" value={range} onChange={e => setRange(e.target.value)}>
-              <option value="24h">Last 24 hours</option>
-              <option value="7d">Last 7 days</option>
-              <option value="30d">Last 30 days</option>
-            </select>
+            <Select
+              className="min-w-[150px]"
+              value={range}
+              onChange={setRange}
+              searchable={false}
+              options={[
+                { value: '24h', label: 'Last 24 hours' },
+                { value: '7d', label: 'Last 7 days' },
+                { value: '30d', label: 'Last 30 days' },
+              ]}
+            />
             <button className="btn btn-secondary btn-sm" onClick={load} disabled={loading} title="Refresh analytics">
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             </button>
@@ -295,17 +302,23 @@ export default function MonitoringPage() {
               <p className="sub">hourly scan of chats, agents, workflows, logs, traces, memory, tool calls, and dispatch records</p>
             </div>
             <div className="row gap-2">
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="lrn-select min-w-[150px]">
-                <option value="">All statuses</option>
-                <option value="ticketed">Ticketed</option>
-                <option value="updated_existing">Updated existing</option>
-                <option value="dispatched">Dispatched</option>
-                <option value="failed_to_ticket">Ticket failed</option>
-                <option value="failed_to_dispatch">Dispatch failed</option>
-                <option value="ignored">Ignored</option>
-                <option value="suppressed">Suppressed</option>
-                <option value="resolved">Resolved</option>
-              </select>
+              <Select
+                className="min-w-[170px]"
+                value={statusFilter}
+                onChange={setStatusFilter}
+                searchable={false}
+                options={[
+                  { value: '', label: 'All statuses' },
+                  { value: 'ticketed', label: 'Ticketed' },
+                  { value: 'updated_existing', label: 'Updated existing' },
+                  { value: 'dispatched', label: 'Dispatched' },
+                  { value: 'failed_to_ticket', label: 'Ticket failed' },
+                  { value: 'failed_to_dispatch', label: 'Dispatch failed' },
+                  { value: 'ignored', label: 'Ignored' },
+                  { value: 'suppressed', label: 'Suppressed' },
+                  { value: 'resolved', label: 'Resolved' },
+                ]}
+              />
               <button className="btn btn-secondary btn-sm" onClick={load} disabled={loading}>
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
                 refresh

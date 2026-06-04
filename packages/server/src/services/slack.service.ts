@@ -11,10 +11,10 @@
  * read-only (interaction happens via Slack only).
  */
 
-import { existsSync, mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { getUploadsDir, ensureLocalDir } from './upload-storage.js';
 import type { Db } from 'mongodb';
 import { ChatService, type ChatEventHandler, type ChatMessageSender } from './chat.service.js';
 import type { ChatProvider } from './chat-providers.js';
@@ -76,8 +76,7 @@ const SLACK_DEFAULT_PROVIDER: ChatProvider = 'codex';
 const SLACK_DEFAULT_MODEL = 'gpt-5.5';
 
 // ── File attachment constants ──
-const UPLOADS_DIR = process.env.UPLOADS_DIR ?? join(process.cwd(), '..', '..', 'uploads');
-if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+// Directory resolved lazily via getUploadsDir() so tests can override UPLOADS_DIR.
 
 const MAX_SLACK_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
 const MAX_FILES_PER_MENTION = 10;
@@ -321,7 +320,9 @@ export class SlackService {
       const ext = extname(file.name) || '.bin';
       const uuid = randomUUID();
       const storedName = `${uuid}${ext}`;
-      const fullPath = join(UPLOADS_DIR, storedName);
+      const uploadsDir = getUploadsDir();
+      ensureLocalDir(uploadsDir);
+      const fullPath = join(uploadsDir, storedName);
 
       await writeFile(fullPath, buffer);
 
@@ -574,7 +575,7 @@ function toolProgressLabel(tool: string): string {
   if (tool.includes('run_workflow')) return 'starting a workflow';
   if (tool.includes('wait_for_execution')) return 'waiting for execution progress';
   if (tool.includes('spawn_agent')) return 'assigning an agent';
-  if (tool.includes('wait_for_delegation')) return 'waiting for the agent';
+  if (tool.includes('wait_for_execution')) return 'waiting for the agent';
   if (tool.includes('list_repos')) return 'checking repositories';
   if (tool.includes('linear')) return 'checking Linear';
   return normalized;

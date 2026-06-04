@@ -13,7 +13,7 @@ export type { NodeResult } from './node-executor.js';
 export { LearningManager, type ExtractionContext } from './learning-manager.js';
 export * from './types.js';
 export { embed, embedAndSave, searchSimilarLearnings, backfillEmbeddings, invalidateEmbeddingCache, cosineSimilarity, registerEmbeddingProvider, setEmbeddingProvider, getActiveProvider, type EmbeddingProvider } from './embedding.js';
-export { loadMcpServers, loadAllMcpServers, getAllenMcpConfig, buildSingleServerConfig, type LoadMcpOptions } from './mcp-loader.js';
+export { loadMcpServers, loadAllMcpServers, getAllenMcpConfig, buildSingleServerConfig, isRunningBuiltCode, type BuildMcpConfigOptions, type LoadMcpOptions, type McpSourceEnv } from './mcp-loader.js';
 export { ALLEN_MCP_TOOL_NAMES, ALLEN_MCP_CLAUDE_TOOL_NAMES } from './allen-mcp-tools.js';
 export { queryViaCli, type CliQueryOptions, type MaterializedAgentFileMetadata } from './cli-runner.js';
 export { writeAgentFile, renderAgentFile, ARTIFACTS_GUIDANCE, withArtifactsGuidance, REPO_CONTEXT_LOADING_GUIDANCE, hasRepoContextLoadingGuidance, withRepoContextLoadingGuidance, hasMandatoryRepoContext, withMandatoryRepoContext, NON_INTERACTIVE_GUIDANCE, withNonInteractiveGuidance, type AgentSpec, type MaterializedAgent } from './agent-file-writer.js';
@@ -31,6 +31,17 @@ export {
 } from './mcp-install.js';
 export { normalizeModelAlias } from './model-alias.js';
 export {
+  renderHumanIntervention,
+  renderClarifyIntervention,
+  buildHumanResumeInput,
+  renderHumanResumePrompt,
+  renderResumeContextPrompt,
+  buildHumanEvent,
+  appendHumanEvent,
+  renderHumanHistory,
+  buildRetryExhaustionContext,
+} from './human-intervention.js';
+export {
   synthesizeClarifyContext, needsSynthesis,
   type ClarifySynthesisInput, type ClarifySynthesisOutput, type ClarifyField,
 } from './clarify-synthesizer.js';
@@ -42,3 +53,11 @@ export {
 export {
   type ToolCallRecord, describeTool, truncatePayload, buildToolCallRecord,
 } from './tool-call.js';
+export {
+  normalizeCodexUsage,
+  normalizeClaudeUsage,
+  aggregateTokenUsage,
+  tokenUsageFromChildMarkers,
+  attachChildTokenUsageMarkers,
+  type TokenUsageInfo,
+} from './token-usage.js';

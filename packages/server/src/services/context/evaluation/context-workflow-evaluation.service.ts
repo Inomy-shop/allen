@@ -5,8 +5,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Collection, Db } from 'mongodb';
 import { logger } from '../../../logger.js';
-import { firstString, isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
-import { normalizeUsageArray } from '../allen-knowledge-graph/repo-knowledge-graph-usage.js';
+import { firstString, isRecord } from '../common/context-utils.js';
+import { normalizeUsageArray } from '../common/context-usage-utils.js';
 import { WORKFLOW_EVIDENCE_PACKING_VERSION, buildWorkflowSemanticEvaluationPromptArtifacts } from './context-workflow-evaluation-prompt.js';
 import { resolveAllenPython } from '../../python-runtime.js';
 import { isContextEngineEnabled } from '../config/context-provider-config.js';
@@ -706,8 +706,10 @@ function workflowAuditSummary(job: Partial<WorkflowSemanticJob>): Record<string,
 
 function resolveWorkflowDeepEvalScript(): string {
   if (process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT) return process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT;
+  const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    join(dirname(fileURLToPath(import.meta.url)), '../scripts/deepeval-workflow-evaluator.py'),
+    join(here, '../../../scripts/deepeval-workflow-evaluator.py'),
+    ...(process.env.ALLEN_DESKTOP === '1' ? [join(here, '../../../../src/scripts/deepeval-workflow-evaluator.py')] : []),
     join(process.cwd(), 'packages/server/src/scripts/deepeval-workflow-evaluator.py'),
     join(process.cwd(), 'src/scripts/deepeval-workflow-evaluator.py'),
   ];

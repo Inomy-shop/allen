@@ -2,6 +2,10 @@ import { authHeaders } from './api';
 
 const BASE = '/api';
 
+function encodeFilePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...options,
@@ -25,12 +29,19 @@ export const workspaces = {
     const qs = params.toString();
     return request<any>(`/workspaces/${id}/diff${qs ? `?${qs}` : ''}`);
   },
+  getDiffFile: (id: string, path: string, options?: { mode?: 'auto' | 'working' | 'branch' | 'workspace'; anchor?: 'creation' }) => {
+    const params = new URLSearchParams();
+    if (options?.mode) params.set('mode', options.mode);
+    if (options?.anchor) params.set('anchor', options.anchor);
+    const qs = params.toString();
+    return request<any>(`/workspaces/${id}/diff-file/${encodeFilePath(path)}${qs ? `?${qs}` : ''}`);
+  },
   getFiles: (id: string) => request<any[]>(`/workspaces/${id}/files`),
   getAllFiles: (id: string) => request<any[]>(`/workspaces/${id}/all-files`),
-  getFile: (id: string, path: string) => request<any>(`/workspaces/${id}/file/${path}`),
-  saveFile: (id: string, path: string, content: string) => request<any>(`/workspaces/${id}/file/${path}`, { method: 'PUT', body: JSON.stringify({ content }) }),
+  getFile: (id: string, path: string) => request<any>(`/workspaces/${id}/file/${encodeFilePath(path)}`),
+  saveFile: (id: string, path: string, content: string) => request<any>(`/workspaces/${id}/file/${encodeFilePath(path)}`, { method: 'PUT', body: JSON.stringify({ content }) }),
   createFile: (id: string, path: string, content?: string) => request<any>(`/workspaces/${id}/create-file`, { method: 'POST', body: JSON.stringify({ path, content: content ?? '' }) }),
-  deleteFile: (id: string, path: string) => request<any>(`/workspaces/${id}/file/${path}`, { method: 'DELETE' }),
+  deleteFile: (id: string, path: string) => request<any>(`/workspaces/${id}/file/${encodeFilePath(path)}`, { method: 'DELETE' }),
   commit: (id: string, message: string) => request<any>(`/workspaces/${id}/commit`, { method: 'POST', body: JSON.stringify({ message }) }),
   push: (id: string) => request<any>(`/workspaces/${id}/push`, { method: 'POST' }),
   pull: (id: string) => request<any>(`/workspaces/${id}/pull`, { method: 'POST' }),
@@ -97,6 +108,7 @@ export const pullRequests = {
       errorCount: number;
     }>('/pull-requests/sync-all', { method: 'POST' }),
   getDiff: (id: string) => request<any>(`/pull-requests/${id}/diff`),
+  getDiffFile: (id: string, path: string) => request<any>(`/pull-requests/${id}/diff-file/${encodeFilePath(path)}`),
   getComments: (id: string) => request<{
     comments: Array<{
       id: string;

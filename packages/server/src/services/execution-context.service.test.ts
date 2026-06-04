@@ -224,6 +224,166 @@ describe('ExecutionService.getContext', () => {
     expect(context.artifacts[0]).toMatchObject({ artifactId: 'art-1', url: '/api/artifacts/art-1/content' });
   });
 
+  it('counts skipped workflow nodes as progressed in context', async () => {
+    const workflowId = new ObjectId();
+    const db = makeDb({
+      executions: [
+        {
+          id: 'wf-skipped-1',
+          workflowId: String(workflowId),
+          workflowName: 'repo-change',
+          status: 'running',
+          input: { task: 'Implement requested change' },
+          state: {},
+          currentNodes: ['execute_repo_plan'],
+          completedNodes: ['understand_request', 'plan_repo_changes'],
+          cost: { actual: null, estimated: 0 },
+          startedAt: new Date('2026-05-01T00:00:00Z'),
+          meta: { origin: 'chat', requestText: 'Implement requested change' },
+        },
+      ],
+      workflows: [
+        {
+          _id: workflowId,
+          parsed: {
+            nodes: {
+              understand_request: { type: 'agent', agent: 'requirements-analyst' },
+              clarify_request: { type: 'human' },
+              plan_repo_changes: { type: 'agent', agent: 'engineering-lead' },
+              review_repo_plan: { type: 'human' },
+              execute_repo_plan: { type: 'agent', agent: 'engineering-lead' },
+              final_summary: { type: 'agent', agent: 'documentation-writer' },
+            },
+          },
+        },
+      ],
+      execution_traces: [],
+      execution_logs: [],
+      workflow_interventions: [],
+      workspaces: [],
+      ticket_assignments: [],
+      pull_requests: [],
+      artifacts: [],
+      agent_activity: [],
+    });
+
+    const context = await new ExecutionService(db).getContext('wf-skipped-1');
+
+    expect(context.progress).toMatchObject({ completed: 4, total: 6, percent: 67, currentStep: 'execute_repo_plan' });
+    expect(context.workflowSteps.map(step => [step.name, step.status])).toEqual([
+      ['understand_request', 'completed'],
+      ['clarify_request', 'skipped'],
+      ['plan_repo_changes', 'completed'],
+      ['review_repo_plan', 'skipped'],
+      ['execute_repo_plan', 'running'],
+      ['final_summary', 'pending'],
+    ]);
+  });
+
+  it('surfaces answered human interventions as workflow steps when no trace row exists', async () => {
+    const workflowId = new ObjectId();
+    const db = makeDb({
+      executions: [
+        {
+          id: 'wf-human-1',
+          workflowId: String(workflowId),
+          workflowName: 'bug-fix-by-severity',
+          status: 'failed',
+          input: { task: 'Fix approval rejection' },
+          state: {},
+          currentNodes: [],
+          completedNodes: ['create_workspace', 'investigate'],
+          cost: { actual: 0.47, estimated: 0.47 },
+          startedAt: new Date('2026-05-01T00:00:00Z'),
+          meta: { origin: 'chat', requestText: 'Fix approval rejection' },
+        },
+      ],
+      workflows: [
+        {
+          _id: workflowId,
+          parsed: {
+            nodes: {
+              create_workspace: { type: 'code' },
+              investigate: { type: 'agent', agent: 'bug-investigator' },
+              implementation_approval_human: { type: 'human' },
+              implement: { type: 'agent', agent: 'engineering-lead' },
+            },
+          },
+        },
+      ],
+      execution_traces: [
+        {
+          executionId: 'wf-human-1',
+          node: 'create_workspace',
+          status: 'completed',
+          attempt: 1,
+          type: 'code',
+          startedAt: new Date('2026-05-01T00:00:00Z'),
+          completedAt: new Date('2026-05-01T00:00:04Z'),
+          durationMs: 4000,
+          output: {},
+        },
+        {
+          executionId: 'wf-human-1',
+          node: 'investigate',
+          status: 'completed',
+          attempt: 1,
+          type: 'agent',
+          agent: 'bug-investigator',
+          startedAt: new Date('2026-05-01T00:00:05Z'),
+          completedAt: new Date('2026-05-01T00:01:40Z'),
+          durationMs: 95_000,
+          output: {},
+        },
+      ],
+      workflow_interventions: [
+        {
+          intervention_id: 'INT-reject1',
+          workflow_run_id: 'wf-human-1',
+          workflow_name: 'bug-fix-by-severity',
+          stage: 'implementation_approval_human',
+          kind: 'review',
+          widget: 'approval_gate',
+          severity: 'approval',
+          title: 'Approve bug fix scope',
+          context_summary: 'Review diagnosis',
+          question: 'Approve or reject?',
+          fields: [{ name: 'decision', type: 'select', options: ['approve', 'request_changes', 'reject'] }],
+          options: [],
+          docs: [],
+          status: 'answered',
+          response: { decision: 'reject' },
+          created_at: new Date('2026-05-01T00:01:41Z'),
+          answered_at: new Date('2026-05-01T00:01:45Z'),
+        },
+      ],
+      execution_logs: [],
+      workspaces: [],
+      workflow_interventions_unused: [],
+      ticket_assignments: [],
+      pull_requests: [],
+      artifacts: [],
+      agent_activity: [],
+    });
+
+    const context = await new ExecutionService(db).getContext('wf-human-1');
+    const traces = await new ExecutionService(db).getTraces('wf-human-1');
+
+    expect(context.workflowSteps.map(step => [step.name, step.status])).toEqual([
+      ['create_workspace', 'completed'],
+      ['investigate', 'completed'],
+      ['implementation_approval_human', 'completed'],
+      ['implement', 'pending'],
+    ]);
+    expect(traces.map(trace => trace.node)).toContain('implementation_approval_human');
+    expect(traces.find(trace => trace.node === 'implementation_approval_human')).toMatchObject({
+      status: 'completed',
+      type: 'human',
+      synthetic: true,
+      output: { decision: 'reject' },
+    });
+  });
+
   it('normalizes direct agent executions with persisted activity', async () => {
     const db = makeDb({
       executions: [

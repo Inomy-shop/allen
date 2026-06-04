@@ -1,3 +1,13 @@
+// ── Token Usage ─────────────────────────────────────────────────────────────
+
+/**
+ * Normalized token usage across providers (Codex, Claude SDK).
+ * Re-exported from token-usage.ts for consumers that import from types.ts.
+ * Each sub-field is independently nullable — null means "not reported by
+ * provider", NOT zero. Never substitute null with 0.
+ */
+export type { TokenUsageInfo } from './token-usage.js';
+
 // ── Node Types ──────────────────────────────────────────────────────────────
 
 export type NodeType = 'agent' | 'code' | 'human' | 'workflow' | 'condition';
@@ -96,6 +106,8 @@ export interface NodeDef {
 
   // human nodes
   fields?: HumanField[];
+  /** Human-facing presentation contract for HITL. Legacy prompt/fields remain supported. */
+  human?: HumanPresentation;
   timeout_action?: 'cancel' | 'default';
 
   // workflow nodes
@@ -117,11 +129,136 @@ export interface NodeDef {
 
 export interface HumanField {
   name: string;
-  type: 'string' | 'text' | 'boolean' | 'number' | 'select';
+  type: 'string' | 'text' | 'textarea' | 'boolean' | 'number' | 'select';
   label?: string;
   required?: boolean;
   options?: string[];
   default?: unknown;
+}
+
+export type HumanInterventionKind = 'clarify' | 'review' | 'recover';
+export type HumanInterventionSeverity = 'question' | 'approval' | 'escalation';
+export type HumanWidget = 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate';
+
+export interface HumanEvidence {
+  label: string;
+  type?: 'text' | 'artifact' | 'url' | 'diff' | 'log';
+  value?: string;
+  url?: string;
+}
+
+export interface HumanActionRoute {
+  type: 'continue' | 'retry' | 'end';
+  targetNode?: string;
+}
+
+export interface HumanAction {
+  id: string;
+  label?: string;
+  intent?: 'submit' | 'approve' | 'request_changes' | 'reject' | 'retry' | 'override' | 'abandon';
+  feedbackRequired?: boolean;
+  feedbackOptional?: boolean;
+  warning?: string;
+  route?: HumanActionRoute;
+}
+
+export interface HumanPresentation {
+  kind: HumanInterventionKind;
+  widget?: HumanWidget;
+  title?: string;
+  summary?: string;
+  question?: string;
+  highlights?: string[];
+  evidence?: HumanEvidence[];
+  actions?: HumanAction[] | Record<string, Omit<HumanAction, 'id'> | string>;
+  fields?: HumanField[];
+}
+
+export interface RetryExhaustionContext {
+  exhaustedFrom: string;
+  retryEdgeKey?: string;
+  attemptsUsed: number;
+  maxRetries?: number;
+  lastFailureSummary?: string;
+  retryTarget?: string;
+  availableFailureFields?: Record<string, unknown>;
+}
+
+export interface HumanInputFieldValue {
+  name: string;
+  label: string;
+  value: unknown;
+}
+
+export interface HumanInputFeedback {
+  label: string;
+  value: string;
+}
+
+export interface HumanResumeInput {
+  kind: HumanInterventionKind;
+  sourceNode: string;
+  actionId?: string;
+  decision?: string;
+  route?: HumanActionRoute;
+  summary: string;
+  fields: HumanInputFieldValue[];
+  fieldsByName: Record<string, HumanInputFieldValue>;
+  feedback?: HumanInputFeedback;
+  retryExhaustion?: RetryExhaustionContext;
+  createdAt: string;
+}
+
+export interface NodeFeedbackField {
+  name: string;
+  label: string;
+  value: unknown;
+}
+
+export interface NodeFeedbackContext {
+  summary?: string;
+  fields: NodeFeedbackField[];
+}
+
+export interface ResumeContext {
+  type: 'human_input' | 'human_review_feedback' | 'node_feedback' | 'retry_exhausted' | 'upstream_changed';
+  sourceNode: string;
+  targetNode?: string;
+  attempt?: number;
+  nodeFeedback?: NodeFeedbackContext;
+  humanInput?: HumanResumeInput;
+  retryExhaustion?: RetryExhaustionContext;
+  history?: HumanResumeInput[];
+  createdAt: string;
+}
+
+export interface HumanInterventionPayload {
+  kind: HumanInterventionKind;
+  widget?: HumanWidget;
+  node: string;
+  title: string;
+  summary?: string;
+  question: string;
+  severity: HumanInterventionSeverity;
+  highlights?: string[];
+  evidence?: HumanEvidence[];
+  fields: HumanField[];
+  actions: HumanAction[];
+  retryExhaustion?: RetryExhaustionContext;
+}
+
+export interface HumanEvent {
+  kind: HumanInterventionKind;
+  node: string;
+  actionId?: string;
+  decision?: string;
+  humanInput?: HumanResumeInput;
+  values?: Record<string, unknown>;
+  feedback?: string;
+  route?: HumanActionRoute;
+  evidence?: HumanEvidence[];
+  retryExhaustion?: RetryExhaustionContext;
+  createdAt: string;
 }
 
 export interface ConditionDef {
@@ -242,7 +379,7 @@ export interface AgentDef {
   displayName?: string;
   personality?: string;
   capabilities?: string[];
-  canDelegateTo?: string[];
+  spawnTargets?: string[];
   canTrigger?: string[];
   /** Default reasoning effort for this agent. Can be overridden per node via `agentOverrides`. */
   reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max';
@@ -463,6 +600,10 @@ export interface NodeTrace {
     estimatedCost: number;
   }>;
 
+  /** Aggregate token usage for this node attempt across all turns.
+   *  Null when the provider did not report usage data. */
+  tokenUsage?: import('./token-usage.js').TokenUsageInfo | null;
+
   /** Populated on failed/cancelled traces — short error message so the UI
    *  can show "why this node stopped" without needing a separate log lookup.
    *  Always undefined on completed traces. */
@@ -531,6 +672,9 @@ export interface ExecutionState {
   failedNode?: string;
   errorMessage?: string;
   cost: { actual: number | null; estimated: number };
+  /** Aggregate token usage across all completed nodes in this execution.
+   *  Null when no provider reported usage data. */
+  tokenUsage?: import('./token-usage.js').TokenUsageInfo | null;
   durationMs: number;
   worktreePath?: string;
   startedAt: Date;

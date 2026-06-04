@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, type CSSProperties } from 'react';
 import { Search, Zap, GitBranch, Bot, BarChart3, AlertCircle, FolderOpen, Brain, Terminal } from 'lucide-react';
+import ShortcutKey from '../common/ShortcutKey';
 
 interface CommandItem {
   id: string;
@@ -130,7 +131,7 @@ export default function CommandPalette({ open, onClose, onSelect, anchorRect = n
             placeholder="Type a command..."
             className="flex-1 bg-transparent text-sm text-theme-primary placeholder-gray-600 outline-none font-body"
           />
-          <kbd className="text-[10px] text-theme-subtle font-mono bg-app-muted px-1.5 py-0.5 rounded border border-app">ESC</kbd>
+          <ShortcutKey value="ESC" className="h-5 min-w-[32px]" />
         </div>
 
         {/* Results */}
@@ -180,13 +181,13 @@ export default function CommandPalette({ open, onClose, onSelect, anchorRect = n
         {/* Footer */}
         <div className="px-4 py-2 border-t border-app flex items-center gap-4">
           <span className="text-[10px] text-theme-subtle flex items-center gap-1">
-            <kbd className="font-mono bg-app-muted px-1 py-0.5 rounded border border-app">↑↓</kbd> navigate
+            <ShortcutKey value="↑↓" className="h-5 min-w-[30px] px-1" /> navigate
           </span>
           <span className="text-[10px] text-theme-subtle flex items-center gap-1">
-            <kbd className="font-mono bg-app-muted px-1 py-0.5 rounded border border-app">↵</kbd> select
+            <ShortcutKey value="↵" className="h-5 min-w-[24px] px-1" /> select
           </span>
           <span className="text-[10px] text-theme-subtle flex items-center gap-1">
-            <kbd className="font-mono bg-app-muted px-1 py-0.5 rounded border border-app">esc</kbd> close
+            <ShortcutKey value="esc" className="h-5 min-w-[30px] px-1" /> close
           </span>
         </div>
       </div>

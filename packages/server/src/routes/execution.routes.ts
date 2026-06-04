@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { ExecutionService } from '../services/execution.service.js';
 import { InterventionService } from '../services/intervention.service.js';
-import { RepoKnowledgeGraphService } from '../services/context/allen-knowledge-graph/repo-knowledge-graph.service.js';
+import { RepoContextPacketService } from '../services/context/core/repo-context-packet.service.js';
 import { isContextEngineEnabled } from '../services/context/config/context-provider-config.js';
 import { param } from '../types.js';
 import type { Db } from 'mongodb';
@@ -13,7 +13,7 @@ export function executionRoutes(db: Db): Router {
   const service = new ExecutionService(db);
   const interventionService = new InterventionService(db);
   const userService = new UserService(db);
-  const repoKnowledge = new RepoKnowledgeGraphService(db);
+  const repoKnowledge = new RepoContextPacketService(db);
 
   // POST /api/executions
   router.post('/', async (req: AuthedRequest, res: Response) => {
@@ -547,7 +547,7 @@ export function executionRoutes(db: Db): Router {
   //
   // Persisted log of intermediate agent events (text / thinking /
   // tool_call / tool_result) for a spawn execution. Mirrors the
-  // delegation-side route at /api/chat/delegations/:conversationId/activity
+  // chat activity routes
   // and exists so the UI can re-hydrate a running spawn's progress view
   // on refresh. Events are returned oldest-first; `since` accepts an ISO
   // timestamp cursor; `limit` defaults to 500, capped at 2000.

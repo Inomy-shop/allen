@@ -1,19 +1,18 @@
 /**
  * Agent Activity Service — running log of intermediate events from
- * delegated agents and spawned-agent executions.
+ * spawned-agent executions and historical agent conversation records.
  *
- * Today the chat-tools `emit()` / `onEvent()` path broadcasts live events
- * (thread_message, spawn_activity) to the chat SSE stream but never
- * persists them. Consequence: the main chat's `wait_for_delegation` /
- * `wait_for_execution` tools see only a bare status; refreshing the UI
- * during a long delegation loses the visible progress. This service is
- * the persistence layer that closes both gaps — it's written every time
+ * Today the chat-tools `emit()` / `onEvent()` path broadcasts live
+ * spawned-agent activity to the chat SSE stream but never persists it.
+ * Consequence: the main chat's `wait_for_execution` tools see only a
+ * bare status; refreshing the UI during a long run loses the visible
+ * progress. This service is the persistence layer that closes both gaps
+ * — it's written every time
  * an agent emits an event and read by (a) the wait tools for their
  * `recent_activity` payload and (b) the UI replay routes.
  *
  * Schema:
- *   scope:         'delegation' (ref = agent_conversations._id)
- *                  | 'execution'  (ref = executions.id)
+ *   scope:         'execution' (ref = executions.id)
  *   refId:         the id the consumer indexes by
  *   chatSessionId: for session-scoped cleanup / UI listing
  *   agent:         the agent that produced the event
@@ -32,7 +31,7 @@
 
 import type { Collection, Db, ObjectId } from 'mongodb';
 
-export type ActivityScope = 'delegation' | 'execution';
+export type ActivityScope = 'execution';
 export type ActivityType = 'text' | 'thinking' | 'tool_call' | 'tool_result';
 
 // Per-row content caps. TEXT_CAP covers `text` and `thinking` rows; the
@@ -86,7 +85,7 @@ export class AgentActivityService {
   /**
    * Persist one event. Called from `chat-tools.ts` at every `emit()` site.
    * Best-effort — caller does NOT await, so a Mongo hiccup never stalls
-   * the delegation stream. Errors are swallowed + logged.
+   * the spawn activity stream. Errors are swallowed + logged.
    */
   record(event: Omit<AgentActivityEvent, '_id' | 'timestamp'> & { timestamp?: Date }): Promise<void> {
     const doc: AgentActivityEvent = {
@@ -106,13 +105,13 @@ export class AgentActivityService {
     return this.col.insertOne(doc)
       .then(() => undefined)
       .catch((err: unknown) => {
-        // Never let a persistence hiccup interrupt the delegation stream.
+        // Never let a persistence hiccup interrupt the spawn activity stream.
         console.warn(`[agent-activity] persist failed (${doc.scope} ${doc.refId}):`, (err as Error).message);
       });
   }
 
   /**
-   * Read recent events for a ref. Used by `wait_for_delegation` and
+   * Read recent events for a ref. Used by `wait_for_execution` and
    * `wait_for_execution` to return the last N events since a cursor, and
    * by the refresh-replay HTTP route.
    *

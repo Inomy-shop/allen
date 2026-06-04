@@ -33,9 +33,9 @@ describe('inferCommand', () => {
 });
 
 describe('Allen MCP tool allowlist', () => {
-  it('includes repo knowledge graph persistence for graph indexer agents', () => {
-    expect(ALLEN_MCP_TOOL_NAMES).toContain('save_repo_knowledge_graph');
-    expect(ALLEN_MCP_CLAUDE_TOOL_NAMES).toContain('mcp__allen__save_repo_knowledge_graph');
+  it('includes repo context body loaders', () => {
+    expect(ALLEN_MCP_TOOL_NAMES).toContain('get_repo_context_body');
+    expect(ALLEN_MCP_CLAUDE_TOOL_NAMES).toContain('mcp__allen__get_repo_context_body');
   });
 
   it('resolves the built-in Allen MCP server from the monorepo root', () => {

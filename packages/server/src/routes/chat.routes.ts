@@ -11,12 +11,32 @@ import { ObjectId, type Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { listSlashCommands, type SlashCommandProvider } from '../services/slash-commands.js';
+import { buildHumanResumeInput, type HumanInterventionPayload } from '@allen/engine';
+import { ChatContextPacketService } from '../services/context/core/chat-context-packet.service.js';
 
 // Simple in-memory rate limiter for the automation-message endpoint.
 // Limits each authenticated caller (by sub) to 60 requests per minute.
 const _automationMsgRateLimit = new Map<string, { count: number; windowStart: number }>();
 const AUTOMATION_MSG_RATE_LIMIT = 60;
 const AUTOMATION_MSG_RATE_WINDOW_MS = 60_000;
+
+function diffFileMetadata(file: unknown): unknown {
+  if (!file || typeof file !== 'object' || Array.isArray(file)) return file;
+  const row = file as Record<string, unknown>;
+  return {
+    ...row,
+    diff: '',
+    originalContent: '',
+    modifiedContent: '',
+  };
+}
+
+function diffSnapshotMetadata(snapshot: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...snapshot,
+    files: Array.isArray(snapshot.files) ? snapshot.files.map(diffFileMetadata) : snapshot.files,
+  };
+}
 
 function checkAutomationMsgRateLimit(userId: string): boolean {
   const now = Date.now();
@@ -97,7 +117,13 @@ export function chatRoutes(db: Db): Router {
       const fields = ((intervention as unknown as { fields?: Array<{ name?: string }> }).fields ?? [])
         .filter((field): field is { name: string } => typeof field.name === 'string' && field.name.length > 0);
       const fieldName = fields[0]?.name ?? 'answer';
-      const payload = { [fieldName]: answer };
+      const fieldValues = { [fieldName]: answer };
+      const payload = {
+        human_input: buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+          ...fieldValues,
+          __human_meta: { actionId: 'answer', decision: 'answer' },
+        }),
+      };
       const delivered = await executionService.submitInput(executionId, intervention.stage, payload);
       if (!delivered) {
         return {
@@ -111,7 +137,7 @@ export function chatRoutes(db: Db): Router {
 
       await interventionService.recordResponse(intervention.intervention_id, {
         decision: 'answer',
-        answer: JSON.stringify(payload),
+        answer: JSON.stringify(fieldValues),
         answered_by_user_id: answeredBy,
       });
       await db.collection('executions').updateOne(
@@ -163,7 +189,7 @@ export function chatRoutes(db: Db): Router {
   router.post('/spawn-agent', async (req: Request, res: Response) => {
     try {
       const {
-        agent_name, prompt, repo_path, session_id,
+        agent_name, prompt, context_query, repo_path, session_id,
         // Spawn-tree linkage forwarded from the Allen MCP server's env.
         // The MCP server reads ALLEN_PARENT_EXECUTION_ID / _CALLER /
         // _ROOT_EXECUTION_ID from its subprocess env and puts them here so
@@ -176,7 +202,7 @@ export function chatRoutes(db: Db): Router {
       } = req.body;
       if (!agent_name || !prompt) return res.status(400).json({ error: 'agent_name and prompt are required' });
       const result = await executeChatTool('spawn_agent', {
-        agent_name, prompt, repo_path, session_id,
+        agent_name, prompt, context_query, repo_path, session_id,
         parent_execution_id, parent_caller, root_execution_id,
         artifact_root_type, artifact_root_id,
         repo_knowledge_packet_id, repo_knowledge_repo_id, repo_knowledge_index_id,
@@ -201,86 +227,6 @@ export function chatRoutes(db: Db): Router {
       const args = (req.body ?? {}) as Record<string, unknown>;
       const result = await executeChatTool(toolName, args, db, readToolContext(req));
       res.json(result);
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // POST /api/chat/delegate — Execute delegation tools via API (used by Allen MCP server)
-  router.post('/delegate', async (req: Request, res: Response) => {
-    try {
-      const { tool, agent_name, task, context, conversation_id, answer } = req.body;
-      const ctx = readToolContext(req);
-
-      // Route to the right tool
-      if (tool === 'answer_delegator' || tool === 'answer_question') {
-        if (!conversation_id || !answer) return res.status(400).json({ error: 'conversation_id and answer are required' });
-        const result = await executeChatTool('answer_delegator', { conversation_id, answer }, db, ctx);
-        return res.json(result);
-      }
-
-      // Default: delegate_to_agent
-      if (!agent_name || !task) return res.status(400).json({ error: 'agent_name and task are required' });
-      const result = await executeChatTool('delegate_to_agent', { agent_name, task, context, conversation_id }, db, ctx);
-      res.json(result);
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // GET /api/chat/delegations/:conversationId/activity — Persisted thread-event log
-  // for a delegation, used by useChat.ts on refresh so running delegations
-  // don't lose their visible progress when the client reloads. Returns
-  // oldest-first so the UI can append in natural order. `since` filters to
-  // events after that ISO timestamp; `limit` caps at 2000 (default 500).
-  router.get('/delegations/:conversationId/activity', async (req: Request, res: Response) => {
-    try {
-      const conversationId = param(req, 'conversationId');
-      const sinceRaw = req.query.since as string | undefined;
-      const limitRaw = req.query.limit as string | undefined;
-      const since = sinceRaw ? new Date(sinceRaw) : undefined;
-      const limit = limitRaw ? Math.max(1, Math.min(parseInt(limitRaw, 10) || 500, 2000)) : 500;
-      const { AgentActivityService } = await import('../services/agent-activity.service.js');
-      const service = new AgentActivityService(db);
-      const events = await service.listForRef(conversationId, { since, limit });
-      console.log('[chat/activity] conv', conversationId, 'since', sinceRaw ?? '-', '→', events.length, 'rows');
-      res.json({ events });
-    } catch (err: unknown) {
-      console.error('[chat/activity] failed:', (err as Error).message);
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // GET /api/chat/delegation/:id/status — Quick status check (non-blocking)
-  router.get('/delegation/:id/status', async (req: Request, res: Response) => {
-    try {
-      const { AgentConversationService } = await import('../services/agent-conversation.service.js');
-      const service = new AgentConversationService(db);
-      const conv = await service.get(param(req, 'id'));
-      if (!conv) return res.status(404).json({ error: 'Not found' });
-      if (conv.status === 'active') {
-        return res.json({ conversation_id: conv._id?.toString(), status: 'active', agent: conv.toAgent, turn_count: conv.turnCount });
-      }
-      if (conv.status === 'waiting_for_answer' && conv.pendingQuestion?.status === 'pending') {
-        return res.json({
-          conversation_id: conv._id?.toString(),
-          status: 'waiting_for_answer',
-          agent: conv.toAgent,
-          question: conv.pendingQuestion.question,
-          from_agent: conv.pendingQuestion.fromAgent,
-        });
-      }
-      res.json({
-        conversation_id: conv._id?.toString(),
-        status: conv.status,
-        agent: conv.toAgent,
-        response: conv.response ?? conv.summary ?? '',
-        summary: conv.summary,
-        cost_usd: conv.costUsd,
-        duration_ms: conv.durationMs,
-        turn_count: conv.turnCount,
-        hint: conv.status === 'completed' ? `To continue, call delegate_to_agent with conversation_id` : undefined,
-      });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -327,11 +273,30 @@ export function chatRoutes(db: Db): Router {
     try {
       const { provider, model, agentOverrides } = req.body ?? {};
       const repoId = typeof req.body?.repoId === 'string' ? req.body.repoId : undefined;
+      const workspaceId = typeof req.body?.workspaceId === 'string' ? req.body.workspaceId.trim() : undefined;
+      // Validate workspaceId BEFORE creating the session to avoid orphaned sessions
+      if (workspaceId && !ObjectId.isValid(workspaceId)) {
+        return res.status(400).json({ error: 'Invalid workspaceId' });
+      }
       const sender = await readSender(req);
       const owner = sender
         ? { userId: sender.userId, name: sender.name, email: sender.email }
         : undefined;
       const session = await chatService.createSession(provider, model, 'ui', undefined, agentOverrides, repoId, owner);
+      if (workspaceId) {
+        // ObjectId.isValid already checked above
+        try {
+          const ws = await workspaceManager.get(workspaceId);
+          if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+          await workspaceManager.linkChat(workspaceId, session._id!.toString());
+          // Re-fetch session to include snapshot fields
+          const linked = await chatService.getSession(session._id!.toString());
+          return res.status(201).json(linked);
+        } catch (linkErr) {
+          // Log but don't fail — session is created, workspace linking is best-effort
+          console.error('Failed to link workspace to session:', linkErr);
+        }
+      }
       res.status(201).json(session);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -373,7 +338,7 @@ export function chatRoutes(db: Db): Router {
         .find(filter)
         .sort({ createdAt: 1 })
         .toArray();
-      const responseSnapshots: Record<string, unknown>[] = snapshots.map(snapshot => ({ ...snapshot }));
+      const responseSnapshots: Record<string, unknown>[] = snapshots.map(snapshot => diffSnapshotMetadata({ ...snapshot }));
       if (!messageId && ObjectId.isValid(sessionId)) {
         const session = await db.collection('chat_sessions').findOne(
           { _id: new ObjectId(sessionId) },
@@ -421,7 +386,7 @@ export function chatRoutes(db: Db): Router {
         if (diffRepoPath && diffBranch && diffBaseBranch) {
           const prDiff = await new PullRequestService(db).getDiff(String(diffRepoPath), String(diffBranch), String(diffBaseBranch));
           const files = (prDiff.files ?? [])
-            .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
+            .filter(file => file.path && ((file.additions ?? 0) > 0 || (file.deletions ?? 0) > 0 || file.status))
             .map(file => {
               const counts = file.diff.split('\n').reduce((acc, line) => {
                 if (line.startsWith('+++') || line.startsWith('---')) return acc;
@@ -431,9 +396,9 @@ export function chatRoutes(db: Db): Router {
               }, { additions: 0, deletions: 0 });
               return {
                 ...file,
-                status: file.diff.includes('new file mode') ? 'added' : file.diff.includes('deleted file mode') ? 'deleted' : 'modified',
-                additions: counts.additions,
-                deletions: counts.deletions,
+                status: file.status ?? (file.diff.includes('new file mode') ? 'added' : file.diff.includes('deleted file mode') ? 'deleted' : 'modified'),
+                additions: file.additions ?? counts.additions,
+                deletions: file.deletions ?? counts.deletions,
               };
             });
           if (files.length > 0) {
@@ -452,7 +417,7 @@ export function chatRoutes(db: Db): Router {
           }
         }
       }
-      res.json({ snapshots: responseSnapshots });
+      res.json({ snapshots: responseSnapshots.map(snapshot => diffSnapshotMetadata(snapshot)) });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -482,11 +447,11 @@ export function chatRoutes(db: Db): Router {
       for (const ref of workspaceRefs) {
         const existing = await collection.findOne({ chatSessionId: sessionId, parentMessageId, workspaceId: ref.id });
         if (existing) {
-          snapshots.push(existing);
+          snapshots.push(diffSnapshotMetadata(existing as Record<string, unknown>));
           continue;
         }
         const diff = await workspaceManager.getDiff(ref.id, { mode: requestedMode, anchorToCreation: requestedMode === 'workspace' });
-        const files = diff.files.filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+        const files = diff.files.filter(file => file.path && (file.additions > 0 || file.deletions > 0 || file.status));
         if (files.length === 0) continue;
         const now = new Date();
         const snapshot = {
@@ -503,7 +468,7 @@ export function chatRoutes(db: Db): Router {
           updatedAt: now,
         };
         const result = await collection.insertOne(snapshot);
-        snapshots.push({ ...snapshot, _id: result.insertedId });
+        snapshots.push(diffSnapshotMetadata({ ...snapshot, _id: result.insertedId }));
       }
       res.json({ snapshots });
     } catch (err: unknown) {
@@ -665,6 +630,16 @@ export function chatRoutes(db: Db): Router {
     }
   });
 
+  // GET /api/chat/sessions/:id/context-usage — repo context attempts captured
+  // for top-level chat-agent turns, grouped by assistant message id.
+  router.get('/sessions/:id/context-usage', async (req: Request, res: Response) => {
+    try {
+      res.json(await new ChatContextPacketService(db).getChatContextUsageReport(param(req, 'id')));
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/chat/logs — Get all chat logs (cross-session)
   router.get('/logs', async (req: Request, res: Response) => {
     try {
@@ -691,32 +666,6 @@ export function chatRoutes(db: Db): Router {
       const log = await db.collection('chat_logs').findOne({ _id: new ObjectId(param(req, 'logId')) });
       if (!log) return res.status(404).json({ error: 'Log not found' });
       res.json(log);
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // GET /api/chat/sessions/:id/threads — Get agent-to-agent conversations for a session
-  router.get('/sessions/:id/threads', async (req: Request, res: Response) => {
-    try {
-      const sessionId = param(req, 'id');
-      const { AgentConversationService } = await import('../services/agent-conversation.service.js');
-      const service = new AgentConversationService(db);
-      const threads = await service.forSession(sessionId);
-      res.json(threads);
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // POST /api/chat/ask-caller — Agent asks its caller a question (blocks until answered)
-  router.post('/ask-caller', async (req: Request, res: Response) => {
-    try {
-      const { question, conversation_id } = req.body;
-      if (!question) return res.status(400).json({ error: 'question is required' });
-      // conversation_id can come from the request or from the active session context
-      const result = await executeChatTool('ask_delegator', { question, _conversation_id: conversation_id }, db, readToolContext(req));
-      res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -903,4 +852,61 @@ export function chatRoutes(db: Db): Router {
   });
 
   return router;
+}
+
+function toHumanInterventionPayload(doc: {
+  stage: string;
+  kind?: string;
+  widget?: string;
+  severity?: string;
+  title?: string;
+  summary?: string;
+  question?: string;
+  fields?: Array<any>;
+  actions?: Array<any>;
+  evidence?: Array<any>;
+  retry_exhaustion?: Record<string, unknown>;
+}): HumanInterventionPayload {
+  return {
+    kind: doc.kind === 'clarify' || doc.kind === 'review' || doc.kind === 'recover'
+      ? doc.kind
+      : doc.severity === 'approval'
+        ? 'review'
+        : doc.severity === 'escalation'
+          ? 'recover'
+        : 'clarify',
+    widget: doc.widget === 'dynamic_form' || doc.widget === 'approval_gate' || doc.widget === 'retry_exhausted_gate' || doc.widget === 'escalation_gate'
+      ? doc.widget
+      : undefined,
+    node: doc.stage,
+    title: doc.title ?? doc.stage,
+    summary: doc.summary,
+    question: doc.question ?? '',
+    severity: doc.severity === 'approval' || doc.severity === 'escalation' || doc.severity === 'question'
+      ? doc.severity
+      : 'question',
+    fields: (doc.fields ?? []).map((field) => ({
+      name: String(field.name ?? ''),
+      type: (field.type === 'string' || field.type === 'text' || field.type === 'textarea' || field.type === 'boolean' || field.type === 'number' || field.type === 'select'
+        ? field.type
+        : 'text') as 'string' | 'text' | 'textarea' | 'boolean' | 'number' | 'select',
+      label: typeof field.label === 'string' ? field.label : undefined,
+      required: typeof field.required === 'boolean' ? field.required : undefined,
+      options: Array.isArray(field.options) ? field.options.filter((item: unknown): item is string => typeof item === 'string') : undefined,
+      default: field.default,
+    })).filter((field) => field.name),
+    actions: (doc.actions ?? []).map((action) => ({
+      id: String(action.id ?? ''),
+      label: typeof action.label === 'string' ? action.label : undefined,
+      intent: typeof action.intent === 'string' ? action.intent as any : undefined,
+      feedbackRequired: typeof action.feedbackRequired === 'boolean' ? action.feedbackRequired : undefined,
+      feedbackOptional: typeof action.feedbackOptional === 'boolean' ? action.feedbackOptional : undefined,
+      warning: typeof action.warning === 'string' ? action.warning : undefined,
+      route: action.route && typeof action.route === 'object' && !Array.isArray(action.route)
+        ? action.route as any
+        : undefined,
+    })).filter((action) => action.id),
+    evidence: doc.evidence as HumanInterventionPayload['evidence'],
+    retryExhaustion: doc.retry_exhaustion as HumanInterventionPayload['retryExhaustion'],
+  };
 }

@@ -11,27 +11,26 @@ import { logger } from '../logger.js';
 import { ExecutionService } from './execution.service.js';
 import { InterventionService } from './intervention.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
-import { AgentConversationService } from './agent-conversation.service.js';
 import { AgentActivityService } from './agent-activity.service.js';
 import { metaChatTools, META_DESTRUCTIVE_TOOLS } from './chat-tools-meta.js';
 import { monitoringAgentTools } from './monitoring-agent-tools.js';
 import { buildRepoContextBlock } from './context/scanner/repo-context-builder.js';
-import { RepoKnowledgeGraphService } from './context/allen-knowledge-graph/repo-knowledge-graph.service.js';
+import { RepoContextPacketService } from './context/core/repo-context-packet.service.js';
 import { ContextEvaluationService } from './context/evaluation/context-evaluation.service.js';
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
-import { withRepoKnowledgeGraphPersistenceGuidance } from './context/allen-knowledge-graph/repo-knowledge-graph-persistence-guidance.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
-import { MonitoringService } from './self-healing-monitor.service.js';
-import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload, type MaterializedAgentFileMetadata, normalizeClaudeUsage, normalizeCodexUsage, aggregateTokenUsage, type TokenUsageInfo } from '@allen/engine';
+import {
+  getRuntimeApiBaseUrl,
+  getRuntimeJwtAccessSecret,
+  getRuntimePublicBaseUrl,
+} from '../runtime/config.js';
 
 /**
  * Claude-spawn-only system-prompt notice. Appended (via appendSystemPrompt
- * or inlined into customSystemPrompt) to every Claude-path spawn so the
- * model doesn't emit `ToolSearch` calls out of habit from the interactive
- * Claude Code harness. `ToolSearch` has no handler in the SDK/CLI spawn
- * environment — emitting it used to stall the stream for ~15 min until
- * Anthropic's idle watchdog fired. Not applied on the Codex path (Codex
- * doesn't emit this pattern and has its own prompt conventions).
+ * or inlined into customSystemPrompt) to every Claude-path spawn so the model
+ * understands that it is running as an Allen spawned agent. Not applied on the
+ * Codex path, which has its own prompt conventions.
  */
 const CLAUDE_SPAWN_NOTICE = `
 ## Execution environment
@@ -39,23 +38,236 @@ const CLAUDE_SPAWN_NOTICE = `
 You are running as a spawned agent via the Claude CLI / SDK, NOT the
 interactive Claude Code harness. Therefore:
 
-- MCP tools are loaded eagerly according to this agent's MCP configuration — call the tool you want
-  directly by its full name (for example \`mcp__allen__*\`,
+- Allen MCP tools are loaded according to this agent's MCP configuration. When you know the
+  tool name, call it directly by its full name (for example \`mcp__allen__*\`,
   \`mcp__pipeline-api-server__*\`, \`mcp__documentdb__*\`, \`mcp__postgres__*\`,
   \`mcp__opensearch__*\`, \`mcp__oxylabs-server__*\`, \`mcp__aws__*\`).
-- The \`ToolSearch\` tool is NOT available in this environment. Never
-  emit a \`ToolSearch\` call — it has no handler here and emitting it
-  will stall the run until the idle watchdog fires.
-- If you're unsure a tool exists, just attempt the call — an
-  unknown-tool error surfaces in seconds, whereas \`ToolSearch\` hangs.
+- If a configured MCP tool is not visible in your initial tool list, use \`ToolSearch\`
+  to discover it before using shell commands to inspect local Claude/MCP config files.
 `.trim();
 
+function toHumanInterventionPayload(doc: {
+  stage: string;
+  kind?: string;
+  widget?: string;
+  severity?: string;
+  title?: string;
+  summary?: string;
+  question?: string;
+  fields?: Array<any>;
+  actions?: Array<any>;
+  evidence?: Array<any>;
+  retry_exhaustion?: Record<string, unknown>;
+}): HumanInterventionPayload {
+  return {
+    kind: doc.kind === 'clarify' || doc.kind === 'review' || doc.kind === 'recover'
+      ? doc.kind
+      : doc.severity === 'approval'
+        ? 'review'
+        : doc.severity === 'escalation'
+          ? 'recover'
+        : 'clarify',
+    widget: doc.widget === 'dynamic_form' || doc.widget === 'approval_gate' || doc.widget === 'retry_exhausted_gate' || doc.widget === 'escalation_gate'
+      ? doc.widget
+      : undefined,
+    node: doc.stage,
+    title: doc.title ?? doc.stage,
+    summary: doc.summary,
+    question: doc.question ?? '',
+    severity: doc.severity === 'approval' || doc.severity === 'escalation' || doc.severity === 'question'
+      ? doc.severity
+      : 'question',
+    fields: (doc.fields ?? []).map((field) => ({
+      name: String(field.name ?? ''),
+      type: (field.type === 'string' || field.type === 'text' || field.type === 'textarea' || field.type === 'boolean' || field.type === 'number' || field.type === 'select'
+        ? field.type
+        : 'text') as 'string' | 'text' | 'textarea' | 'boolean' | 'number' | 'select',
+      label: typeof field.label === 'string' ? field.label : undefined,
+      required: typeof field.required === 'boolean' ? field.required : undefined,
+      options: Array.isArray(field.options) ? field.options.filter((item: unknown): item is string => typeof item === 'string') : undefined,
+      default: field.default,
+    })).filter((field) => field.name),
+    actions: (doc.actions ?? []).map((action) => ({
+      id: String(action.id ?? ''),
+      label: typeof action.label === 'string' ? action.label : undefined,
+      intent: typeof action.intent === 'string' ? action.intent as any : undefined,
+      feedbackRequired: typeof action.feedbackRequired === 'boolean' ? action.feedbackRequired : undefined,
+      feedbackOptional: typeof action.feedbackOptional === 'boolean' ? action.feedbackOptional : undefined,
+      warning: typeof action.warning === 'string' ? action.warning : undefined,
+      route: action.route && typeof action.route === 'object' && !Array.isArray(action.route)
+        ? action.route as any
+        : undefined,
+    })).filter((action) => action.id),
+    evidence: doc.evidence as HumanInterventionPayload['evidence'],
+    retryExhaustion: doc.retry_exhaustion as HumanInterventionPayload['retryExhaustion'],
+  };
+}
+
 const ALWAYS_ON_ALLEN_CONTEXT_TOOLS = [
-  `mcp__${MCP_SERVER_NAME}__search_repo_knowledge`,
   `mcp__${MCP_SERVER_NAME}__get_repo_context_body`,
   `mcp__${MCP_SERVER_NAME}__get_repo_skill_body`,
   `mcp__${MCP_SERVER_NAME}__get_node_context_usage`,
 ];
+
+function summarizeToolNames(tools: string[] | undefined): { toolCount: number; nativeCount: number; mcpCount: number } {
+  const list = tools ?? [];
+  return {
+    toolCount: list.length,
+    nativeCount: list.filter((tool) => !tool.startsWith('mcp__')).length,
+    mcpCount: list.filter((tool) => tool.startsWith('mcp__')).length,
+  };
+}
+
+function summarizeMcpServers(value: unknown): { count: number; names: string[]; raw?: unknown } {
+  if (Array.isArray(value)) {
+    const names = value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const rec = item as Record<string, unknown>;
+          if (typeof rec.name === 'string') return rec.name;
+          if (typeof rec.server === 'string') return rec.server;
+        }
+        return undefined;
+      })
+      .filter((name): name is string => Boolean(name));
+    return { count: names.length, names, raw: value };
+  }
+  if (value && typeof value === 'object') {
+    const names = Object.keys(value as Record<string, unknown>);
+    return { count: names.length, names, raw: value };
+  }
+  return { count: 0, names: [] };
+}
+
+function stripUnsupportedInlineContextQuery(prompt: string): { prompt: string; stripped: boolean } {
+  const stripped = prompt.replace(/<allen_context_query>\s*[\s\S]*?\s*<\/allen_context_query>\s*/gi, '');
+  return {
+    prompt: stripped.trimStart(),
+    stripped: stripped !== prompt,
+  };
+}
+
+function normalizeSpawnContextQuery(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+type SpawnContextQuerySource = 'tool_arg' | 'derived_prompt' | 'prompt_fallback';
+
+function resolveSpawnContextQuery(value: unknown, prompt: string, repoPath?: string): {
+  contextQuery?: Record<string, unknown>;
+  source: SpawnContextQuerySource;
+} {
+  const explicit = normalizeSpawnContextQuery(value);
+  if (explicit) return { contextQuery: explicit, source: 'tool_arg' };
+  const derived = deriveSpawnContextQuery(prompt, repoPath);
+  if (derived) return { contextQuery: derived, source: 'derived_prompt' };
+  return { source: 'prompt_fallback' };
+}
+
+function deriveSpawnContextQuery(prompt: string, repoPath?: string): Record<string, unknown> | undefined {
+  if (!repoPath) return undefined;
+  const retrievalText = extractRetrievalTaskText(prompt);
+  if (!retrievalText) return undefined;
+  const topics = deriveRetrievalTopics(retrievalText);
+  return {
+    user_request: retrievalText,
+    task_type: /\b(analy[sz]e|analysis|inspect|investigat|review)\b/i.test(retrievalText)
+      ? 'repo_analysis'
+      : 'repo_task',
+    ...(topics.length ? { topics } : {}),
+    required_categories: ['source', 'guideline'],
+    preferred_categories: ['design', 'runbook'],
+  };
+}
+
+function extractRetrievalTaskText(prompt: string): string | undefined {
+  const text = prompt.replace(/\r\n/g, '\n').trim();
+  if (!text) return undefined;
+  const taskSection = extractPromptSection(text, 'Task');
+  const candidate = taskSection || text.split(executionOnlyPromptBoundary)[0] || text;
+  const cleaned = compactForContextQuery(candidate
+    .replace(/^\s*(?:Task|User request|User prompt)\s*:\s*/i, '')
+    .replace(/\b(?:for\s+)?repo\s+`[^`]+`/gi, '')
+    .replace(/\b(?:for\s+)?repo\s+\/[^\s]+/gi, '')
+    .replace(/\b(?:repo path|worktree path|working directory)\s*:\s*`?\/[^\s`]+`?/gi, ''));
+  return cleaned || undefined;
+}
+
+const executionOnlyPromptBoundary = /^\s*(?:Strict constraints|Hard guardrails|Guardrails|Constraints|Final response|Output|Do not stop because)\s*:/gim;
+
+function extractPromptSection(text: string, label: string): string | undefined {
+  const startPattern = new RegExp(`^\\s*${label}\\s*:`, 'im');
+  const start = startPattern.exec(text);
+  if (!start) return undefined;
+  const afterLabel = start.index + start[0].length;
+  const remainder = text.slice(afterLabel);
+  executionOnlyPromptBoundary.lastIndex = 0;
+  const boundary = executionOnlyPromptBoundary.exec(remainder);
+  executionOnlyPromptBoundary.lastIndex = 0;
+  return remainder.slice(0, boundary?.index ?? remainder.length);
+}
+
+function compactForContextQuery(value: string, maxLength = 900): string {
+  return value
+    .split('\n')
+    .map(cleanContextQueryLine)
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength);
+}
+
+function cleanContextQueryLine(line: string): string {
+  const trimmed = line.trim();
+  if (!trimmed) return '';
+  const withoutMarkers = trimmed
+    .replace(/\bREAD[-\s]*ONLY\b\s*(?:task|analysis)?\s*[:;,.—-]?\s*/gi, '')
+    .replace(/\bNOT\s+an\s+implementation\s+task\b\s*[:;,.—-]?\s*/gi, '')
+    .replace(/\bno\s+code\s+changes?\b\s*[:;,.—-]?\s*/gi, '');
+  const segments = withoutMarkers
+    .split(/(?<=[.!?])\s+|;\s+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .filter((segment) => !isExecutionOnlyContextQueryLine(segment));
+  return segments.join(' ').trim();
+}
+
+function isExecutionOnlyContextQueryLine(line: string): boolean {
+  const normalized = line.toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return /^strict constraints:?$/.test(normalized)
+    || /^hard guardrails:?$/.test(normalized)
+    || /\bread only\b/.test(normalized)
+    || /\bdo not\b.*\b(edit|write|commit|push|open pr|pull request|migration|db|service)\b/.test(normalized)
+    || /\bno\b.*\b(edits?|commits?|prs?|pull requests?|implementation worktree)\b/.test(normalized)
+    || /\ballen_save_artifact\b/.test(normalized)
+    || /\bsave\b.*\b(artifact|report|analysis)\b/.test(normalized)
+    || /\bfinal response\b/.test(normalized)
+    || /\bdo not stop because\b/.test(normalized);
+}
+
+function deriveRetrievalTopics(text: string): string[] {
+  const lower = text.toLowerCase();
+  const topics: string[] = [];
+  const phraseTopics: Array<[RegExp, string]> = [
+    [/\bproduct grouping\b/, 'product grouping'],
+    [/\basin\b/, 'ASIN'],
+    [/\bvariant grouping\b|\bvariants?\b/, 'variant grouping'],
+    [/\bupstream\b|\bingestion\b/, 'upstream ingestion'],
+    [/\bdownstream\b|\bconsumption\b|\bconsumer\b/, 'downstream consumption'],
+    [/\bfields?\b|\btables?\b|\bschema\b/, 'data fields and tables'],
+    [/\bsemantic post-processing\b|\bsemantic\b/, 'semantic post-processing'],
+    [/\brisk\b|\bcaveat\b|\bgotcha\b|\boperational\b/, 'operational risks'],
+    [/\bapi\b/, 'API'],
+    [/\btests?\b|\bvalidation\b/, 'tests and validation'],
+  ];
+  for (const [pattern, topic] of phraseTopics) {
+    if (pattern.test(lower)) topics.push(topic);
+  }
+  return [...new Set(topics)].slice(0, 10);
+}
 
 // Codex CLI spawn lifecycle controls. Without these, a hung codex child
 // (or one blocked writing to stderr because nobody drains the pipe) holds
@@ -142,23 +354,19 @@ function resolveExecutionMode(_cwd: string | undefined): 'sdk' | 'cli' {
 
 // ── Active Session Registry ──────────────────────────────────────────────────
 // When chat.service starts processing a message, it registers the session context.
-// delegation tools (delegate_to_agent, report_to_user) read from this registry
-// to know which session they're running in, even when called via MCP → API chain.
+// chat-scoped tools read from this registry to know which session they're
+// running in, even when called via MCP → API chain.
 
 export interface ActiveSessionContext {
   chatSessionId: string;
   parentMessageId: string;
   /** Which agent is currently responding (undefined = Allen Assistant) */
   currentAgent?: string;
-  /** Current delegation depth (0 = top-level chat, 1+ = delegated) */
-  delegationDepth: number;
-  /** Current conversation ID (for tracking parent-child delegation chains) */
-  currentConversationId?: string;
   /** Broadcast SSE events to the chat listeners */
   broadcastEvent: (event: string, data: Record<string, unknown>) => void;
-  /** Number of background tasks (delegations/spawns) still running */
+  /** Number of background spawns still running */
   pendingBackgroundTasks: number;
-  /** Resolved working directory — set by chat.service.ts, inherited by all spawned/delegated agents */
+  /** Resolved working directory — set by chat.service.ts, inherited by spawned agents */
   resolvedCwd?: string;
 }
 
@@ -175,7 +383,7 @@ export function unregisterActiveSession(sessionId: string): void {
   activeSessions.delete(sessionId);
 }
 
-/** Get the active context for a session (used by delegation tools) */
+/** Get the active context for a session (used by chat tools and spawned agents) */
 export function getActiveSession(sessionId: string): ActiveSessionContext | undefined {
   return activeSessions.get(sessionId);
 }
@@ -233,8 +441,6 @@ function toolDescription(tool: string, args: Record<string, unknown>): string {
     if (fn === 'list_repos') return 'List repos';
     if (fn === 'wait_for_execution') return `Get execution ${(args.execution_id as string ?? '').slice(0, 12)}`;
     if (fn === 'spawn_agent') return `Spawn ${args.agent_name ?? 'agent'}`;
-    if (fn === 'delegate_to_agent') return `Delegate to ${args.agent_name ?? 'agent'}: ${(args.task as string ?? '').slice(0, 80)}`;
-    if (fn === 'wait_for_delegation') return `Wait for delegation ${(args.conversation_id as string ?? '').slice(0, 12)}`;
     if (fn === 'run_workflow') return `Run workflow ${args.workflow_name ?? args.workflow_id ?? ''}`;
     if (fn === 'save_learning') return `Save learning: ${(args.content as string ?? '').slice(0, 60)}`;
     if (fn === 'query_database') return `Query: ${(args.query as string ?? '').slice(0, 80)}`;
@@ -298,7 +504,7 @@ export interface ChatTool {
 
 /** Tools that mutate state — require approval in guided mode */
 export const DESTRUCTIVE_TOOLS = new Set([
-  'run_workflow', 'cancel_execution', 'spawn_agent', 'submit_execution_input', 'delegate_to_agent',
+  'run_workflow', 'cancel_execution', 'spawn_agent', 'submit_execution_input',
   // MCP tools that mutate (linear create/edit/delete)
   'mcp__linear__linear_create_issue', 'mcp__linear__linear_edit_issue',
   'mcp__linear__linear_delete_issue', 'mcp__linear__linear_create_comment',
@@ -576,7 +782,7 @@ const runWorkflow: ChatTool = {
 
 const getExecution: ChatTool = {
   name: 'wait_for_execution',
-  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion (like wait_for_delegation). If status="waiting", call again. When completed, includes the agent's response. Also returns recent_activity, top_logs, and activity_summary since activity_since so the caller can narrate what is happening inside the execution — pass the returned activity_cursor back as activity_since on the next call to stream forward.`,
+  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion. If status="waiting", call again. When completed, includes the agent's response. Also returns recent_activity, top_logs, and activity_summary since activity_since so the caller can narrate what is happening inside the execution — pass the returned activity_cursor back as activity_since on the next call to stream forward.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -715,7 +921,7 @@ const getExecution: ChatTool = {
 
     // Still running after 90s — return "waiting" so LLM calls again.
     // Include the latest activity window so the caller can narrate what
-    // the delegated agent is doing instead of silently polling.
+    // the spawned agent is doing instead of silently polling.
     const waitingActivity = await readActivity();
     return {
       id: executionId,
@@ -890,6 +1096,10 @@ const spawnAgent: ChatTool = {
     properties: {
       agent_name: { type: 'string', description: 'Name of the agent to spawn (e.g., "coding-reviewer", "coding-investigator", "coding-planner")' },
       prompt: { type: 'string', description: 'The task/prompt to send to the spawned agent' },
+      context_query: {
+        type: 'object',
+        description: 'Optional structured retrieval-only context query. This is used by the context engine and is not sent as part of the agent prompt.',
+      },
       repo_path: { type: 'string', description: 'Optional repo path for the agent to work in' },
       session_id: { type: 'string', description: 'Session ID from a previous spawn to resume with context. The agent picks up where it left off.' },
     },
@@ -897,7 +1107,9 @@ const spawnAgent: ChatTool = {
   },
   async execute(args, db, context) {
     const agentName = args.agent_name as string;
-    const prompt = args.prompt as string;
+    const rawPrompt = args.prompt as string;
+    const promptSanitization = stripUnsupportedInlineContextQuery(rawPrompt);
+    const prompt = promptSanitization.prompt;
     const resumeSession = args.session_id as string | undefined;
 
     const role = await db.collection('agents').findOne({ name: agentName });
@@ -920,6 +1132,8 @@ const spawnAgent: ChatTool = {
     if (!repoPath && typeof role.sourceRepoPath === 'string' && role.sourceRepoPath) {
       repoPath = role.sourceRepoPath;
     }
+    const resolvedContextQuery = resolveSpawnContextQuery(args.context_query, prompt, repoPath);
+    const contextQuery = resolvedContextQuery.contextQuery;
 
     const { randomUUID } = await import('node:crypto');
     const executionId = randomUUID();
@@ -981,7 +1195,13 @@ const spawnAgent: ChatTool = {
       workflowVersion: 0,
       status: 'running',
       source: parentCaller ? 'spawn' : 'chat',
-      input: { prompt, agent_name: agentName, repo_path: repoPath, session_id: resumeSession },
+      input: {
+        prompt,
+        ...(contextQuery ? { context_query: contextQuery } : {}),
+        agent_name: agentName,
+        repo_path: repoPath,
+        session_id: resumeSession,
+      },
       // Execution metadata for tracing
       meta: {
         cwd: repoPath || AGENT_FALLBACK_CWD,
@@ -990,6 +1210,10 @@ const spawnAgent: ChatTool = {
         spawnedBy: activeCtxForMeta?.currentAgent ?? parentCaller ?? 'user',
         chatSessionId: chatSessionIdForMeta,
         parentMessageId: activeCtxForMeta?.parentMessageId,
+        contextQuery: {
+          source: resolvedContextQuery.source,
+          inlineBlockStripped: promptSanitization.stripped,
+        },
         repoKnowledgeParent: providedRepoKnowledgePacketId ? {
           packetId: providedRepoKnowledgePacketId,
           repoId: providedRepoKnowledgeRepoId,
@@ -1055,6 +1279,8 @@ const spawnAgent: ChatTool = {
       repoKnowledgeIndexId: providedRepoKnowledgeIndexId,
       repoKnowledgeRepoName: providedRepoKnowledgeRepoName,
       repoKnowledgeFreshness: providedRepoKnowledgeFreshness,
+      contextQuery,
+      inlineContextQueryStripped: promptSanitization.stripped,
     }, 1, context).catch(() => {});
 
     return {
@@ -1089,6 +1315,44 @@ interface SpawnTreeContext {
   repoKnowledgeIndexId?: string | null;
   repoKnowledgeRepoName?: string | null;
   repoKnowledgeFreshness?: string | null;
+  contextQuery?: Record<string, unknown>;
+  inlineContextQueryStripped?: boolean;
+}
+
+async function markSpawnCompletedUnlessTerminal(
+  db: Db,
+  executionId: string,
+  agentName: string,
+  costUsd: number,
+  durationMs: number,
+  sessionId?: string,
+  tokenUsage?: TokenUsageInfo | null,
+): Promise<boolean> {
+  const completionFields: Record<string, unknown> = {
+    status: 'completed',
+    completedNodes: [agentName],
+    currentNodes: [],
+    cost: { actual: costUsd, estimated: costUsd },
+    durationMs,
+    completedAt: new Date(),
+  };
+  if (tokenUsage != null) completionFields.tokenUsage = tokenUsage;
+  if (sessionId) completionFields[`sessions.${agentName}`] = sessionId;
+
+  const result = await db.collection('executions').updateOne(
+    { id: executionId, status: { $nin: ['completed', 'cancelled', 'canceled', 'failed'] } },
+    { $set: completionFields },
+  );
+
+  if (result.matchedCount > 0) return true;
+
+  if (sessionId) {
+    await db.collection('executions').updateOne(
+      { id: executionId },
+      { $set: { [`sessions.${agentName}`]: sessionId, durationMs } },
+    );
+  }
+  return false;
 }
 
 /** Run spawn_agent in background — supports both Claude and Codex with MCP + tracing */
@@ -1121,7 +1385,7 @@ async function runSpawnInBackground(
   // Persist spawn activity to agent_activity so the wait tools can return
   // a `recent_activity` cursor and the UI replay route can hydrate this
   // execution's event log on refresh. Fire-and-forget — failures here
-  // must never stall the delegation stream.
+  // must never stall the spawn activity stream.
   const activityService = new AgentActivityService(db);
   const persistSpawnActivity = (
     rawType: 'tool_start' | 'tool_done' | 'thinking' | 'text',
@@ -1144,7 +1408,17 @@ async function runSpawnInBackground(
   };
 
   // Broadcast spawn started + persist log
-  if (onEvent) onEvent('spawn_started', { executionId, agent: agentName, prompt: prompt.slice(0, 200), provider, model });
+  if (onEvent) onEvent('spawn_started', {
+    executionId,
+    agent: agentName,
+    prompt: prompt.slice(0, 200),
+    provider,
+    model,
+    parentExecutionId: spawnTree?.parentExecutionId ?? null,
+    parentCaller: spawnTree?.parentCaller ?? null,
+    rootExecutionId: spawnTree?.rootExecutionId ?? executionId,
+    spawnDepth: spawnTree?.spawnDepth ?? 0,
+  });
 
   // ── Phase 3 log fan-out setup ──
   //
@@ -1248,16 +1522,17 @@ async function runSpawnInBackground(
     repoId: string;
     repoName?: string;
     indexId?: string;
-    indexFreshness?: 'fresh' | 'stale' | 'partial' | 'missing';
+    indexFreshness?: string;
     mandatoryContextInjectedCount?: number;
     mandatoryContextSkippedProviderNativeCount?: number;
     mandatoryContextTargetLayer?: string;
     systemPromptContextInjected?: boolean;
   } | null = null;
   let repoKnowledgeSystemPromptBlock = '';
-  if (contextEngineEnabled && repoPath && agentName !== 'repo-knowledge-graph-indexer') {
+  if (contextEngineEnabled && repoPath) {
     try {
-      const repoKnowledge = new RepoKnowledgeGraphService(db);
+      liveLog({ type: 'started', content: 'Building repo knowledge packet' });
+      const repoKnowledge = new RepoContextPacketService(db);
       const packet = await repoKnowledge.buildNodeContextPacket({
         executionId,
         workflowName: spawnTree?.parentCaller ? `${spawnTree.parentCaller}:spawn_agent/${agentName}` : `chat:spawn_agent/${agentName}`,
@@ -1269,6 +1544,7 @@ async function runSpawnInBackground(
         attempt: baseAttempt,
         state: { repo_path: repoPath, worktree_path: repoPath },
         prompt,
+        contextQuery: spawnTree?.contextQuery,
         parentPacketId: spawnTree?.repoKnowledgePacketId ?? undefined,
         parentExecutionId: spawnTree?.parentExecutionId ?? undefined,
         rootExecutionId: spawnTree?.rootExecutionId ?? executionId,
@@ -1278,8 +1554,11 @@ async function runSpawnInBackground(
         repoKnowledgeSystemPromptBlock = packet.systemPromptBlock ?? '';
         repoKnowledgePacketSummary = packet.traceSummary;
         liveLog({ type: 'started', content: `Resolved repo knowledge packet ${packet.packetId}` });
+      } else {
+        liveLog({ type: 'started', content: 'No repo knowledge packet resolved before agent start' });
       }
     } catch (err) {
+      liveLog({ type: 'started', content: `Repo knowledge packet build failed: ${(err as Error).message}` });
       logger.warn('[spawn] failed to build repo knowledge packet', { executionId, agentName, error: (err as Error).message });
     }
   }
@@ -1309,17 +1588,10 @@ async function runSpawnInBackground(
 
   const initialRenderedPrompt = prompt;
   const roleSystem = (role.system as string) ?? '';
-  const roleSystemWithGraphPersistenceGuidance = contextEngineEnabled
-    ? withRepoKnowledgeGraphPersistenceGuidance(roleSystem, {
-      agentName,
-      prompt: initialRenderedPrompt,
-      repoPath,
-    })
-    : roleSystem;
-  const repoContextLoadingGuidanceAlreadyPresent = hasRepoContextLoadingGuidance(roleSystemWithGraphPersistenceGuidance);
+  const repoContextLoadingGuidanceAlreadyPresent = hasRepoContextLoadingGuidance(roleSystem);
   const roleSystemWithRepoContextGuidance = contextEngineEnabled
-    ? withRepoContextLoadingGuidance(roleSystemWithGraphPersistenceGuidance)
-    : roleSystemWithGraphPersistenceGuidance;
+    ? withRepoContextLoadingGuidance(roleSystem)
+    : roleSystem;
   const roleSystemWithMandatoryRepoContext = contextEngineEnabled
     ? withMandatoryRepoContext(roleSystemWithRepoContextGuidance, repoKnowledgeSystemPromptBlock)
     : roleSystemWithRepoContextGuidance;
@@ -1329,13 +1601,51 @@ async function runSpawnInBackground(
 
   const MAX_SPAWN_RETRIES = 3;
   let currentResumeSession = resumeSession;
+  let materializedAgentFileForTrace: (MaterializedAgentFileMetadata & {
+    toolCount: number;
+    nativeCount: number;
+    mcpCount: number;
+  }) | undefined;
+  let capturedToolsAvailable: string[] | undefined;
+  let capturedClaudeInitMcpServers: { count: number; names: string[]; raw?: unknown } | undefined;
+  let claudeExecutionMode: 'cli' | 'sdk' | undefined;
+  let claudeMcpConfigServerNames: string[] | undefined;
+  let claudeDiscoveredMcpToolNames: string[] | undefined;
+
+  const buildSpawnRuntimeContext = () => {
+    const runtimeToolCounts = summarizeToolNames(capturedToolsAvailable);
+    return {
+      repoContextLoadingGuidancePresent,
+      repoContextLoadingGuidanceInjected,
+      mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
+      mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
+      mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,
+      mandatoryRepoContextTargetLayer: provider === 'codex' && repoKnowledgeSystemPromptBlock ? 'codex_prompt_instruction_prefix' : repoKnowledgePacketSummary?.mandatoryContextTargetLayer,
+      claudeExecutionMode,
+      mcpConfigServerCount: claudeMcpConfigServerNames?.length,
+      mcpConfigServerNames: claudeMcpConfigServerNames,
+      discoveredMcpToolCount: claudeDiscoveredMcpToolNames?.length,
+      discoveredMcpToolNames: claudeDiscoveredMcpToolNames,
+      materializedAgentFile: materializedAgentFileForTrace,
+      materializedAgentToolCount: materializedAgentFileForTrace?.toolCount,
+      materializedAgentNativeCount: materializedAgentFileForTrace?.nativeCount,
+      materializedAgentMcpCount: materializedAgentFileForTrace?.mcpCount,
+      claudeInitToolCount: capturedToolsAvailable ? runtimeToolCounts.toolCount : undefined,
+      claudeInitNativeCount: capturedToolsAvailable ? runtimeToolCounts.nativeCount : undefined,
+      claudeInitMcpCount: capturedToolsAvailable ? runtimeToolCounts.mcpCount : undefined,
+      claudeInitMcpServerCount: capturedClaudeInitMcpServers?.count,
+      claudeInitMcpServerNames: capturedClaudeInitMcpServers?.names,
+      claudeInitMcpServers: capturedClaudeInitMcpServers?.raw,
+    };
+  };
 
   for (let attempt = 0; attempt <= MAX_SPAWN_RETRIES; attempt++) {
-  try {
-    let response = '';
-    let costUsd = 0;
-    let sessionId: string | undefined = currentResumeSession;
-    const toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown> }[] = [];
+    let toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown> }[] = [];
+    try {
+      let response = '';
+      let costUsd = 0;
+      let spawnTokenUsage: TokenUsageInfo | null = null;
+      let sessionId: string | undefined = currentResumeSession;
 
     // On retry, update prompt to "continue"
     if (attempt > 0) {
@@ -1379,9 +1689,9 @@ async function runSpawnInBackground(
         mcpEnvOverrides.push('-c', `mcp_servers.${MCP_SERVER_NAME}.env.${k}="${v.replace(/"/g, '\\"')}"`);
       }
       mcpEnvOverrides.push(
-        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
-        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
-        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}"`,
+        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="${getRuntimeApiBaseUrl()}"`,
+        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${getRuntimeJwtAccessSecret()}"`,
+        '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${getRuntimePublicBaseUrl()}"`,
       );
 
       const args: string[] = ['exec'];
@@ -1556,6 +1866,19 @@ async function runSpawnInBackground(
                 persistSpawnActivity('thinking', {});
                 liveLog({ type: 'thinking' });
               }
+              // Capture token usage from Codex turn events
+              if (evt.type === 'turn.completed') {
+                if (evt.usage) {
+                  const turnUsage = normalizeCodexUsage(evt.usage);
+                  spawnTokenUsage = aggregateTokenUsage(spawnTokenUsage, turnUsage);
+                  if (turnUsage === null) {
+                    const rawSample = JSON.stringify(evt.usage).slice(0, 400);
+                    logger.warn('[token-usage] unrecognized', { executionId, agentName, rawSample });
+                  }
+                } else {
+                  logger.debug('[token-usage] absent', { executionId, agentName, provider: 'codex' });
+                }
+              }
             } catch {}
           }
         });
@@ -1619,11 +1942,27 @@ async function runSpawnInBackground(
         extraEnv: spawnContextEnv,
         externalServerNames: externalMcpServers,
       });
-      const requiresAllenGraphPersistenceTool = agentName === 'repo-knowledge-graph-indexer';
-      if (requiresAllenGraphPersistenceTool && !mcpServers.allen) {
-        throw new Error('repo-knowledge-graph-indexer requires the built-in Allen MCP server for save_repo_knowledge_graph');
-      }
-
+      claudeMcpConfigServerNames = Object.keys(mcpServers);
+      logger.info('[spawn] prepared claude mcp config', {
+        executionId,
+        agentName,
+        serverCount: claudeMcpConfigServerNames.length,
+        serverNames: claudeMcpConfigServerNames,
+        externalServerNames: externalMcpServers,
+        disabledMcpToolCount: disallowedMcpToolNames.length,
+      });
+      liveLog({
+        type: 'tool_start',
+        content: `[claude] MCP config prepared (${claudeMcpConfigServerNames.length} servers): ${claudeMcpConfigServerNames.join(', ') || 'none'}`,
+        args: {
+          source: 'mcp-config',
+          serverCount: claudeMcpConfigServerNames.length,
+          serverNames: claudeMcpConfigServerNames,
+          externalServerNames: externalMcpServers,
+          disabledMcpToolCount: disallowedMcpToolNames.length,
+          disabledMcpToolNames: disallowedMcpToolNames,
+        },
+      });
       const sdkOptions: Record<string, unknown> = {
         model, permissionMode: 'bypassPermissions',
         // Pin cwd so the SDK doesn't implicitly inherit the server's own
@@ -1641,8 +1980,6 @@ async function runSpawnInBackground(
         // ALLEN_SYSTEM_PROMPT_MODE: 'append' (default) preserves Claude
         // Code's built-in agentic scaffolding; 'custom' reverts to the old
         // full-replacement behavior. Matches node-executor.ts wiring.
-        // CLAUDE_SPAWN_NOTICE warns the model that ToolSearch isn't wired
-        // here (claude-cli only — codex path above has its own prompt).
         const systemPromptBody = `${CLAUDE_SPAWN_NOTICE}\n\n${roleSystemWithMandatoryRepoContext}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}`;
         if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPromptBody;
         else sdkOptions.appendSystemPrompt = systemPromptBody;
@@ -1655,7 +1992,13 @@ async function runSpawnInBackground(
 
       // Execution mode. Claude-provider spawns default to CLI mode. Explicit
       // ALLEN_AGENT_EXECUTION_MODE=cli|sdk overrides. See cli-runner.ts.
-      const useCliMode = !requiresAllenGraphPersistenceTool && resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
+      const useCliMode = resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
+      claudeExecutionMode = useCliMode ? 'cli' : 'sdk';
+      liveLog({
+        type: 'tool_start',
+        content: `[claude] execution mode=${claudeExecutionMode}`,
+        args: { source: 'claude-execution-mode', mode: claudeExecutionMode },
+      });
       let msgStream: AsyncIterable<any>;
       if (useCliMode) {
         const { queryViaCli } = await import('@allen/engine');
@@ -1675,16 +2018,25 @@ async function runSpawnInBackground(
           logger.warn('[spawn] MCP tool discovery failed (allowlist will lack mcp__* entries)', { executionId, agentName, error: (err as Error).message });
         }
         discoveredMcpTools = Array.from(new Set([...discoveredMcpTools, ...ALWAYS_ON_ALLEN_CONTEXT_TOOLS]));
+        claudeDiscoveredMcpToolNames = discoveredMcpTools;
+        const discoveredToolCounts = summarizeToolNames(discoveredMcpTools);
+        liveLog({
+          type: 'tool_start',
+          content: `[agent-tools] discovered MCP allowlist tools (${discoveredToolCounts.toolCount} tools, ${discoveredToolCounts.mcpCount} MCP)`,
+          args: {
+            source: 'mcp-tool-discovery',
+            ...discoveredToolCounts,
+            tools: discoveredMcpTools,
+          },
+        });
         msgStream = queryViaCli({
           agent: {
             name: agentName,
             description: (role as any)?.description,
-            // Mirror the SDK path — ARTIFACTS_GUIDANCE and CLAUDE_SPAWN_NOTICE
-            // must be part of the system prompt for the CLI branch too.
-            // Without ARTIFACTS_GUIDANCE, CLI-mode agents never see the
-            // instruction to save via allen_save_artifact. Without
-            // CLAUDE_SPAWN_NOTICE, CLI-mode agents emit `ToolSearch` out of
-            // harness habit and stall their stream for ~15 min.
+            // Mirror the SDK path — ARTIFACTS_GUIDANCE and
+            // CLAUDE_SPAWN_NOTICE must be part of the system prompt for the
+            // CLI branch too. Without ARTIFACTS_GUIDANCE, CLI-mode agents
+            // never see the instruction to save via allen_save_artifact.
             system: `${CLAUDE_SPAWN_NOTICE}\n\n${roleSystemWithMandatoryRepoContext}${repoContextBlock}${workspaceConstraint}${ARTIFACTS_GUIDANCE}${NON_INTERACTIVE_GUIDANCE}`,
             model: sdkOptions.model as string | undefined,
             tools: Array.isArray((role as any)?.tools) ? (role as any).tools : undefined,
@@ -1701,6 +2053,11 @@ async function runSpawnInBackground(
           mcpServers: sdkOptions.mcpServers as Record<string, unknown> | undefined,
           abortSignal: abortController.signal,
           onMaterializedAgentFile: (metadata) => {
+            const materializedToolCounts = summarizeToolNames(metadata.tools);
+            materializedAgentFileForTrace = {
+              ...metadata,
+              ...materializedToolCounts,
+            };
             db.collection('executions').updateOne(
               { id: executionId },
               {
@@ -1711,6 +2068,8 @@ async function runSpawnInBackground(
                     sha256: metadata.sha256,
                     byteLength: metadata.byteLength,
                     containsMandatoryRepoContext: metadata.containsMandatoryRepoContext,
+                    tools: metadata.tools,
+                    ...materializedToolCounts,
                     createdAt: metadata.createdAt,
                   },
                 },
@@ -1723,10 +2082,21 @@ async function runSpawnInBackground(
               sha256: metadata.sha256,
               byteLength: metadata.byteLength,
               containsMandatoryRepoContext: metadata.containsMandatoryRepoContext,
+              ...materializedToolCounts,
             });
             liveLog({
               type: 'tool_start',
-              content: `[claude-cli] materialized agent file ${metadata.subagentName} sha256=${metadata.sha256}`,
+              content: `[agent-tools] passed to materialized agent file (${materializedToolCounts.toolCount} tools, ${materializedToolCounts.mcpCount} MCP): ${metadata.subagentName}`,
+              args: {
+                source: 'materialized-agent-file',
+                subagentName: metadata.subagentName,
+                path: metadata.path,
+                sha256: metadata.sha256,
+                byteLength: metadata.byteLength,
+                containsMandatoryRepoContext: metadata.containsMandatoryRepoContext,
+                ...materializedToolCounts,
+                tools: metadata.tools,
+              },
             });
           },
           stderr: (chunk) => liveLog({ type: 'tool_start', content: `[claude-cli stderr] ${chunk.slice(0, 4000)}` }),
@@ -1745,45 +2115,88 @@ async function runSpawnInBackground(
         msgStream = query({ prompt: promptForThisAttempt, options: sdkOptions as any });
       }
 
-      // Client-side idle watchdog (claude-cli path only). Claude's server-
-      // side stream-idle timeout is ~15 min, which is too generous when a
-      // run stalls. We race every `next()` against a setTimeout whose
-      // threshold depends on whether we've already seen a `ToolSearch`
-      // tool_use in this stream:
-      //   - Default: 5 min. Longer than any legit single tool call
-      //     should run, so false positives are rare.
-      //   - After ToolSearch: 5 min. ToolSearch has no handler in the
-      //     spawn env, so the stream is very likely to stall from here
-      //     on — but the model can sometimes recover by emitting a
-      //     different tool call after a long pause. 5 min beats
-      //     Anthropic's 15-min server-side watchdog by a comfortable
-      //     margin while giving the model time to course-correct.
-      //     Bumped from 60s after agent runs were getting prematurely
-      //     failed by the tighter window.
-      // On timeout we abort the controller and let the existing catch/
-      // retry logic at `isTimeout` take over.
+      // Client-side idle watchdog. Claude's server-side stream-idle timeout
+      // is generous; abort locally if the stream stops producing messages.
       const STREAM_IDLE_MS = 900_000; // 15 min — general stall
-      const STREAM_IDLE_AFTER_TOOLSEARCH_MS = 300_000; // 5 min — after ToolSearch
-      let toolSearchSeen = false;
       const streamIterator = (msgStream as AsyncIterable<any>)[Symbol.asyncIterator]();
       while (true) {
-        const currentIdleMs = toolSearchSeen ? STREAM_IDLE_AFTER_TOOLSEARCH_MS : STREAM_IDLE_MS;
         const raced = await Promise.race([
           streamIterator.next().then(r => ({ kind: 'msg' as const, result: r })),
           new Promise<{ kind: 'timeout' }>(resolve =>
-            setTimeout(() => resolve({ kind: 'timeout' }), currentIdleMs),
+            setTimeout(() => resolve({ kind: 'timeout' }), STREAM_IDLE_MS),
           ),
         ]);
         if (raced.kind === 'timeout') {
-          const reason = toolSearchSeen ? 'post-ToolSearch' : 'general';
-          const warn = `[spawn:${agentName}] claude-cli stream idle >${currentIdleMs / 1000}s (${reason}) — aborting`;
-          logger.warn('[spawn] claude-cli stream idle', { executionId, agentName, idleSec: currentIdleMs / 1000, reason });
+          const warn = `[spawn:${agentName}] claude stream idle >${STREAM_IDLE_MS / 1000}s — aborting`;
+          logger.warn('[spawn] claude stream idle', { executionId, agentName, idleSec: STREAM_IDLE_MS / 1000 });
           if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'warn', content: warn });
           abortController.abort(new Error('Stream idle (client-side watchdog)'));
-          throw new Error(`claude-cli stream idle timeout (${currentIdleMs / 1000}s, ${reason})`);
+          throw new Error(`claude stream idle timeout (${STREAM_IDLE_MS / 1000}s)`);
         }
         if (raced.result.done) break;
         const msg = raced.result.value;
+
+        if ((msg as any).type === 'system' && (msg as any).subtype === 'init') {
+          const tools = (msg as any).tools;
+          const mcpServersSummary = summarizeMcpServers((msg as any).mcp_servers ?? (msg as any).mcpServers);
+          if (!capturedClaudeInitMcpServers) capturedClaudeInitMcpServers = mcpServersSummary;
+          if (!capturedToolsAvailable && Array.isArray(tools)) {
+            capturedToolsAvailable = tools as string[];
+            const initToolCounts = summarizeToolNames(capturedToolsAvailable);
+            logger.info('[spawn] claude system init tools', {
+              executionId,
+              agentName,
+              ...initToolCounts,
+              mcpServerCount: mcpServersSummary.count,
+              mcpServerNames: mcpServersSummary.names,
+            });
+            liveLog({
+              type: 'tool_start',
+              content: `[agent-tools] available at claude init (${initToolCounts.toolCount} tools, ${initToolCounts.mcpCount} MCP)`,
+              args: {
+                source: 'claude-system-init',
+                ...initToolCounts,
+                tools: capturedToolsAvailable,
+                mcpServerCount: mcpServersSummary.count,
+                mcpServerNames: mcpServersSummary.names,
+                mcpServers: mcpServersSummary.raw,
+              },
+            });
+            if (materializedAgentFileForTrace && materializedAgentFileForTrace.tools.length > capturedToolsAvailable.length) {
+              const runtimeTools = capturedToolsAvailable;
+              const missing = materializedAgentFileForTrace.tools.filter((tool) => !runtimeTools.includes(tool));
+              logger.warn('[spawn] claude init tool list smaller than materialized agent file', {
+                executionId,
+                agentName,
+                frontmatterCount: materializedAgentFileForTrace.tools.length,
+                runtimeCount: capturedToolsAvailable.length,
+                missingCount: missing.length,
+              });
+              liveLog({
+                type: 'tool_start',
+                content: `[agent-tools] claude init tools (${capturedToolsAvailable.length}) < materialized tools (${materializedAgentFileForTrace.tools.length}) — ${missing.length} missing`,
+                args: {
+                  source: 'claude-system-init-mismatch',
+                  frontmatterCount: materializedAgentFileForTrace.tools.length,
+                  runtimeCount: capturedToolsAvailable.length,
+                  missingCount: missing.length,
+                  missing,
+                },
+              });
+            }
+          } else if (mcpServersSummary.count > 0) {
+            liveLog({
+              type: 'tool_start',
+              content: `[agent-tools] claude init reported MCP servers (${mcpServersSummary.count}): ${mcpServersSummary.names.join(', ')}`,
+              args: {
+                source: 'claude-system-init',
+                mcpServerCount: mcpServersSummary.count,
+                mcpServerNames: mcpServersSummary.names,
+                mcpServers: mcpServersSummary.raw,
+              },
+            });
+          }
+        }
 
         if ('session_id' in msg && msg.session_id) {
           const incoming = msg.session_id as string;
@@ -1812,23 +2225,6 @@ async function runSpawnInBackground(
           }
           for (const block of blocks) {
             if (block.type === 'tool_use' && block.name) {
-              // Guard: Claude sometimes emits `ToolSearch` out of habit
-              // from the interactive harness. Spawned agents don't have
-              // that tool registered, so the stream would stall until
-              // Anthropic's 15-min idle watchdog. Rather than abort
-              // immediately, mark the stream as post-ToolSearch so the
-              // watchdog above uses the shorter 1-min threshold. This
-              // gives a small grace window in case the model recovers
-              // on its own, while still cutting total wait from ~15 min
-              // to ≤1 min. The existing isTimeout retry path (the
-              // watchdog throws an error containing "timeout") then
-              // re-runs with CLAUDE_SPAWN_NOTICE in force.
-              if (block.name === 'ToolSearch' && !toolSearchSeen) {
-                const warn = `[spawn:${agentName}] model emitted ToolSearch — will abort in ${STREAM_IDLE_AFTER_TOOLSEARCH_MS / 1000}s if stream stays idle`;
-                logger.warn('[spawn] model emitted ToolSearch', { executionId, agentName, abortInSec: STREAM_IDLE_AFTER_TOOLSEARCH_MS / 1000 });
-                if (onEvent) onEvent('spawn_activity', { executionId, agent: agentName, type: 'warn', content: warn });
-                toolSearchSeen = true;
-              }
               const args = (block.input as Record<string, unknown>) ?? {};
               const desc = toolDescription(block.name, args);
               const toolUseId = block.id ?? '';
@@ -1857,6 +2253,21 @@ async function runSpawnInBackground(
 
         if (msg.type === 'result') {
           costUsd = (msg as any).total_cost_usd ?? 0;
+          const rawClaudeUsage = (msg as any).usage ?? null;
+          const turnUsage = normalizeClaudeUsage(rawClaudeUsage);
+          spawnTokenUsage = aggregateTokenUsage(spawnTokenUsage, turnUsage);
+          if (rawClaudeUsage == null) {
+            logger.debug('[token-usage] absent', { executionId, agentName, provider: 'claude' });
+          } else if (turnUsage === null) {
+            const rawSample = JSON.stringify(rawClaudeUsage).slice(0, 400);
+            logger.warn('[token-usage] unrecognized', { executionId, agentName, rawSample });
+          } else {
+            const nullFields = Object.entries(turnUsage).filter(([, v]) => v === null).map(([k]) => k);
+            if (nullFields.length > 0) {
+              logger.debug('[token-usage] partial', { executionId, agentName, nullFields });
+            }
+            logger.debug('[token-usage] claude result', { executionId, agentName, inputCachedTokens: turnUsage.inputCachedTokens, inputNonCachedTokens: turnUsage.inputNonCachedTokens, outputTokens: turnUsage.outputTokens });
+          }
           if ((msg as any).subtype === 'success' && (msg as any).result) response = (msg as any).result;
           if ((msg as any).session_id) { sessionId = (msg as any).session_id; currentResumeSession = sessionId; }
         }
@@ -1869,14 +2280,20 @@ async function runSpawnInBackground(
     // Clean up process registry
     runningProcesses.delete(executionId);
 
-    await db.collection('executions').updateOne(
-      { id: executionId },
-      { $set: {
-        status: 'completed', completedNodes: [agentName], currentNodes: [],
-        cost: { actual: costUsd, estimated: costUsd }, durationMs, completedAt: new Date(),
-        ...(sessionId ? { [`sessions.${agentName}`]: sessionId } : {}),
-      } },
+    const markedCompleted = await markSpawnCompletedUnlessTerminal(
+      db,
+      executionId,
+      agentName,
+      costUsd,
+      durationMs,
+      sessionId,
+      spawnTokenUsage,
     );
+    if (!markedCompleted) {
+      logger.info('[spawn] completion skipped because execution is already terminal', { executionId, agentName });
+      if (activeCtx) activeCtx.pendingBackgroundTasks--;
+      return;
+    }
 
     // Broadcast completion + log
     if (onEvent) onEvent('spawn_completed', { executionId, agent: agentName, durationMs, toolCount: toolCalls.length, response: response.slice(0, 300) });
@@ -1888,7 +2305,7 @@ async function runSpawnInBackground(
     let contextEvaluationId: string | undefined;
     if (repoKnowledgePacketSummary) {
       try {
-        const repoKnowledge = new RepoKnowledgeGraphService(db);
+        const repoKnowledge = new RepoContextPacketService(db);
         const recordedUsage = await repoKnowledge.recordContextUsage({
           executionId,
           executionTraceId,
@@ -1937,22 +2354,18 @@ async function runSpawnInBackground(
     // collide with the base attempt of the run that spawned it.
     await db.collection('execution_traces').insertOne({
       executionId, executionTraceId, node: agentName, attempt: baseAttempt + attempt, status: 'completed', type: 'agent', agent: agentName,
-      inputState: { prompt: initialRenderedPrompt }, renderedPrompt: initialRenderedPrompt, rawResponse: response,
+      inputState: { prompt: initialRenderedPrompt, ...(spawnTree?.contextQuery ? { context_query: spawnTree.contextQuery } : {}) }, renderedPrompt: initialRenderedPrompt, rawResponse: response,
       output: traceOutput,
       toolCalls,
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
+      toolsAvailable: capturedToolsAvailable,
+      materializedAgentFile: materializedAgentFileForTrace,
       contextAttemptId: repoKnowledgePacketSummary?.packetId,
       contextUsageTraceId: contextUsageTrace?.traceId,
       contextEvaluationId,
-      runtimeContext: {
-        repoContextLoadingGuidancePresent,
-        repoContextLoadingGuidanceInjected,
-        mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
-        mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
-        mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,
-        mandatoryRepoContextTargetLayer: provider === 'codex' && repoKnowledgeSystemPromptBlock ? 'codex_prompt_instruction_prefix' : repoKnowledgePacketSummary?.mandatoryContextTargetLayer,
-      },
+      runtimeContext: buildSpawnRuntimeContext(),
       cost: { actual: costUsd, estimated: costUsd, model, method: 'sdk_reported' as const },
+      tokenUsage: spawnTokenUsage ?? null,
       durationMs, startedAt: new Date(startMs), completedAt: new Date(),
     });
     // Success — break out of retry loop
@@ -1977,8 +2390,121 @@ async function runSpawnInBackground(
       { projection: { status: 1 } },
     ).catch(() => null);
     if (currentExec?.status === 'cancelled') {
+      const cancelledOutput: Record<string, unknown> = { cancelled: true, reason: errorMsg, session_id: failedSessionId };
+      const executionTraceId = randomUUID();
+      let contextUsageTrace: { traceId?: string; preselectedCount?: number; loadedCount: number; appliedCount: number; skippedCount: number } | null = null;
+      let contextEvaluationId: string | undefined;
+      if (repoKnowledgePacketSummary) {
+        try {
+          const repoKnowledge = new RepoContextPacketService(db);
+          const recordedUsage = await repoKnowledge.recordContextUsage({
+            executionId,
+            executionTraceId,
+            workflowName: spawnTree?.parentCaller ? `${spawnTree.parentCaller}:spawn_agent/${agentName}` : `chat:spawn_agent/${agentName}`,
+            nodeName: agentName,
+            nodeRole: agentName,
+            executionKind: 'spawned_agent',
+            targetRole: agentName,
+            callerRole: spawnTree?.parentCaller ?? undefined,
+            attempt: baseAttempt + attempt,
+            packetId: repoKnowledgePacketSummary.packetId,
+            outputs: cancelledOutput,
+            rawResponse: '',
+            toolCalls,
+            parentPacketId: spawnTree?.repoKnowledgePacketId ?? null,
+            parentExecutionId: spawnTree?.parentExecutionId ?? null,
+            rootExecutionId: spawnTree?.rootExecutionId ?? executionId,
+            parentNodeName: spawnTree?.parentCaller ?? undefined,
+            agentName,
+          });
+          contextUsageTrace = recordedUsage ? {
+            traceId: recordedUsage.traceId,
+            preselectedCount: recordedUsage.preselectedCount,
+            loadedCount: recordedUsage.loadedCount,
+            appliedCount: recordedUsage.appliedCount,
+            skippedCount: recordedUsage.skippedCount,
+          } : null;
+          contextEvaluationId = typeof recordedUsage?.contextEvaluation?.evaluationId === 'string'
+            ? recordedUsage.contextEvaluation.evaluationId
+            : typeof recordedUsage?.contextEvaluation?.traceId === 'string'
+              ? recordedUsage.contextEvaluation.traceId
+              : undefined;
+          if (recordedUsage?.repoContextUsage && !hasMeaningfulRepoContextUsage(cancelledOutput.repo_context_usage)) {
+            cancelledOutput.repo_context_usage = recordedUsage.repoContextUsage;
+          }
+        } catch (usageErr) {
+          logger.warn('[spawn] failed to record repo knowledge usage for cancelled run', { executionId, agentName, error: (usageErr as Error).message });
+        }
+      }
+      await db.collection('execution_traces').updateOne(
+        { executionId, node: agentName, attempt: baseAttempt + attempt },
+        {
+          $set: {
+            executionId, executionTraceId, node: agentName, attempt: baseAttempt + attempt, status: 'cancelled', type: 'agent', agent: agentName,
+            inputState: { prompt: initialRenderedPrompt, ...(spawnTree?.contextQuery ? { context_query: spawnTree.contextQuery } : {}) }, renderedPrompt: initialRenderedPrompt, rawResponse: '',
+            output: cancelledOutput,
+            toolCalls,
+            activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
+            toolsAvailable: capturedToolsAvailable,
+            materializedAgentFile: materializedAgentFileForTrace,
+            contextAttemptId: repoKnowledgePacketSummary?.packetId,
+            contextUsageTraceId: contextUsageTrace?.traceId,
+            contextEvaluationId,
+            runtimeContext: buildSpawnRuntimeContext(),
+            cost: { actual: 0, estimated: 0, model, method: 'sdk_reported' as const },
+            durationMs, startedAt: new Date(startMs), completedAt: new Date(),
+          },
+        },
+        { upsert: true },
+      );
       if (activeCtx) activeCtx.pendingBackgroundTasks--;
       return;
+    }
+    const failedTraceOutput: Record<string, unknown> = { error: errorMsg, session_id: failedSessionId };
+    const executionTraceId = randomUUID();
+    let contextUsageTrace: { traceId?: string; preselectedCount?: number; loadedCount: number; appliedCount: number; skippedCount: number } | null = null;
+    let contextEvaluationId: string | undefined;
+    if (repoKnowledgePacketSummary) {
+      try {
+        const repoKnowledge = new RepoContextPacketService(db);
+        const recordedUsage = await repoKnowledge.recordContextUsage({
+          executionId,
+          executionTraceId,
+          workflowName: spawnTree?.parentCaller ? `${spawnTree.parentCaller}:spawn_agent/${agentName}` : `chat:spawn_agent/${agentName}`,
+          nodeName: agentName,
+          nodeRole: agentName,
+          executionKind: 'spawned_agent',
+          targetRole: agentName,
+          callerRole: spawnTree?.parentCaller ?? undefined,
+          attempt: baseAttempt + attempt,
+          packetId: repoKnowledgePacketSummary.packetId,
+          outputs: failedTraceOutput,
+          rawResponse: '',
+          toolCalls,
+          parentPacketId: spawnTree?.repoKnowledgePacketId ?? null,
+          parentExecutionId: spawnTree?.parentExecutionId ?? null,
+          rootExecutionId: spawnTree?.rootExecutionId ?? executionId,
+          parentNodeName: spawnTree?.parentCaller ?? undefined,
+          agentName,
+        });
+        contextUsageTrace = recordedUsage ? {
+          traceId: recordedUsage.traceId,
+          preselectedCount: recordedUsage.preselectedCount,
+          loadedCount: recordedUsage.loadedCount,
+          appliedCount: recordedUsage.appliedCount,
+          skippedCount: recordedUsage.skippedCount,
+        } : null;
+        contextEvaluationId = typeof recordedUsage?.contextEvaluation?.evaluationId === 'string'
+          ? recordedUsage.contextEvaluation.evaluationId
+          : typeof recordedUsage?.contextEvaluation?.traceId === 'string'
+            ? recordedUsage.contextEvaluation.traceId
+            : undefined;
+        if (recordedUsage?.repoContextUsage && !hasMeaningfulRepoContextUsage(failedTraceOutput.repo_context_usage)) {
+          failedTraceOutput.repo_context_usage = recordedUsage.repoContextUsage;
+        }
+      } catch (usageErr) {
+        logger.warn('[spawn] failed to record repo knowledge usage for failed run', { executionId, agentName, error: (usageErr as Error).message });
+      }
     }
     await db.collection('executions').updateOne(
       { id: executionId },
@@ -1988,19 +2514,17 @@ async function runSpawnInBackground(
       } },
     );
     await db.collection('execution_traces').insertOne({
-      executionId, executionTraceId: randomUUID(), node: agentName, attempt: baseAttempt + attempt, status: 'failed', type: 'agent', agent: agentName,
-      inputState: { prompt: initialRenderedPrompt }, renderedPrompt: initialRenderedPrompt, rawResponse: '',
-      output: { error: errorMsg, session_id: failedSessionId },
+      executionId, executionTraceId, node: agentName, attempt: baseAttempt + attempt, status: 'failed', type: 'agent', agent: agentName,
+      inputState: { prompt: initialRenderedPrompt, ...(spawnTree?.contextQuery ? { context_query: spawnTree.contextQuery } : {}) }, renderedPrompt: initialRenderedPrompt, rawResponse: '',
+      output: failedTraceOutput,
+      toolCalls,
       activity: activity.map(a => ({ ...a, type: a.type as any, content: a.tool ?? '' })),
+      toolsAvailable: capturedToolsAvailable,
+      materializedAgentFile: materializedAgentFileForTrace,
       contextAttemptId: repoKnowledgePacketSummary?.packetId,
-      runtimeContext: {
-        repoContextLoadingGuidancePresent,
-        repoContextLoadingGuidanceInjected,
-        mandatoryRepoContextInjected: Boolean(repoKnowledgeSystemPromptBlock),
-        mandatoryRepoContextInjectedCount: repoKnowledgePacketSummary?.mandatoryContextInjectedCount,
-        mandatoryRepoContextSkippedProviderNativeCount: repoKnowledgePacketSummary?.mandatoryContextSkippedProviderNativeCount,
-        mandatoryRepoContextTargetLayer: provider === 'codex' && repoKnowledgeSystemPromptBlock ? 'codex_prompt_instruction_prefix' : repoKnowledgePacketSummary?.mandatoryContextTargetLayer,
-      },
+      contextUsageTraceId: contextUsageTrace?.traceId,
+      contextEvaluationId,
+      runtimeContext: buildSpawnRuntimeContext(),
       cost: { actual: 0, estimated: 0, model, method: 'sdk_reported' as const },
       durationMs, startedAt: new Date(startMs), completedAt: new Date(),
     });
@@ -2016,8 +2540,12 @@ async function runSpawnInBackground(
 // Test-injection seam — allows unit tests to spy on runSpawnInBackground.
 // The function is called via __internalsForTest so tests can replace the reference.
 export const __internalsForTest = {
+  stripUnsupportedInlineContextQuery,
+  deriveSpawnContextQuery,
+  resolveSpawnContextQuery,
   runSpawnInBackground: (...args: Parameters<typeof runSpawnInBackground>) =>
     runSpawnInBackground(...args),
+  markSpawnCompletedUnlessTerminal,
 };
 
 /**
@@ -2211,11 +2739,11 @@ const getLearnings: ChatTool = {
 
 const queryDatabase: ChatTool = {
   name: 'query_database',
-  description: 'Run a read-only query against the Allen MongoDB database. Can query collections: workflows, executions, agents, repos, learnings, chat_sessions, and repo knowledge graph collections. Returns up to 20 results.',
+  description: 'Run a read-only query against the Allen MongoDB database. Can query collections: workflows, executions, agents, repos, learnings, chat_sessions, and context-engine collections. Returns up to 20 results.',
   inputSchema: {
     type: 'object',
     properties: {
-      collection: { type: 'string', description: 'MongoDB collection name (e.g., "workflows", "executions", "agents", "repos", "learnings", "knowledge_nodes")' },
+      collection: { type: 'string', description: 'MongoDB collection name (e.g., "workflows", "executions", "agents", "repos", "learnings")' },
       filter: { type: 'object', description: 'MongoDB query filter (e.g., {"status": "completed"})', additionalProperties: true },
       projection: { type: 'object', description: 'Fields to include/exclude (e.g., {"name": 1, "status": 1})', additionalProperties: true },
       sort: { type: 'object', description: 'Sort order (e.g., {"createdAt": -1})', additionalProperties: true },
@@ -2224,7 +2752,7 @@ const queryDatabase: ChatTool = {
     required: ['collection'],
   },
   async execute(args, db) {
-    const allowedCollections = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces', 'repo_knowledge_indexes', 'knowledge_nodes', 'knowledge_edges', 'context_attempts', 'context_refs', 'context_ref_events', 'context_evaluations', 'context_artifacts'];
+    const allowedCollections = ['workflows', 'executions', 'agents', 'repos', 'learnings', 'chat_sessions', 'execution_logs', 'node_traces', 'repo_context_curation_profiles', 'repo_context_curation_entries', 'repo_mandatory_context_mappings', 'context_attempts', 'context_refs', 'context_ref_events', 'context_evaluations', 'context_artifacts'];
     const collection = args.collection as string;
     if (!allowedCollections.includes(collection)) {
       return { error: `Collection "${collection}" not allowed. Allowed: ${allowedCollections.join(', ')}` };
@@ -2495,21 +3023,15 @@ const submitExecutionInput: ChatTool = {
       // Dispatch by decision — mirrors the POST /api/interventions/:id/respond handler
       if (decision === 'approve' || decision === 'answer') {
         const nodeName = intervention.stage;
-        const originalFields = (intervention as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
-        const payload: Record<string, unknown> = {};
-        if (Object.keys(fieldValues).length > 0) {
-          Object.assign(payload, fieldValues);
-        } else if (originalFields.some(f => f.name === 'approval_decision')) {
-          payload.approval_decision = 'approve';
-          if (args.feedback != null) payload.approval_feedback = args.feedback;
-        } else if (originalFields.some(f => f.name === 'decision')) {
-          payload.decision = 'approve';
-          if (args.feedback != null) payload.feedback = args.feedback;
-        } else if (originalFields.length > 0) {
-          // Fallback — single-field case where the caller only sent `data`
-          // with a free-form response.
-          payload[originalFields[0].name] = (args.data as Record<string, unknown>)?.response ?? '';
+        if (Object.keys(fieldValues).length === 0) {
+          return { error: 'field_values is required for HITL responses.' };
         }
+        const payload = {
+          human_input: buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+            ...fieldValues,
+            __human_meta: { actionId: decision, decision, feedback },
+          }),
+        };
         try {
           await executionService.submitInput(intervention.workflow_run_id, nodeName, payload);
         } catch (err) {
@@ -2522,21 +3044,40 @@ const submitExecutionInput: ChatTool = {
       } else if (decision === 'request_changes') {
         const nodeName = intervention.stage;
         const originalFields = (intervention as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
-        const payload: Record<string, unknown> = { ...fieldValues };
-        const hasDecisionField = originalFields.some(f => f.name === 'approval_decision' || f.name === 'decision');
+        const values: Record<string, unknown> = { ...fieldValues };
+        const isEscalation = intervention.severity === 'escalation'
+          || String(intervention.stage ?? '').toLowerCase().includes('escalation');
+        const hasDecisionField = originalFields.some(f => f.name === 'approval_decision' || f.name === 'decision' || f.name === 'escalation_decision');
         if (hasDecisionField) {
-          if (originalFields.some(f => f.name === 'approval_decision') && payload.approval_decision == null) {
-            payload.approval_decision = 'request_changes';
+          if (originalFields.some(f => f.name === 'approval_decision') && values.approval_decision == null) {
+            values.approval_decision = 'request_changes';
           }
-          if (originalFields.some(f => f.name === 'decision') && payload.decision == null) {
-            payload.decision = 'request_changes';
+          if (originalFields.some(f => f.name === 'decision') && values.decision == null) {
+            values.decision = isEscalation ? 'retry_with_feedback' : 'request_changes';
           }
-          if (originalFields.some(f => f.name === 'approval_feedback') && payload.approval_feedback == null) {
-            payload.approval_feedback = feedback ?? '';
+          if (originalFields.some(f => f.name === 'escalation_decision') && values.escalation_decision == null) {
+            values.escalation_decision = 'retry_with_feedback';
           }
-          if (originalFields.some(f => f.name === 'feedback') && payload.feedback == null) {
-            payload.feedback = feedback ?? '';
+          if (originalFields.some(f => f.name === 'approval_feedback') && values.approval_feedback == null) {
+            values.approval_feedback = feedback ?? '';
           }
+          if (originalFields.some(f => f.name === 'feedback') && values.feedback == null) {
+            values.feedback = feedback ?? '';
+          }
+          if (originalFields.some(f => f.name === 'escalation_feedback') && values.escalation_feedback == null) {
+            values.escalation_feedback = feedback ?? '';
+          }
+          const humanDecision = String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? decision);
+          const payload = {
+            human_input: buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+              ...values,
+              __human_meta: {
+                actionId: humanDecision,
+                decision: humanDecision,
+                feedback: feedback ?? String(values.feedback ?? values.approval_feedback ?? values.escalation_feedback ?? ''),
+              },
+            }),
+          };
           const delivered = await executionService.submitInput(intervention.workflow_run_id, nodeName, payload);
           if (delivered) {
             await db.collection('executions').updateOne(
@@ -2548,27 +3089,41 @@ const submitExecutionInput: ChatTool = {
             await db.collection('executions').updateOne(
               { id: intervention.workflow_run_id },
               {
-                $set: {
-                  'state.__retry_target': [targetNode],
-                  'state.__retry_source': 'human_feedback',
-                  'state.__retry_attempt': 1,
-                  'state.retry_context': feedback ?? '',
-                },
+	                $set: {
+	                  'state.__retry_target': [targetNode],
+	                  'state.__retry_source': 'human_feedback',
+	                  'state.__retry_attempt': 1,
+	                  'state.human_input': buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+	                    ...values,
+	                    __human_meta: {
+                        actionId: humanDecision,
+                        decision: humanDecision,
+                        feedback: feedback ?? String(values.feedback ?? values.approval_feedback ?? values.escalation_feedback ?? ''),
+                      },
+	                  }),
+	                },
               },
             );
             await executionService.retryFromNode(intervention.workflow_run_id, targetNode);
           }
         } else {
         const targetNode = retryTargetForStage(intervention.stage, scope);
-        await db.collection('executions').updateOne(
-          { id: intervention.workflow_run_id },
-          {
-            $set: {
-              'state.__retry_target': [targetNode],
-              'state.__retry_source': 'human_feedback',
-              'state.__retry_attempt': 1,
-              'state.retry_context': feedback ?? '',
-            },
+	        await db.collection('executions').updateOne(
+	          { id: intervention.workflow_run_id },
+	          {
+	            $set: {
+	              'state.__retry_target': [targetNode],
+	              'state.__retry_source': 'human_feedback',
+	              'state.__retry_attempt': 1,
+	              'state.human_input': buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+	                ...values,
+	                __human_meta: {
+                    actionId: String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? decision),
+                    decision: String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? decision),
+                    feedback: feedback ?? String(values.feedback ?? values.approval_feedback ?? values.escalation_feedback ?? ''),
+                  },
+	              }),
+	            },
           },
         );
         try {
@@ -2578,9 +3133,43 @@ const submitExecutionInput: ChatTool = {
         }
         }
       } else if (decision === 'reject') {
+        const nodeName = intervention.stage;
+        const originalFields = (intervention as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
+        const values: Record<string, unknown> = { ...fieldValues };
+        const actionValue = String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? 'reject');
+        if (originalFields.some(f => f.name === 'approval_decision') && values.approval_decision == null) {
+          values.approval_decision = actionValue;
+        }
+        if (originalFields.some(f => f.name === 'decision') && values.decision == null) {
+          values.decision = actionValue;
+        }
+        if (originalFields.some(f => f.name === 'escalation_decision') && values.escalation_decision == null) {
+          values.escalation_decision = actionValue;
+        }
+        if (feedback != null) {
+          if (originalFields.some(f => f.name === 'approval_feedback') && values.approval_feedback == null) {
+            values.approval_feedback = feedback;
+          } else if (originalFields.some(f => f.name === 'feedback') && values.feedback == null) {
+            values.feedback = feedback;
+          } else if (originalFields.some(f => f.name === 'escalation_feedback') && values.escalation_feedback == null) {
+            values.escalation_feedback = feedback;
+          } else {
+            values.feedback = feedback;
+          }
+        }
+        let delivered = false;
+        if (originalFields.length > 0) {
+          const payload = {
+            human_input: buildHumanResumeInput(toHumanInterventionPayload(intervention), {
+              ...values,
+              __human_meta: { actionId: actionValue, decision: actionValue, feedback },
+            }),
+          };
+          delivered = await executionService.submitInput(intervention.workflow_run_id, nodeName, payload);
+        }
         await db.collection('executions').updateOne(
           { id: intervention.workflow_run_id },
-          { $set: { status: 'cancelled' } },
+          { $set: { status: delivered ? 'running' : 'cancelled' } },
         );
       }
 
@@ -2779,374 +3368,7 @@ const saveLearning: ChatTool = {
   },
 };
 
-// ── Delegation Tools ──────────────────────────────────────────────────────────
-
-const delegateToAgent: ChatTool = {
-  name: 'delegate_to_agent',
-  description: `Delegate a task to another team agent. Returns immediately with a conversation_id. Then call wait_for_delegation(conversation_id) which BLOCKS until the agent finishes — no polling loop needed.
-
-WORKFLOW:
-1. delegate_to_agent(agent_name="engineer", task="Analyze feasibility") → { conversation_id: "abc" }
-2. wait_for_delegation(conversation_id="abc") → WAITS → { status: "completed", response: "..." }
-3. Optional follow-up: delegate_to_agent(agent_name="engineer", task="What about CSS?", conversation_id="abc")
-4. wait_for_delegation(conversation_id="abc") → WAITS → { status: "completed", response: "..." }
-
-CRITICAL RULES:
-- ALWAYS call wait_for_delegation after delegate_to_agent.
-- If wait_for_delegation returns status="waiting", call it again immediately. Keep calling until "completed" or "failed".
-- NEVER respond to the user before ALL delegations are complete.
-- NEVER give up — the agent WILL finish. Just keep calling wait_for_delegation.
-- After getting "completed", you MAY send follow-ups via delegate_to_agent(conversation_id=...) then wait_for_delegation again.
-- Only after ALL delegation results are in, synthesize and respond to the user.`,
-  destructive: true,
-  inputSchema: {
-    type: 'object',
-    properties: {
-      agent_name: { type: 'string', description: 'Name of the agent to delegate to (e.g., "engineer", "qa-engineer", "data-analyst")' },
-      task: { type: 'string', description: 'The task, question, or follow-up message for the target agent' },
-      context: { type: 'object', description: 'Any relevant context (repo path, ticket info, etc.)', additionalProperties: true },
-      conversation_id: { type: 'string', description: 'ID of an existing conversation to continue (for multi-turn). Omit for new delegation.' },
-    },
-    required: ['agent_name', 'task'],
-  },
-  async execute(args, db, toolContext) {
-    const targetName = args.agent_name as string;
-    const task = args.task as string;
-    const context = (args.context as Record<string, unknown>) ?? {};
-    const continueConvId = args.conversation_id as string | undefined;
-    const conversationService = new AgentConversationService(db);
-
-    // Find the target agent
-    const targetAgent = await db.collection('agents').findOne({ name: targetName });
-    if (!targetAgent) {
-      return { error: `Agent "${targetName}" not found. Use list_agents to see available agents.` };
-    }
-
-    const activeCtx = resolveActiveSession(toolContext);
-    const chatSessionId = activeCtx?.chatSessionId ?? toolContext?.chatSessionId;
-    if (!chatSessionId) {
-      return { error: 'Missing chat session context. Delegation must be started from a chat session.' };
-    }
-    const parentMessageId = activeCtx?.parentMessageId ?? 'unknown';
-    const fromAgent = activeCtx?.currentAgent ?? 'assistant';
-    const currentDepth = (activeCtx?.delegationDepth ?? 0) + 1;
-    const onEvent = activeCtx?.broadcastEvent;
-
-    if (!chatSessionId || !parentMessageId) {
-      return {
-        error: 'delegate_to_agent requires an active chat context with a parent message id. Refusing to create or reuse an unscoped delegation thread.',
-      };
-    }
-
-    // Resolve cwd: explicit context > session cwd > workspace linked to
-    // session > target agent's sourceRepoPath. See spawn_agent for the full
-    // rationale. This fallback makes imported Claude agents "just work"
-    // without every caller having to look up their source repo.
-    let delegationCwd = context.repo_path as string | undefined;
-    if (!delegationCwd) {
-      delegationCwd = activeCtx?.resolvedCwd ?? await resolveWorkspacePath(db, chatSessionId) ?? undefined;
-    }
-    if (!delegationCwd && typeof targetAgent.sourceRepoPath === 'string' && targetAgent.sourceRepoPath) {
-      delegationCwd = targetAgent.sourceRepoPath;
-      // Mirror into context so the receiving agent's prompt includes the
-      // same repo_path it will actually run in.
-      if (!context.repo_path) context.repo_path = delegationCwd;
-    }
-
-    // ── Continue existing conversation (explicit ID or auto-find) ──
-    let existingConvId = continueConvId;
-    if (!existingConvId) {
-      // Auto-find active conversation between caller and target
-      const existing = await conversationService.findActiveConversation(chatSessionId, fromAgent, targetName);
-      if (existing) existingConvId = existing._id!.toString();
-    }
-
-    if (existingConvId) {
-      const existing = await conversationService.get(existingConvId);
-      if (!existing) return { error: `Conversation "${existingConvId}" not found.` };
-
-      // Flip the conversation back to `active` and anchor it to the current
-      // assistant message before kicking off the background run. Without
-      // this, wait_for_delegation sees the prior turn's `completed` status
-      // and returns the stale response/summary/cost/duration immediately —
-      // the caller thinks the continuation finished instantly with the
-      // previous turn's output. parentMessageIds also lets the UI render
-      // the thread card under every assistant message that touched it.
-      await conversationService.markContinuation(existingConvId, parentMessageId);
-
-      await conversationService.addMessage(existingConvId, { agent: fromAgent, type: 'message', content: task, timestamp: new Date() });
-      if (onEvent) onEvent('thread_message', { conversationId: existingConvId, agent: fromAgent, type: 'message', content: task.slice(0, 200) });
-
-      // Get the target agent's session for resume
-      const targetSessionId = existing.sessions?.[targetName];
-
-      // Run in background — return immediately
-      runDelegationInBackground(db, targetAgent, task, existingConvId, targetSessionId, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd, chatSessionId).catch(() => {});
-
-      return { conversation_id: existingConvId, status: 'started', turn: 'continue', message: `Message sent to ${targetName}. Use wait_for_delegation to check the response.` };
-    }
-
-    // ── New conversation ──
-    if (!conversationService.canDelegate(currentDepth - 1)) {
-      return { error: `Delegation depth limit reached (max ${conversationService.maxDepth}). Respond directly.` };
-    }
-
-    // Delegation is intentionally unrestricted: any agent can delegate to any
-    // other agent regardless of canDelegateTo lists or team boundaries.
-    // The team isolation and canDelegateTo checks were removed so that
-    // orchestrators are never blocked by allowlist mismatches (ENG-1469).
-
-    const conversation = await conversationService.create({ chatSessionId, parentMessageId, fromAgent, toAgent: targetName, task, context, depth: currentDepth, parentConversationId: activeCtx?.currentConversationId });
-    const convId = conversation._id!.toString();
-
-    if (onEvent) onEvent('thread_created', { conversationId: convId, fromAgent, toAgent: targetName, task: task.slice(0, 200), depth: currentDepth, parentConversationId: activeCtx?.currentConversationId });
-    await conversationService.addMessage(convId, { agent: fromAgent, type: 'message', content: task, timestamp: new Date() });
-
-    // Auto-inject workspace context
-    if (!context.repo_path) {
-      const wsPath = await resolveWorkspacePath(db, chatSessionId);
-      if (wsPath) {
-        context.repo_path = wsPath;
-        try {
-          const ws = await db.collection('workspaces').findOne({ worktreePath: wsPath, status: { $nin: ['archived', 'failed'] } });
-          if (ws?.branch) context.workspace_branch = ws.branch as string;
-        } catch {}
-      }
-    }
-
-    let fullPrompt = task;
-    if (Object.keys(context).length > 0) fullPrompt = `CONTEXT:\n${JSON.stringify(context, null, 2)}\n\nTASK:\n${task}`;
-
-    // Run in background — return immediately so MCP doesn't timeout
-    runDelegationInBackground(db, targetAgent, fullPrompt, convId, undefined, conversationService, onEvent, activeCtx, currentDepth, fromAgent, targetName, delegationCwd, chatSessionId).catch(() => {});
-
-    return { conversation_id: convId, status: 'started', agent: targetName, depth: currentDepth, message: `Delegation started. Use wait_for_delegation(conversation_id="${convId}") to get the response.` };
-  },
-};
-
-/** Run delegation in background — decoupled from MCP tool call timeout */
-async function runDelegationInBackground(
-  db: Db, targetAgent: Record<string, unknown>, prompt: string, convId: string,
-  resumeSessionId: string | undefined, conversationService: AgentConversationService,
-  onEvent: ((event: string, data: Record<string, unknown>) => void) | undefined,
-  activeCtx: ActiveSessionContext | undefined, currentDepth: number,
-  fromAgent: string, targetName: string, cwd?: string, chatSessionId?: string,
-): Promise<void> {
-  if (activeCtx) activeCtx.pendingBackgroundTasks++;
-  const startMs = Date.now();
-  try {
-    const result = await runAgentTurn(db, targetAgent, prompt, convId, resumeSessionId, conversationService, onEvent, activeCtx, currentDepth, cwd, chatSessionId);
-    logger.info('[delegation] completed', { convId, targetName, responseLen: result.responseText.length, toolCalls: result.toolCalls.length });
-    await conversationService.addMessage(convId, { agent: targetName, type: 'message', content: result.responseText, toolCalls: result.toolCalls, timestamp: new Date() });
-    await conversationService.addCost(convId, result.costUsd);
-    if (result.sessionId) await conversationService.saveSessionId(convId, targetName, result.sessionId);
-
-    const durationMs = Date.now() - startMs;
-    const summary = result.responseText.split('\n').find(l => l.trim().length > 10)?.trim().slice(0, 150) ?? result.responseText.slice(0, 150);
-    await conversationService.complete(convId, result.responseText, summary, result.costUsd);
-    if (onEvent) onEvent('thread_completed', { conversationId: convId, fromAgent, toAgent: targetName, summary, costUsd: result.costUsd, durationMs });
-  } catch (err) {
-    const durationMs = Date.now() - startMs;
-    const errorMsg = (err as Error).message;
-    await conversationService.fail(convId, errorMsg);
-    new MonitoringService(db).handleEvent({
-      sourceType: 'delegation',
-      sourceId: convId,
-      title: `Delegation failed: ${fromAgent} -> ${targetName}`,
-      error: errorMsg,
-      rootCauseArea: 'agent_prompt',
-      severity: 'high',
-      confidence: 0.80,
-      failureMode: 'delegation_failed',
-      relatedIds: {
-        conversationId: convId,
-        chatSessionId,
-        fromAgent,
-        toAgent: targetName,
-      },
-    }).catch(() => {});
-    if (onEvent) onEvent('thread_completed', { conversationId: convId, fromAgent, toAgent: targetName, summary: `Failed: ${errorMsg}`, costUsd: 0, durationMs, error: true });
-  } finally {
-    if (activeCtx) activeCtx.pendingBackgroundTasks--;
-  }
-}
-
-/** Wait for delegation result — handles active, waiting_for_answer, completed, failed */
-const getDelegationResult: ChatTool = {
-  name: 'wait_for_delegation',
-  description: `Wait for a delegation to complete. Blocks up to 90 seconds per call.
-
-Possible return statuses:
-- "waiting" → agent still working. Call wait_for_delegation again.
-- "question" → agent is asking YOU a question. Read the question, then call answer_delegator(conversation_id, answer).
-  After answering, call wait_for_delegation again to wait for the agent to finish.
-- "completed" → agent finished. Response is in the result.
-- "failed" → agent errored.
-
-RULES:
-- If "waiting": call wait_for_delegation again immediately. NEVER give up.
-- If "question": answer it via answer_delegator, then call wait_for_delegation again.
-- If you can't answer the question yourself, use ask_delegator to escalate to YOUR caller.
-- NEVER respond to the user before status is "completed" or "failed".
-
-Also returns recent_activity and activity_summary (human-readable progress lines since the activity_since cursor) so you can describe what the delegated agent is doing rather than polling silently — pass the returned activity_cursor back on the next call to stream forward.`,
-  inputSchema: {
-    type: 'object',
-    properties: {
-      conversation_id: { type: 'string', description: 'Conversation ID from delegate_to_agent' },
-      activity_since: { type: 'string', description: 'ISO timestamp cursor. Pass activity_cursor from the previous wait_for_delegation response to fetch only newer events.' },
-    },
-    required: ['conversation_id'],
-  },
-  async execute(args, db) {
-    const convId = args.conversation_id as string;
-    const activitySince = typeof args.activity_since === 'string' ? new Date(args.activity_since) : undefined;
-    const conversationService = new AgentConversationService(db);
-    const { AgentActivityService } = await import('./agent-activity.service.js');
-    const activityService = new AgentActivityService(db);
-    const readActivity = async () => {
-      const rows = await activityService.recent(convId, { since: activitySince, limit: 10 });
-      const activitySummary = rows
-        .map((row) => formatActivityForCaller(row as unknown as Record<string, unknown>))
-        .filter((line): line is string => Boolean(line))
-        .slice(-8);
-      const activityCursor = rows.length > 0 ? rows[rows.length - 1].at : activitySince?.toISOString();
-      return {
-        recent_activity: rows,
-        activity_summary: activitySummary,
-        progress_message: activitySummary.length > 0 ? activitySummary[activitySummary.length - 1] : undefined,
-        activity_cursor: activityCursor,
-      };
-    };
-
-    let waitMs = 5000;
-    const maxWaitMs = 30000;
-    const maxTotalMs = 90_000; // 90s per call (MCP safe)
-    const startMs = Date.now();
-
-    while (Date.now() - startMs < maxTotalMs) {
-      const conv = await conversationService.get(convId);
-      if (!conv) return { error: `Conversation "${convId}" not found.` };
-
-      // Agent asked a question — return immediately so caller can answer
-      if (conv.status === 'waiting_for_answer' && conv.pendingQuestion?.status === 'pending') {
-        const qActivity = await readActivity();
-        return {
-          conversation_id: convId,
-          status: 'question',
-          question: conv.pendingQuestion.question,
-          from_agent: conv.pendingQuestion.fromAgent,
-          message: `${conv.toAgent} is asking: "${conv.pendingQuestion.question}". Answer via answer_delegator(conversation_id, answer).`,
-          ...qActivity,
-        };
-      }
-
-      // Completed or failed — return result
-      if (conv.status === 'completed' || conv.status === 'failed') {
-        const finalActivity = await readActivity();
-        return {
-          conversation_id: convId,
-          status: conv.status,
-          agent: conv.toAgent,
-          response: conv.response ?? conv.summary ?? '',
-          summary: conv.summary,
-          cost_usd: conv.costUsd,
-          duration_ms: conv.durationMs,
-          turn_count: conv.turnCount,
-          hint: conv.status === 'completed' ? `To continue, call delegate_to_agent with conversation_id="${convId}"` : undefined,
-          ...finalActivity,
-        };
-      }
-
-      // Still active — wait
-      await new Promise(r => setTimeout(r, waitMs));
-      waitMs = Math.min(waitMs * 1.3, maxWaitMs);
-    }
-
-    // Timed out — include activity so the caller can narrate progress
-    // rather than silently re-polling.
-    const waitingActivity = await readActivity();
-    return { conversation_id: convId, status: 'waiting', message: 'Agent is still working. Call wait_for_delegation again.', ...waitingActivity };
-  },
-};
-
-/** Answer a question from a delegated agent */
-const answerQuestion: ChatTool = {
-  name: 'answer_delegator',
-  description: 'Answer a question from an agent you delegated to. Use when wait_for_delegation returns status="question". After answering, call wait_for_delegation again to wait for the agent to continue.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      conversation_id: { type: 'string', description: 'Conversation ID' },
-      answer: { type: 'string', description: 'Your answer to the agent\'s question' },
-    },
-    required: ['conversation_id', 'answer'],
-  },
-  async execute(args, db, context) {
-    const convId = args.conversation_id as string;
-    const answer = args.answer as string;
-    const conversationService = new AgentConversationService(db);
-    const activeCtx = resolveActiveSession(context);
-    const fromAgent = activeCtx?.currentAgent ?? 'assistant';
-
-    const conv = await conversationService.get(convId);
-    if (!conv) return { error: `Conversation "${convId}" not found.` };
-    if (conv.status !== 'waiting_for_answer') return { error: `Conversation is not waiting for an answer (status: ${conv.status}).` };
-
-    await conversationService.answerQuestion(convId, fromAgent, answer);
-
-    // Emit SSE
-    activeCtx?.broadcastEvent?.('thread_answer', {
-      conversationId: convId, fromAgent, answer: answer.slice(0, 200),
-    });
-
-    return { answered: true, conversation_id: convId };
-  },
-};
-
-/** Ask the caller (agent who delegated to you) a question. Blocks until they answer. */
-const askCaller: ChatTool = {
-  name: 'ask_delegator',
-  description: 'Ask a question to the agent who delegated this task to you. Use when you need clarification, context, or a decision before you can proceed. Your execution pauses until they answer. Do NOT guess — ask.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      question: { type: 'string', description: 'Your question for the caller' },
-    },
-    required: ['question'],
-  },
-  async execute(args, db, context) {
-    const question = args.question as string;
-    const activeCtx = resolveActiveSession(context);
-    const currentAgent = activeCtx?.currentAgent ?? 'unknown';
-    // Accept conversation_id from API route (when called via MCP → HTTP) or from active context
-    const convId = (args._conversation_id as string) ?? activeCtx?.currentConversationId;
-
-    if (!convId) return { error: 'No active conversation context. ask_delegator can only be used by a delegated agent.' };
-
-    const conversationService = new AgentConversationService(db);
-
-    // Write question and set status to waiting_for_answer
-    await conversationService.askQuestion(convId, currentAgent, question);
-
-    // Emit SSE
-    activeCtx?.broadcastEvent?.('thread_question', {
-      conversationId: convId, fromAgent: currentAgent, question: question.slice(0, 300),
-    });
-
-    // Block: poll until the caller answers
-    let waitMs = 3000;
-    const maxWaitMs = 30000;
-    while (true) {
-      const { answered, answer } = await conversationService.isQuestionAnswered(convId);
-      if (answered && answer) {
-        return { answer };
-      }
-      await new Promise(r => setTimeout(r, waitMs));
-      waitMs = Math.min(waitMs * 1.3, maxWaitMs);
-    }
-  },
-};
+// ── Chat Communication Tools ─────────────────────────────────────────────────
 
 /** Ask the user a question directly. Only for the top-level team agent. Blocks until user answers. */
 const askUser: ChatTool = {
@@ -3209,567 +3431,9 @@ const askUser: ChatTool = {
   },
 };
 
-/**
- * Run a single turn of an agent conversation.
- * Streams thinking, text, tool calls, and tool results to the UI in real-time.
- * No timeout — agents run until they finish.
- */
-async function runAgentTurn(
-  db: Db,
-  targetAgent: Record<string, unknown>,
-  prompt: string,
-  convId: string,
-  resumeSessionId: string | undefined,
-  conversationService: AgentConversationService,
-  onEvent: ((event: string, data: Record<string, unknown>) => void) | undefined,
-  activeCtx: ActiveSessionContext | undefined,
-  currentDepth: number,
-  cwd?: string,
-  chatSessionId?: string,
-): Promise<{ responseText: string; costUsd: number; sessionId?: string; toolCalls: { tool: string; args: Record<string, unknown> }[] }> {
-  const targetName = targetAgent.name as string;
-  const provider = targetAgent.provider ?? 'claude';
-  const model = normalizeModelAlias((targetAgent.model as string | undefined) ?? 'sonnet') ?? 'sonnet';
-  // Capture fromAgent BEFORE mutating activeCtx (fixes stale context bug)
-  const fromAgent = activeCtx?.currentAgent ?? 'assistant';
-
-  let responseText = '';
-  let costUsd = 0;
-  let sessionId: string | undefined = resumeSessionId;
-  const toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown> }[] = [];
-  const activeMcpCalls = new Map<string, { tool: string; startMs: number }>();
-  const MAX_RETRIES = 3;
-
-  // Persist delegation activity to agent_activity for refresh replay and
-  // for the main agent's wait_for_delegation `recent_activity` cursor.
-  // Same pattern as runSpawnInBackground's persistSpawnActivity — a
-  // fire-and-forget write that cannot stall the thread stream.
-  const activityService = new AgentActivityService(db);
-
-  /** Emit a thread event to the UI */
-  // Text events in runAgentTurn carry `text.slice(-300)` — the tail of
-  // the cumulative response. Consecutive emits often repeat content (the
-  // tail window barely moves between stream chunks), so de-dupe here to
-  // stop the activity log filling with near-identical rows.
-  let lastPersistedText: string | undefined;
-  function emit(type: string, data: Record<string, unknown>) {
-    if (onEvent) onEvent('thread_message', { conversationId: convId, agent: targetName, ...data, type });
-    // runAgentTurn emits these types verbatim — keep this list in sync
-    // with the emit() call sites below. Anything else (status, warn,
-    // follow_up, response) is UI-only and does not need persisting.
-    const allowed: ReadonlyArray<'text' | 'thinking' | 'tool_call' | 'tool_result'> =
-      ['text', 'thinking', 'tool_call', 'tool_result'];
-    if (!allowed.includes(type as (typeof allowed)[number])) {
-      logger.debug('[delegation:emit] skip (not persisted)', { type, conv: convId.slice(0, 8) });
-      return;
-    }
-    const activityType = type as 'text' | 'thinking' | 'tool_call' | 'tool_result';
-
-    const content = typeof data.content === 'string' ? (data.content as string) : undefined;
-    if (activityType === 'text') {
-      if (!content || content === lastPersistedText) {
-        logger.debug('[delegation:emit] skip text (dedupe)', { conv: convId.slice(0, 8) });
-        return;
-      }
-      lastPersistedText = content;
-    }
-
-    logger.debug('[delegation:emit] persist', { activityType, tool: data.tool ?? '-', conv: convId.slice(0, 8), contentLen: content?.length ?? 0 });
-    void activityService.record({
-      scope: 'delegation',
-      refId: convId,
-      chatSessionId,
-      agent: targetName,
-      type: activityType,
-      tool: typeof data.tool === 'string' ? (data.tool as string) : undefined,
-      content,
-      toolUseId: typeof data.toolUseId === 'string' ? (data.toolUseId as string) : undefined,
-      durationMs: typeof data.durationMs === 'number' ? (data.durationMs as number) : undefined,
-    });
-  }
-
-  // Save/restore context for nested delegation
-  const prevCtx = activeCtx ? { ...activeCtx } : undefined;
-  if (activeCtx) { activeCtx.currentAgent = targetName; activeCtx.delegationDepth = currentDepth; activeCtx.currentConversationId = convId; }
-
-  const contextEngineEnabled = isContextEngineEnabled();
-  const baseSystemPrompt = buildDelegationPrompt(targetAgent, fromAgent, currentDepth, conversationService.maxDepth, cwd);
-  let systemPrompt = resumeSessionId ? undefined : (contextEngineEnabled ? withRepoContextLoadingGuidance(baseSystemPrompt) : baseSystemPrompt);
-
-  // Inject the deep repo context block (skip for the scanner itself).
-  // buildDelegationPrompt already appended the WORKSPACE CONSTRAINT section at the
-  // tail when cwd is set, so we splice the repo context in right before it to
-  // preserve ordering: base → repoContext → workspaceConstraint.
-  if (contextEngineEnabled && systemPrompt && cwd && targetName !== 'repo-scanner' && isEphemeralCwd(cwd)) {
-    try {
-      const repoContextBlock = await buildRepoContextBlock(db, cwd);
-      if (repoContextBlock) {
-        const wcMarker = '\nWORKSPACE CONSTRAINT:';
-        const wcIdx = systemPrompt.indexOf(wcMarker);
-        if (wcIdx !== -1) {
-          systemPrompt = systemPrompt.slice(0, wcIdx) + repoContextBlock + systemPrompt.slice(wcIdx);
-        } else {
-          systemPrompt += repoContextBlock;
-        }
-      }
-    } catch (err) {
-      logger.error('[delegation] failed to build repo context block', { targetName, convId, error: (err as Error).message });
-    }
-  }
-
-  // Append agent-scoped learnings to the system prompt
-  if (systemPrompt) {
-    try {
-      const agentLearnings = await db.collection('learnings')
-        .find({ status: 'active', $or: [
-          { 'scope.level': 'agent', 'scope.agentName': targetName },
-          { 'scope.level': 'global' },
-        ]})
-        .sort({ confidence: -1 })
-        .limit(5)
-        .toArray();
-      if (agentLearnings.length > 0) {
-        const items = agentLearnings.map((l: any) => `- [${l.type}] ${l.content}`).join('\n');
-        systemPrompt += `\n\nMemory from past work:\n${items}`;
-      }
-    } catch {}
-    // Artifacts guidance for the delegated agent — same block spawned agents get.
-    systemPrompt += ARTIFACTS_GUIDANCE;
-  }
-
-  // Retry loop — if CLI times out, resume the same session and continue
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      // This is a retry — resume the session with "continue" prompt.
-      logger.info('[delegation] Auto-retry', { targetName, convId, attempt, session: sessionId?.slice(0, 12) });
-      emit('text', { content: `Reconnecting to ${targetName} (retry ${attempt}/${MAX_RETRIES})...` });
-      prompt = 'Continue from where you left off. Complete your task and provide the final response.';
-    }
-
-  try {
-    if (provider === 'codex') {
-      // ── Codex CLI with MCP ──
-      // Note: no per-call syncMcpToCodex — sync runs once on boot to avoid
-      // races between parallel agent spawns rewriting Codex's config.
-      const { spawn } = await import('node:child_process');
-
-      // Per-call MCP env overrides — codex stores the Allen MCP entry
-      // with only registration-time env vars and does NOT forward its
-      // own runtime env to MCP children. Without these `-c` overrides
-      // the delegated agent's allen_save_artifact would fail with
-      // "ALLEN_ARTIFACT_ROOT_TYPE / ROOT_ID env vars not set" — same
-      // mechanism as the codex chat provider in chat-providers.ts.
-      const mcpEnvOverrides: string[] = [];
-      if (chatSessionId) {
-        mcpEnvOverrides.push(
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_TYPE="chat"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_ROOT_ID="${chatSessionId}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_AGENT_NAME="${targetName}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_ARTIFACT_PARENT_ID="${convId}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_CHAT_SESSION_ID="${chatSessionId}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_API_URL="http://localhost:${process.env.PORT ?? '4023'}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.JWT_ACCESS_SECRET="${process.env.JWT_ACCESS_SECRET ?? ''}"`,
-          '-c', `mcp_servers.${MCP_SERVER_NAME}.env.ALLEN_PUBLIC_URL="${process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`}"`,
-        );
-      }
-
-      const args: string[] = ['exec'];
-      if (resumeSessionId) {
-        args.push('resume', '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
-        if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
-        args.push('--', resumeSessionId, prompt);
-      } else {
-        args.push('--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check');
-        if (model) args.push('-c', `model="${model}"`);
-        if (mcpEnvOverrides.length > 0) args.push(...mcpEnvOverrides);
-        args.push(`${systemPrompt}\n\n${prompt}`);
-      }
-
-      const result = await new Promise<{ text: string; threadId?: string; costUsd: number }>((resolveP, rejectP) => {
-        // Artifact-root env for the delegated agent's Allen MCP subprocess.
-        // Without these, `allen_save_artifact` inside the delegated agent
-        // fails with "ALLEN_ARTIFACT_ROOT_TYPE / ROOT_ID env vars not set".
-        // Rooting at the chat session (not the delegation id) makes saved
-        // files appear in this chat's Artifacts panel — same behaviour as
-        // spawn_agent spawns.
-        const cleanEnv: NodeJS.ProcessEnv = { ...process.env };
-        delete cleanEnv.PORT; // Don't leak host server port
-        if (chatSessionId) {
-          cleanEnv.ALLEN_ARTIFACT_ROOT_TYPE = 'chat';
-          cleanEnv.ALLEN_ARTIFACT_ROOT_ID = chatSessionId;
-          cleanEnv.ALLEN_ARTIFACT_AGENT_NAME = targetName;
-          cleanEnv.ALLEN_ARTIFACT_PARENT_ID = convId;
-          // Session marker so the delegated agent's MCP subprocess
-          // forwards x-allen-chat-session-id on outbound chat-tool
-          // calls. Without it, tools called by this delegated agent
-          // cannot be attached to a chat session.
-          cleanEnv.ALLEN_CHAT_SESSION_ID = chatSessionId;
-        }
-        const proc = spawn('codex', args, { cwd: resolveAgentCwd(cwd), env: cleanEnv, stdio: ['pipe', 'pipe', 'pipe'] });
-        const spawnStartMs = Date.now();
-        let text = '';
-        let threadId: string | undefined = resumeSessionId;
-        let buf = '';
-        let stderrTail = '';
-        let settled = false;
-        let idleTimer: NodeJS.Timeout | undefined;
-        let totalTimer: NodeJS.Timeout | undefined;
-        let killTimer: NodeJS.Timeout | undefined;
-
-        const clearTimers = () => {
-          if (idleTimer) { clearTimeout(idleTimer); idleTimer = undefined; }
-          if (totalTimer) { clearTimeout(totalTimer); totalTimer = undefined; }
-          if (killTimer) { clearTimeout(killTimer); killTimer = undefined; }
-        };
-
-        // Persist threadId to outer-scope sessionId as soon as it's observed
-        // so the retry loop can resume even when this spawn is killed by a
-        // watchdog. (See identical pattern in the chat-tools spawn path.)
-        const settle = (action: () => void) => {
-          if (settled) return;
-          settled = true;
-          clearTimers();
-          if (threadId) sessionId = threadId;
-          action();
-        };
-
-        const escalateKill = (reason: string) => {
-          try { proc.kill('SIGTERM'); } catch {}
-          if (killTimer) clearTimeout(killTimer);
-          killTimer = setTimeout(() => {
-            logger.error('[codex-delegation] sigkill', { convId, targetName, pid: proc.pid ?? '?', reason });
-            try { proc.kill('SIGKILL'); } catch {}
-          }, CODEX_KILL_GRACE_MS);
-        };
-
-        const resetIdleTimer = () => {
-          if (idleTimer) clearTimeout(idleTimer);
-          idleTimer = setTimeout(() => {
-            logger.error('[codex-delegation] timeout-idle', { convId, targetName, pid: proc.pid ?? '?', idleSec: CODEX_STREAM_IDLE_MS / 1000, thread: threadId?.slice(0, 12) ?? 'none' });
-            escalateKill('idle');
-            settle(() => rejectP(new Error(`codex stream idle for ${CODEX_STREAM_IDLE_MS / 1000}s (timeout)${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
-          }, CODEX_STREAM_IDLE_MS);
-        };
-
-        proc.on('error', (err) => {
-          logger.error('[codex-delegation] spawn error', { convId, targetName, pid: proc.pid ?? '?', error: err.message });
-          settle(() => rejectP(new Error(`Failed to spawn codex: ${err.message}. Is codex CLI installed?`)));
-        });
-        proc.stdin.end();
-        // Register PID for cancel — use convId as key for delegations
-        if (proc.pid) registerExecutionProcess(convId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
-        logger.info('[codex-delegation] start', { convId, targetName, pid: proc.pid ?? '?', resume: resumeSessionId ? resumeSessionId.slice(0, 12) : 'new' });
-
-        totalTimer = setTimeout(() => {
-          logger.error('[codex-delegation] timeout-total', { convId, targetName, pid: proc.pid ?? '?', totalSec: CODEX_TOTAL_TIMEOUT_MS / 1000, thread: threadId?.slice(0, 12) ?? 'none' });
-          escalateKill('total-timeout');
-          settle(() => rejectP(new Error(`codex exceeded ${CODEX_TOTAL_TIMEOUT_MS / 1000}s total timeout${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
-        }, CODEX_TOTAL_TIMEOUT_MS);
-        resetIdleTimer();
-
-        // Drain stderr so codex doesn't block on a full pipe buffer (default
-        // 64 KiB on Linux); keep a bounded tail for diagnostics on failure.
-        proc.stderr.on('data', (chunk: Buffer) => {
-          stderrTail += chunk.toString();
-          if (stderrTail.length > CODEX_STDERR_TAIL_BYTES) stderrTail = stderrTail.slice(-CODEX_STDERR_TAIL_BYTES);
-        });
-
-        proc.stdout.on('data', (chunk: Buffer) => {
-          resetIdleTimer();
-          buf += chunk.toString();
-          const lines = buf.split('\n');
-          buf = lines.pop() ?? '';
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-              const evt = JSON.parse(line);
-              if (evt.type === 'thread.started' && evt.thread_id) {
-                threadId = evt.thread_id;
-                // Persist to outer-scope sessionId so retry-on-timeout can
-                // resume even when this spawn is killed by a watchdog.
-                sessionId = evt.thread_id;
-                logger.info('[codex-delegation] thread.started', { convId, targetName, pid: proc.pid ?? '?', thread: String(evt.thread_id).slice(0, 12) });
-              }
-              // Text output
-              if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
-                const t = evt.item.text ?? evt.item.content?.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('') ?? '';
-                if (t) { text = t; emit('text', { content: t.slice(-300) }); }
-              }
-              // MCP / collab tool calls (Codex uses 'collab_tool_call' in exec mode)
-              if (evt.type === 'item.started' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
-                const server = evt.item.server ?? evt.item.serverLabel ?? '';
-                const tool = evt.item.tool ?? evt.item.name ?? '';
-                const fullName = server ? `mcp__${server}__${tool}` : tool;
-                toolCalls.push({ tool: fullName, args: evt.item.arguments ?? evt.item.input ?? {} });
-                emit('tool_call', { tool: fullName });
-              }
-              if (evt.type === 'item.completed' && (evt.item?.type === 'mcp_tool_call' || evt.item?.type === 'collab_tool_call')) {
-                const server = evt.item.server ?? evt.item.serverLabel ?? '';
-                const tool = evt.item.tool ?? evt.item.name ?? '';
-                const fullName = server ? `mcp__${server}__${tool}` : tool;
-                // Capture result
-                const resultContent = evt.item.result?.content ?? evt.item.output;
-                if (resultContent) {
-                  const lastTc = [...toolCalls].reverse().find((tc: any) => tc.tool === fullName && !tc.result);
-                  if (lastTc) {
-                    try {
-                      const text = Array.isArray(resultContent) ? resultContent.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('') : String(resultContent);
-                      lastTc.result = JSON.parse(text);
-                    } catch { lastTc.result = { raw: String(resultContent).slice(0, 500) }; }
-                  }
-                }
-                emit('tool_result', { tool: fullName });
-              }
-              // Function calls
-              if (evt.type === 'item.completed' && evt.item?.type === 'function_call') {
-                toolCalls.push({ tool: evt.item.name ?? 'unknown', args: {} });
-                emit('tool_call', { tool: evt.item.name ?? 'unknown' });
-              }
-              // Bash commands
-              if (evt.type === 'item.completed' && evt.item?.type === 'command_execution') {
-                toolCalls.push({ tool: 'Bash', args: { command: evt.item.command ?? '' } });
-                emit('tool_call', { tool: 'Bash' });
-              }
-            } catch {}
-          }
-        });
-        proc.on('close', (code, signal) => {
-          const durationMs = Date.now() - spawnStartMs;
-          if (code != null && code !== 0) {
-            logger.error('[codex-delegation] non-zero-exit', { convId, targetName, pid: proc.pid ?? '?', code, signal: signal ?? 'null', durationMs, textBytes: text.length });
-            settle(() => rejectP(new Error(`codex exited code=${code} signal=${signal ?? 'null'}${stderrTail ? `; stderr tail: ${stderrTail.slice(-512)}` : ''}`)));
-            return;
-          }
-          logger.info('[codex-delegation] close', { convId, targetName, pid: proc.pid ?? '?', code: code ?? 'null', signal: signal ?? 'null', durationMs, textBytes: text.length, thread: threadId?.slice(0, 12) ?? 'none' });
-          settle(() => resolveP({ text, threadId, costUsd: 0 }));
-        });
-      });
-
-      responseText = result.text;
-      sessionId = result.threadId;
-      costUsd = result.costUsd;
-
-    } else {
-      // ── Claude provider with MCP — full streaming ──
-      const { query } = await import('@anthropic-ai/claude-code');
-      const { resolve, dirname } = await import('node:path');
-
-      const mcpServers: Record<string, unknown> = {};
-      const serverPath = resolve(dirname(new URL(import.meta.url).pathname), 'allen-mcp-server.ts');
-      mcpServers[MCP_SERVER_NAME] = {
-        type: 'stdio',
-        command: 'npx',
-        args: ['tsx', serverPath],
-        env: {
-          ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
-          JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
-          ALLEN_PUBLIC_URL: process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`,
-          // Artifact-root context so `allen_save_artifact` inside this
-          // delegated agent routes files to the parent chat's Artifacts
-          // panel instead of failing with "env vars not set". The Claude
-          // SDK passes this object verbatim to the MCP subprocess — it
-          // does NOT inherit from the host Node env — so these MUST be
-          // listed here.
-          ...(chatSessionId
-            ? {
-                ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
-                ALLEN_ARTIFACT_ROOT_ID: chatSessionId,
-                ALLEN_ARTIFACT_AGENT_NAME: targetName,
-                ALLEN_ARTIFACT_PARENT_ID: convId,
-                // Session marker — see Codex delegation path above.
-                ALLEN_CHAT_SESSION_ID: chatSessionId,
-              }
-            : {}),
-        },
-      };
-      const { loadExternalMcpServers } = await import('./chat-mcp.js');
-      const externalMcpServers = externalMcpServersForAgent(targetAgent as Record<string, unknown>);
-      const disabledMcpTools = disabledMcpToolsForAgent(targetAgent as Record<string, unknown>);
-      const disallowedMcpToolNames = Object.entries(disabledMcpTools).flatMap(([server, tools]) =>
-        tools.map((tool) => tool.startsWith('mcp__') ? tool : `mcp__${server}__${tool}`),
-      );
-      Object.assign(mcpServers, await loadExternalMcpServers(db, externalMcpServers));
-
-      const abortController = new AbortController();
-      const sdkOptions: Record<string, unknown> = {
-        model,
-        permissionMode: 'bypassPermissions',
-        cwd: resolveAgentCwd(cwd),
-        mcpServers,
-        abortController,
-        ...(disallowedMcpToolNames.length > 0 ? { disallowedTools: disallowedMcpToolNames } : {}),
-      };
-      if (resumeSessionId) sdkOptions.resume = resumeSessionId;
-      else if (process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom') sdkOptions.customSystemPrompt = systemPrompt;
-      else sdkOptions.appendSystemPrompt = systemPrompt;
-      registerExecutionProcess(convId, process.pid, () => abortController.abort());
-
-      const requiresAllenGraphPersistenceTool = targetName === 'repo-knowledge-graph-indexer';
-      const useCliMode = !requiresAllenGraphPersistenceTool && resolveExecutionMode(sdkOptions.cwd as string | undefined) === 'cli';
-      let messageStream: AsyncIterable<any>;
-      if (useCliMode) {
-        const { queryViaCli } = await import('@allen/engine');
-        let discoveredMcpTools: string[] = [];
-        try {
-          const { loadMcpTools } = await import('./chat-mcp-client.js');
-          discoveredMcpTools = (await loadMcpTools(db, { externalServerNames: externalMcpServers })).map(t => t.fullName);
-        } catch (err) {
-          logger.warn('[delegation] MCP tool discovery failed (allowlist will lack mcp__* entries)', { convId, targetName, error: (err as Error).message });
-        }
-        messageStream = queryViaCli({
-          agent: {
-            name: targetName,
-            description: targetAgent.description as string | undefined,
-            system: systemPrompt ?? String(targetAgent.system ?? ''),
-            model,
-            tools: Array.isArray(targetAgent.tools) ? targetAgent.tools as string[] : undefined,
-            mcpToolNames: discoveredMcpTools,
-            disabledMcpTools,
-          },
-          prompt,
-          cwd: sdkOptions.cwd as string | undefined,
-          model,
-          resume: sdkOptions.resume as string | undefined,
-          permissionMode: 'bypassPermissions',
-          env: sdkOptions.env as NodeJS.ProcessEnv | undefined,
-          mcpServers: sdkOptions.mcpServers as Record<string, unknown> | undefined,
-          abortSignal: abortController.signal,
-          stderr: (chunk) => emit('tool_call', { tool: 'claude-cli stderr', content: chunk.slice(0, 4000) }),
-          onPid: (pid: number) => {
-            db.collection('agent_conversations').updateOne(
-              { _id: new ObjectId(convId) },
-              { $set: { 'meta.pid': pid } },
-            ).catch(() => {});
-          },
-        });
-      } else {
-        messageStream = query({ prompt, options: sdkOptions as any });
-      }
-
-      for await (const message of messageStream) {
-        if ('session_id' in message && message.session_id) sessionId = message.session_id as string;
-        if (message.type === 'assistant') {
-          const blocks = (message as any).message.content as Array<{ type: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string }>;
-          const text = blocks.filter((b: any) => b.type === 'text').map((b: any) => b.text || '').join('');
-          if (text && text !== responseText) { responseText = text; emit('text', { content: text.slice(-300) }); }
-          for (const block of blocks) {
-            if (block.type === 'thinking' && (block.thinking || block.text)) emit('thinking', { content: (block.thinking || block.text || '').slice(0, 200) });
-            if (block.type === 'tool_use' && block.name && block.id) {
-              toolCalls.push({ tool: block.name, args: (block.input as Record<string, unknown>) ?? {} });
-              activeMcpCalls.set(block.id, { tool: block.name, startMs: Date.now() });
-              emit('tool_call', { tool: block.name, toolUseId: block.id });
-            }
-          }
-        }
-        if (message.type === 'user') {
-          const content = (message as any).message?.content;
-          if (Array.isArray(content)) {
-            for (const block of content) {
-              if (block.type === 'tool_result' && block.tool_use_id) {
-                const pending = activeMcpCalls.get(block.tool_use_id);
-                if (pending) { emit('tool_result', { tool: pending.tool, toolUseId: block.tool_use_id, durationMs: Date.now() - pending.startMs }); activeMcpCalls.delete(block.tool_use_id); }
-              }
-            }
-          }
-        }
-        if (message.type === 'result') {
-          costUsd = (message as any).total_cost_usd ?? 0;
-          if ((message as any).subtype === 'success' && (message as any).result) responseText = (message as any).result;
-          if ((message as any).session_id) sessionId = (message as any).session_id;
-        }
-      }
-    }
-  } catch (err) {
-    const errorMsg = (err as Error).message ?? String(err);
-    const isTimeout = errorMsg.toLowerCase().includes('timed out') || errorMsg.toLowerCase().includes('timeout');
-
-    // If timeout and we have a session to resume, retry
-    if (isTimeout && sessionId && attempt < MAX_RETRIES) {
-      logger.info('[delegation] timed out, will retry', { convId, targetName, attempt: attempt + 1, session: sessionId.slice(0, 12) });
-      continue; // next iteration of retry loop
-    }
-
-    // Not a timeout or out of retries — restore context and re-throw
-    if (activeCtx && prevCtx) { activeCtx.currentAgent = prevCtx.currentAgent; activeCtx.delegationDepth = prevCtx.delegationDepth; activeCtx.currentConversationId = prevCtx.currentConversationId; }
-    throw err;
-  }
-
-  // Success — break out of retry loop
-  break;
-  } // end retry loop
-
-  // Restore context after success
-  if (activeCtx && prevCtx) { activeCtx.currentAgent = prevCtx.currentAgent; activeCtx.delegationDepth = prevCtx.delegationDepth; activeCtx.currentConversationId = prevCtx.currentConversationId; }
-
-  return { responseText, costUsd, sessionId, toolCalls };
-}
-
-function buildDelegationPrompt(
-  targetAgent: Record<string, unknown>,
-  fromAgent: string,
-  depth: number,
-  maxDepth: number,
-  cwd?: string,
-): string {
-  const systemBase = (targetAgent.system as string) ?? '';
-  const personality = (targetAgent.personality as string) ?? '';
-  const canDelegateTo = (targetAgent.canDelegateTo as string[]) ?? [];
-  const canTrigger = (targetAgent.canTrigger as string[]) ?? [];
-
-  const parts = [systemBase];
-
-  if (personality) parts.push(`\nYour personality: ${personality}`);
-
-  parts.push(`\nYou were delegated a task by ${fromAgent}. Respond with a clear, actionable answer.`);
-
-  // ask_delegator — always available to delegated agents
-  parts.push(`
-ASKING QUESTIONS:
-- If you need clarification, context, or a decision from ${fromAgent}, use ask_delegator(question).
-- Your execution pauses until ${fromAgent} answers, then you continue with the answer.
-- Do NOT guess when you're unsure — ASK.`);
-
-  if (canDelegateTo.length > 0 && depth < maxDepth) {
-    parts.push(`\nYou can delegate sub-tasks to: ${canDelegateTo.join(', ')} using delegate_to_agent.
-When wait_for_delegation returns "question", answer it via answer_delegator, then call wait_for_delegation again.`);
-  } else if (depth >= maxDepth) {
-    parts.push(`\nYou are at the maximum delegation depth (${depth}/${maxDepth}). Do NOT delegate further — respond directly.`);
-  }
-
-  if (canTrigger.length > 0) {
-    parts.push(`You can trigger these workflows: ${canTrigger.join(', ')} using run_workflow.`);
-  }
-
-  // Team agents should delegate, not do hands-on work
-  const agentType = (targetAgent.type as string) ?? 'technical';
-  if (agentType === 'team') {
-    parts.push(`
-YOU MUST call spawn_agent before making any claims about code. You have no filesystem access.
-Available technical agents: coding-investigator, coding-planner, coding-reviewer, coding-developer, coding-tester, coding-writer, git-ops.
-Pick the right agent for each sub-task. Call spawn_agent(agent_name, prompt_with_repo_path), then wait_for_execution to wait.
-NEVER fabricate analysis. Every technical claim must come from an agent's actual response.`);
-  }
-
-  parts.push(`\nBe concise. You are collaborating with another agent. Use structured output with headers and bullets.`);
-
-  if (cwd && cwd !== '/tmp/allen') {
-    parts.push(`
-WORKSPACE CONSTRAINT:
-Your working directory is: ${cwd}
-CRITICAL: ALL file operations (Read, Write, Edit, Grep, Glob, Bash) MUST use paths within this directory.
-- Use relative paths (e.g., "src/app.ts") or absolute paths starting with "${cwd}/"
-- NEVER read, write, or modify files outside this directory
-- If you see paths from search results pointing elsewhere, replace the base path with "${cwd}/"
-- Example: if you find "/original/repo/src/file.ts", use "${cwd}/src/file.ts" instead
-- When writing tests or making HTTP requests, read the .env file in the workspace to get the correct PORT — do NOT use default ports like 4023 or 5173`);
-  }
-
-  return parts.join('\n');
-}
-
 const reportToUser: ChatTool = {
   name: 'report_to_user',
-  description: 'Send a progress update or result to the user during a long-running delegation chain. Use this for intermediate status updates (e.g., "Engineer is analyzing the codebase...") or final results.',
+  description: 'Send a progress update or result to the user during a long-running chat, workflow, or spawned-agent run. Use this for intermediate status updates (e.g., "Engineer is analyzing the codebase...") or final results.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -3897,11 +3561,7 @@ export const chatTools: ChatTool[] = [
   listAgents,
   spawnAgent,
   getLearnings,
-  // Delegation & conversation
-  delegateToAgent,
-  getDelegationResult,
-  answerQuestion,
-  askCaller,
+  // Chat communication
   askUser,
   reportToUser,
   // Advanced queries

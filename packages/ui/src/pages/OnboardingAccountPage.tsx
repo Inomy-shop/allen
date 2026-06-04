@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Activity, Loader2, ShieldCheck } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Circle, CircleDot, Loader2 } from 'lucide-react';
 import { auth, system } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
-import { BRAND_NAME, BRAND_TAGLINE } from '../lib/brand';
+import { OnboardingShell } from '../components/onboarding/OnboardingShell';
 
 function passwordLooksStrong(password: string): boolean {
   return password.length >= 8
@@ -16,6 +16,7 @@ function passwordLooksStrong(password: string): boolean {
 export default function OnboardingAccountPage() {
   const navigate = useNavigate();
   const setSession = useAuthStore((s) => s.setSession);
+  const isDesktop = typeof window !== 'undefined' && Boolean(window.allenDesktop);
 
   const [checking, setChecking] = useState(true);
   const [name, setName] = useState('');
@@ -84,134 +85,183 @@ export default function OnboardingAccountPage() {
     }
   }
 
+  const runtimeLabel = isDesktop ? 'desktop runtime' : 'web setup';
+  const runtimeCopy = isDesktop
+    ? 'Allen is preparing the local runtime that will host your repos, workspaces, and execution traces.'
+    : 'Create the first admin for this Allen instance before continuing into setup.';
+  const bootstrapSteps: Array<{
+    number: string;
+    title: string;
+    copy: string;
+    state: 'done' | 'active' | 'next';
+  }> = isDesktop
+    ? [
+      { number: '01', title: 'Create admin', copy: 'Unlock this local Allen instance.', state: 'active' },
+      { number: '02', title: 'Verify runtime', copy: 'Check CLIs, auth, ports, and local services.', state: 'next' },
+      { number: '03', title: 'Choose models', copy: 'Set chat and seeded workflow defaults.', state: 'next' },
+      { number: '04', title: 'Connect repo', copy: 'Register a checkout or clone a starter repository.', state: 'next' },
+      { number: '05', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'next' },
+    ]
+    : [
+      { number: '01', title: 'Create admin', copy: 'Unlock this local Allen instance.', state: 'active' },
+      { number: '02', title: 'Verify runtime', copy: 'Check CLIs, auth, ports, and local services.', state: 'next' },
+      { number: '03', title: 'Connect repo', copy: 'Register a checkout or clone a starter repository.', state: 'next' },
+      { number: '04', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'next' },
+    ];
+
   return (
-    <div className="min-h-screen bg-surface-50 p-4">
-      <div className="mx-auto flex min-h-screen w-full max-w-5xl items-center justify-center">
-        <div className="grid w-full gap-5 md:grid-cols-[minmax(0,0.9fr)_minmax(360px,440px)] md:items-center">
-          <section className="space-y-5">
-            <div className="flex items-center gap-2.5">
-              <div className="relative">
-                <Activity className="h-7 w-7 text-accent-blue" />
-                <div className="absolute inset-0 rounded-full bg-accent-blue/30 blur-md" />
-              </div>
-              <span className="font-heading text-xl font-bold uppercase tracking-widest text-theme-primary">
-                {BRAND_NAME}
-              </span>
-            </div>
-
-            <div className="space-y-3">
-              <p className="overline text-theme-muted">First launch</p>
-              <h1 className="max-w-xl font-heading text-3xl text-theme-primary md:text-4xl">
-                Create the first admin account
-              </h1>
-              <p className="max-w-xl text-sm leading-6 text-theme-secondary">
-                This local Allen instance does not have users yet. Create the first admin here, then continue into the app.
-              </p>
-            </div>
-
-            <div className="grid max-w-xl gap-3 sm:grid-cols-2">
-              <div className="rounded-md border border-app bg-surface-100 p-4">
-                <ShieldCheck className="mb-3 h-5 w-5 text-accent-blue" />
-                <p className="text-sm font-medium text-theme-primary">First-user guarded</p>
-                <p className="mt-1 text-xs leading-5 text-theme-muted">
-                  Bootstrap closes automatically after the first user exists.
-                </p>
-              </div>
-              <div className="rounded-md border border-app bg-surface-100 p-4">
-                <ShieldCheck className="mb-3 h-5 w-5 text-accent-blue" />
-                <p className="text-sm font-medium text-theme-primary">Local admin credentials</p>
-                <p className="mt-1 text-xs leading-5 text-theme-muted">
-                  Use this account to sign in and manage this Allen instance.
-                </p>
-              </div>
-            </div>
-          </section>
-
-          <form onSubmit={handleSubmit} className="card space-y-4 p-6">
+    <OnboardingShell
+      step="account"
+      eyebrow="Allen setup"
+      title="Create the first admin account"
+      description="Allen is an agentic operating system for software development. It coordinates AI agents that plan, code, review, test, and ship against your repositories."
+      runtimeLabel={runtimeLabel}
+      runtimeCopy={runtimeCopy}
+      side={(
+        <div className="onboarding-card mt-8 rounded-md border border-app bg-app-card p-4">
+          <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h2 className="font-heading text-base text-theme-primary">Admin setup</h2>
-              <p className="mt-1 text-xs text-theme-muted">{BRAND_TAGLINE}</p>
+              <div className="font-mono text-[10.5px] text-theme-subtle">bootstrap path</div>
+              <div className="mt-1 text-[13px] font-semibold text-theme-primary">From first admin to first run</div>
             </div>
-
-            {checking && (
-              <div className="flex items-center gap-2 rounded-md border border-app bg-surface-50 px-3 py-2 text-xs text-theme-muted">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Checking first-run status
+          </div>
+          <div className="space-y-0">
+            {bootstrapSteps.map(({ number, title, copy, state }) => (
+              <div
+                key={number}
+                className="onboarding-step grid grid-cols-[24px_minmax(0,1fr)] gap-3"
+                style={{ animationDelay: `${Number(number) * 45}ms` }}
+              >
+                <div className="relative flex justify-center">
+                  <div className={`onboarding-step-icon mt-0.5 grid h-5 w-5 place-items-center rounded-full ${
+                    state === 'active'
+                      ? 'text-accent'
+                      : state === 'done'
+                        ? 'text-accent-green'
+                        : 'text-theme-subtle'
+                  }`}>
+                    {state === 'done'
+                      ? <CheckCircle2 className="h-5 w-5" />
+                      : state === 'active'
+                        ? <CircleDot className="h-5 w-5" />
+                        : <Circle className="h-5 w-5" />}
+                  </div>
+                  {number !== (isDesktop ? '05' : '04') && (
+                    <div className={`onboarding-step-line absolute bottom-0 top-6 w-px ${
+                      state === 'done' ? 'bg-accent-green/35' : 'bg-border'
+                    }`} />
+                  )}
+                </div>
+                <div className="pb-4">
+                  <div className={`text-[13px] font-semibold ${
+                    state === 'active' ? 'text-accent' : 'text-theme-primary'
+                  }`}>
+                    {title}
+                  </div>
+                  <p className="mt-0.5 text-[12px] leading-5 text-theme-muted">{copy}</p>
+                </div>
               </div>
-            )}
-
-            <div className="space-y-2">
-              <label className="block overline text-theme-muted">Name</label>
-              <input
-                required
-                autoFocus
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                className="input w-full"
-                autoComplete="name"
-                disabled={checking || submitting}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="block overline text-theme-muted">Email</label>
-              <input
-                required
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                className="input w-full"
-                autoComplete="email"
-                disabled={checking || submitting}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="block overline text-theme-muted">Password</label>
-              <input
-                required
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                className="input w-full"
-                autoComplete="new-password"
-                disabled={checking || submitting}
-              />
-              <p className="text-[11px] leading-4 text-theme-subtle">
-                Minimum 8 characters with uppercase, lowercase, number, and symbol.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label className="block overline text-theme-muted">Confirm password</label>
-              <input
-                required
-                type="password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                className="input w-full"
-                autoComplete="new-password"
-                disabled={checking || submitting}
-              />
-            </div>
-
-            {error && (
-              <div className="rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-xs text-accent-red">
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={checking || submitting}
-              className="btn-primary inline-flex w-full items-center justify-center gap-2"
-            >
-              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-              {submitting ? 'Creating admin...' : 'Create admin account'}
-            </button>
-          </form>
+            ))}
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    >
+      <form onSubmit={handleSubmit} className="onboarding-card onboarding-panel-enter rounded-md border border-app bg-app-card p-5 shadow-sm sm:p-6">
+        <div className="mb-5">
+          <h2 className="text-[22px] font-semibold text-theme-primary">First admin</h2>
+          <p className="mt-1 text-[13px] leading-5 text-theme-muted">
+            Create the account that will manage this Allen instance.
+          </p>
+        </div>
+
+        {checking && (
+          <div className="onboarding-soft-enter mb-4 flex items-center gap-2 rounded-md border border-app bg-app-muted px-3 py-2 text-[12px] text-theme-muted">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Checking first-run status
+          </div>
+        )}
+
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label htmlFor="onboarding-name" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">name</label>
+            <input
+              id="onboarding-name"
+              required
+              autoFocus
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              className="onboarding-control h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+              autoComplete="name"
+              disabled={checking || submitting}
+              placeholder="Elena Jones"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="onboarding-email" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">email</label>
+            <input
+              id="onboarding-email"
+              required
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              className="onboarding-control h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+              autoComplete="email"
+              disabled={checking || submitting}
+              placeholder="you@company.com"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="onboarding-password" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">password</label>
+            <input
+              id="onboarding-password"
+              required
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="onboarding-control h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+              autoComplete="new-password"
+              disabled={checking || submitting}
+              placeholder="Create password"
+            />
+            <p className="text-[11px] leading-4 text-theme-subtle">
+              Minimum 8 characters with uppercase, lowercase, number, and symbol.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="onboarding-confirm-password" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">confirm password</label>
+            <input
+              id="onboarding-confirm-password"
+              required
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              className="onboarding-control h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+              autoComplete="new-password"
+              disabled={checking || submitting}
+              placeholder="Repeat password"
+            />
+          </div>
+        </div>
+
+        {error && (
+          <div className="onboarding-soft-enter mt-4 rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">
+            {error}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={checking || submitting}
+          className="onboarding-control btn-primary mt-5 w-full justify-center"
+        >
+          {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+          {submitting ? 'Creating admin...' : 'Create admin account'}
+          {!submitting && <ArrowRight className="h-4 w-4" />}
+        </button>
+      </form>
+    </OnboardingShell>
   );
 }

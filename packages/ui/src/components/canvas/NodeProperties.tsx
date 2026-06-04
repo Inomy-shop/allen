@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { Node } from '@xyflow/react';
 import { Trash2, Plus, X } from 'lucide-react';
 import { agents as agentsApi, mcp as mcpApi, type McpToolGroup } from '../../services/api';
+import Select from '../common/Select';
 import { outputsAsKeys, mergeOutputsFromKeys } from '../../utils/outputs';
 import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
 
@@ -182,13 +183,18 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
       {/* Type selector */}
       <div>
         <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Type</label>
-        <select className="input w-full text-xs" value={type} onChange={e => update('type', e.target.value)}>
-          <option value="agent">Agent</option>
-          <option value="code">Code</option>
-          <option value="human">Human</option>
-          <option value="workflow">Workflow</option>
-          <option value="condition">Condition</option>
-        </select>
+        <Select
+          value={type}
+          onChange={(value) => update('type', value)}
+          searchable={false}
+          options={[
+            { value: 'agent', label: 'Agent' },
+            { value: 'code', label: 'Code' },
+            { value: 'human', label: 'Human' },
+            { value: 'workflow', label: 'Workflow' },
+            { value: 'condition', label: 'Condition' },
+          ]}
+        />
       </div>
 
       {/* ── Agent-specific ── */}
@@ -196,19 +202,22 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
         <>
           <div>
             <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Agent</label>
-            <select
-              className="input w-full text-xs"
+            <Select
               value={(localData.agent as string) ?? (localData.role as string) ?? ''}
-              onChange={e => {
-                const next: Record<string, any> = { ...localData, agent: e.target.value };
+              onChange={(value) => {
+                const next: Record<string, any> = { ...localData, agent: value };
                 delete next.role;
                 setLocalData(next);
                 onUpdate(node.id, next);
               }}
-            >
-              <option value="">Select agent...</option>
-              {agentList.map((a: any) => <option key={a.name} value={a.name}>{a.name}</option>)}
-            </select>
+              placeholder="Select agent..."
+              searchPlaceholder="Search agents..."
+              options={agentList.map((agent: any) => ({
+                value: agent.name,
+                label: agent.displayName ?? agent.name,
+                sublabel: agent.name,
+              }))}
+            />
           </div>
           <div>
             <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Prompt</label>
@@ -238,10 +247,13 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
         <>
           <div>
             <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Function</label>
-            <select className="input w-full text-xs" value={(localData.function as string) ?? ''} onChange={e => update('function', e.target.value)}>
-              <option value="">Select function...</option>
-              {builtIns.map(b => <option key={b} value={b}>{b}</option>)}
-            </select>
+            <Select
+              value={(localData.function as string) ?? ''}
+              onChange={(value) => update('function', value)}
+              placeholder="Select function..."
+              searchPlaceholder="Search functions..."
+              options={builtIns.map(builtIn => ({ value: builtIn, label: builtIn }))}
+            />
           </div>
           <div>
             <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Retries</label>
@@ -271,9 +283,13 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
                 <div key={idx} className="bg-surface-200/80 rounded-sm p-2 space-y-1.5 border border-app">
                   <div className="flex items-center gap-1">
                     <input className="input flex-1 text-xs" placeholder="name" value={field.name} onChange={e => updateField(idx, 'name', e.target.value)} />
-                    <select className="input text-xs w-20" value={field.type} onChange={e => updateField(idx, 'type', e.target.value)}>
-                      {fieldTypes.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
+                    <Select
+                      className="w-24"
+                      value={field.type}
+                      onChange={(value) => updateField(idx, 'type', value)}
+                      searchable={false}
+                      options={fieldTypes.map(fieldType => ({ value: fieldType, label: fieldType }))}
+                    />
                     <button onClick={() => removeField(idx)} className="text-theme-muted hover:text-accent-red p-0.5 transition-colors">
                       <X className="w-3 h-3" />
                     </button>
@@ -564,27 +580,24 @@ function AgentNodeOverrides({
             <label className="block overline mb-1">
               Model
             </label>
-            <select
-              className="input w-full text-xs"
+            <Select
               value={modelSelectValue}
-              onChange={(e) => handleModelChange(e.target.value)}
-            >
-              <option value="">Inherit — {inheritedModelLabel}</option>
-              <optgroup label="Claude">
-                {CLAUDE_MODELS.map((m) => (
-                  <option key={`claude::${m}`} value={encodeModelOption('claude-cli', m)}>
-                    {m}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="Codex">
-                {CODEX_MODELS.map((m) => (
-                  <option key={`codex::${m}`} value={encodeModelOption('codex', m)}>
-                    {m}
-                  </option>
-                ))}
-              </optgroup>
-            </select>
+              onChange={handleModelChange}
+              searchPlaceholder="Search models..."
+              options={[
+                { value: '', label: 'Inherit', sublabel: inheritedModelLabel },
+                ...CLAUDE_MODELS.map((model) => ({
+                  value: encodeModelOption('claude-cli', model),
+                  label: model,
+                  sublabel: 'Claude',
+                })),
+                ...CODEX_MODELS.map((model) => ({
+                  value: encodeModelOption('codex', model),
+                  label: model,
+                  sublabel: 'Codex',
+                })),
+              ]}
+            />
           </div>
 
           {/* Effort */}
@@ -592,20 +605,21 @@ function AgentNodeOverrides({
             <label className="block overline mb-1">
               Reasoning Effort
             </label>
-            <select
-              className="input w-full text-xs"
+            <Select
               value={overrides.reasoningEffort ?? ''}
-              onChange={(e) =>
-                update({ ...overrides, reasoningEffort: (e.target.value || null) as EffortValue | null })
+              onChange={(value) =>
+                update({ ...overrides, reasoningEffort: (value || null) as EffortValue | null })
               }
-            >
-              <option value="">Inherit — {inheritedEffortLabel}</option>
-              <option value="off">Off</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="max">Max — Claude Opus only</option>
-            </select>
+              searchable={false}
+              options={[
+                { value: '', label: 'Inherit', sublabel: inheritedEffortLabel },
+                { value: 'off', label: 'Off' },
+                { value: 'low', label: 'Low' },
+                { value: 'medium', label: 'Medium' },
+                { value: 'high', label: 'High' },
+                { value: 'max', label: 'Max', sublabel: 'Claude Opus only' },
+              ]}
+            />
           </div>
 
           {/* Plan mode — only when effective provider is Claude */}
@@ -614,18 +628,18 @@ function AgentNodeOverrides({
               <label className="block overline mb-1">
                 Plan Mode
               </label>
-              <select
-                className="input w-full text-xs"
+              <Select
                 value={planSelectValue}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  update({ ...overrides, planMode: v === '' ? null : v === 'on' });
+                onChange={(value) => {
+                  update({ ...overrides, planMode: value === '' ? null : value === 'on' });
                 }}
-              >
-                <option value="">Inherit — {inheritedPlanLabel}</option>
-                <option value="off">Off — may edit files</option>
-                <option value="on">On — read &amp; plan only</option>
-              </select>
+                searchable={false}
+                options={[
+                  { value: '', label: 'Inherit', sublabel: inheritedPlanLabel },
+                  { value: 'off', label: 'Off', sublabel: 'May edit files' },
+                  { value: 'on', label: 'On', sublabel: 'Read and plan only' },
+                ]}
+              />
             </div>
           ) : (
             <div className="text-[10px] text-theme-subtle font-body leading-relaxed">
@@ -638,11 +652,10 @@ function AgentNodeOverrides({
             <label className="block overline mb-1">
               MCP Access
             </label>
-            <select
-              className="input w-full text-xs"
+            <Select
               value={mcpOverrideMode}
-              onChange={(e) => {
-                if (e.target.value === 'inherit') {
+              onChange={(value) => {
+                if (value === 'inherit') {
                   update({
                     ...overrides,
                     externalMcpServers: undefined,
@@ -658,10 +671,12 @@ function AgentNodeOverrides({
                   });
                 }
               }}
-            >
-              <option value="inherit">Inherit — external: {inheritedMcpLabel}; {inheritedAllenLabel}</option>
-              <option value="custom">Configure MCP access</option>
-            </select>
+              searchable={false}
+              options={[
+                { value: 'inherit', label: 'Inherit', sublabel: `external: ${inheritedMcpLabel}; ${inheritedAllenLabel}` },
+                { value: 'custom', label: 'Configure MCP access' },
+              ]}
+            />
             {mcpOverrideMode === 'custom' && (
               <div className="mt-2 space-y-2">
                 {visibleMcpToolGroups.length === 0 ? (

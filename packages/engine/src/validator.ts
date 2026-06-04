@@ -101,6 +101,38 @@ export function validateWorkflow(
     if (node.retries != null && node.retries > 10) {
       warnings.push(`Node ${name} has retries=${node.retries} — this seems high`);
     }
+
+    if (node.human) {
+      if (!['clarify', 'review', 'recover'].includes(node.human.kind)) {
+        errors.push(`Node ${name} has invalid human.kind: ${String(node.human.kind)}`);
+      }
+      if (node.human.widget && !['dynamic_form', 'approval_gate', 'retry_exhausted_gate', 'escalation_gate'].includes(node.human.widget)) {
+        errors.push(`Node ${name} has invalid human.widget: ${String(node.human.widget)}`);
+      }
+      const actions = Array.isArray(node.human.actions)
+        ? node.human.actions
+        : node.human.actions && typeof node.human.actions === 'object'
+          ? Object.entries(node.human.actions).map(([id, value]) => (
+            typeof value === 'string' ? { id } : { id, ...(value as Record<string, unknown>) }
+          ))
+          : [];
+      for (const action of actions) {
+        const route = (action as { route?: { targetNode?: unknown } }).route;
+        const target = route?.targetNode;
+        if (typeof target === 'string' && target !== 'END' && !nodeNames.includes(target)) {
+          errors.push(`Node ${name} human action ${String((action as { id?: unknown }).id)} references non-existent targetNode: ${target}`);
+        }
+      }
+      const humanFields = node.human.fields ?? [];
+      for (const field of humanFields) {
+        if (!field.name || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(field.name)) {
+          errors.push(`Node ${name} human field has invalid name: ${String(field.name)}`);
+        }
+        if (field.type === 'select' && (!Array.isArray(field.options) || field.options.length === 0)) {
+          errors.push(`Node ${name} select field ${field.name} must declare options`);
+        }
+      }
+    }
   }
 
   // 7. Validate conditions
@@ -138,8 +170,10 @@ export function validateWorkflow(
     // an explicit `outputs:` map is still supported and preferred for
     // human nodes with documentation value.
     const fields = (node as unknown as { fields?: Array<{ name?: unknown }> }).fields;
-    if (Array.isArray(fields)) {
-      for (const f of fields) {
+    const humanFields = (node as unknown as { human?: { fields?: Array<{ name?: unknown }> } }).human?.fields;
+    for (const fieldList of [fields, humanFields]) {
+      if (!Array.isArray(fieldList)) continue;
+      for (const f of fieldList) {
         if (f && typeof f === 'object' && typeof f.name === 'string') {
           allOutputs.add(f.name);
         }
@@ -149,13 +183,15 @@ export function validateWorkflow(
   if (workflow.input) {
     for (const key of Object.keys(workflow.input)) allOutputs.add(key);
   }
+  const reservedStateRoots = new Set(['inputs', 'nodes', 'human', 'resume_context']);
+
   // Check prompts for {{var}} references
   for (const [name, node] of Object.entries(workflow.nodes)) {
     if (node.prompt) {
       const refs = [...node.prompt.matchAll(/\{\{([a-zA-Z_][a-zA-Z0-9_.]*)\}\}/g)];
       for (const match of refs) {
         const varName = match[1].split('.')[0];
-        if (!allOutputs.has(varName) && varName !== 'retry_context') {
+        if (!allOutputs.has(varName) && varName !== 'retry_context' && !reservedStateRoots.has(varName)) {
           warnings.push(`Node ${name} uses {{${match[1]}}} but no upstream node outputs '${varName}'`);
         }
       }
@@ -169,7 +205,7 @@ export function validateWorkflow(
   // __retry_attempt, __retry_target, __clarify_action, __gate_reason). No
   // node "outputs" them because they're the engine's plumbing, not agent
   // output — but they are valid condition operands. Skip them.
-  const reservedCondVars = new Set(['true', 'false', 'null', 'AND', 'OR', 'NOT', 'retry_context']);
+  const reservedCondVars = new Set(['true', 'false', 'null', 'AND', 'OR', 'NOT', 'retry_context', ...reservedStateRoots]);
   const isEngineReserved = (v: string) => v.startsWith('__');
   for (const edge of workflow.edges) {
     if (edge.condition) {
@@ -224,9 +260,10 @@ export function validateWorkflow(
 function extractConditionVariables(expression: string): string[] {
   // Remove string literals
   const cleaned = expression.replace(/'[^']*'/g, '').replace(/"[^"]*"/g, '');
-  // Extract identifiers
-  const matches = cleaned.match(/\b[a-zA-Z_][a-zA-Z0-9_]*\b/g) ?? [];
+  // Extract identifiers, preserving dotted state paths so scoped roots
+  // like `human.*` and `nodes.*` validate as engine-managed state.
+  const matches = cleaned.match(/\b[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*\b/g) ?? [];
   // Filter out operators and keywords
   const keywords = new Set(['AND', 'OR', 'NOT', 'and', 'or', 'not', 'true', 'false', 'null', 'in', 'of', 'then', 'else']);
-  return [...new Set(matches.filter(m => !keywords.has(m)))];
+  return [...new Set(matches.filter(m => !keywords.has(m)).map((m) => m.split('.')[0]))];
 }

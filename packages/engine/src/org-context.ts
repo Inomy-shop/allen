@@ -60,11 +60,11 @@ export async function buildOrgContextBlock(
 
     if (options.forAgent) {
       const self = agentByName.get(options.forAgent);
-      const targets = ((self?.canDelegateTo as string[] | undefined) ?? []).filter(Boolean);
+      const targets = ((self?.spawnTargets as string[] | undefined) ?? []).filter(Boolean);
       if (targets.length > 0) {
-        lines.push('## Your delegation targets');
+        lines.push('## Suggested spawn targets');
         lines.push('');
-        lines.push('Call `delegate_to_agent(agent_name, task)` with one of:');
+        lines.push('Call `spawn_agent(agent_name, prompt)` with one of:');
         lines.push('');
         for (const t of targets) {
           const ag = agentByName.get(t);

@@ -31,6 +31,7 @@ import { ExecutionService } from '../services/execution.service.js';
 import { ContextEvaluationService } from '../services/context/evaluation/context-evaluation.service.js';
 import { isContextEngineEnabled } from '../services/context/config/context-provider-config.js';
 import { param } from '../types.js';
+import { buildHumanResumeInput, renderHumanIntervention, type HumanInterventionPayload } from '@allen/engine';
 
 export function interventionRoutes(db: Db): Router {
   const router = Router();
@@ -83,20 +84,16 @@ export function interventionRoutes(db: Db): Router {
   // POST /api/interventions/:id/respond
   // Body: {
   //   decision,
-  //   field_values?,     ← NEW: map of field name → value, keys must match
-  //                        the original human node's fields. The UI
-  //                        collects these dynamically from the intervention's
-  //                        stored `fields` array. If absent, we fall back
-  //                        to the legacy `answer` field for backward compat.
+  //   field_values,      ← map of field name → value, keys must match the
+  //                        original human node's fields.
   //   feedback?, scope?, answer?, answered_by_user_id?,
   //   human_node_name?, retry_target_override?
   // }
   //
   // Decision → downstream action:
   //
-  //   approve / answer → call ExecutionService.submitInput with the
-  //     field_values payload (keys = original field names). The engine
-  //     merges this into state so downstream nodes see the right keys.
+  //   approve / answer → call ExecutionService.submitInput with a focused
+  //     human_input payload. Raw field_values are not merged into state.
   //
   //   request_changes → set retry state fields, call retryFromNode.
   //
@@ -106,6 +103,7 @@ export function interventionRoutes(db: Db): Router {
       const intervention_id = param(req, 'id');
       const {
         decision,
+        action_id,
         field_values,
         feedback,
         scope,
@@ -116,6 +114,7 @@ export function interventionRoutes(db: Db): Router {
         source,
       } = (req.body ?? {}) as {
         decision?: InterventionDecision;
+        action_id?: string;
         field_values?: Record<string, unknown>;
         feedback?: string;
         scope?: InterventionScope;
@@ -147,6 +146,9 @@ export function interventionRoutes(db: Db): Router {
         // create time). The payload merges into state, so keys must
         // match what the workflow YAML declared.
         const nodeName = human_node_name ?? existing.stage;
+        if (!field_values || typeof field_values !== 'object') {
+          return res.status(400).json({ error: 'field_values is required for HITL responses.' });
+        }
         const payload: Record<string, unknown> = {};
 
         const originalFields = (existing as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
@@ -164,29 +166,16 @@ export function interventionRoutes(db: Db): Router {
           });
         }
 
-        if (field_values && typeof field_values === 'object') {
-          // Preferred: UI sent explicit field_values keyed by field name.
-          for (const [k, v] of Object.entries(field_values)) {
-            payload[k] = v;
-          }
-        } else if (originalFields.some(f => f.name === 'approval_decision')) {
-          payload.approval_decision = 'approve';
-          if (feedback != null) payload.approval_feedback = feedback;
-        } else if (originalFields.some(f => f.name === 'decision')) {
-          payload.decision = 'approve';
-          if (feedback != null) payload.feedback = feedback;
-        } else if (answer != null && originalFields.length > 0) {
-          // Legacy fallback: single-field nodes where the UI only sent
-          // a free-form `answer` string. Use the first field's name as
-          // the key so state.questionName (or whatever) gets set.
-          payload[originalFields[0].name] = answer;
-        } else if (answer != null) {
-          // Last resort: no fields recorded. Use the literal `answer`
-          // key. Legacy interventions from before this fix will hit
-          // this path; they'll still submit but the state key may be
-          // wrong. New interventions always have fields populated.
-          payload.answer = answer;
-        }
+        const resolvedDecision = action_id ?? decision;
+        const humanValues = {
+          ...field_values,
+          __human_meta: {
+            actionId: resolvedDecision,
+            decision: resolvedDecision,
+            feedback,
+          },
+        };
+        payload.human_input = buildHumanResumeInput(toHumanInterventionPayload(existing), humanValues);
 
         try {
           await executionService.submitInput(existing.workflow_run_id, nodeName, payload);
@@ -204,25 +193,40 @@ export function interventionRoutes(db: Db): Router {
       if (decision === 'request_changes') {
         const originalFields = (existing as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
         const nodeName = human_node_name ?? existing.stage;
-        const payload: Record<string, unknown> = field_values && typeof field_values === 'object'
-          ? { ...field_values }
-          : {};
+        const values: Record<string, unknown> = field_values && typeof field_values === 'object' ? { ...field_values } : {};
         const isEscalation = existing.severity === 'escalation'
           || String(existing.stage ?? '').toLowerCase().includes('escalation');
-        const hasDecisionField = originalFields.some(f => f.name === 'approval_decision' || f.name === 'decision');
+        const hasDecisionField = originalFields.some(f => f.name === 'approval_decision' || f.name === 'decision' || f.name === 'escalation_decision');
         if (hasDecisionField) {
-          if (originalFields.some(f => f.name === 'approval_decision') && payload.approval_decision == null) {
-            payload.approval_decision = 'request_changes';
+          if (originalFields.some(f => f.name === 'approval_decision') && values.approval_decision == null) {
+            values.approval_decision = 'request_changes';
           }
           if (originalFields.some(f => f.name === 'decision')) {
-            payload.decision = isEscalation ? 'retry_with_feedback' : (payload.decision ?? 'request_changes');
+            values.decision = isEscalation ? 'retry_with_feedback' : (values.decision ?? 'request_changes');
           }
-          if (originalFields.some(f => f.name === 'approval_feedback') && payload.approval_feedback == null) {
-            payload.approval_feedback = feedback ?? answer ?? '';
+          if (originalFields.some(f => f.name === 'escalation_decision') && values.escalation_decision == null) {
+            values.escalation_decision = 'retry_with_feedback';
           }
-          if (originalFields.some(f => f.name === 'feedback') && payload.feedback == null) {
-            payload.feedback = feedback ?? answer ?? '';
+          if (originalFields.some(f => f.name === 'approval_feedback') && values.approval_feedback == null) {
+            values.approval_feedback = feedback ?? answer ?? '';
           }
+          if (originalFields.some(f => f.name === 'feedback') && values.feedback == null) {
+            values.feedback = feedback ?? answer ?? '';
+          }
+          if (originalFields.some(f => f.name === 'escalation_feedback') && values.escalation_feedback == null) {
+            values.escalation_feedback = feedback ?? answer ?? '';
+          }
+          const humanDecision = String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? decision);
+          const payload = {
+            human_input: buildHumanResumeInput(toHumanInterventionPayload(existing), {
+              ...values,
+              __human_meta: {
+                actionId: action_id ?? humanDecision,
+                decision: humanDecision,
+                feedback: feedback ?? String(values.feedback ?? values.approval_feedback ?? values.escalation_feedback ?? ''),
+              },
+            }),
+          };
 
           const delivered = await executionService.submitInput(existing.workflow_run_id, nodeName, payload);
           if (delivered) {
@@ -287,7 +291,14 @@ export function interventionRoutes(db: Db): Router {
               'state.__retry_target': [targetNode],
               'state.__retry_source': 'human_feedback',
               'state.__retry_attempt': 1,
-              'state.retry_context': feedback ?? '',
+              'state.human_input': buildHumanResumeInput(toHumanInterventionPayload(existing), {
+                ...values,
+                __human_meta: {
+                  actionId: action_id ?? String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? decision),
+                  decision: String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? decision),
+                  feedback: feedback ?? String(values.feedback ?? values.approval_feedback ?? values.escalation_feedback ?? ''),
+                },
+              }),
             },
           },
         );
@@ -304,9 +315,52 @@ export function interventionRoutes(db: Db): Router {
 
       // ── REJECT → cancel ──
       if (decision === 'reject') {
+        const originalFields = (existing as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
+        const nodeName = human_node_name ?? existing.stage;
+        const actionValue = action_id ?? decision;
+        const values: Record<string, unknown> = field_values && typeof field_values === 'object' ? { ...field_values } : {};
+        if (originalFields.some(f => f.name === 'approval_decision') && values.approval_decision == null) {
+          values.approval_decision = actionValue === 'abandon' ? 'reject' : actionValue;
+        }
+        if (originalFields.some(f => f.name === 'decision') && values.decision == null) {
+          values.decision = actionValue;
+        }
+        if (originalFields.some(f => f.name === 'escalation_decision') && values.escalation_decision == null) {
+          values.escalation_decision = actionValue;
+        }
+        if (feedback != null) {
+          if (originalFields.some(f => f.name === 'approval_feedback') && values.approval_feedback == null) {
+            values.approval_feedback = feedback;
+          } else if (originalFields.some(f => f.name === 'feedback') && values.feedback == null) {
+            values.feedback = feedback;
+          } else if (originalFields.some(f => f.name === 'escalation_feedback') && values.escalation_feedback == null) {
+            values.escalation_feedback = feedback;
+          } else {
+            values.feedback = feedback;
+          }
+        }
+        const payload = {
+          human_input: buildHumanResumeInput(toHumanInterventionPayload(existing), {
+            ...values,
+            __human_meta: {
+              actionId: actionValue,
+              decision: String(values.approval_decision ?? values.decision ?? values.escalation_decision ?? actionValue),
+              feedback,
+            },
+          }),
+        };
+
+        let delivered = false;
+        if (originalFields.length > 0) {
+          try {
+            delivered = await executionService.submitInput(existing.workflow_run_id, nodeName, payload);
+          } catch (err) {
+            console.error('[intervention.respond] reject submitInput failed:', err);
+          }
+        }
         await execCol.updateOne(
           { id: existing.workflow_run_id },
-          { $set: { status: 'cancelled' } },
+          { $set: { status: delivered ? 'running' : 'cancelled' } },
         );
       }
 
@@ -343,6 +397,63 @@ export function interventionRoutes(db: Db): Router {
   });
 
   return router;
+}
+
+function toHumanInterventionPayload(doc: {
+  stage: string;
+  kind?: string;
+  widget?: string;
+  severity?: string;
+  title?: string;
+  summary?: string;
+  question?: string;
+  fields?: Array<any>;
+  actions?: Array<any>;
+  evidence?: Array<any>;
+  retry_exhaustion?: Record<string, unknown>;
+}): HumanInterventionPayload {
+  return {
+    kind: doc.kind === 'clarify' || doc.kind === 'review' || doc.kind === 'recover'
+      ? doc.kind
+      : doc.severity === 'approval'
+        ? 'review'
+        : doc.severity === 'escalation'
+          ? 'recover'
+        : 'clarify',
+    widget: doc.widget === 'dynamic_form' || doc.widget === 'approval_gate' || doc.widget === 'retry_exhausted_gate' || doc.widget === 'escalation_gate'
+      ? doc.widget
+      : undefined,
+    node: doc.stage,
+    title: doc.title ?? doc.stage,
+    summary: doc.summary,
+    question: doc.question ?? '',
+    severity: doc.severity === 'approval' || doc.severity === 'escalation' || doc.severity === 'question'
+      ? doc.severity
+      : 'question',
+    fields: (doc.fields ?? []).map((field) => ({
+      name: String(field.name ?? ''),
+      type: (field.type === 'string' || field.type === 'text' || field.type === 'textarea' || field.type === 'boolean' || field.type === 'number' || field.type === 'select'
+        ? field.type
+        : 'text') as 'string' | 'text' | 'textarea' | 'boolean' | 'number' | 'select',
+      label: typeof field.label === 'string' ? field.label : undefined,
+      required: typeof field.required === 'boolean' ? field.required : undefined,
+      options: Array.isArray(field.options) ? field.options.filter((item: unknown): item is string => typeof item === 'string') : undefined,
+      default: field.default,
+    })).filter((field) => field.name),
+    actions: (doc.actions ?? []).map((action) => ({
+      id: String(action.id ?? ''),
+      label: typeof action.label === 'string' ? action.label : undefined,
+      intent: typeof action.intent === 'string' ? action.intent as any : undefined,
+      feedbackRequired: typeof action.feedbackRequired === 'boolean' ? action.feedbackRequired : undefined,
+      feedbackOptional: typeof action.feedbackOptional === 'boolean' ? action.feedbackOptional : undefined,
+      warning: typeof action.warning === 'string' ? action.warning : undefined,
+      route: action.route && typeof action.route === 'object' && !Array.isArray(action.route)
+        ? action.route as any
+        : undefined,
+    })).filter((action) => action.id),
+    evidence: doc.evidence as HumanInterventionPayload['evidence'],
+    retryExhaustion: doc.retry_exhaustion as HumanInterventionPayload['retryExhaustion'],
+  };
 }
 
 function escapeRegex(value: string): string {
@@ -485,9 +596,9 @@ async function ensurePendingInterventionForWaitingRun(
   const workflow = (workflowDoc?.parsed ?? workflowDoc ?? {}) as Record<string, any>;
   const nodeDef = workflow?.nodes?.[nodeName] ?? workflow?.parsed?.nodes?.[nodeName] ?? {};
   const state = (exec.state ?? {}) as Record<string, unknown>;
-  const prompt = renderTemplate(String(nodeDef.prompt ?? `Input required for ${nodeName}`), state);
-  const rawFields = Array.isArray(nodeDef.fields) ? nodeDef.fields : [];
-  const fields = rawFields.map((field: any) => ({
+  const intervention = renderHumanIntervention(nodeName, nodeDef, state, workflow as any);
+  const prompt = intervention.question || renderTemplate(String(nodeDef.prompt ?? `Input required for ${nodeName}`), state);
+  const fields = intervention.fields.map((field: any) => ({
     name: String(field.name),
     label: field.label,
     type: field.type,
@@ -495,63 +606,14 @@ async function ensurePendingInterventionForWaitingRun(
     options: field.options,
     placeholder: field.placeholder,
   })).filter((field: any) => field.name);
-  let severity: InterventionSeverity = 'question';
-  const stageLower = nodeName.toLowerCase();
-  if (stageLower.endsWith('_gate') || stageLower.includes('approval')) severity = 'approval';
-  else if (stageLower.includes('escalation')) severity = 'escalation';
-  // Field-content fallback: if the node carries a select field with
-  // approve/request_changes/reject/cancel options, treat it as an
-  // approval gate regardless of the node name. Otherwise the persisted
-  // intervention's severity stays 'question', the UI's
-  // severityForIntervention falls back to 'simple' mode, and the
-  // decision buttons never render — only a generic textarea. Covers
-  // human nodes named review_repo_plan etc.
-  if (severity === 'question') {
-    const hasApprovalField = fields.some((field: any) => {
-      if (field.type !== 'select' || !Array.isArray(field.options)) return false;
-      const optionValues = field.options.map((option: unknown) => {
-        if (typeof option === 'string') return option.toLowerCase();
-        if (option && typeof option === 'object') {
-          const record = option as { value?: unknown; label?: unknown };
-          return String(record.value ?? record.label ?? '').toLowerCase();
-        }
-        return '';
-      });
-      return optionValues.some((v: string) =>
-        v === 'approve' || v === 'request_changes' || v === 'reject' || v === 'cancel',
-      );
-    });
-    if (hasApprovalField) severity = 'approval';
-  }
-  const options = fields.flatMap((field: any) => {
-    if (field.type !== 'select' || !Array.isArray(field.options)) return [];
-    return field.options.map((option: string) => ({
-      label: option.replace(/_/g, ' '),
-      value: option,
-      primary: option === 'approve' || option === 'continue',
-      destructive: option === 'reject' || option === 'cancel' || option === 'abort',
-    }));
-  });
-  if (options.length === 0) {
-    if (severity === 'escalation') {
-      options.push(
-        { label: 'Retry with feedback', value: 'retry_with_feedback', primary: true, destructive: false },
-        { label: 'Override and continue', value: 'override_and_continue', primary: false, destructive: false },
-        { label: 'Abandon', value: 'abandon', primary: false, destructive: true },
-      );
-    } else if (severity === 'approval') {
-      options.push(
-        { label: 'Approve', value: 'approve', primary: true, destructive: false },
-        { label: 'Request changes', value: 'request_changes', primary: false, destructive: false },
-        { label: 'Reject', value: 'reject', primary: false, destructive: true },
-      );
-    } else {
-      options.push(
-        { label: 'Answer', value: 'answer', primary: true, destructive: false },
-        { label: 'Reject', value: 'reject', primary: false, destructive: true },
-      );
-    }
-  }
+  const severity = intervention.severity;
+  const options = intervention.actions.map((action) => ({
+    label: action.label ?? action.id.replace(/_/g, ' '),
+    value: action.id,
+    primary: action.id === 'approve' || action.id === 'retry_with_feedback' || action.id === 'answer',
+    destructive: action.id === 'reject' || action.id === 'cancel' || action.id === 'abandon',
+    description: action.warning,
+  }));
 
   await service.create({
     workflow_run_id: executionId,
@@ -560,12 +622,19 @@ async function ensurePendingInterventionForWaitingRun(
     started_by_user_id: typeof (exec.input as any)?.started_by_user_id === 'string' ? (exec.input as any).started_by_user_id : undefined,
     started_by_user_email: typeof (exec.input as any)?.started_by_user_email === 'string' ? (exec.input as any).started_by_user_email : undefined,
     stage: nodeName,
+    kind: intervention.kind,
+    widget: intervention.widget,
     severity,
-    title: String(nodeDef.displayName ?? humaniseNodeName(nodeName)),
-    context_summary: prompt.slice(0, 400) || `The workflow is paused at node "${nodeName}".`,
+    title: intervention.title ?? String(nodeDef.displayName ?? humaniseNodeName(nodeName)),
+    summary: intervention.summary,
+    context_summary: (intervention.summary ?? prompt).slice(0, 400) || `The workflow is paused at node "${nodeName}".`,
     question: prompt || 'Please respond to continue.',
     options,
     fields,
+    actions: intervention.actions as unknown as Array<Record<string, unknown>>,
+    highlights: intervention.highlights,
+    evidence: intervention.evidence as Array<Record<string, unknown>> | undefined,
+    retry_exhaustion: intervention.retryExhaustion as Record<string, unknown> | undefined,
     docs: [],
     user_request: typeof (exec.input as any)?.user_request === 'string'
       ? (exec.input as any).user_request

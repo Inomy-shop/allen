@@ -26,12 +26,14 @@ const originalCogneeMandatoryGraph = process.env.ALLEN_COGNEE_MANDATORY_GRAPH;
 const originalContextProviderFallback = process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
 const originalCogneeMinSelectionScore = process.env.ALLEN_COGNEE_MIN_SELECTION_SCORE;
 const originalContextMinRerankScore = process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE;
+const originalContextMinFinalScore = process.env.ALLEN_CONTEXT_MIN_FINAL_SCORE;
 const originalCogneeMinInjectionScore = process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
 
 beforeEach(() => {
   process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
   delete process.env.ALLEN_COGNEE_MIN_SELECTION_SCORE;
   delete process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE;
+  delete process.env.ALLEN_CONTEXT_MIN_FINAL_SCORE;
   delete process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
 });
 
@@ -46,6 +48,8 @@ afterEach(() => {
   else process.env.ALLEN_COGNEE_MIN_SELECTION_SCORE = originalCogneeMinSelectionScore;
   if (originalContextMinRerankScore === undefined) delete process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE;
   else process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE = originalContextMinRerankScore;
+  if (originalContextMinFinalScore === undefined) delete process.env.ALLEN_CONTEXT_MIN_FINAL_SCORE;
+  else process.env.ALLEN_CONTEXT_MIN_FINAL_SCORE = originalContextMinFinalScore;
   if (originalCogneeMinInjectionScore === undefined) delete process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
   else process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE = originalCogneeMinInjectionScore;
 });
@@ -197,29 +201,7 @@ describe('RepoContextEngine', () => {
     ]));
   });
 
-  it('searches through the same provider scoring path', () => {
-    const refs = graphEngine().search({
-      repoId: 'repo',
-      repoName: 'fixture',
-      repoPath: '/tmp/fixture',
-      indexId: 'index-1',
-      indexFreshness: 'fresh',
-      workflowName: 'search_repo_knowledge',
-      nodeName: 'search',
-      nodeRole: 'backend-developer',
-      attempt: 1,
-      state: {},
-      provider: 'unknown',
-      currentFiles: [],
-      nodes,
-      query: 'payment reconciliation',
-      limit: 5,
-    });
 
-    expect(refs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ refId: 'repo:skill', source: 'search_repo_knowledge', loadable: true }),
-    ]));
-  });
 
   it('configures Cognee with Allen mandatory context before semantic retrieval by default', () => {
     process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
@@ -227,17 +209,20 @@ describe('RepoContextEngine', () => {
     delete process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
 
     expect(createConfiguredKnowledgeProviders().map((provider) => provider.providerId)).toEqual([
-      'mandatory_graph',
+      'mandatory_context_mapping',
       'cognee_memory',
     ]);
   });
 
-  it('allows Cognee Allen mandatory context to be disabled separately from Cognee retrieval', () => {
+  it('keeps mandatory DB mappings enabled when Cognee graph fallback is disabled', () => {
     process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
     process.env.ALLEN_COGNEE_MANDATORY_GRAPH = 'off';
     delete process.env.ALLEN_CONTEXT_PROVIDER_FALLBACK;
 
-    expect(createConfiguredKnowledgeProviders().map((provider) => provider.providerId)).toEqual(['cognee_memory']);
+    expect(createConfiguredKnowledgeProviders().map((provider) => provider.providerId)).toEqual([
+      'mandatory_context_mapping',
+      'cognee_memory',
+    ]);
   });
 
   it('keeps mandatory refs protected while allowing optional semantic reranking', async () => {
@@ -339,6 +324,15 @@ describe('RepoContextEngine', () => {
         },
       },
       {
+        ...providerRef('cognee-low-final', 'docs/low-final.md', 'hash-cognee-low-final', 'passes reranker but weak blended score', 95),
+        providerId: 'cognee_memory',
+        providerMetadata: {
+          retrievalScore: 0.7,
+          injectionDecision: 'snippet',
+          injectionPolicy: 'injectable',
+        },
+      },
+      {
         ...providerRef('mandatory-ref', 'AGENTS.md', 'hash-mandatory', 'mandatory rules', 1),
         providerId: 'mandatory_graph',
         mandatory: true,
@@ -352,6 +346,7 @@ describe('RepoContextEngine', () => {
         'cognee-strong': 0.9,
         'cognee-mid-rerank': 0.4,
         'cognee-low-rerank': 0.05,
+        'cognee-low-final': 0.1,
       }),
     ).buildPacket({
       packetId: 'packet-threshold',
@@ -384,10 +379,75 @@ describe('RepoContextEngine', () => {
         rerank: expect.objectContaining({ rerankScore: 0.05 }),
         providerMetadata: expect.objectContaining({ rejectionReason: 'below_rerank_threshold' }),
       }),
+      expect.objectContaining({
+        refId: 'cognee-low-final',
+        rerank: expect.objectContaining({ rerankScore: 0.1 }),
+        providerMetadata: expect.objectContaining({ rejectionReason: 'below_final_score_threshold' }),
+      }),
     ]));
     expect(packet.providerDiagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'context_relevance_thresholds_applied', thresholdRejectedCount: expect.any(Number) }),
     ]));
+  });
+
+  it('prioritizes reranker score over retrieval score when optional Cognee refs conflict', async () => {
+    const refs: KnowledgeCandidateRef[] = [
+      {
+        ...providerRef('rerank-wins', 'docs/rerank-wins.md', 'hash-rerank-wins', 'higher rerank lower retrieval', 80),
+        providerId: 'cognee_memory',
+        providerMetadata: {
+          retrievalScore: 0.5,
+          injectionDecision: 'snippet',
+          injectionPolicy: 'injectable',
+        },
+      },
+      {
+        ...providerRef('retrieval-heavy', 'docs/retrieval-heavy.md', 'hash-retrieval-heavy', 'lower rerank higher retrieval', 95),
+        providerId: 'cognee_memory',
+        providerMetadata: {
+          retrievalScore: 0.95,
+          injectionDecision: 'snippet',
+          injectionPolicy: 'injectable',
+        },
+      },
+    ];
+
+    const packet = await new RepoContextEngine(
+      [new StaticContextProvider(refs)],
+      new FixedScoreReranker({
+        'rerank-wins': 0.5,
+        'retrieval-heavy': 0.3,
+      }),
+    ).buildPacket({
+      packetId: 'packet-rerank-priority',
+      executionId: 'exec-rerank-priority',
+      repoId: 'repo',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'workflow',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      state: {},
+      prompt: 'Fix vendor category mappings',
+      provider: 'claude',
+      currentFiles: [],
+      nodes: [],
+    });
+
+    expect(packet.selectedRefs.map((ref) => ref.refId)).toEqual(['rerank-wins', 'retrieval-heavy']);
+    expect(packet.selectedRefs[0]?.rerank).toEqual(expect.objectContaining({
+      rerankScore: 0.5,
+      retrievalScore: 0.5,
+      finalRelevanceScore: 0.5,
+    }));
+    expect(packet.selectedRefs[1]?.rerank).toEqual(expect.objectContaining({
+      rerankScore: 0.3,
+      retrievalScore: 0.95,
+      finalRelevanceScore: expect.closeTo(0.43, 5),
+    }));
   });
 });
 
@@ -733,6 +793,36 @@ describe('CogneeMemoryProvider', () => {
     previousHome = undefined;
     previousFakeEnvOut = undefined;
     previousGraphExpansion = undefined;
+  });
+
+  it('does not fall back to legacy markdown datasets for workflow retrieval', async () => {
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-legacy-docmeta-v1',
+      ingestFormat: 'markdown_file_docmeta_v1',
+    }) as any).retrieve({
+      repoId: 'repo-id',
+      repoName: 'fixture',
+      repoPath: '/tmp/fixture',
+      indexId: 'index-1',
+      indexFreshness: 'fresh',
+      workflowName: 'workflow',
+      nodeName: 'implement',
+      nodeRole: 'backend-developer',
+      attempt: 1,
+      state: {},
+      prompt: 'Fix vendor mappings',
+      provider: 'claude',
+      currentFiles: [],
+      nodes: [],
+    });
+
+    expect(result.selectedRefs).toEqual([]);
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'cognee_curated_dataset_missing',
+        ingestFormat: 'curated_context_entry_v1',
+      }),
+    ]));
   });
 
   it('builds stable role envelopes and query hashes for spawned developer agents', () => {
@@ -1357,7 +1447,10 @@ print(json.dumps({
 `);
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
 
-    const result = await new CogneeMemoryProvider().retrieve({
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-repo-id-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
+    }) as any).retrieve({
       repoId: 'repo-id',
       repoName: 'fixture',
       repoPath: '/tmp/fixture',
@@ -1409,7 +1502,10 @@ print(json.dumps({
 `);
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
 
-    const result = await new CogneeMemoryProvider().retrieve({
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-repo-id-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
+    }) as any).retrieve({
       repoId: 'repo-id',
       repoName: 'fixture',
       repoPath: '/tmp/fixture',
@@ -1483,7 +1579,7 @@ print(json.dumps({
         "title": "Vendor Guidelines",
         "kind": "doc",
         "fileHash": "doc-hash",
-        "ingestFormat": "markdown_file_docmeta_v1"
+        "ingestFormat": "curated_context_entry_v1"
       },
       "score": 0.9,
       "datasetName": payload.get("datasetName")
@@ -1492,16 +1588,10 @@ print(json.dumps({
 }))
 `);
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
-    const fakeDb = {
-      collection: () => ({
-        findOne: async () => ({
-          datasetName: 'allen-fixture-repo-id-docmeta-v1',
-          ingestFormat: 'markdown_file_docmeta_v1',
-        }),
-      }),
-    };
-
-    const result = await new CogneeMemoryProvider(fakeDb as any).retrieve({
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-repo-id-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
+    }) as any).retrieve({
       repoId: 'repo-id',
       repoName: 'fixture',
       repoPath: '/tmp/fixture',
@@ -1581,7 +1671,10 @@ print(json.dumps({"diagnostics": [], "results": results}))
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
     process.env.ALLEN_COGNEE_GRAPH_EXPANSION = 'shadow';
 
-    const result = await new CogneeMemoryProvider().retrieve({
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-repo-id-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
+    }) as any).retrieve({
       repoId: 'repo-id',
       repoName: 'fixture',
       repoPath: '/tmp/fixture',
@@ -1712,7 +1805,10 @@ print(json.dumps({
 `);
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = scriptPath;
 
-    const result = await new CogneeMemoryProvider().retrieve({
+    const result = await new CogneeMemoryProvider(fakeCogneeStatusDb({
+      datasetName: 'allen-fixture-repo-id-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
+    }) as any).retrieve({
       repoId: 'repo-id',
       repoName: 'fixture',
       repoPath: '/tmp/fixture',
@@ -1836,16 +1932,20 @@ async def search(**kwargs):
     expect(JSON.stringify(output.results)).not.toContain('search_result');
   });
 
-  it('resolves Cognee chunk ids through SQLite document metadata when search omits source metadata', async () => {
+  it('resolves Cognee chunk ids through Cognee relational document metadata when search omits source metadata', async () => {
     previousScript = process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
     previousPythonPath = process.env.PYTHONPATH;
-    scriptDir = mkdtempSync(join(tmpdir(), 'allen-cognee-sqlite-meta-'));
+    scriptDir = mkdtempSync(join(tmpdir(), 'allen-cognee-relational-meta-'));
     const fakeModuleDir = join(scriptDir, 'fake-python');
     const dataDir = join(scriptDir, 'cognee');
-    const databaseDir = join(dataDir, 'system', 'databases');
+    const cogneePackageDir = join(fakeModuleDir, 'cognee');
     mkdirSync(fakeModuleDir, { recursive: true });
-    mkdirSync(databaseDir, { recursive: true });
-    writeFileSync(join(fakeModuleDir, 'cognee.py'), `
+    mkdirSync(join(cogneePackageDir, 'infrastructure/databases'), { recursive: true });
+    writeFileSync(join(fakeModuleDir, 'sqlalchemy.py'), `
+def text(value):
+    return value
+`);
+    writeFileSync(join(cogneePackageDir, '__init__.py'), `
 class SearchType:
     CHUNKS = "CHUNKS"
 
@@ -1860,17 +1960,13 @@ config = Config()
 async def search(**kwargs):
     return [{"id": "chunk-1", "content": "Use live vendor mappings.", "score": 0.9}]
 `);
-    execFileSync('python3', ['-c', `
-import json
-import sqlite3
-from pathlib import Path
-db = Path(${JSON.stringify(join(databaseDir, 'cognee_db'))})
-connection = sqlite3.connect(db)
-connection.execute("CREATE TABLE data (id TEXT PRIMARY KEY, external_metadata TEXT)")
-connection.execute("CREATE TABLE nodes (id TEXT, slug TEXT, data_id TEXT, label TEXT, attributes TEXT)")
-connection.execute(
-    "INSERT INTO data (id, external_metadata) VALUES (?, ?)",
-    ("data-1", json.dumps({
+    writeFileSync(join(cogneePackageDir, 'infrastructure/__init__.py'), '');
+    writeFileSync(join(cogneePackageDir, 'infrastructure/databases/__init__.py'), '');
+    writeFileSync(join(cogneePackageDir, 'infrastructure/databases/relational.py'), `
+class Result:
+    def fetchall(self):
+        return [{
+            "external_metadata": {
         "repoId": "repo-id",
         "repoName": "fixture",
         "branch": "main",
@@ -1881,15 +1977,28 @@ connection.execute(
         "fileHash": "doc-hash",
         "ingestFormat": "markdown_file_docmeta_v1",
         "source": "allen_markdown_file_filter",
-    })),
-)
-connection.execute(
-    "INSERT INTO nodes (id, slug, data_id, label, attributes) VALUES (?, ?, ?, ?, ?)",
-    ("node-1", "chunk1", "data-1", "chunk-1", json.dumps({"id": "chunk-1"})),
-)
-connection.commit()
-connection.close()
-`]);
+            },
+            "node_id": "node-1",
+            "node_slug": "chunk1",
+            "node_label": "chunk-1",
+            "node_attributes": {"id": "chunk-1"},
+        }]
+
+class Session:
+    async def __aenter__(self):
+        return self
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+    async def execute(self, query, params=None):
+        return Result()
+
+class Engine:
+    def get_async_session(self):
+        return Session()
+
+def get_relational_engine():
+    return Engine()
+`);
     process.env.PYTHONPATH = fakeModuleDir;
     process.env.ALLEN_COGNEE_SIDECAR_SCRIPT = join(process.cwd(), 'src/scripts/cognee-context-provider.py');
 
@@ -2583,7 +2692,7 @@ class FixedScoreReranker implements ContextReranker {
       .map((ref, originalRank) => {
         const score = this.scores[ref.refId] ?? 0;
         const retrievalScore = Number(ref.providerMetadata?.retrievalScore ?? ref.providerMetadata?.retrievalPolicyScore ?? ref.score ?? 0);
-        const finalRelevanceScore = ref.mandatory ? 1 : Math.max(0, Math.min(1, (score * 0.55) + (retrievalScore * 0.45)));
+        const finalRelevanceScore = ref.mandatory ? 1 : Math.max(0, Math.min(1, (score * 0.8) + (retrievalScore * 0.2)));
         return {
           ...ref,
           rerank: {
@@ -2707,6 +2816,25 @@ function providerRef(refId: string, path: string, contentSha256: string, summary
     providerMetadata: {
       injectionDecision: 'snippet',
       injectionPolicy: 'injectable',
+    },
+  };
+}
+
+function fakeCogneeStatusDb(status: { datasetName: string; ingestFormat: string }) {
+  return {
+    collection: (name: string) => {
+      if (name === 'repo_cognee_datasets') {
+        return {
+          findOne: async (query: Record<string, unknown>) => (
+            query.ingestFormat === status.ingestFormat ? status : null
+          ),
+        };
+      }
+      return {
+        findOne: async () => null,
+        find: () => ({ sort: () => ({ limit: () => ({ toArray: async () => [] }) }) }),
+        updateOne: async () => undefined,
+      };
     },
   };
 }

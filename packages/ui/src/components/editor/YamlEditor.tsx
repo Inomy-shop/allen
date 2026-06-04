@@ -59,8 +59,6 @@ export default function YamlEditor({ value, onChange, errors, warnings, readOnly
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
   const colorMode = useSettingsStore((state) => state.colorMode);
-  const themeName = useSettingsStore((state) => state.themeName);
-  const customAccent = useSettingsStore((state) => state.customAccent);
 
   const applyEditorTheme = useCallback(() => {
     if (!monacoRef.current) return;
@@ -135,7 +133,7 @@ export default function YamlEditor({ value, onChange, errors, warnings, readOnly
 
   useEffect(() => {
     applyEditorTheme();
-  }, [applyEditorTheme, colorMode, themeName, customAccent]);
+  }, [applyEditorTheme, colorMode]);
 
   return (
     <div className="h-full flex flex-col">

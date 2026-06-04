@@ -54,9 +54,9 @@ describe('context query intent', () => {
       querySignalSections: expect.arrayContaining(['USER REQUEST', 'BUG REPORT', 'Expected behavior', 'Required investigation path']),
     }));
     expect(query).toContain('Role family: investigation');
-    expect(query).toContain('Task signal: Changed files: packages/server/src/services/context/core/repo-context-engine.ts');
+    expect(query).toContain('Retrieval signals: Changed files: packages/server/src/services/context/core/repo-context-engine.ts');
     expect(query).toContain('Required investigation path: packages/server/src/services/context/evaluation/context-evaluation-service.ts');
-    expect(query).toContain('USER REQUEST: Check why the UI keeps showing queued context evaluation results.');
+    expect(query).toContain('User request: Check why the UI keeps showing queued context evaluation results.');
     expect(contextQueryIntentHash(intent)).toBe(contextQueryIntentHash(buildContextQueryIntent(input)));
     expect(renderedContextQueryHash(query)).toMatch(/^[a-f0-9]{64}$/);
   });

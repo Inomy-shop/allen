@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
 import App from './App';
@@ -11,6 +11,7 @@ import ExecutionListPage from './pages/ExecutionListPage';
 import ExecutionDetailPage from './pages/ExecutionDetailPage';
 import DashboardPage from './pages/DashboardPage';
 import RoleManagerPage from './pages/RoleManagerPage';
+import RepoContextManagementPage from './pages/RepoContextManagementPage';
 import SettingsPage from './pages/SettingsPage';
 import ChatPage from './pages/ChatPage';
 import ThreadsPage from './pages/ThreadsPage';
@@ -22,17 +23,30 @@ import TicketsPage from './pages/TicketsPage';
 import LoginPage from './pages/LoginPage';
 import OnboardingAccountPage from './pages/OnboardingAccountPage';
 import OnboardingHealthPage from './pages/OnboardingHealthPage';
+import OnboardingModelDefaultsPage from './pages/OnboardingModelDefaultsPage';
 import OnboardingRepositoryPage from './pages/OnboardingRepositoryPage';
 import OnboardingFirstWorkflowPage from './pages/OnboardingFirstWorkflowPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import { ToastProvider } from './components/common/Toast';
+import { useSettingsStore } from './stores/settingsStore';
+
+if (typeof window !== 'undefined') {
+  if (window.allenDesktop) {
+    document.documentElement.dataset.runtime = 'desktop';
+    if (/Mac/i.test(navigator.platform)) {
+      document.documentElement.dataset.desktopPlatform = 'darwin';
+    }
+  }
+  useSettingsStore.getState().initFromLocalStorage();
+}
 
 const router = createBrowserRouter([
   { path: '/onboarding', element: <Navigate to="/onboarding/account" replace /> },
   { path: '/onboarding/account', element: <OnboardingAccountPage /> },
   { path: '/onboarding/health', element: <OnboardingHealthPage /> },
+  { path: '/onboarding/model-defaults', element: <OnboardingModelDefaultsPage /> },
   { path: '/onboarding/repository', element: <OnboardingRepositoryPage /> },
   { path: '/onboarding/first-workflow', element: <OnboardingFirstWorkflowPage /> },
   { path: '/login', element: <LoginPage /> },
@@ -51,6 +65,7 @@ const router = createBrowserRouter([
           { path: 'workflows/:id', element: <WorkflowDetailPage /> },
           { path: 'workflows/:id/edit', element: <WorkflowBuilderPage /> },
           { path: 'repos', element: <Navigate to="/agents?section=repos" replace /> },
+          { path: 'repos/:id/context-management', element: <RepoContextManagementPage /> },
           { path: 'learnings', element: <Navigate to="/settings/learnings" replace /> },
           { path: 'executions', element: <ExecutionListPage /> },
           { path: 'executions/:id', element: <ExecutionDetailPage /> },
@@ -66,7 +81,7 @@ const router = createBrowserRouter([
           { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
           { path: 'crons', element: <Navigate to="/settings/schedules" replace /> },
           { path: 'tickets', element: <TicketsPage /> },
-          { path: 'monitoring', element: <Navigate to="/settings/analytics" replace /> },
+          { path: 'monitoring', element: <Navigate to="/settings/runtime" replace /> },
           { path: 'interventions', element: <InterventionsPage /> },
           { path: 'interventions/:id', element: <InterventionsPage /> },
           { path: 'settings', element: <SettingsPage /> },
@@ -77,10 +92,21 @@ const router = createBrowserRouter([
   },
 ]);
 
+function ThemeBootstrap() {
+  const addSystemThemeListener = useSettingsStore((s) => s.addSystemThemeListener);
+
+  useEffect(() => {
+    const cleanup = addSystemThemeListener();
+    return cleanup;
+  }, [addSystemThemeListener]);
+
+  return <RouterProvider router={router} />;
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ToastProvider>
-      <RouterProvider router={router} />
+      <ThemeBootstrap />
     </ToastProvider>
   </React.StrictMode>,
 );

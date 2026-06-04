@@ -1,5 +1,5 @@
 export const DEFAULT_ONBOARDING_REPO = {
-  url: 'https://github.com/Kalpai-poc/test-website',
+  url: 'https://github.com/Inomy-shop/test-website',
   branch: 'main',
   name: 'test-website',
 };

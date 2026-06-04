@@ -39,7 +39,7 @@ const REPO_KNOWLEDGE_FRESHNESS = process.env.ALLEN_REPO_KNOWLEDGE_FRESHNESS || u
 // /api/chat/* calls so the server can route tools to the correct chat /
 // spawn-execution context. Set by whoever spawned this MCP subprocess:
 //   chat-llm.ts        → ALLEN_CHAT_SESSION_ID for main-chat agents
-//   chat-tools.ts      → same for delegation / spawn subprocesses rooted
+//   chat-tools.ts      → same for spawn subprocesses rooted
 //                        in a chat (omitted for workflow-rooted spawns)
 const SPAWN_CHAT_SESSION_ID = process.env.ALLEN_CHAT_SESSION_ID || undefined;
 
@@ -161,22 +161,22 @@ const TOOLS = [
   { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution (e.g. answer a human node).', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
   { name: 'get_node_trace', description: 'Get detailed trace of a specific node execution: prompt, response, outputs, cost, duration.', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
   { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, or category.', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
-  { name: 'get_node_context_usage', description: 'Get repo-knowledge context packets and usage traces captured for an execution.', params: { execution_id: 'string (required)' } },
+  { name: 'get_node_context_usage', description: 'Get repo context packets and usage traces captured for an execution.', params: { execution_id: 'string (required)' } },
 
   // ── Agents ──
   { name: 'list_agents', description: 'List all agents with minimal info: name, displayName, teamName, type, model, provider. Use get_agent for full details.', params: {} },
-  { name: 'get_agent', description: 'Get full details of a specific agent: system prompt, tools, capabilities, model, provider, canDelegateTo, personality, description.', params: { name: 'string (required) — agent slug' } },
-  { name: 'create_agent', description: 'Create a new agent in a team. Team must exist. The agent slug must be unique system-wide.', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', description: 'string — short description of what the agent does', teamName: 'string (required) — existing team slug', teamRole: 'string (required) — "lead" or "member"', system: 'string (required) — full system prompt', provider: 'string (required) — "claude-cli" or "codex"', model: 'string', tools: 'object — array of tool names', capabilities: 'object — array of capability tags', canDelegateTo: 'object — array of agent names', personality: 'string', icon: 'string', color: 'string' } },
-  { name: 'update_agent', description: 'Update an agent: system prompt, model, provider, tools, capabilities, canDelegateTo, personality, displayName, description.', params: { name: 'string (required)', displayName: 'string', description: 'string', system: 'string', tools: 'object', capabilities: 'object', canDelegateTo: 'object', personality: 'string', model: 'string', provider: 'string' } },
+  { name: 'get_agent', description: 'Get full details of a specific agent: system prompt, tools, capabilities, model, provider, spawnTargets, personality, description.', params: { name: 'string (required) — agent slug' } },
+  { name: 'create_agent', description: 'Create a new agent in a team. Team must exist. The agent slug must be unique system-wide.', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', description: 'string — short description of what the agent does', teamName: 'string (required) — existing team slug', teamRole: 'string (required) — "lead" or "member"', system: 'string (required) — full system prompt', provider: 'string (required) — "claude-cli" or "codex"', model: 'string', tools: 'object — array of tool names', capabilities: 'object — array of capability tags', spawnTargets: 'object — array of agent names this agent can spawn', personality: 'string', icon: 'string', color: 'string' } },
+  { name: 'update_agent', description: 'Update an agent: system prompt, model, provider, tools, capabilities, spawnTargets, personality, displayName, description.', params: { name: 'string (required)', displayName: 'string', description: 'string', system: 'string', tools: 'object', capabilities: 'object', spawnTargets: 'object — array of agent names this agent can spawn', personality: 'string', model: 'string', provider: 'string' } },
   { name: 'delete_agent', description: 'Delete an agent. Refuses built-in agents and team leads. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
   { name: 'move_agent_to_team', description: 'Move one or more agents to a different team. Works for any cross-team move including unassigned → team.', params: { agent_names: 'object — array of agent name strings (required)', team_name: 'string (required) — target team slug' } },
-  { name: 'spawn_agent', description: 'Spawn an agent in the background. Returns immediately with execution_id. Pass session_id to resume a previous session.', params: { agent_name: 'string (required)', prompt: 'string (required)', repo_path: 'string — optional repo path', session_id: 'string — session ID from previous spawn to resume' } },
+  { name: 'spawn_agent', description: 'Spawn an agent in the background. Returns immediately with execution_id. Pass context_query as structured retrieval-only metadata; do not embed context query XML/JSON in prompt.', params: { agent_name: 'string (required)', prompt: 'string (required)', context_query: 'object — optional structured retrieval query, not sent to the agent prompt', repo_path: 'string — optional repo path', session_id: 'string — session ID from previous spawn to resume' } },
 
   // ── Teams ──
   { name: 'list_teams', description: 'List all teams: name, displayName, mission, lead, parent, isBuiltIn.', params: {} },
   { name: 'get_team', description: 'Get a team\'s metadata and member list (names + roles, without system prompts). Use get_team_blueprint for the deep view.', params: { name: 'string (required) — team slug' } },
-  { name: 'get_team_blueprint', description: 'Full team blueprint: metadata, all members WITH system prompts, delegation edges. Use before adding agents.', params: { team_name: 'string (required) — team slug' } },
-  { name: 'list_team_members', description: 'List agents in a team with name, displayName, teamRole, capabilities, tools, canDelegateTo.', params: { team_name: 'string (required) — team slug' } },
+  { name: 'get_team_blueprint', description: 'Full team blueprint: metadata and all members WITH system prompts. Use before adding agents.', params: { team_name: 'string (required) — team slug' } },
+  { name: 'list_team_members', description: 'List agents in a team with name, displayName, teamRole, capabilities, tools, spawnTargets.', params: { team_name: 'string (required) — team slug' } },
   { name: 'create_team', description: 'Create a team. Lead agent must exist first (call create_agent for the lead first).', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', description: 'string', mission: 'string', leadAgentName: 'string (required) — lead agent name', parentTeamName: 'string — optional parent team' } },
   { name: 'update_team', description: 'Update a team\'s displayName, description, mission, or parent. Built-in teams cannot be updated.', params: { name: 'string (required)', displayName: 'string', description: 'string', mission: 'string', parentTeamName: 'string' } },
   { name: 'delete_team', description: 'Delete a team. Refuses if it has members. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
@@ -184,11 +184,14 @@ const TOOLS = [
   // ── Repos ──
   { name: 'list_repos', description: 'List registered repositories with tech stack.', params: {} },
   { name: 'get_repo_context', description: 'Get the deep agent-generated context document for a repo (markdown describing each module).', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree' } },
-  { name: 'get_repo_knowledge_graph', description: 'Get the structured repo knowledge graph for a repo: modules, instruction files, skills, production notes, commands, and relationships.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree' } },
-  { name: 'search_repo_knowledge', description: 'Search the repo knowledge graph for missing or follow-up context refs by query. Use when an investigation discovers a module, file, term, or concept not covered by repo_context_selection; load useful file-backed results with get_repo_context_body/get_repo_skill_body before relying on them.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', query: 'string (required) — module, file, ticket, error, or concept to search for', node_role: 'string — optional workflow node role', current_files: 'string[] — optional repo-relative files currently being inspected', limit: 'number — optional max refs' } },
-  { name: 'get_repo_skill_body', description: 'Load the full body of a repo skill file referenced by the knowledge graph. Use when a repo_knowledge_packet summary makes a skill look useful; summaries are only a relevance filter and must not be the only source for useful skills.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — knowledge graph refId for the skill', skill_path: 'string — repo-relative SKILL.md path alternative to ref_id' } },
-  { name: 'get_repo_context_body', description: 'Load the full body of a repo instruction, context, doc, runbook, production knowledge file, or selected Cognee ref. Use when a repo_knowledge_packet summary makes a ref look useful; summaries are only a relevance filter and must not be the only source for useful context.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — knowledge graph or Cognee refId for the context item', context_path: 'string — repo-relative file path alternative to ref_id' } },
-  { name: 'save_repo_knowledge_graph', description: 'Save a generated repo knowledge graph as a new latest version in Allen DB. Use after repo-knowledge-graph-indexer produces graph JSON directly in chat/agent execution.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', graph_mode: 'string (required) — full_graph or mandatory_context_map', graph: 'object — parsed graph JSON with repoSummary, nodes, edges', graph_json: 'string — graph JSON string alternative to graph' } },
+  { name: 'get_repo_skill_body', description: 'Load the full body of a repo skill file by repo-relative skill_path. Use when selected context points to a useful skill; summaries are only a relevance filter and must not be the only source for useful skills.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — selected provider refId for audit only', skill_path: 'string — repo-relative SKILL.md path' } },
+  { name: 'get_repo_context_body', description: 'Load the full body of a repo instruction, context, doc, runbook, production knowledge file, or selected Cognee ref. Use selected Cognee ref_id or a repo-relative context_path; summaries are only a relevance filter and must not be the only source for useful context.', params: { repo_path: 'string (required) — absolute path of a registered repo or workspace worktree', ref_id: 'string — selected Cognee refId', context_path: 'string — repo-relative file path alternative to ref_id' } },
+  { name: 'prepare_repo_context_curation', description: 'Prepare an idempotent repo-context-curator run. The service inventories context files from the specified branch (or the repo\'s detected default branch), compares hashes with DB, returns only missing/changed/retry files, budgets, and a staging run id.', params: { repo_id: 'string — registered repo id', repo_path: 'string — registered repo path alternative to repo_id', branch: 'string — optional branch name to curate (e.g. "context/knowledge-docs-curation-branch-tfsvp1"); defaults to the repo\'s detected default branch', git_ref: 'string — alias for branch', scope: 'object — optional {mode, pattern, force}; mode can be all/documents/docs or a path hint', force: 'boolean — recurate scoped files even when hashes match' } },
+  { name: 'plan_repo_context_curation_assignments', description: 'Create and register deterministic worker assignment batches for a prepared repo context curation run. Use this before spawning repo-context-curation-worker agents; it avoids huge files_to_curate payloads and returns ready-to-spawn assignments plus a concurrency limit hard-capped at 4.', params: { run_id: 'string (required)', register: 'boolean — default true; registers returned assignments idempotently', include_all: 'boolean — optional; use all expected files instead of current retry files', max_files_per_assignment: 'number — optional batch file cap; default 20', max_bytes_per_assignment: 'number — optional batch byte cap; default 350000', concurrency_limit: 'number — optional visible worker concurrency cap; hard max 4' } },
+  { name: 'register_repo_context_curation_assignments', description: 'Register worker assignments for a prepared repo context curation run before spawning workers. Idempotent by assignment id.', params: { run_id: 'string (required)', assignments: 'array of {assignmentId, workerId, files}' } },
+  { name: 'get_repo_context_curation_stage_status', description: 'Validate staged repo context curation rows and return missing/invalid/retry files. Call after workers finish and before promotion.', params: { run_id: 'string (required)' } },
+  { name: 'promote_repo_context_curation_stage', description: 'Promote a fully validated temporary repo context curation run into final DB collections visible in UI. Fails if any expected file is missing or invalid.', params: { run_id: 'string (required)' } },
+  { name: 'save_repo_mandatory_context_mappings', description: 'Save agent-specific mandatory repo context mappings into Allen DB. Use only from repo-mandatory-context-mapper; this writes always-injected context for exact Allen agent names.', params: { repo_id: 'string (required)', mappings: 'array of {agentName, sourcePath, sourceHash, title, content, reasoning, enabled}' } },
   { name: 'find_repo_for_pr_url', description: 'Given a GitHub PR URL, find the registered Allen repo whose remote matches (owner/repo). Returns null if the repo is not registered.', params: { pr_url: 'string (required) — https://github.com/<owner>/<repo>/pull/<n>' } },
 
   // ── Pull Requests ──
@@ -200,17 +203,12 @@ const TOOLS = [
   { name: 'create_workspace_for_pr', description: 'Create a fresh workspace from a PR branch (Flow B). Used when a PR has no linked workspace. Polls until setup completes. Returns { workspace_id, worktree_path, branch, base_branch }.', params: { pr_url: 'string (required)', repo_id: 'string (required)', branch: 'string (required) — PR head branch', base_branch: 'string (required) — PR base branch', pr_number: 'number (required)', pr_title: 'string — optional display name' } },
   { name: 'create_workspace', description: 'Create an isolated git worktree from a registered repo, on a new branch off the base branch. Use this whenever code changes are needed — every specialist agent you spawn must work inside this worktree. Returns { workspace_id, worktree_path, branch, base_branch }. Engineering-lead orchestrators are the expected caller; never call this from a worker/specialist agent.', params: { repo_path: 'string (required) — absolute path of a registered repo or an existing worktree whose repo will be used as the base', branch_prefix: 'string — short label prepended to the generated branch (e.g. "feature", "fix"). Default: "feature".', task_summary: 'string — one-line intent used inside the generated branch name for human readability', base_branch: 'string — branch to cut from. Defaults to the repo\'s detected default branch (captured at scan time); falls back to "main" only if the repo record has no defaultBranch. Pass this explicitly only when you need to cut from a non-default branch.' } },
 
-  // ── Delegation & Communication ──
-  { name: 'delegate_to_agent', description: 'Delegate a task to another agent. Pass conversation_id to continue an existing thread.', params: { agent_name: 'string (required)', task: 'string (required)', context: 'object — relevant context', conversation_id: 'string — existing conversation ID to continue' } },
-  { name: 'wait_for_delegation', description: 'Wait for a delegated task to finish. Blocks up to 90s. If "waiting" call again. If "question" — answer via answer_delegator then call again.', params: { conversation_id: 'string (required)' } },
-  { name: 'answer_delegator', description: 'Answer a question from an agent you delegated to. Use when wait_for_delegation returns status="question".', params: { conversation_id: 'string (required)', answer: 'string (required)' } },
-  { name: 'ask_delegator', description: 'Ask a question to the agent who delegated this task to you. Blocks until they answer.', params: { question: 'string (required)', conversation_id: 'string — optional, auto-detected from context' } },
+  // ── Communication ──
   { name: 'ask_user', description: 'Ask the user a question directly. Blocks until they answer. Only use when no agent can help.', params: { question: 'string (required)' } },
-  { name: 'report_to_user', description: 'Send a progress update to the user during a delegation chain.', params: { message: 'string (required)', status: 'string — in_progress | completed | needs_input' } },
+  { name: 'report_to_user', description: 'Send a progress update to the user during a long-running chat, workflow, or spawned-agent run.', params: { message: 'string (required)', status: 'string — in_progress | completed | needs_input' } },
 
   // ── Self-introspection ──
   { name: 'get_my_session_history', description: 'Get your own chat session message history. Use to re-read the user\'s original request or see your prior responses.', params: { limit: 'number — max messages (default 30, max 100)' } },
-  { name: 'get_my_delegation_thread', description: 'Get messages in your current delegation thread. Only works for delegated agents.', params: {} },
 
   // ── Chat conversation tracing (arbitrary sessions) ──
   //
@@ -220,12 +218,10 @@ const TOOLS = [
   //   chat_sessions       → provider, model, activeAgent, agentOverrides
   //   chat_messages       → full user/assistant/tool turns + persisted toolCalls
   //   chat_logs           → per-turn trace: provider, model, trace, cost, duration, status
-  //   agent_conversations → agent-to-agent delegation threads spawned from the chat
   { name: 'get_chat_session', description: 'Get chat session metadata for any session id: provider, model, activeAgent, agentOverrides, llmSessionId, userId, createdAt. Use to answer "which provider/model is this chat configured for?".', params: { session_id: 'string (required) — chat_sessions _id' } },
   { name: 'get_chat_messages', description: 'Paginated read of the chat_messages collection for a session. Returns user + assistant turns, including persisted toolCalls on assistant rows. Pass before=<timestamp|id> to page backward.', params: { session_id: 'string (required)', limit: 'number — max messages per page (default 50, max 200)', before: 'string — cursor for older pages' } },
   { name: 'get_chat_logs', description: 'Read the chat_logs collection for a session (full per-turn trace: provider, model, trace, toolCalls, cost, duration, status). Newest-first ordering, then reversed to chronological on return.', params: { session_id: 'string (required)', limit: 'number — max logs (default 50, max 200)' } },
   { name: 'get_chat_log', description: 'Drill into one chat_log row by its Mongo _id. Full trace/toolCalls/prompt, not truncated. Pair with get_chat_logs to locate the id.', params: { log_id: 'string (required) — chat_logs _id' } },
-  { name: 'get_chat_threads', description: 'List agent-to-agent delegation conversations spawned from this chat session. Shows which agents were invoked, their prompts, and statuses.', params: { session_id: 'string (required)' } },
 
   // ── Self-healing monitoring evidence + incident state ──
   { name: 'allen_monitoring_get_scan_cursor', description: 'Read the self-healing monitoring cursor. Use before planning an hourly scan window.', params: { name: 'string — cursor name, default hourly-agent' } },
@@ -243,6 +239,7 @@ const TOOLS = [
   { name: 'save_learning', description: 'Save a learning/correction to memory. Call when user corrects you or states a preference.', params: { content: 'string (required) — generalized rule', type: 'string (required) — fact, pattern, mistake, or preference' } },
   { name: 'get_dashboard_stats', description: 'Get dashboard statistics: workflow count, executions, success rate, agent count.', params: {} },
   { name: 'query_database', description: 'Read-only MongoDB query against any collection (e.g. workflows, executions, agents, repos, learnings, chat_sessions, chat_threads, execution_logs, node_traces, workspaces, teams, …). Pass filter/projection/sort for precise results.', params: { collection: 'string (required)', filter: 'object', projection: 'object', sort: 'object', limit: 'number (max 100, default 20)' } },
+  { name: 'save_repo_context_curation_stage', description: 'Save generated repo context into the temporary staging area for the active repo-context-curator run. Worker agents use this only; it never writes final curation collections.', params: { run_id: 'string (required)', assignment_id: 'string (required)', worker_id: 'string (required)', entries: 'array of generated context entries', file_statuses: 'array with one status per assigned file' } },
 
   // ── File upload ──
   { name: 'upload_file', description: 'Upload a file to Allen storage. Returns a permanent public URL.', params: { content: 'string (required) — file content', filename: 'string (required) — e.g. "report.md"', mime_type: 'string — MIME type (default: text/plain)' } },
@@ -462,37 +459,13 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       }
       return res.json();
     }
-    case 'get_repo_knowledge_graph': {
-      const path = String(args.repo_path ?? '');
-      if (!path) return { error: 'repo_path is required' };
-      const url = `${API_BASE}/api/repos/knowledge-graph?path=${encodeURIComponent(path)}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        if (res.status === 404) return { error: `No knowledge graph found for path: ${path}. Either the repo is not registered or its first graph index has not completed yet.` };
-        return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
-      }
-      return res.json();
-    }
-    case 'search_repo_knowledge': {
-      const path = String(args.repo_path ?? '');
-      const query = String(args.query ?? '');
-      if (!path) return { error: 'repo_path is required' };
-      if (!query.trim()) return { error: 'query is required' };
-      const params = new URLSearchParams({ path, query });
-      if (args.node_role) params.set('nodeRole', String(args.node_role));
-      if (Array.isArray(args.current_files)) params.set('currentFiles', args.current_files.map(String).join(','));
-      if (args.limit) params.set('limit', String(args.limit));
-      const res = await fetch(`${API_BASE}/api/repos/search-knowledge?${params.toString()}`);
-      if (!res.ok) return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
-      return res.json();
-    }
     case 'get_repo_skill_body': {
       const path = String(args.repo_path ?? '');
       if (!path) return { error: 'repo_path is required' };
       const params = new URLSearchParams({ path });
       if (args.ref_id) params.set('refId', String(args.ref_id));
       if (args.skill_path) params.set('skillPath', String(args.skill_path));
-      if (!params.has('refId') && !params.has('skillPath')) return { error: 'ref_id or skill_path is required' };
+      if (!params.has('skillPath')) return { error: 'skill_path is required' };
       const res = await fetch(`${API_BASE}/api/repos/skill-body?${params.toString()}`);
       if (!res.ok) return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
       return res.json();
@@ -508,19 +481,72 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       if (!res.ok) return { error: `API ${res.status}: ${await res.text().catch(() => 'unknown')}` };
       return res.json();
     }
-    case 'save_repo_knowledge_graph': {
-      const path = String(args.repo_path ?? '');
-      if (!path) return { error: 'repo_path is required' };
-      const graphMode = String(args.graph_mode ?? '');
-      if (graphMode !== 'full_graph' && graphMode !== 'mandatory_context_map') return { error: 'graph_mode is required and must be full_graph or mandatory_context_map' };
-      const graph = args.graph as Record<string, unknown> | undefined;
-      const graphJson = typeof args.graph_json === 'string' ? args.graph_json : undefined;
-      if (!graph && !graphJson) return { error: 'graph or graph_json is required' };
-      return callAPI(`/api/repos/knowledge-graph?path=${encodeURIComponent(path)}`, 'POST', {
-        graph,
-        graph_mode: graphMode,
-        graph_json: graphJson,
-        source_execution_id: SPAWN_ROOT_EXECUTION_ID || SPAWN_PARENT_EXECUTION_ID,
+    case 'prepare_repo_context_curation': {
+      const repoId = String(args.repo_id ?? args.repoId ?? '');
+      const repoPath = String(args.repo_path ?? args.repoPath ?? '');
+      if (!repoId && !repoPath) return { error: 'repo_id or repo_path is required' };
+      const scope = args.scope && typeof args.scope === 'object' ? args.scope as Record<string, unknown> : {};
+      const branch = typeof args.branch === 'string' && args.branch.trim() ? args.branch.trim() : undefined;
+      const gitRef = typeof args.git_ref === 'string' && args.git_ref.trim() ? args.git_ref.trim() : undefined;
+      return callAPI('/api/repos/context-curation/prepare', 'POST', {
+        repo_id: repoId || undefined,
+        repo_path: repoPath || undefined,
+        branch: branch ?? gitRef,
+        scope: { ...scope, force: args.force === true || scope.force === true },
+        source_execution_id: SPAWN_PARENT_EXECUTION_ID || SPAWN_ROOT_EXECUTION_ID,
+        source_agent: SPAWN_PARENT_CALLER,
+      });
+    }
+    case 'register_repo_context_curation_assignments': {
+      const runId = String(args.run_id ?? args.runId ?? '');
+      if (!runId) return { error: 'run_id is required' };
+      return callAPI('/api/repos/context-curation/assignments', 'POST', {
+        run_id: runId,
+        assignments: Array.isArray(args.assignments) ? args.assignments : [],
+      });
+    }
+    case 'plan_repo_context_curation_assignments': {
+      const runId = String(args.run_id ?? args.runId ?? '');
+      if (!runId) return { error: 'run_id is required' };
+      return callAPI('/api/repos/context-curation/assignment-plan', 'POST', {
+        run_id: runId,
+        register: args.register !== false,
+        max_files_per_assignment: args.max_files_per_assignment ?? args.maxFilesPerAssignment,
+        max_bytes_per_assignment: args.max_bytes_per_assignment ?? args.maxBytesPerAssignment,
+        large_file_bytes: args.large_file_bytes ?? args.largeFileBytes,
+        concurrency_limit: args.concurrency_limit ?? args.concurrencyLimit,
+        include_all: args.include_all === true || args.includeAll === true,
+      });
+    }
+    case 'get_repo_context_curation_stage_status': {
+      const runId = String(args.run_id ?? args.runId ?? '');
+      if (!runId) return { error: 'run_id is required' };
+      return callAPI('/api/repos/context-curation/stage-status', 'POST', { run_id: runId });
+    }
+    case 'promote_repo_context_curation_stage': {
+      const runId = String(args.run_id ?? args.runId ?? '');
+      if (!runId) return { error: 'run_id is required' };
+      return callAPI('/api/repos/context-curation/promote', 'POST', { run_id: runId });
+    }
+    case 'save_repo_context_curation_stage': {
+      const runId = String(args.run_id ?? args.runId ?? '');
+      const assignmentId = String(args.assignment_id ?? args.assignmentId ?? '');
+      const workerId = String(args.worker_id ?? args.workerId ?? '');
+      if (!runId || !assignmentId || !workerId) return { error: 'run_id, assignment_id, and worker_id are required' };
+      return callAPI('/api/repos/context-curation/stage', 'POST', {
+        run_id: runId,
+        assignment_id: assignmentId,
+        worker_id: workerId,
+        entries: Array.isArray(args.entries) ? args.entries : [],
+        file_statuses: Array.isArray(args.file_statuses) ? args.file_statuses : Array.isArray(args.fileStatuses) ? args.fileStatuses : [],
+      });
+    }
+    case 'save_repo_mandatory_context_mappings': {
+      const repoId = String(args.repo_id ?? args.repoId ?? '');
+      if (!repoId) return { error: 'repo_id is required' };
+      return callAPI('/api/repos/mandatory-context', 'POST', {
+        repo_id: repoId,
+        mappings: Array.isArray(args.mappings) ? args.mappings : [],
       });
     }
     case 'get_node_context_usage': {
@@ -805,6 +831,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         body: JSON.stringify({
           agent_name: args.agent_name,
           prompt: args.prompt,
+          context_query: args.context_query,
           repo_path: args.repo_path,
           session_id: args.session_id,
           // Spawn-tree linkage — lets the execution row carry its caller
@@ -886,13 +913,6 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       if (!res.ok) return { error: `chat_log ${lid} not found (${res.status})` };
       return res.json();
     }
-    case 'get_chat_threads': {
-      const sid = args.session_id as string | undefined;
-      if (!sid) return { error: 'session_id is required' };
-      const res = await fetch(`${API_BASE}/api/chat/sessions/${encodeURIComponent(sid)}/threads`);
-      if (!res.ok) return { error: `chat_threads lookup failed (${res.status})` };
-      return res.json();
-    }
     case 'search_executions': {
       const params = new URLSearchParams();
       if (args.status) params.set('status', String(args.status));
@@ -916,61 +936,6 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
           confidence: 0.9,
           status: 'active',
         }),
-      });
-      return res.json();
-    }
-    case 'delegate_to_agent': {
-      const url = `${API_BASE}/api/chat/delegate`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_name: args.agent_name, task: args.task, context: args.context, conversation_id: args.conversation_id }),
-      });
-      return res.json();
-    }
-    case 'wait_for_delegation': {
-      // Chunked long-poll: wait up to 90s (under MCP's 120s transport timeout), then return
-      // If still active, return { status: "waiting" } so the LLM calls again
-      const convId = args.conversation_id;
-      let waitMs = 5000;
-      const maxWait = 30_000;
-      const chunkDeadline = Date.now() + 90_000; // 90s max per call
-      while (Date.now() < chunkDeadline) {
-        const res = await fetch(`${API_BASE}/api/chat/delegation/${convId}/status`);
-        const data = await res.json() as Record<string, unknown>;
-        // Return immediately for anything except 'active' (completed, failed, waiting_for_answer)
-        if (data.status !== 'active') {
-          // Map waiting_for_answer to 'question' for the LLM
-          if (data.status === 'waiting_for_answer') data.status = 'question';
-          return data;
-        }
-        process.stderr.write(`[mcp] waiting for delegation ${convId} (${Math.round(waitMs / 1000)}s interval)\n`);
-        await new Promise(r => setTimeout(r, waitMs));
-        waitMs = Math.min(waitMs * 1.3, maxWait);
-      }
-      // Return "waiting" so the LLM calls wait_for_delegation again
-      return {
-        conversation_id: convId,
-        status: 'waiting',
-        message: 'Agent is still working. Call wait_for_delegation again — it will continue waiting.',
-      };
-    }
-    case 'answer_delegator': {
-      const url = `${API_BASE}/api/chat/delegate`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tool: 'answer_delegator', conversation_id: args.conversation_id, answer: args.answer }),
-      });
-      return res.json();
-    }
-    case 'ask_delegator': {
-      // Blocks server-side until the caller answers
-      const url = `${API_BASE}/api/chat/ask-caller`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversation_id: args.conversation_id, question: args.question }),
       });
       return res.json();
     }

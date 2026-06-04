@@ -1,18 +1,18 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bot, AlertCircle, AlertTriangle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
   Sparkles, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
   ChevronDown, ChevronRight, GitPullRequest, FolderGit2, FileText, PlayCircle, StopCircle, Timer,
   Send, Bookmark, Download, X,
 } from 'lucide-react';
-import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentThread as AgentThreadType, AgentReport, SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
-import { AgentThread } from './AgentThread';
+import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentReport, SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
 import MermaidChatBlock from './MermaidChatBlock';
 import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { WorkflowInterventionAction } from '../execution/WorkflowInterventionAction';
+import { sanitizeChatAssistantResponse } from '../../lib/chat-response-sanitize';
 
 const ChatExecutionsPanel = React.lazy(() =>
   import('./ChatRunSidebar').then(module => ({ default: module.ExecutionsPanel })),
@@ -29,10 +29,7 @@ interface ChatMessageListProps {
   thinkingText?: string;
   streaming: boolean;
   activeToolCalls?: ActiveToolCall[];
-  agentThreads?: AgentThreadType[];
   agentReports?: AgentReport[];
-  /** Persisted threads keyed by parentMessageId — loaded from DB for historical viewing */
-  threadsByMessage?: Record<string, AgentThreadType[]>;
   /** Pending question from an agent to the user */
   pendingUserQuestion?: { question: string; fromAgent: string } | null;
   onAnswerUserQuestion?: (answer: string) => void;
@@ -76,8 +73,11 @@ type ChatDiffFile = {
   additions?: number;
   deletions?: number;
   diff?: string;
+  originalContent?: string;
   modifiedContent?: string;
   workspaceName?: string | null;
+  sourceType?: 'workspace' | 'pull-request';
+  sourceId?: string;
   key?: string;
 };
 
@@ -91,6 +91,19 @@ function diffLineCounts(diff?: string): { additions: number; deletions: number }
   }, { additions: 0, deletions: 0 });
 }
 
+function hasChangedDiffMetadata(file: ChatDiffFile): boolean {
+  return Boolean(file.path) && (
+    Number(file.additions ?? 0) > 0 ||
+    Number(file.deletions ?? 0) > 0 ||
+    Boolean(file.status) ||
+    Boolean(file.diff?.trim() || file.modifiedContent?.trim())
+  );
+}
+
+function hasDiffContent(file: ChatDiffFile): boolean {
+  return Boolean(file.diff?.trim() || file.originalContent?.trim() || file.modifiedContent?.trim());
+}
+
 type ChatDiffBundle = {
   workspaceId: string;
   workspaceName?: string | null;
@@ -102,6 +115,10 @@ type ChatDiffSnapshot = {
   workspaceName?: string | null;
   files?: ChatDiffFile[];
 };
+
+type ChatTimelineItem =
+  | { type: 'message'; key: string; message: ChatMessage; index: number; timeMs: number }
+  | { type: 'message-part'; key: string; message: ChatMessage; index: number; part: 'thinking' | 'response'; timeMs: number };
 
 /* ── Copy button for code blocks ─────────────────────────────────────────── */
 function CopyButton({ text }: { text: string }) {
@@ -218,6 +235,54 @@ function formatTimestampTitle(dateStr?: string): string {
   });
 }
 
+function timestampMs(value?: string | number | Date | null): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number') {
+    const ms = value < 1_000_000_000_000 ? value * 1000 : value;
+    return Number.isFinite(ms) ? ms : null;
+  }
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function buildChatTimeline(messages: ChatMessage[]): ChatTimelineItem[] {
+  const timeline: ChatTimelineItem[] = [];
+
+  messages.forEach((message, index) => {
+    const messageTime = timestampMs(message.createdAt) ?? index;
+    const shouldSplit = message.role === 'assistant' && Boolean(message.thinkingText) && Boolean(message.content || message.error);
+    if (!shouldSplit) {
+      timeline.push({
+        type: 'message',
+        key: `message:${message._id ?? index}`,
+        message,
+        index,
+        timeMs: messageTime,
+      });
+      return;
+    }
+
+    timeline.push({
+      type: 'message-part',
+      key: `message:${message._id ?? index}:thinking`,
+      message,
+      index,
+      part: 'thinking',
+      timeMs: messageTime,
+    });
+    timeline.push({
+      type: 'message-part',
+      key: `message:${message._id ?? index}:response`,
+      message,
+      index,
+      part: 'response',
+      timeMs: messageTime + 1,
+    });
+  });
+
+  return timeline;
+}
+
 function formatClock(dateStr?: string | null): string {
   if (!dateStr) return '—';
   const d = new Date(dateStr);
@@ -289,7 +354,7 @@ function parseDiffSummary(code: string) {
 }
 
 function diffText(file: ChatDiffFile): string {
-  return file.diff?.trim() || file.modifiedContent?.trim() || 'No diff available.';
+  return file.diff?.trim() || file.modifiedContent?.trim() || 'Loading diff...';
 }
 
 function diffLineClass(line: string): 'add' | 'del' | 'hunk' | 'meta' | 'ctx' {
@@ -363,14 +428,26 @@ function ChatCodeDiffCard({
   state?: React.ReactNode;
   onOpenAllFiles?: () => void;
 }) {
-  const normalized = files.map((file, index) => ({
-    ...file,
-    key: file.key ?? `${file.workspaceName ?? 'diff'}:${file.path}:${index}`,
-    additions: file.additions ?? 0,
-    deletions: file.deletions ?? 0,
-    status: file.status ?? ((file as ChatDiffFile & { isNew?: boolean }).isNew ? 'added' : 'modified'),
-  }));
-  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
+  const [hydratedByKey, setHydratedByKey] = useState<Record<string, ChatDiffFile>>({});
+  const [loadingKeys, setLoadingKeys] = useState<Set<string>>(() => new Set());
+  const loadingKeysRef = useRef<Set<string>>(new Set());
+  const normalized = files.map((file, index) => {
+    const key = file.key ?? `${file.sourceType ?? 'diff'}:${file.sourceId ?? file.workspaceName ?? 'diff'}:${file.path}:${index}`;
+    const hydrated = hydratedByKey[key];
+    return {
+      ...file,
+      ...hydrated,
+      key,
+      additions: hydrated?.additions ?? file.additions ?? 0,
+      deletions: hydrated?.deletions ?? file.deletions ?? 0,
+      status: hydrated?.status ?? file.status ?? ((file as ChatDiffFile & { isNew?: boolean }).isNew ? 'added' : 'modified'),
+      sourceType: hydrated?.sourceType ?? file.sourceType,
+      sourceId: hydrated?.sourceId ?? file.sourceId,
+    };
+  });
+  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(
+    () => new Set(normalized[0]?.key ? [normalized[0].key] : []),
+  );
   const totalAdditions = normalized.reduce((sum, file) => sum + (file.additions ?? 0), 0);
   const totalDeletions = normalized.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
 
@@ -383,16 +460,76 @@ function ChatCodeDiffCard({
     });
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    const missing = normalized.filter(file =>
+      expandedFiles.has(file.key) &&
+      !hasDiffContent(file) &&
+      file.sourceType &&
+      file.sourceId &&
+      !loadingKeysRef.current.has(file.key)
+    );
+    if (missing.length === 0) return;
+
+    for (const file of missing) {
+      loadingKeysRef.current.add(file.key);
+      setLoadingKeys(prev => new Set(prev).add(file.key));
+      const request = file.sourceType === 'pull-request'
+        ? pullRequestsApi.getDiffFile(file.sourceId!, file.path)
+        : workspacesApi.getDiffFile(file.sourceId!, file.path, { mode: 'workspace', anchor: 'creation' });
+      request
+        .then(hydrated => {
+          if (cancelled) return;
+          setHydratedByKey(prev => ({
+            ...prev,
+            [file.key]: {
+              ...file,
+              ...hydrated,
+              sourceType: file.sourceType,
+              sourceId: file.sourceId,
+              workspaceName: file.workspaceName,
+            },
+          }));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setHydratedByKey(prev => ({
+            ...prev,
+            [file.key]: {
+              ...file,
+              diff: 'Failed to load diff content.',
+            },
+          }));
+        })
+        .finally(() => {
+          loadingKeysRef.current.delete(file.key);
+          if (cancelled) return;
+          setLoadingKeys(prev => {
+            const next = new Set(prev);
+            next.delete(file.key);
+            return next;
+          });
+        });
+    }
+
+    return () => { cancelled = true; };
+  }, [
+    expandedFiles,
+    normalized.map(file => `${file.key}:${file.sourceType ?? ''}:${file.sourceId ?? ''}:${hasDiffContent(file) ? '1' : '0'}`).join('|'),
+  ]);
+
   if (normalized.length === 0) return null;
 
   return (
     <div className="ch-card code-card">
       <div className="ch-card-h">
-        <span className="cc-tag impl">code diff</span>
-        <span className="cc-title">{title}</span>
+        <span className="cc-title">
+          <FileText className="cc-title-icon" />
+          <span>{title}</span>
+        </span>
         <span className="cc-pct">
-          <span className="cf-p">+{totalAdditions}</span>
-          <span className="cf-m">-{totalDeletions}</span>
+          <span className="text-accent-green">+{totalAdditions}</span>
+          <span className="text-accent-red">-{totalDeletions}</span>
           {state && <span className="chat-diff-status">{state}</span>}
           {onOpenAllFiles && (
             <button type="button" className="cc-icon-action" onClick={onOpenAllFiles} title="Show all modified files">
@@ -410,6 +547,7 @@ function ChatCodeDiffCard({
               <div key={key} className="cc-file-wrap">
                 <button type="button" className="cc-file cc-file-btn" onClick={() => toggle(key)}>
                   {expanded ? <ChevronDown className="cf-chevron" /> : <ChevronRight className="cf-chevron" />}
+                  <FileText className="cf-file-icon" />
                   <span className="cf-n">{file.path}</span>
                   {(file.status === 'added' || file.status === 'untracked') && <span className="cf-new">new</span>}
                   {file.workspaceName && <span className="cf-ws">{file.workspaceName}</span>}
@@ -418,15 +556,21 @@ function ChatCodeDiffCard({
                 </button>
                 {expanded && (
                   <div className="cc-file-diff">
-                    <DiffCodeView text={diffText(file)} />
+                    {loadingKeys.has(key) && !hasDiffContent(file) ? (
+                      <div className="chat-diff-code">
+                        <div className="chat-diff-line meta">
+                          <span className="ln">1</span>
+                          <code>Loading diff...</code>
+                        </div>
+                      </div>
+                    ) : (
+                      <DiffCodeView text={diffText(file)} />
+                    )}
                   </div>
                 )}
               </div>
             );
           })}
-          <div className="cc-file muted">
-            <span className="cf-n">{normalized.length} file{normalized.length === 1 ? '' : 's'} · {totalAdditions} additions / {totalDeletions} deletions</span>
-          </div>
         </div>
       </div>
     </div>
@@ -963,14 +1107,17 @@ const TOOL_LABELS: Record<string, { label: string; color: string }> = {
   list_executions: { label: 'List Executions', color: 'text-accent-blue' },
   cancel_execution: { label: 'Cancel Execution', color: 'text-accent-red' },
   list_repos: { label: 'List Repos', color: 'text-accent-blue' },
+  prepare_repo_context_curation: { label: 'Prepare Curation', color: 'text-accent-blue' },
+  plan_repo_context_curation_assignments: { label: 'Plan Curation Workers', color: 'text-accent-purple' },
+  register_repo_context_curation_assignments: { label: 'Register Curation', color: 'text-accent-purple' },
+  get_repo_context_curation_stage_status: { label: 'Curation Status', color: 'text-accent-blue' },
+  promote_repo_context_curation_stage: { label: 'Promote Curation', color: 'text-accent-green' },
+  save_repo_context_curation_stage: { label: 'Save Curation Stage', color: 'text-accent-green' },
+  save_repo_mandatory_context_mappings: { label: 'Save Mandatory Context', color: 'text-accent-green' },
   list_agents: { label: 'List Agents', color: 'text-accent-purple' },
   get_agent: { label: 'Get Agent', color: 'text-accent-purple' },
   spawn_agent: { label: 'Spawn Agent', color: 'text-accent-purple' },
   move_agent_to_team: { label: 'Move Agent', color: 'text-accent-purple' },
-  delegate_to_agent: { label: 'Delegate', color: 'text-accent-cyan' },
-  wait_for_delegation: { label: 'Wait for Delegation', color: 'text-accent-cyan' },
-  answer_delegator: { label: 'Answer Delegator', color: 'text-accent-cyan' },
-  ask_delegator: { label: 'Ask Delegator', color: 'text-accent-cyan' },
   report_to_user: { label: 'Progress Update', color: 'text-accent-green' },
   search_learnings: { label: 'Search Learnings', color: 'text-accent-yellow' },
   // Advanced queries
@@ -1026,7 +1173,7 @@ function argsSummary(args?: Record<string, unknown>): string {
 function resultSummary(result?: Record<string, unknown>): string {
   if (!result) return '';
   if (result.error) return `Error: ${compactValue(result.error)}`;
-  const preferred = ['message', 'summary', 'status', 'title', 'name', 'execution_id', 'conversation_id'];
+  const preferred = ['message', 'summary', 'status', 'title', 'name', 'execution_id'];
   for (const key of preferred) {
     if (result[key] !== undefined) return `${key.replace(/_/g, ' ')}: ${compactValue(result[key])}`;
   }
@@ -1043,74 +1190,72 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
   const isRunning = active && (call as ActiveToolCall).status === 'running';
   const [expanded, setExpanded] = useState(false);
   const label = humanizeToolName(call.tool);
-  const color = toolColor(call.tool);
   const result = 'result' in call ? call.result : undefined;
   const duration = 'durationMs' in call ? call.durationMs : undefined;
   const hasArgs = call.args && Object.keys(call.args).length > 0;
   const inputSummary = argsSummary(call.args);
   const outputSummary = resultSummary(result);
   const providerPrefix = call.tool.includes('__') ? call.tool.split('__').slice(0, -1).join(' / ').replace(/^mcp \/ /, '') : '';
-
-  // Check if result has an execution_id (for link to execution page)
   const executionId = result?.execution_id as string | undefined;
+  const hasError = Boolean(result?.error);
+  const state = isRunning ? 'running' : hasError ? 'error' : 'complete';
+  const summary = inputSummary || outputSummary || (isRunning ? 'Running...' : providerPrefix || call.tool);
 
   return (
-    <div className="relative">
+    <div className="chat-tool-row" data-state={state}>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="group/tool grid w-full grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 rounded-sm px-1 py-1.5 text-left transition-colors hover:bg-app-muted/35"
+        className="chat-tool-row-button"
         title={expanded ? 'Collapse tool result' : 'Expand tool result'}
       >
-        {isRunning ? (
-          <Loader2 className={`h-3.5 w-3.5 ${color} animate-spin`} />
-        ) : result?.error ? (
-          <AlertCircle className="h-3.5 w-3.5 text-accent-red" />
-        ) : (
-          <CheckCircle className="h-3.5 w-3.5 text-accent-green/70" />
-        )}
-        <Wrench className={`h-3 w-3 ${color}`} />
-        <span className="min-w-0">
-          <span className={`block text-[12px] font-medium leading-4 ${color}`}>{label}</span>
-          <span className="block truncate text-[11px] leading-4 text-theme-subtle">
-            {inputSummary || outputSummary || (isRunning ? 'Running...' : providerPrefix || call.tool)}
-          </span>
-        </span>
-
-        <span className="flex items-center gap-2 justify-end">
-          {providerPrefix && <span className="hidden sm:inline text-[10px] text-theme-subtle">{providerPrefix}</span>}
-          {duration != null && (
-            <span className="text-[10px] text-theme-subtle font-mono">{formatDuration(duration)}</span>
+        <span className="chat-tool-row-status" aria-hidden="true">
+          {isRunning ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : hasError ? (
+            <AlertCircle className="h-3.5 w-3.5" />
+          ) : (
+            <CheckCircle className="h-3.5 w-3.5" />
           )}
+        </span>
+        <span className="chat-tool-row-main">
+          <span className="chat-tool-row-title">
+            <span>{label}</span>
+          </span>
+          <span className="chat-tool-row-summary">{summary}</span>
+        </span>
+        <span className="chat-tool-row-meta">
+          {providerPrefix && <span>{providerPrefix}</span>}
+          {duration != null && <span>{formatDuration(duration)}</span>}
           {executionId && (
             <a
               href={`/executions/${executionId}`}
               onClick={e => e.stopPropagation()}
-              className="text-accent-blue hover:text-accent-blue/80 transition-colors"
+              className="chat-tool-row-link"
               title="View execution"
             >
-              <ExternalLink className="w-3 h-3" />
+              <ExternalLink className="h-3.5 w-3.5" />
             </a>
           )}
-          {expanded ? <ChevronDown className="h-3 w-3 text-theme-subtle" /> : <ChevronRight className="h-3 w-3 text-theme-subtle" />}
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </span>
       </button>
 
       {expanded && (
-        <div className="ml-6 mt-1 max-h-72 overflow-auto border-l border-border/10 pl-3 text-[11px] text-theme-secondary">
+        <div className="chat-tool-row-details">
           {hasArgs && (
-            <div className="mb-2">
-              <div className="mb-1 text-[10px] uppercase tracking-wide text-theme-subtle">Input</div>
-              <pre className="whitespace-pre-wrap font-mono leading-relaxed text-theme-secondary">{prettyJson(call.args)}</pre>
+            <div className="chat-tool-json-block">
+              <div className="chat-tool-json-label">Input</div>
+              <pre>{prettyJson(call.args)}</pre>
             </div>
           )}
           {result && (
-            <div>
-              <div className="mb-1 text-[10px] uppercase tracking-wide text-theme-subtle">Output</div>
-              <pre className="whitespace-pre-wrap font-mono leading-relaxed text-theme-secondary">{prettyJson(result)}</pre>
+            <div className="chat-tool-json-block">
+              <div className="chat-tool-json-label">Output</div>
+              <pre>{prettyJson(result)}</pre>
             </div>
           )}
           {!hasArgs && !result && (
-            <div className="text-[11px] text-theme-subtle">Waiting for tool input/output details...</div>
+            <div className="chat-tool-empty-detail">Waiting for tool input/output details...</div>
           )}
         </div>
       )}
@@ -1132,11 +1277,9 @@ function ToolCallLine({ call, count, active }: { call: ToolCallRecord | ActiveTo
   const duration = 'durationMs' in call ? call.durationMs : undefined;
   const executionId = result?.execution_id as string | undefined;
   const hasError = Boolean(result?.error);
-  const Icon = isRunning ? Loader2 : hasError ? AlertCircle : Wrench;
 
   return (
     <div className={`chat-tool-latest-line ${isRunning ? 'running' : ''} ${hasError ? 'error' : ''}`}>
-      <Icon className={`h-3.5 w-3.5 shrink-0 ${isRunning ? 'animate-spin text-accent-blue' : hasError ? 'text-accent-red' : 'text-theme-subtle'}`} />
       <span className="chat-tool-count">{count} tool call{count === 1 ? '' : 's'}</span>
       <span className="chat-tool-text">{toolCallLineText(call)}</span>
       {duration != null && <span className="chat-tool-duration">{formatDuration(duration)}</span>}
@@ -1150,31 +1293,28 @@ function ToolCallLine({ call, count, active }: { call: ToolCallRecord | ActiveTo
 }
 
 /**
- * Completed message: threads shown inline, tool calls reduced to latest activity.
+ * Completed message: tool calls reduced to latest activity.
  */
-function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord[]; threads?: AgentThreadType[]; agentMap?: Record<string, { displayName?: string; icon?: string; color?: string }> }) {
+function ToolCallsSection({ calls }: { calls?: ToolCallRecord[] }) {
   const [showTools, setShowTools] = useState(false);
   if (!calls || calls.length === 0) return null;
 
-  // Build thread tree from flat list, then show only root-level threads
-  const rootThreads = threads ? buildThreadTree(threads) : [];
   const latestCall = calls[calls.length - 1];
 
   return (
     <div className="mt-3 space-y-2">
-      {/* Threads — nested tree, primary content */}
-      {rootThreads.map(thread => (
-        <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
-      ))}
-
       {latestCall && (
-        <button type="button" className="chat-tool-disclosure" onClick={() => setShowTools(value => !value)}>
+        <button type="button" className="chat-tool-disclosure" data-expanded={showTools} onClick={() => setShowTools(value => !value)}>
           {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           <ToolCallLine call={latestCall} count={calls.length} />
         </button>
       )}
       {showTools && (
         <div className="chat-tool-history">
+          <div className="chat-tool-history-head">
+            <span>Tool calls</span>
+            <span>{calls.length}</span>
+          </div>
           {calls.map((call, i) => <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} />)}
         </div>
       )}
@@ -1183,31 +1323,29 @@ function ToolCallsSection({ calls, threads, agentMap }: { calls?: ToolCallRecord
 }
 
 /**
- * Streaming: threads + running indicator.
+ * Streaming: running tool indicator.
  */
-function ActiveToolCallsSection({ calls, liveThreads, agentMap }: { calls: ActiveToolCall[]; liveThreads?: AgentThreadType[]; agentMap?: Record<string, { displayName?: string; icon?: string; color?: string }> }) {
+function ActiveToolCallsSection({ calls }: { calls: ActiveToolCall[] }) {
   const [showTools, setShowTools] = useState(false);
-  if (calls.length === 0 && (!liveThreads || liveThreads.length === 0)) return null;
+  if (calls.length === 0) return null;
 
-  const rootThreads = buildThreadTree(liveThreads ?? []);
   const runningTool = [...calls].reverse().find(c => (c as ActiveToolCall).status === 'running');
   const latestCall = runningTool ?? calls[calls.length - 1];
 
   return (
     <div className="mt-3 space-y-2">
-      {/* Live threads */}
-      {rootThreads.map(thread => (
-        <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
-      ))}
-
       {latestCall && (
-        <button type="button" className="chat-tool-disclosure" onClick={() => setShowTools(value => !value)}>
+        <button type="button" className="chat-tool-disclosure" data-expanded={showTools} onClick={() => setShowTools(value => !value)}>
           {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           <ToolCallLine call={latestCall} count={calls.length} active />
         </button>
       )}
       {showTools && (
         <div className="chat-tool-history">
+          <div className="chat-tool-history-head">
+            <span>Tool calls</span>
+            <span>{calls.length}</span>
+          </div>
           {calls.map((call, i) => (
             <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} active />
           ))}
@@ -1268,11 +1406,21 @@ function ChatCodeDiffPreview({
     const uniqueRefs = workspaceRefs.filter((ref, index, arr) => arr.findIndex(item => item.id === ref.id) === index);
     const uniquePrRefs = pullRequestRefs.filter((ref, index, arr) => arr.findIndex(item => item.id === ref.id) === index);
     const snapshotBundles = (snapshots: ChatDiffSnapshot[]): ChatDiffBundle[] => snapshots
-      .map(snapshot => ({
-        workspaceId: snapshot.workspaceId,
-        workspaceName: snapshot.workspaceName,
-        files: ((snapshot.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim()),
-      }))
+      .map(snapshot => {
+        const sourceId = String(snapshot.workspaceId ?? '');
+        const isPrSnapshot = sourceId.startsWith('pr:');
+        return {
+          workspaceId: snapshot.workspaceId,
+          workspaceName: snapshot.workspaceName,
+          files: ((snapshot.files ?? []) as ChatDiffFile[])
+            .filter(hasChangedDiffMetadata)
+            .map(file => ({
+              ...file,
+              sourceType: isPrSnapshot ? 'pull-request' as const : 'workspace' as const,
+              sourceId: isPrSnapshot ? sourceId.slice(3) : sourceId,
+            })),
+        };
+      })
       .filter(bundle => bundle.files.length > 0);
     setLoading(true);
     (async () => {
@@ -1287,7 +1435,9 @@ function ChatCodeDiffPreview({
       const live = await Promise.all(uniqueRefs.map(async (ref) => {
         try {
           const result = await workspacesApi.getDiff(ref.id, { mode: 'workspace', anchor: 'creation' });
-          const files = ((result.files ?? []) as ChatDiffFile[]).filter(file => file.diff?.trim() || file.modifiedContent?.trim());
+          const files = ((result.files ?? []) as ChatDiffFile[])
+            .filter(hasChangedDiffMetadata)
+            .map(file => ({ ...file, sourceType: 'workspace' as const, sourceId: ref.id }));
           return { workspaceId: ref.id, workspaceName: ref.name, files };
         } catch {
           return { workspaceId: ref.id, workspaceName: ref.name, files: [] };
@@ -1314,14 +1464,16 @@ function ChatCodeDiffPreview({
         try {
           const result = await pullRequestsApi.getDiff(ref.id);
           const files = ((result.files ?? []) as Array<{ path: string; diff?: string; originalContent?: string; modifiedContent?: string }>)
-            .filter(file => file.diff?.trim() || file.modifiedContent?.trim())
+            .filter(file => hasChangedDiffMetadata(file as ChatDiffFile))
             .map(file => {
               const counts = diffLineCounts(file.diff);
               return {
                 ...file,
-                status: file.diff?.includes('new file mode') ? 'added' : file.diff?.includes('deleted file mode') ? 'deleted' : 'modified',
-                additions: counts.additions,
-                deletions: counts.deletions,
+                status: (file as any).status ?? (file.diff?.includes('new file mode') ? 'added' : file.diff?.includes('deleted file mode') ? 'deleted' : 'modified'),
+                additions: (file as any).additions ?? counts.additions,
+                deletions: (file as any).deletions ?? counts.deletions,
+                sourceType: 'pull-request' as const,
+                sourceId: ref.id,
               } as ChatDiffFile;
             });
           return { workspaceId: `pr:${ref.id}`, workspaceName: ref.name, files };
@@ -1372,7 +1524,7 @@ function ChatCodeDiffPreview({
           <ChatCodeDiffCard
             files={visibleFiles}
             title={`${totalFiles} file${totalFiles === 1 ? '' : 's'} modified`}
-            state={allTerminal ? 'completed' : <><span className="dot pulse accent" /> live</>}
+            state={allTerminal ? undefined : <><span className="dot pulse accent" /> live</>}
             onOpenAllFiles={onOpenAllFiles}
           />
         )}
@@ -1427,23 +1579,6 @@ function ChatPullRequestCards({ runs }: { runs: SpawnedAgent[] }) {
 /* ── Main component ──────────────────────────────────────────────────────── */
 
 /** Build a tree from a flat thread list using parentConversationId */
-function buildThreadTree(threads: AgentThreadType[]): AgentThreadType[] {
-  const map = new Map<string, AgentThreadType>();
-  for (const t of threads) map.set(t.conversationId, { ...t, children: [] });
-
-  const roots: AgentThreadType[] = [];
-  for (const t of map.values()) {
-    if (t.parentConversationId && map.has(t.parentConversationId)) {
-      const parent = map.get(t.parentConversationId)!;
-      if (!parent.children) parent.children = [];
-      parent.children.push(t);
-    } else {
-      roots.push(t);
-    }
-  }
-  return roots;
-}
-
 function statusTone(status: string): string {
   if (status === 'completed') return 'border-accent-green/35 bg-accent-green/5';
   if (status === 'failed' || status === 'cancelled') return 'border-accent-red/35 bg-accent-red/5';
@@ -1854,6 +1989,21 @@ function activityRowsForRun(run: SpawnedAgent): Array<{ key: string; text: strin
   });
 }
 
+function archivedActivityRowsForRun(run: SpawnedAgent, count: number): Array<{ key: string; text: string; at: string | number }> {
+  if (count <= 0) return [];
+  try {
+    const raw = sessionStorage.getItem(`allen-run-activity:${run.executionId}`);
+    if (!raw) return [];
+    const items = JSON.parse(raw) as Array<{ type?: string; tool?: string; command?: string; content?: string; timestamp?: number }>;
+    return items
+      .slice(-count)
+      .map(item => activityLine(run, item))
+      .filter((row): row is { key: string; text: string; at: string | number } => Boolean(row));
+  } catch {
+    return [];
+  }
+}
+
 function RunProgressFeed({
   runs,
   renderExecutionHeaderAction,
@@ -1861,13 +2011,21 @@ function RunProgressFeed({
   runs: SpawnedAgent[];
   renderExecutionHeaderAction?: (run: SpawnedAgent) => React.ReactNode;
 }) {
+  const [olderActivityCounts, setOlderActivityCounts] = useState<Record<string, number>>({});
   const activeRuns = runs.filter(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
   if (activeRuns.length === 0) return null;
 
   const heading = activeRuns.length === 1 ? 'Execution running' : `${activeRuns.length} executions running`;
 
   const renderExecutionLogs = (run: SpawnedAgent) => {
-    const logRows = activityRowsForRun(run).slice(-12);
+    const archivedRows = archivedActivityRowsForRun(run, olderActivityCounts[run.executionId] ?? 0);
+    const logRows = [...archivedRows, ...activityRowsForRun(run)].slice(-Math.max(12, 12 + (olderActivityCounts[run.executionId] ?? 0)));
+    const loadOlder = () => {
+      setOlderActivityCounts(prev => ({
+        ...prev,
+        [run.executionId]: Math.min((prev[run.executionId] ?? 0) + 50, 5000),
+      }));
+    };
     return (
       <details className="run-progress-logs">
         <summary>
@@ -1875,7 +2033,18 @@ function RunProgressFeed({
           <span>Logs</span>
           <em>{logRows.length} event{logRows.length === 1 ? '' : 's'}</em>
         </summary>
-        <div className="run-progress-log-list">
+        <div
+          className="run-progress-log-list"
+          onScroll={(event) => {
+            if ((event.currentTarget as HTMLDivElement).scrollTop <= 4) loadOlder();
+          }}
+        >
+          {archivedRows.length > 0 && (
+            <button type="button" className="run-progress-row" onClick={loadOlder}>
+              <span className="run-progress-time">older</span>
+              <span className="run-progress-text">Load earlier activity</span>
+            </button>
+          )}
           {logRows.length > 0 ? logRows.map(row => (
             <div key={row.key} className="run-progress-row">
               <span className="run-progress-time">{formatTime(typeof row.at === 'string' ? row.at : new Date(row.at).toISOString())}</span>
@@ -1971,10 +2140,52 @@ function WorkflowInterventionPrompt({
   );
 }
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentThreads = [], agentReports = [], threadsByMessage = {}, pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel }: ChatMessageListProps) {
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentReports = [], pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel }: ChatMessageListProps) {
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
   const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
   const hasActiveSpawnedRuns = spawnedAgents.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
+  const runsBySourceMessage = useMemo(() => {
+    const byMessage = new Map<string, SpawnedAgent[]>();
+    for (const run of spawnedAgents) {
+      if (!run.sourceMessageId) continue;
+      const current = byMessage.get(run.sourceMessageId) ?? [];
+      current.push(run);
+      byMessage.set(run.sourceMessageId, current);
+    }
+    return byMessage;
+  }, [spawnedAgents]);
+  const forwardedDiffRunsByMessage = useMemo(() => {
+    const byMessage = new Map<string, SpawnedAgent[]>();
+    let pendingRuns: SpawnedAgent[] = [];
+    const appendRuns = (runs: SpawnedAgent[]) => {
+      for (const run of runs) {
+        if (!pendingRuns.some(existing => existing.executionId === run.executionId)) {
+          pendingRuns.push(run);
+        }
+      }
+    };
+
+    for (const message of messages) {
+      const ownRuns = message._id ? runsBySourceMessage.get(message._id) ?? [] : [];
+      if (ownRuns.length > 0) {
+        appendRuns(ownRuns);
+      }
+
+      const hasVisibleAssistantResponse = message.role === 'assistant' && Boolean(message.content || message.error);
+      if (hasVisibleAssistantResponse) {
+        if (message._id && ownRuns.length === 0 && pendingRuns.length > 0) {
+          byMessage.set(message._id, pendingRuns);
+        }
+        pendingRuns = [];
+      }
+    }
+
+    return byMessage;
+  }, [messages, runsBySourceMessage]);
+  const chatTimeline = useMemo(
+    () => buildChatTimeline(messages),
+    [messages],
+  );
 
   // Load agent info for labels, avatars, and thread display
   useEffect(() => {
@@ -2029,15 +2240,27 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       )}
 
       {/* Messages */}
-      {messages.map((msg, i) => {
-        const msgThreads = msg._id ? threadsByMessage[msg._id] : undefined;
+      {chatTimeline.map((item) => {
+        const msg = item.message;
+        const i = item.index;
+        const timelinePart = item.type === 'message-part' ? item.part : 'full';
+        const showThinking = msg.role === 'assistant' && msg.thinkingText && timelinePart !== 'response';
+        const showResponse = timelinePart !== 'thinking';
+        const suppressLinkedRunPanels = item.type === 'message-part';
         const senderLabel = msg.role === 'user' ? userDisplayName(msg) : '';
-        const diffSplit = msg.role === 'assistant' ? splitFirstDiffFence(msg.content) : { text: msg.content, diff: null };
+        const visibleContent = msg.role === 'assistant' ? sanitizeChatAssistantResponse(msg.content) : msg.content;
+        const visibleError = msg.role === 'assistant' ? sanitizeChatAssistantResponse(msg.error) : msg.error;
+        const diffSplit = msg.role === 'assistant' ? splitFirstDiffFence(visibleContent) : { text: visibleContent, diff: null };
         const messageRuns = msg.role === 'assistant' && msg._id
-          ? spawnedAgents.filter(run => run.sourceMessageId === msg._id)
+          ? runsBySourceMessage.get(msg._id) ?? []
+          : [];
+        const diffPreviewRuns = msg.role === 'assistant' && msg._id
+          ? messageRuns.length > 0
+            ? messageRuns
+            : forwardedDiffRunsByMessage.get(msg._id) ?? []
           : [];
         const messageHasActiveRuns = messageRuns.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
-        return (<React.Fragment key={msg._id || i}>
+        return (<React.Fragment key={item.key}>
         <div className={`ch-msg ${msg.role === 'user' ? 'you' : 'allen'} group/msg al-msg-enter`}>
           <div className="ch-avatar">{msg.role === 'user' ? senderInitial(senderLabel) : 'a'}</div>
           <div className="ch-msg-body">
@@ -2053,30 +2276,30 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             </div>
 
             <div className={`ch-msg-text ${msg.status === 'failed' || msg.status === 'cancelled' ? 'failed' : ''}`}>
-              {msg.role === 'assistant' && msg.thinkingText && (
-                <ThinkingBlock text={msg.thinkingText} durationMs={msg.durationMs} />
+              {showThinking && (
+                <ThinkingBlock text={msg.thinkingText ?? ''} durationMs={msg.durationMs} />
               )}
-              {diffSplit.text && (
+              {showResponse && diffSplit.text && (
                 <div>
                   {renderMarkdown(diffSplit.text)}
                 </div>
               )}
-              {msg.role === 'assistant' && !messageHasActiveRuns && (
-                <ToolCallsSection calls={msg.toolCalls} threads={msgThreads} agentMap={agentMap} />
+              {showResponse && msg.role === 'assistant' && !messageHasActiveRuns && (
+                <ToolCallsSection calls={msg.toolCalls} />
               )}
-              {msg.error && (
+              {showResponse && visibleError && (
                 <div className="chat-msg-error">
                   <AlertCircle className="w-3 h-3 shrink-0" />
-                  {msg.error}
+                  {visibleError}
                 </div>
               )}
             </div>
-            {(msg.content || msg.error) && (
+            {showResponse && (visibleContent || visibleError) && (
               <div className="chat-save-row">
-                <MessageCopyButton text={msg.content || msg.error || ''} />
-                {msg.role !== 'user' && msg.content && onSaveToLearnings && (
+                <MessageCopyButton text={visibleContent || visibleError || ''} />
+                {msg.role !== 'user' && visibleContent && onSaveToLearnings && (
                   <button
-                    onClick={() => onSaveToLearnings(msg.content)}
+                    onClick={() => onSaveToLearnings(visibleContent)}
                     title="Save to learnings"
                     aria-label="Save to learnings"
                   >
@@ -2088,7 +2311,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           </div>
         </div>
 
-        {diffSplit.diff && (
+        {showResponse && diffSplit.diff && (
           <div className="ch-msg allen al-msg-enter">
             <div className="ch-avatar">a</div>
             <div className="ch-msg-body">
@@ -2097,41 +2320,24 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           </div>
         )}
 
-        {messageRuns.length > 0 && !messageHasActiveRuns && (
-          <>
-            <section className="run-progress-feed" aria-label={`${messageRuns.length} linked execution${messageRuns.length === 1 ? '' : 's'}`}>
-              <React.Suspense fallback={<div className="run-progress-loading">Loading execution details...</div>}>
-                <ChatExecutionsPanel runs={messageRuns} renderExecutionHeaderAction={renderWorkflowInterventionHeaderAction} />
-              </React.Suspense>
-            </section>
-            <ChatCodeDiffPreview
-              runs={messageRuns}
-              sessionId={msg.sessionId}
-              messageId={msg._id}
-              onReady={scrollToBottomIfPinned}
-              onOpenAllFiles={onOpenFilesPanel}
-            />
-          </>
+        {messageRuns.length > 0 && !messageHasActiveRuns && !suppressLinkedRunPanels && (
+          <section className="run-progress-feed" aria-label={`${messageRuns.length} linked execution${messageRuns.length === 1 ? '' : 's'}`}>
+            <React.Suspense fallback={<div className="run-progress-loading">Loading execution details...</div>}>
+              <ChatExecutionsPanel runs={messageRuns} renderExecutionHeaderAction={renderWorkflowInterventionHeaderAction} />
+            </React.Suspense>
+          </section>
         )}
 
-        {/* Threads not linked to a tool call (fallback — render below message) */}
-        {msgThreads && msgThreads.length > 0 && (() => {
-          // Only render threads that weren't already rendered inline with tool calls
-          const toolConvIds = new Set(
-            (msg.toolCalls ?? [])
-              .map(tc => (tc.result as Record<string, unknown>)?.conversation_id as string)
-              .filter(Boolean)
-          );
-          const unlinked = msgThreads.filter(t => !toolConvIds.has(t.conversationId));
-          if (unlinked.length === 0) return null;
-          return (
-            <div className="chat-linked-threads">
-              {buildThreadTree(unlinked).map(thread => (
-                <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
-              ))}
-            </div>
-          );
-        })()}
+        {showResponse && diffPreviewRuns.length > 0 && (
+          <ChatCodeDiffPreview
+            runs={diffPreviewRuns}
+            sessionId={msg.sessionId}
+            messageId={msg._id}
+            onReady={scrollToBottomIfPinned}
+            onOpenAllFiles={onOpenFilesPanel}
+          />
+        )}
+
         </React.Fragment>);
       })}
 
@@ -2148,11 +2354,11 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               </div>
               <div className="ch-msg-text">
               {thinkingText && <ThinkingBlock text={thinkingText} active />}
-              <ActiveToolCallsSection calls={activeToolCalls} liveThreads={agentThreads} agentMap={agentMap} />
+              <ActiveToolCallsSection calls={activeToolCalls} />
               <div className={activeToolCalls.length > 0 || thinkingText ? 'mt-2' : undefined}>
                 {streamText ? (
                   <>
-                    {renderMarkdown(streamText)}
+                    {renderMarkdown(sanitizeChatAssistantResponse(streamText))}
                     <span className="inline-block w-0.5 h-4 bg-accent-blue/70 ml-0.5 animate-pulse align-middle" />
                   </>
                 ) : thinkingText ? (
@@ -2189,22 +2395,6 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           })}
         </div>
       )}
-
-      {/* Agent threads — only render orphans not already shown inline with tool calls */}
-      {agentThreads.length > 0 && !streaming && (() => {
-        // During streaming, threads are rendered inline with ActiveToolCallsSection
-        // After completion, they're rendered inline with ToolCallsSection via threadsByMessage
-        // This section only catches threads that somehow aren't linked to either
-        const orphans = agentThreads.filter(t => !t.parentConversationId);
-        if (orphans.length === 0) return null;
-        return (
-          <div className="chat-linked-threads">
-            {buildThreadTree(orphans).map(thread => (
-              <AgentThread key={thread.conversationId} thread={thread} agents={agentMap} />
-            ))}
-          </div>
-        );
-      })()}
 
       {/* Agent question prompt (ask_user) */}
       {pendingUserQuestion && onAnswerUserQuestion && (

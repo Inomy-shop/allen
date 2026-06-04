@@ -1,10 +1,10 @@
 import { useMemo, useEffect, useRef, useState, useCallback } from 'react';
-import mermaid from 'mermaid';
 import { Maximize2, Minimize2, X, Download, Copy, Check, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { generateMermaid } from '../../lib/mermaid-generator';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { resolveColorMode } from '../../lib/theme';
 import { getCssVarHex } from '../../lib/theme';
+import { initializeMermaid, mermaid } from '../../lib/mermaid';
 
 function getMermaidTheme(colorMode: 'light' | 'dark') {
   if (colorMode === 'light') {
@@ -69,7 +69,7 @@ export default function MermaidPreview({ workflow }: Props) {
     (async () => {
       try {
         const themeConfig = getMermaidTheme(resolvedMode);
-        mermaid.initialize({ startOnLoad: false, theme: themeConfig.theme as any, themeVariables: themeConfig.themeVariables, flowchart: { htmlLabels: true, curve: 'basis', padding: 12 } });
+        initializeMermaid({ startOnLoad: false, theme: themeConfig.theme as any, themeVariables: themeConfig.themeVariables, flowchart: { htmlLabels: true, curve: 'basis', padding: 12 } });
         const id = `mermaid-${Date.now()}`;
         const { svg } = await mermaid.render(id, mermaidCode);
         if (!cancelled) { setSvgHtml(svg); setError(''); }
@@ -89,7 +89,7 @@ export default function MermaidPreview({ workflow }: Props) {
     (async () => {
       try {
         const themeConfig = getMermaidTheme(resolvedMode);
-        mermaid.initialize({
+        initializeMermaid({
           startOnLoad: false,
           theme: themeConfig.theme as any,
           themeVariables: { ...themeConfig.themeVariables, fontSize: '18px' },

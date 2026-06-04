@@ -55,11 +55,11 @@ export default function ResetPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-surface-50 p-4">
+    <div className="flex min-h-screen items-center justify-center bg-app p-4 text-theme-primary">
       <div className="w-full max-w-sm">
         <form
           onSubmit={handleSubmit}
-          className="bg-surface-100 border border-app rounded-lg p-6 space-y-4"
+          className="space-y-4 rounded-md border border-app bg-app-card p-6 shadow-sm"
         >
           <div>
             <h1 className="text-base font-heading text-theme-primary">
@@ -81,7 +81,7 @@ export default function ResetPasswordPage() {
               autoFocus
               value={currentPassword}
               onChange={(e) => setCurrent(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-50 border border-app rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
+              className="w-full rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary outline-none transition-colors focus:border-accent focus:shadow-[var(--focus-ring)]"
             />
           </div>
           <div className="space-y-2">
@@ -93,7 +93,7 @@ export default function ResetPasswordPage() {
               required
               value={newPassword}
               onChange={(e) => setNew(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-50 border border-app rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
+              className="w-full rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary outline-none transition-colors focus:border-accent focus:shadow-[var(--focus-ring)]"
             />
             <p className="text-[10px] text-theme-subtle">
               Min 8 chars, with uppercase, lowercase, number, and symbol.
@@ -108,16 +108,16 @@ export default function ResetPasswordPage() {
               required
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-50 border border-app rounded-md text-sm text-theme-primary focus:outline-none focus:border-accent-blue"
+              className="w-full rounded-md border border-app bg-app-muted px-3 py-2 text-sm text-theme-primary outline-none transition-colors focus:border-accent focus:shadow-[var(--focus-ring)]"
             />
           </div>
           {error && <div className="text-xs text-accent-red">{error}</div>}
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2 rounded-md bg-accent-blue text-white text-sm font-body disabled:opacity-50"
+            className="btn-primary w-full justify-center"
           >
-            {loading ? 'Saving…' : 'Save password'}
+            {loading ? 'Saving...' : 'Save password'}
           </button>
         </form>
       </div>

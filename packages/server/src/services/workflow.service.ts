@@ -19,7 +19,7 @@ export class WorkflowService {
 
   async list(includeArchived = false): Promise<Record<string, unknown>[]> {
     const filter = includeArchived ? {} : { archived: { $ne: true } };
-    return this.col.find(filter, {
+    const rows = await this.col.find(filter, {
       projection: {
         name: 1,
         description: 1,
@@ -33,6 +33,43 @@ export class WorkflowService {
         'parsed.edges': 1,
       },
     }).sort({ updatedAt: -1 }).toArray();
+    if (rows.length === 0) return [];
+
+    const workflowIds = rows.map((row) => String(row._id));
+    const workflowNames = rows.map((row) => String(row.name)).filter(Boolean);
+    const executionGroups = await this.db.collection('executions').aggregate([
+      {
+        $match: {
+          $or: [
+            { workflowId: { $in: workflowIds } },
+            { workflowName: { $in: workflowNames } },
+          ],
+        },
+      },
+      {
+        $group: {
+          _id: {
+            workflowId: '$workflowId',
+            workflowName: '$workflowName',
+          },
+          count: { $sum: 1 },
+        },
+      },
+    ]).toArray();
+
+    const countsById = new Map<string, number>();
+    const countsByName = new Map<string, number>();
+    for (const group of executionGroups) {
+      const id = typeof group._id?.workflowId === 'string' ? group._id.workflowId : null;
+      const name = typeof group._id?.workflowName === 'string' ? group._id.workflowName : null;
+      if (id) countsById.set(id, (countsById.get(id) ?? 0) + Number(group.count ?? 0));
+      else if (name) countsByName.set(name, (countsByName.get(name) ?? 0) + Number(group.count ?? 0));
+    }
+
+    return rows.map((row) => ({
+      ...row,
+      runCount: countsById.get(String(row._id)) ?? countsByName.get(String(row.name)) ?? 0,
+    }));
   }
 
   /**
@@ -228,9 +265,12 @@ export class WorkflowService {
 
   async validateById(id: string): Promise<ValidationResult> {
     const { ObjectId } = await import('mongodb');
-    const doc = await this.col.findOne({ _id: new ObjectId(id) });
+    const _id = new ObjectId(id);
+    const doc = await this.col.findOne({ _id });
     if (!doc) throw new Error('Workflow not found');
-    return this.validate(doc.parsed as WorkflowDef);
+    const validation = await this.validate(doc.parsed as WorkflowDef);
+    await this.col.updateOne({ _id }, { $set: { validation, updatedAt: new Date() } });
+    return validation;
   }
 
   async getMermaid(id: string): Promise<string> {

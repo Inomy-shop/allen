@@ -4,6 +4,38 @@ import { useAuthStore, type AuthUser } from '../stores/authStore';
 
 /** Maximum number of automatic reconnect attempts on a transient stream error. */
 export const MAX_RECONNECT_ATTEMPTS = 3;
+const MAX_LIVE_ACTIVITY_ITEMS = 300;
+const MAX_AGENT_REPORTS = 100;
+const MAX_LIVE_TOOL_CALLS = 100;
+const MAX_ARCHIVED_ACTIVITY_ITEMS = 5000;
+
+function appendCapped<T>(items: T[] | undefined, item: T, max: number): T[] {
+  const next = [...(items ?? []), item];
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
+function runActivityArchiveKey(executionId: string): string {
+  return `allen-run-activity:${executionId}`;
+}
+
+function archiveRunActivity(executionId: string, items: SpawnedAgent['activity']): void {
+  if (items.length === 0) return;
+  try {
+    const key = runActivityArchiveKey(executionId);
+    const existing = JSON.parse(sessionStorage.getItem(key) ?? '[]') as SpawnedAgent['activity'];
+    const next = [...existing, ...items].slice(-MAX_ARCHIVED_ACTIVITY_ITEMS);
+    sessionStorage.setItem(key, JSON.stringify(next));
+  } catch {
+    // Best effort: keeping React state capped is the important part.
+  }
+}
+
+function appendRunActivity(run: SpawnedAgent, item: SpawnedAgent['activity'][number]): SpawnedAgent['activity'] {
+  const next = [...run.activity, item];
+  if (next.length <= MAX_LIVE_ACTIVITY_ITEMS) return next;
+  archiveRunActivity(run.executionId, next.slice(0, next.length - MAX_LIVE_ACTIVITY_ITEMS));
+  return next.slice(-MAX_LIVE_ACTIVITY_ITEMS);
+}
 
 /**
  * Check whether the backend session is still streaming.
@@ -117,44 +149,12 @@ export interface ActiveToolCall {
 }
 
 /** Live activity entry for an agent thread */
-export interface ThreadActivity {
-  type: 'thinking' | 'text' | 'tool_call' | 'tool_result' | 'follow_up' | 'response';
-  agent: string;
-  content?: string;
-  tool?: string;
-  toolUseId?: string;
-  durationMs?: number;
-  timestamp: number;
-}
-
-/** Agent-to-agent delegation thread (live-updated via SSE) */
-export interface AgentThread {
-  conversationId: string;
-  fromAgent: string;
-  toAgent: string;
-  task: string;
-  status: 'active' | 'waiting_for_answer' | 'completed' | 'failed';
-  summary?: string;
-  response?: string;
-  messages?: { agent: string; type?: string; content: string; toolCalls?: { tool: string }[]; timestamp: string }[];
-  costUsd?: number;
-  durationMs?: number;
-  depth?: number;
-  toolCalls?: string[];
-  /** Pending question from the target agent */
-  pendingQuestion?: { fromAgent: string; question: string };
-  /** Real-time activity feed (thinking, text, tool calls) while thread is active */
-  liveActivity?: ThreadActivity[];
-  /** Parent conversation for nesting (PM→Engineer→QA = QA's parentConversationId is Engineer's) */
-  parentConversationId?: string;
-  /** Child threads (built on UI side from flat list) */
-  children?: AgentThread[];
-}
-
 /** Spawned agent execution — live tracking */
 export interface SpawnedAgent {
   executionId: string;
   sourceMessageId?: string;
+  parentExecutionId?: string | null;
+  spawnDepth?: number | null;
   agent: string;
   prompt: string;
   status: 'queued' | 'running' | 'waiting_for_input' | 'completed' | 'failed' | 'cancelled';
@@ -169,6 +169,7 @@ export interface SpawnedAgent {
 export interface WorkflowInterventionAnswer {
   executionId: string;
   interventionId?: string;
+  actionId?: string;
   decision: 'approve' | 'request_changes' | 'reject' | 'answer';
   fieldValues?: Record<string, unknown>;
   feedback?: string;
@@ -184,47 +185,14 @@ export interface AgentReport {
   timestamp: string;
 }
 
-/** Fetch full thread data from the API to get messages/response */
-async function fetchThreadDetail(sessionId: string, conversationId: string): Promise<{ messages?: any[]; response?: string } | null> {
-  try {
-    const threads = await api.getThreads(sessionId);
-    const thread = threads.find((t: any) => t._id === conversationId);
-    return thread ? { messages: thread.messages, response: thread.response } : null;
-  } catch { return null; }
-}
-
-/**
- * Apply `update` to whichever thread in the grouped-by-parentMessageId map
- * matches `conversationId`. The SSE `thread_*` handlers used to only update
- * `agentThreads` (live-send state), so refresh-loaded threads in
- * `threadsByMessage` never received subsequent updates. This helper gives
- * the same events a path into that persisted group.
- */
-function mapThreadInGroups(
-  groups: Record<string, AgentThread[]>,
-  conversationId: string,
-  update: (t: AgentThread) => AgentThread,
-): Record<string, AgentThread[]> {
-  let changed = false;
-  const next: Record<string, AgentThread[]> = {};
-  for (const [key, list] of Object.entries(groups)) {
-    next[key] = list.map(t => {
-      if (t.conversationId === conversationId) {
-        changed = true;
-        return update(t);
-      }
-      return t;
-    });
-  }
-  return changed ? next : groups;
-}
-
 function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>, 'executionId'> & { executionId: string }): SpawnedAgent[] {
   const existing = prev.find(s => s.executionId === run.executionId);
   if (!existing) {
     return [...prev, {
       executionId: run.executionId,
       sourceMessageId: run.sourceMessageId,
+      parentExecutionId: run.parentExecutionId,
+      spawnDepth: run.spawnDepth,
       agent: run.agent ?? 'Routed run',
       prompt: run.prompt ?? '',
       status: run.status ?? 'running',
@@ -238,7 +206,13 @@ function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>,
   }
   return prev.map(s =>
     s.executionId === run.executionId
-      ? { ...s, ...run, activity: run.activity ?? s.activity }
+      ? {
+          ...s,
+          ...run,
+          parentExecutionId: run.parentExecutionId ?? s.parentExecutionId,
+          spawnDepth: run.spawnDepth ?? s.spawnDepth,
+          activity: run.activity ?? s.activity,
+        }
       : s,
   );
 }
@@ -246,7 +220,7 @@ function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>,
 function toolRunFromResult(tool: string, result: Record<string, unknown> | undefined): SpawnedAgent | null {
   if (!result) return null;
   const normalizedTool = tool.split('__').pop() ?? tool;
-  const isRunTool = /^(run_workflow|spawn_agent|delegate_to_agent)$/.test(normalizedTool);
+  const isRunTool = /^(run_workflow|spawn_agent)$/.test(normalizedTool);
   if (!isRunTool) return null;
 
   const executionId = typeof result.execution_id === 'string'
@@ -382,6 +356,8 @@ function runsFromPersistedExecutions(items: Array<{
     .map(item => ({
       executionId: item.executionId,
       sourceMessageId: item.sourceMessageId ?? item.runContext?.chat?.parentMessageId ?? undefined,
+      parentExecutionId: item.runContext?.execution.parentExecutionId ?? undefined,
+      spawnDepth: item.runContext?.execution.spawnDepth ?? undefined,
       agent: item.agent ?? item.runContext?.title ?? 'Routed run',
       prompt: item.prompt ?? item.runContext?.io?.input ?? '',
       status: (item.runContext?.status ?? item.status ?? 'running') as SpawnedAgent['status'],
@@ -399,10 +375,7 @@ export function useChat() {
   const [streamText, setStreamText] = useState('');
   const [thinkingText, setThinkingText] = useState('');
   const [activeToolCalls, setActiveToolCalls] = useState<ActiveToolCall[]>([]);
-  const [agentThreads, setAgentThreads] = useState<AgentThread[]>([]); // live SSE threads
   const [agentReports, setAgentReports] = useState<AgentReport[]>([]);
-  /** Threads loaded from DB, keyed by parentMessageId */
-  const [threadsByMessage, setThreadsByMessage] = useState<Record<string, AgentThread[]>>({});
   /** Pending question from an agent to the user (ask_user) */
   const [pendingUserQuestion, setPendingUserQuestion] = useState<{ question: string; fromAgent: string } | null>(null);
   const [spawnedAgents, setSpawnedAgents] = useState<SpawnedAgent[]>([]);
@@ -439,6 +412,8 @@ export function useChat() {
             status: update.context.status as SpawnedAgent['status'],
             runContext: update.context,
             sourceMessageId: update.context.chat?.parentMessageId ?? run.sourceMessageId,
+            parentExecutionId: update.context.execution.parentExecutionId ?? run.parentExecutionId,
+            spawnDepth: update.context.execution.spawnDepth ?? run.spawnDepth,
           };
         });
         return changed ? next : prev;
@@ -485,12 +460,13 @@ export function useChat() {
     if (sendingRef.current) return;
 
     let cancelled = false;
+    const streamAbortController = new AbortController();
+    let streamReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     (async () => {
       try {
         setLoadingMessages(true);
-        const [session, threads, persistedRuns] = await Promise.all([
+        const [session, persistedRuns] = await Promise.all([
           api.getSession(activeSessionId),
-          api.getThreads(activeSessionId).catch(() => []),
           executionsApi.forChat(activeSessionId).catch(() => []),
         ]);
         if (cancelled) return;
@@ -517,81 +493,10 @@ export function useChat() {
           setPendingUserQuestion(null);
         }
 
-        // Replay persisted intermediate activity for threads that were
-        // running when the user left this session. Without this hop, a
-        // refresh of a session with an in-flight delegation would lose
-        // every thinking/tool event the agent already emitted — the SSE
-        // stream only fans out new events, not backfill. We hit the
-        // /delegations/:id/activity route for each still-running thread
-        // in parallel. Failures are swallowed; missing activity just
-        // renders an empty feed, same as before this hydration existed.
-        console.log('[useChat:refresh] loaded', threads.length, 'threads — statuses:', threads.map((t: any) => `${t._id.slice(0,8)}=${t.status}`).join(', '));
-        const runningThreads = threads.filter(
-          (t: any) => t.status === 'active' || t.status === 'waiting_for_answer',
-        );
-        console.log('[useChat:refresh] running threads to replay:', runningThreads.length);
-        const activityById = new Map<string, ThreadActivity[]>();
-        if (runningThreads.length > 0) {
-          const results = await Promise.all(
-            runningThreads.map((t: any) =>
-              api.getDelegationActivity(t._id)
-                .then((r) => { console.log('[useChat:refresh] activity for', t._id.slice(0,8), '→', r.events?.length ?? 0, 'events'); return r; })
-                .catch((err) => { console.warn('[useChat:refresh] activity fetch failed for', t._id.slice(0,8), err); return { events: [] }; }),
-            ),
-          );
-          for (let i = 0; i < runningThreads.length; i++) {
-            const events = results[i]?.events ?? [];
-            const rows: ThreadActivity[] = events.map((ev) => ({
-              type: ev.type as ThreadActivity['type'],
-              agent: ev.agent,
-              content: ev.content,
-              tool: ev.tool,
-              toolUseId: ev.toolUseId,
-              durationMs: ev.durationMs,
-              timestamp: new Date(ev.at).getTime(),
-            }));
-            activityById.set(runningThreads[i]._id, rows);
-          }
-        }
-
-        // Group threads by every anchor message they touched so a continued
-        // delegation renders inline under each turn that issued/continued
-        // it, not only under the original parentMessageId.
-        // Legacy rows without parentMessageIds fall back to parentMessageId.
-        const grouped: Record<string, AgentThread[]> = {};
-        for (const t of threads) {
-          const keys: string[] = Array.isArray(t.parentMessageIds) && t.parentMessageIds.length
-            ? t.parentMessageIds
-            : [t.parentMessageId];
-          const threadObj: AgentThread = {
-            conversationId: t._id,
-            fromAgent: t.fromAgent,
-            toAgent: t.toAgent,
-            task: t.task,
-            status: t.status,
-            summary: t.summary,
-            response: t.response,
-            messages: t.messages,
-            costUsd: t.costUsd,
-            durationMs: t.durationMs,
-            depth: t.depth,
-            parentConversationId: t.parentConversationId,
-            liveActivity: activityById.get(t._id),
-          };
-          for (const key of keys) {
-            if (!grouped[key]) grouped[key] = [];
-            grouped[key].push(threadObj);
-          }
-        }
-        setThreadsByMessage(grouped);
-
         // Check if this session has an active streaming response
         const { streaming: isActive } = await api.isStreaming(activeSessionId);
-        console.log('[useChat:refresh] isStreaming →', isActive, '— runningThreads:', runningThreads.length);
+        console.log('[useChat:refresh] isStreaming →', isActive);
         if (cancelled || !isActive) {
-          if (!isActive && runningThreads.length > 0) {
-            console.warn('[useChat:refresh] ⚠ server says NOT streaming but', runningThreads.length, 'threads are still active — SSE will NOT reconnect. New live events will NOT appear until next send.');
-          }
           return;
         }
 
@@ -613,13 +518,16 @@ export function useChat() {
           try {
             const response = await fetch(api.streamUrl(activeSessionId), {
               headers: authHeaders(),
+              signal: streamAbortController.signal,
             });
             if (response.body) {
               sessionReader = response.body.getReader();
+              streamReader = sessionReader;
               console.log('[useChat:refresh] SSE reader attached (attempt', attempt, ')');
               break;
             }
           } catch (fetchErr) {
+            if ((fetchErr as Error).name === 'AbortError') break;
             console.warn('[useChat:refresh] SSE fetch attempt', attempt, 'failed:', fetchErr);
           }
           if (attempt < MAX_RECONNECT_ATTEMPTS) {
@@ -628,8 +536,10 @@ export function useChat() {
         }
 
         if (cancelled || !sessionReader) {
-          setStreaming(false);
-          console.warn('[useChat:refresh] SSE stream fetch returned no body after retries');
+          if (!cancelled) {
+            setStreaming(false);
+            console.warn('[useChat:refresh] SSE stream fetch returned no body after retries');
+          }
           return;
         }
 
@@ -657,14 +567,22 @@ export function useChat() {
             }
           }
         }
-        setStreaming(false);
+        if (!cancelled) setStreaming(false);
       } catch (e) {
-        console.error('Failed to load messages:', e);
+        if ((e as Error).name !== 'AbortError') {
+          console.error('Failed to load messages:', e);
+        }
       } finally {
         if (!cancelled) setLoadingMessages(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      streamAbortController.abort();
+      if (streamReader) {
+        void streamReader.cancel().catch(() => {});
+      }
+    };
   }, [activeSessionId]);
 
   // Centralized SSE event handler
@@ -679,11 +597,11 @@ export function useChat() {
         break;
 
       case 'tool_start':
-        setActiveToolCalls(prev => mergeToolStart(prev, data));
+        setActiveToolCalls(prev => mergeToolStart(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
         break;
 
       case 'tool_result':
-        setActiveToolCalls(prev => mergeToolResult(prev, data));
+        setActiveToolCalls(prev => mergeToolResult(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
         {
           const run = toolRunFromResult(data.tool, data.result);
           if (run) {
@@ -724,100 +642,6 @@ export function useChat() {
         }
         break;
 
-      case 'thread_created':
-        setAgentThreads(prev => [...prev, {
-          conversationId: data.conversationId as string,
-          fromAgent: data.fromAgent as string,
-          toAgent: data.toAgent as string,
-          task: (data.task as string) ?? '',
-          status: 'active',
-          depth: data.depth as number,
-          parentConversationId: data.parentConversationId as string | undefined,
-        }]);
-        break;
-
-      case 'thread_message': {
-        const activity: ThreadActivity = {
-          type: (data.type as string) as ThreadActivity['type'],
-          agent: data.agent as string,
-          content: data.content as string | undefined,
-          tool: data.tool as string | undefined,
-          toolUseId: data.toolUseId as string | undefined,
-          durationMs: data.durationMs as number | undefined,
-          timestamp: Date.now(),
-        };
-        setAgentThreads(prev => prev.map(t =>
-          t.conversationId === data.conversationId
-            ? {
-                ...t,
-                toolCalls: data.tool ? [...(t.toolCalls ?? []), data.tool as string] : t.toolCalls,
-                liveActivity: [...(t.liveActivity ?? []), activity],
-              }
-            : t,
-        ));
-        // Mirror to threadsByMessage so refresh-loaded threads (which
-        // live in the grouped map, not agentThreads) also receive live
-        // updates. Without this, SSE events after refresh are dropped
-        // because agentThreads is empty post-refresh.
-        setThreadsByMessage(prev => mapThreadInGroups(prev, data.conversationId as string, t => ({
-          ...t,
-          toolCalls: data.tool ? [...(t.toolCalls ?? []), data.tool as string] : t.toolCalls,
-          liveActivity: [...(t.liveActivity ?? []), activity],
-        })));
-        break;
-      }
-
-      case 'thread_question':
-        setAgentThreads(prev => prev.map(t =>
-          t.conversationId === data.conversationId
-            ? { ...t, status: 'waiting_for_answer' as const, pendingQuestion: { fromAgent: data.fromAgent as string, question: data.question as string } }
-            : t,
-        ));
-        setThreadsByMessage(prev => mapThreadInGroups(prev, data.conversationId as string, t => ({
-          ...t, status: 'waiting_for_answer' as const, pendingQuestion: { fromAgent: data.fromAgent as string, question: data.question as string },
-        })));
-        break;
-
-      case 'thread_answer':
-        setAgentThreads(prev => prev.map(t =>
-          t.conversationId === data.conversationId
-            ? { ...t, status: 'active' as const, pendingQuestion: undefined }
-            : t,
-        ));
-        setThreadsByMessage(prev => mapThreadInGroups(prev, data.conversationId as string, t => ({
-          ...t, status: 'active' as const, pendingQuestion: undefined,
-        })));
-        break;
-
-      case 'thread_completed':
-        setAgentThreads(prev => prev.map(t =>
-          t.conversationId === data.conversationId
-            ? { ...t, status: (data.error ? 'failed' : 'completed') as AgentThread['status'], summary: data.summary as string, costUsd: data.costUsd as number, durationMs: data.durationMs as number }
-            : t,
-        ));
-        setThreadsByMessage(prev => mapThreadInGroups(prev, data.conversationId as string, t => ({
-          ...t,
-          status: (data.error ? 'failed' : 'completed') as AgentThread['status'],
-          summary: data.summary as string,
-          costUsd: data.costUsd as number,
-          durationMs: data.durationMs as number,
-        })));
-        if (sessionId) {
-          fetchThreadDetail(sessionId, data.conversationId as string).then(detail => {
-            if (detail) {
-              setAgentThreads(prev => prev.map(t =>
-                t.conversationId === data.conversationId
-                  ? { ...t, messages: detail.messages, response: detail.response }
-                  : t,
-              ));
-              setThreadsByMessage(prev => mapThreadInGroups(prev, data.conversationId as string, t => ({
-                ...t, messages: detail.messages, response: detail.response,
-              })));
-            }
-          });
-        }
-        break;
-
       case 'user_question':
         setPendingUserQuestion({ question: data.question as string, fromAgent: data.fromAgent as string });
         break;
@@ -827,18 +651,20 @@ export function useChat() {
         break;
 
       case 'agent_report':
-        setAgentReports(prev => [...prev, {
+        setAgentReports(prev => appendCapped(prev, {
           agent: data.agent as string,
           message: data.message as string,
           status: data.status as string,
           timestamp: data.timestamp as string,
-        }]);
+        }, MAX_AGENT_REPORTS));
         break;
 
       case 'spawn_started':
         setSpawnedAgents(prev => upsertSpawnedRun(prev, {
           executionId: data.executionId as string,
           sourceMessageId: data.messageId as string | undefined,
+          parentExecutionId: data.parentExecutionId as string | null | undefined,
+          spawnDepth: data.spawnDepth as number | null | undefined,
           agent: data.agent as string,
           prompt: (data.prompt as string) ?? '',
           status: 'running',
@@ -851,6 +677,8 @@ export function useChat() {
         setSpawnedAgents(prev => upsertSpawnedRun(prev, {
           executionId: data.executionId as string,
           sourceMessageId: data.messageId as string | undefined,
+          parentExecutionId: data.parentExecutionId as string | null | undefined,
+          spawnDepth: data.spawnDepth as number | null | undefined,
           agent: (data.name as string) ?? (data.agent as string) ?? (data.workflowName as string) ?? 'Routed run',
           prompt: (data.reason as string) ?? '',
           status: 'running',
@@ -862,7 +690,7 @@ export function useChat() {
       case 'spawn_activity':
         setSpawnedAgents(prev => prev.map(s =>
           s.executionId === data.executionId
-            ? { ...s, activity: [...s.activity, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, content: data.content as string | undefined, timestamp: Date.now() }] }
+            ? { ...s, activity: appendRunActivity(s, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, content: data.content as string | undefined, timestamp: Date.now() }) }
             : s,
         ));
         break;
@@ -901,8 +729,8 @@ export function useChat() {
   }, [streamText, thinkingText]);
 
   const createSession = useCallback(
-    async (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string) => {
-      const session = await api.createSession(provider, model, agentOverrides, repoId);
+    async (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string, workspaceId?: string) => {
+      const session = await api.createSession(provider, model, agentOverrides, repoId, workspaceId);
       setSessions(prev => [session, ...prev]);
       setActiveSessionId(session._id);
       setMessages([]);
@@ -962,9 +790,7 @@ export function useChat() {
     setStreamText('');
     setThinkingText('');
     setActiveToolCalls([]);
-    setAgentThreads([]);
     setAgentReports([]);
-    setThreadsByMessage({});
     setPendingUserQuestion(null);
     setSpawnedAgents([]);
     setStreaming(false);
@@ -976,11 +802,10 @@ export function useChat() {
 
     sendingRef.current = true;
     setStreaming(true);
-    setStreamText('');
-    setThinkingText('');
-    setActiveToolCalls([]);
-    setAgentThreads([]);
-    setAgentReports([]);
+  setStreamText('');
+  setThinkingText('');
+  setActiveToolCalls([]);
+  setAgentReports([]);
 
     // Add user message optimistically
     const userMsg: ChatMessage = {
@@ -1048,7 +873,7 @@ export function useChat() {
                   if (data.toolUseId ?? data.tool_use_id) {
                     activeToolArgs.set(data.toolUseId ?? data.tool_use_id, data.args ?? {});
                   }
-                  setActiveToolCalls(prev => mergeToolStart(prev, data));
+                  setActiveToolCalls(prev => mergeToolStart(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
                   break;
 
                 case 'tool_result': {
@@ -1063,7 +888,7 @@ export function useChat() {
                   };
                   collectedToolCalls.push(toolRecord);
                   if (toolUseId) activeToolArgs.delete(toolUseId);
-                  setActiveToolCalls(prev => mergeToolResult(prev, data));
+                  setActiveToolCalls(prev => mergeToolResult(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
                   const run = toolRunFromResult(data.tool, data.result);
                   if (run) {
                     run.sourceMessageId = data.messageId || assistantMsgId;
@@ -1094,48 +919,7 @@ export function useChat() {
                   setThinkingText('');
                   setActiveToolCalls([]);
 
-                  // Move live threads to threadsByMessage, then load full data from API
-                  setAgentThreads(liveThreads => {
-                    if (liveThreads.length > 0) {
-                      setThreadsByMessage(prev => ({ ...prev, [msgId]: liveThreads }));
-                    }
-                    return [];
-                  });
                   setAgentReports([]);
-
-                  // Fetch full thread data from DB (messages, response, etc.)
-                  // This replaces the incomplete SSE-only data with the persisted version
-                  if (sessionId) {
-                    api.getThreads(sessionId).then(threads => {
-                      // Same multi-anchor grouping as the initial-load path
-                      // (see the parentMessageIds comment above).
-                      const grouped: Record<string, AgentThread[]> = {};
-                      for (const t of threads) {
-                        const keys: string[] = Array.isArray(t.parentMessageIds) && t.parentMessageIds.length
-                          ? t.parentMessageIds
-                          : [t.parentMessageId];
-                        const threadObj: AgentThread = {
-                          conversationId: t._id,
-                          fromAgent: t.fromAgent,
-                          toAgent: t.toAgent,
-                          task: t.task,
-                          status: t.status,
-                          summary: t.summary,
-                          response: t.response,
-                          messages: t.messages,
-                          costUsd: t.costUsd,
-                          durationMs: t.durationMs,
-                          depth: t.depth,
-                          parentConversationId: t.parentConversationId,
-                        };
-                        for (const key of keys) {
-                          if (!grouped[key]) grouped[key] = [];
-                          grouped[key].push(threadObj);
-                        }
-                      }
-                      setThreadsByMessage(grouped);
-                    }).catch(() => {});
-                  }
                   break;
                 }
 
@@ -1149,75 +933,6 @@ export function useChat() {
                   }
                   break;
 
-                case 'thread_created':
-                  setAgentThreads(prev => [...prev, {
-                    conversationId: data.conversationId as string,
-                    fromAgent: data.fromAgent as string,
-                    toAgent: data.toAgent as string,
-                    task: (data.task as string) ?? '',
-                    status: 'active',
-                    depth: data.depth as number,
-                    parentConversationId: data.parentConversationId as string | undefined,
-                  }]);
-                  break;
-
-                case 'thread_message': {
-                  const act: ThreadActivity = {
-                    type: (data.type as string) as ThreadActivity['type'],
-                    agent: data.agent as string,
-                    content: data.content as string | undefined,
-                    tool: data.tool as string | undefined,
-                    toolUseId: data.toolUseId as string | undefined,
-                    durationMs: data.durationMs as number | undefined,
-                    timestamp: Date.now(),
-                  };
-                  setAgentThreads(prev => prev.map(t =>
-                    t.conversationId === data.conversationId
-                      ? {
-                          ...t,
-                          toolCalls: data.tool ? [...(t.toolCalls ?? []), data.tool as string] : t.toolCalls,
-                          liveActivity: [...(t.liveActivity ?? []), act],
-                        }
-                      : t,
-                  ));
-                  break;
-                }
-
-                case 'thread_question':
-                  setAgentThreads(prev => prev.map(t =>
-                    t.conversationId === data.conversationId
-                      ? { ...t, status: 'waiting_for_answer' as const, pendingQuestion: { fromAgent: data.fromAgent as string, question: data.question as string } }
-                      : t,
-                  ));
-                  break;
-
-                case 'thread_answer':
-                  setAgentThreads(prev => prev.map(t =>
-                    t.conversationId === data.conversationId
-                      ? { ...t, status: 'active' as const, pendingQuestion: undefined }
-                      : t,
-                  ));
-                  break;
-
-                case 'thread_completed':
-                  setAgentThreads(prev => prev.map(t =>
-                    t.conversationId === data.conversationId
-                      ? { ...t, status: (data.error ? 'failed' : 'completed') as AgentThread['status'], summary: data.summary as string, costUsd: data.costUsd as number, durationMs: data.durationMs as number }
-                      : t,
-                  ));
-                  if (sessionId) {
-                    fetchThreadDetail(sessionId, data.conversationId as string).then(detail => {
-                      if (detail) {
-                        setAgentThreads(prev => prev.map(t =>
-                          t.conversationId === data.conversationId
-                            ? { ...t, messages: detail.messages, response: detail.response }
-                            : t,
-                        ));
-                      }
-                    });
-                  }
-                  break;
-
                 case 'user_question':
                   setPendingUserQuestion({ question: data.question as string, fromAgent: data.fromAgent as string });
                   break;
@@ -1227,18 +942,20 @@ export function useChat() {
                   break;
 
                 case 'agent_report':
-                  setAgentReports(prev => [...prev, {
+                  setAgentReports(prev => appendCapped(prev, {
                     agent: data.agent as string,
                     message: data.message as string,
                     status: data.status as string,
                     timestamp: data.timestamp as string,
-                  }]);
+                  }, MAX_AGENT_REPORTS));
                   break;
 
                 case 'spawn_started':
                   setSpawnedAgents(prev => upsertSpawnedRun(prev, {
                     executionId: data.executionId as string,
                     sourceMessageId: (data.messageId || assistantMsgId) as string | undefined,
+                    parentExecutionId: data.parentExecutionId as string | null | undefined,
+                    spawnDepth: data.spawnDepth as number | null | undefined,
                     agent: data.agent as string,
                     prompt: (data.prompt as string) ?? '',
                     status: 'running',
@@ -1251,6 +968,8 @@ export function useChat() {
                   setSpawnedAgents(prev => upsertSpawnedRun(prev, {
                     executionId: data.executionId as string,
                     sourceMessageId: (data.messageId || assistantMsgId) as string | undefined,
+                    parentExecutionId: data.parentExecutionId as string | null | undefined,
+                    spawnDepth: data.spawnDepth as number | null | undefined,
                     agent: (data.name as string) ?? (data.agent as string) ?? (data.workflowName as string) ?? 'Routed run',
                     prompt: (data.reason as string) ?? '',
                     status: 'running',
@@ -1262,7 +981,7 @@ export function useChat() {
                 case 'spawn_activity':
                   setSpawnedAgents(prev => prev.map(s =>
                     s.executionId === data.executionId
-                      ? { ...s, activity: [...s.activity, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, content: data.content as string | undefined, timestamp: Date.now() }] }
+                      ? { ...s, activity: appendRunActivity(s, { type: data.type as string, tool: data.tool as string | undefined, command: data.command as string | undefined, content: data.content as string | undefined, timestamp: Date.now() }) }
                       : s,
                   ));
                   break;
@@ -1469,7 +1188,8 @@ export function useChat() {
 
     await interventionsApi.respond(input.interventionId, {
       decision: input.decision,
-      field_values: input.decision === 'approve' || input.decision === 'answer' ? input.fieldValues : undefined,
+      action_id: input.actionId,
+      field_values: input.fieldValues,
       feedback: input.feedback,
       answer: input.answer,
       answered_by_user_id: useAuthStore.getState().user?.id,
@@ -1527,9 +1247,7 @@ export function useChat() {
     streamText,
     thinkingText,
     activeToolCalls,
-    agentThreads,
     agentReports,
-    threadsByMessage,
     spawnedAgents,
     pendingUserQuestion,
     answerUserQuestion: async (answer: string) => {

@@ -3,6 +3,17 @@
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/app.js",
+  "exports": {
+    ".": "./dist/app.js",
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./runtime/config": {
+      "types": "./dist/runtime/config.d.ts",
+      "import": "./dist/runtime/config.js"
+    }
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/app.ts",
@@ -15,6 +26,7 @@
   "dependencies": {
     "@allen/engine": "*",
     "@anthropic-ai/claude-code": "1.0.128",
+    "@aws-sdk/client-s3": "^3.1052.0",
     "@linear/sdk": "^82.0.0",
     "@types/node-cron": "^3.0.11",
     "@xenova/transformers": "^2.17.2",
@@ -44,9 +56,11 @@
     "@types/multer": "^1.4.12",
     "@types/node": "^22.0.0",
     "@types/supertest": "^7.2.0",
+    "@types/ws": "^8.18.1",
     "mongodb-memory-server": "^11.0.1",
     "supertest": "^7.2.2",
     "tsx": "^4.19.0",
+    "typescript": "^5.9.3",
     "vitest": "^2.1.8"
   }
 }

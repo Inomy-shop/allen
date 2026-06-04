@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { KnowledgeCandidateRef, KnowledgeNodeKind, KnowledgeRetrievalInput } from './repo-context-engine.js';
 import { runSharedRerankerWorker } from './context-reranker-worker.js';
-import { isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
+import { isRecord } from '../common/context-utils.js';
 import { resolveAllenPython } from '../../python-runtime.js';
 
 export { shutdownContextRerankerWorkers } from './context-reranker-worker.js';
@@ -27,7 +27,7 @@ export interface ContextReranker {
 export class ProviderAwareContextReranker implements ContextReranker {
   readonly providerId = 'provider_aware_context_reranker';
 
-  constructor(private delegate: ContextReranker) {}
+  constructor(private wrapped: ContextReranker) {}
 
   async rerank(input: ContextRerankInput): Promise<ContextRerankResult> {
     if (input.candidates.length <= 1) {
@@ -40,7 +40,7 @@ export class ProviderAwareContextReranker implements ContextReranker {
       };
     }
 
-    return this.delegate.rerank(input);
+    return this.wrapped.rerank(input);
   }
 }
 
@@ -93,6 +93,8 @@ class SidecarContextReranker implements ContextReranker {
             candidateCount: input.candidates.length,
             scoredCandidateCount: scores.size,
             contentCandidateCount: input.candidates.filter((candidate) => typeof candidate.content === 'string' && candidate.content.trim()).length,
+            semanticContextQueryHash: input.semanticContextQueryHash,
+            semanticContextQueryLength: input.semanticContextQueryLength ?? input.semanticContextQuery?.length,
             renderedContextQueryHash: input.renderedContextQueryHash,
             renderedContextQueryLength: input.renderedContextQueryLength ?? input.renderedContextQuery?.length,
             contentUsed: true,
@@ -155,7 +157,7 @@ function mergeSemanticScores(
       const policy = contextPolicyAdjustment(ref, input);
       const finalRelevanceScore = ref.mandatory
         ? 1
-        : clampScore((rerankScore * 0.55) + (retrievalScore * 0.45) + policy.adjustment);
+        : clampScore((rerankScore * 0.8) + (retrievalScore * 0.2) + policy.adjustment);
       const sortScore = ref.mandatory ? deterministicScore : finalRelevanceScore;
       return {
         ref,
@@ -199,7 +201,7 @@ function rankDeterministically(candidates: KnowledgeCandidateRef[], providerId: 
       const baseScore = deterministicPriority(ref, input);
       const retrievalScore = retrievalRelevanceScore(ref);
       const policy = contextPolicyAdjustment(ref, input);
-      const finalRelevanceScore = ref.mandatory ? 1 : retrievalScore;
+      const finalRelevanceScore = ref.mandatory ? 1 : clampScore(retrievalScore + policy.adjustment);
       return { ref, originalRank, score: baseScore + policy.adjustment, baseScore, retrievalScore, finalRelevanceScore, policy };
     })
     .sort((a, b) => b.score - a.score)
@@ -301,15 +303,19 @@ async function runRerankerSidecar(providerId: string, input: ContextRerankInput)
   const script = resolveRerankerScript();
   const python = resolveAllenPython();
   const modelName = process.env.ALLEN_CONTEXT_RERANKER_MODEL;
-  const task = input.renderedContextQuery ?? legacyTaskText(input);
+  const task = input.semanticContextQuery ?? input.renderedContextQuery ?? legacyTaskText(input);
   const payload = {
     providerId,
     task,
-    contextQuery: input.renderedContextQuery,
+    contextQuery: task,
+    semanticContextQuery: input.semanticContextQuery,
     contextQueryIntent: input.contextQueryIntent,
     contextQueryIntentHash: input.contextQueryIntentHash,
+    semanticContextQueryHash: input.semanticContextQueryHash,
+    semanticContextQueryLength: input.semanticContextQueryLength ?? input.semanticContextQuery?.length,
+    auditContextQuery: input.renderedContextQuery,
     renderedContextQueryHash: input.renderedContextQueryHash,
-    renderedContextQueryLength: input.renderedContextQueryLength ?? task.length,
+    renderedContextQueryLength: input.renderedContextQueryLength ?? input.renderedContextQuery?.length ?? task.length,
     currentFiles: input.currentFiles,
     candidates: input.candidates.map((candidate) => ({
       refId: candidate.refId,
@@ -401,7 +407,7 @@ function isProductOrRequirementsTask(input: ContextRerankInput): boolean {
 }
 
 function taskProfileText(input: ContextRerankInput): string {
-  return (input.renderedContextQuery ?? legacyTaskText(input)).toLowerCase();
+  return (input.semanticContextQuery ?? input.renderedContextQuery ?? legacyTaskText(input)).toLowerCase();
 }
 
 function legacyTaskText(input: ContextRerankInput): string {
@@ -410,8 +416,10 @@ function legacyTaskText(input: ContextRerankInput): string {
 
 function resolveRerankerScript(): string {
   if (process.env.ALLEN_CONTEXT_RERANKER_SCRIPT) return process.env.ALLEN_CONTEXT_RERANKER_SCRIPT;
+  const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    join(dirname(fileURLToPath(import.meta.url)), '../scripts/context-reranker.py'),
+    join(here, '../../../scripts/context-reranker.py'),
+    ...(process.env.ALLEN_DESKTOP === '1' ? [join(here, '../../../../src/scripts/context-reranker.py')] : []),
     join(process.cwd(), 'packages/server/src/scripts/context-reranker.py'),
     join(process.cwd(), 'src/scripts/context-reranker.py'),
   ];

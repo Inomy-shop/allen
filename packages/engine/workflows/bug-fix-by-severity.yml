@@ -45,7 +45,7 @@ input:
     required: true
     widget: repo_picker
     label: Target repo
-    description: The registered repo where the bug lives.
+    description: Where the bug lives. Pass your current worktree path if working inside a workspace/worktree; otherwise pass the registered repo root.
   chat_session_id:
     type: string
     required: false
@@ -162,6 +162,14 @@ nodes:
   # workflow continues into the normal approval gate.
   severity_classification_human:
     type: human
+    human:
+      kind: clarify
+      title: "Classify bug severity"
+      summary: "The investigator did not emit small, medium, or large."
+      question: "Pick the severity that best matches the investigation report so the bug-fix workflow can continue."
+      evidence:
+        - label: "Investigation report"
+          url: "{{investigation_artifact_url}}"
     fields:
       - name: severity
         label: "Pick a severity (the investigator did not classify this bug)"
@@ -192,19 +200,21 @@ nodes:
 
   implementation_approval_human:
     type: human
-    fields:
-      - name: approval_decision
-        label: "Approve this root cause and fix scope?"
-        type: select
-        options: [approve, request_changes, cancel]
-        required: true
-      - name: approval_feedback
-        label: "Feedback or reason (optional for approval)"
-        type: textarea
-        required: false
+    human:
+      kind: review
+      widget: approval_gate
+      title: "Approve bug fix scope"
+      summary: "Review the root cause, severity, and proposed fix scope before code changes start."
+      question: "Approve this diagnosis, request changes with feedback, or reject the workflow."
+      highlights:
+        - "Severity: {{severity}}"
+        - "Confidence: {{confidence}}"
+      evidence:
+        - label: "Investigation report"
+          url: "{{investigation_artifact_url}}"
     outputs:
-      approval_decision: "approve | request_changes | cancel"
-      approval_feedback: "Feedback passed back to the investigator or implementation lead."
+      decision: "approve | request_changes | reject"
+      feedback: "Feedback passed back to the investigator or implementation lead."
     prompt: |
       Review the diagnosed root cause and severity classification before
       any implementation agent starts changing code.
@@ -223,7 +233,7 @@ nodes:
       Options:
         approve         → start implementation with this root cause and severity
         request_changes → send feedback back to investigation before coding
-        cancel          → abandon the workflow before implementation
+        reject          → abandon the workflow before implementation
 
   implement:
     agent: engineering-lead
@@ -254,7 +264,7 @@ nodes:
 
       ROUTING PRIMITIVES (small, already in state — no fetch needed):
         SEVERITY:                {{severity}}
-        HUMAN APPROVAL FEEDBACK: {{approval_feedback}}
+        HUMAN APPROVAL FEEDBACK: {{human.implementation_approval_human.latest.feedback.value}}
 
       EXISTING WORKSPACE (do NOT create a new one):
         worktree_path: {{worktree_path}}
@@ -613,16 +623,17 @@ nodes:
   # / abandon.
   escalation_review:
     type: human
-    fields:
-      - name: decision
-        label: "What should happen?"
-        type: select
-        options: [retry_with_feedback, override_and_continue, abandon]
-        required: true
-      - name: feedback
-        label: "Feedback or reason"
-        type: textarea
-        required: true
+    human:
+      kind: recover
+      widget: escalation_gate
+      title: "Recover blocked bug-fix workflow"
+      summary: "The bug-fix workflow paused because an agent escalated or retries were exhausted."
+      question: "Choose whether to retry with feedback, override and continue, or abandon the run."
+      highlights:
+        - "Exhausted from: {{default __retry_exhausted_from \"direct escalate\"}}"
+        - "Severity: {{severity}}"
+        - "QA verdict: {{default qa_verdict \"n/a\"}}"
+        - "Review verdict: {{default review_verdict \"n/a\"}}"
     outputs:
       decision: "retry_with_feedback | override_and_continue | abandon"
       feedback: "Free-text feedback passed to the agent on retry"
@@ -736,24 +747,24 @@ edges:
   - {
       from: implementation_approval_human,
       to: implement,
-      condition: "approval_decision == 'approve'",
+      condition: "human.implementation_approval_human.latest.decision == 'approve'",
     }
   - {
       from: implementation_approval_human,
       to: investigate,
-      condition: "approval_decision == 'request_changes'",
+      condition: "human.implementation_approval_human.latest.decision == 'request_changes'",
       max_retries: 2,
-      retry_context: "Human requested investigation changes before implementation:\n{{approval_feedback}}",
+      retry_context: "Human requested investigation changes before implementation:\n{{human.implementation_approval_human.latest.feedback.value}}",
     }
   - {
       from: implementation_approval_human,
       to: END,
-      condition: "approval_decision == 'cancel'",
+      condition: "human.implementation_approval_human.latest.decision == 'reject'",
     }
   - {
       from: implementation_approval_human,
       to: escalation_review,
-      condition: "approval_decision == 'request_changes' AND __retry_exhausted_from == 'implementation_approval_human'",
+      condition: "human.implementation_approval_human.latest.decision == 'request_changes' AND __retry_exhausted_from == 'implementation_approval_human'",
     }
 
   # Severity-based fast paths after implement:
@@ -850,53 +861,53 @@ edges:
   - {
       from: open_pr,
       to: summary,
-      condition: "(status == 'created' OR status == 'reused_existing') AND severity != 'small'",
+      condition: "(nodes.open_pr.status == 'created' OR nodes.open_pr.status == 'reused_existing') AND severity != 'small'",
     }
   - {
       from: open_pr,
       to: END,
-      condition: "(status == 'created' OR status == 'reused_existing') AND severity == 'small'",
+      condition: "(nodes.open_pr.status == 'created' OR nodes.open_pr.status == 'reused_existing') AND severity == 'small'",
     }
-  - { from: open_pr, to: escalation_review, condition: "status == 'failed'" }
+  - { from: open_pr, to: escalation_review, condition: "nodes.open_pr.status == 'failed'" }
   - { from: summary, to: END }
 
   # escalation_review outgoing
-  - { from: escalation_review, to: END, condition: "decision == 'abandon'" }
+  - { from: escalation_review, to: END, condition: "human.escalation_review.latest.decision == 'abandon'" }
   - {
       from: escalation_review,
       to: investigate,
-      condition: "decision == 'retry_with_feedback' AND __retry_exhausted_from == 'implementation_approval_human'",
-      retry_context: "Human intervened on pre-implementation approval feedback:\n{{feedback}}",
+      condition: "human.escalation_review.latest.decision == 'retry_with_feedback' AND __retry_exhausted_from == 'implementation_approval_human'",
+      retry_context: "Human intervened on pre-implementation approval feedback:\n{{human.escalation_review.latest.feedback.value}}",
     }
   - {
       from: escalation_review,
       to: implement,
-      condition: "decision == 'retry_with_feedback' AND (any_failures == true OR qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')",
-      retry_context: "Human intervened on bug-fix failure. Feedback:\n{{feedback}}",
+      condition: "human.escalation_review.latest.decision == 'retry_with_feedback' AND (any_failures == true OR qa_verdict == 'escalate' OR qa_verdict == 'fail' OR __retry_exhausted_from == 'implementation_validator' OR review_verdict == 'REQUEST_CHANGES')",
+      retry_context: "Human intervened on bug-fix failure. Feedback:\n{{human.escalation_review.latest.feedback.value}}",
     }
   - {
       from: escalation_review,
       to: open_pr,
-      condition: "decision == 'retry_with_feedback' AND status == 'failed'",
-      retry_context: "Human intervened on PR creation failure. Feedback:\n{{feedback}}",
+      condition: "human.escalation_review.latest.decision == 'retry_with_feedback' AND nodes.open_pr.status == 'failed'",
+      retry_context: "Human intervened on PR creation failure. Feedback:\n{{human.escalation_review.latest.feedback.value}}",
     }
   - {
       from: escalation_review,
       to: implementation_validator,
-      condition: "decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')",
+      condition: "human.escalation_review.latest.decision == 'override_and_continue' AND (qa_verdict == 'escalate' OR qa_verdict == 'fail')",
     }
   - {
       from: escalation_review,
       to: code_review,
-      condition: "decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'",
+      condition: "human.escalation_review.latest.decision == 'override_and_continue' AND __retry_exhausted_from == 'implementation_validator'",
     }
   - {
       from: escalation_review,
       to: open_pr,
-      condition: "decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'",
+      condition: "human.escalation_review.latest.decision == 'override_and_continue' AND review_verdict == 'REQUEST_CHANGES'",
     }
   - {
       from: escalation_review,
       to: summary,
-      condition: "decision == 'override_and_continue' AND status == 'failed'",
+      condition: "human.escalation_review.latest.decision == 'override_and_continue' AND nodes.open_pr.status == 'failed'",
     }

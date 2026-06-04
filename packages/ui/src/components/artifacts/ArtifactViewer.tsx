@@ -14,7 +14,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import {
-  X as XIcon, Download, Copy, ExternalLink, Trash2,
+  X as XIcon, Download, Copy, Trash2,
   FileText, FileJson, FileSpreadsheet, Code2, File, Database,
 } from 'lucide-react';
 import { artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
@@ -24,10 +24,9 @@ export interface ArtifactViewerProps {
   artifact: ArtifactDoc;
   onClose?: () => void;
   onDelete?: () => void;
-  showExternalLink?: boolean;
 }
 
-export default function ArtifactViewer({ artifact, onClose, onDelete, showExternalLink = true }: ArtifactViewerProps) {
+export default function ArtifactViewer({ artifact, onClose, onDelete }: ArtifactViewerProps) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -99,17 +98,6 @@ export default function ArtifactViewer({ artifact, onClose, onDelete, showExtern
             >
               <Copy className="w-3.5 h-3.5" />
             </button>
-            {showExternalLink && (
-              <a
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                title="Open in new tab"
-                className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-            )}
             <a
               href={url}
               download={artifact.filename}

@@ -51,7 +51,7 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
           name: 'engineering-lead',
           displayName: 'Custom Engineering Lead',
           system: 'custom prompt',
-          canDelegateTo: ['ui-copywriter'],
+          spawnTargets: ['ui-copywriter'],
           teamName: 'engineering',
           teamRole: 'lead',
           isBuiltIn: true,
@@ -74,7 +74,7 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
     const team = db.store.teams.find((t: any) => t.name === 'engineering');
     expect(lead.displayName).toBe('Custom Engineering Lead');
     expect(lead.system).toBe('custom prompt');
-    expect(lead.canDelegateTo).toEqual(['ui-copywriter']);
+    expect(lead.spawnTargets).toEqual(['ui-copywriter']);
     expect(team.displayName).toBe('Custom Engineering');
     expect(team.mission).toBe('custom mission');
     expect(db.store.agents.length).toBeGreaterThan(1);
@@ -89,7 +89,7 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
           name: 'engineering-lead',
           displayName: 'Custom Engineering Lead',
           system: 'custom prompt',
-          canDelegateTo: ['ui-copywriter'],
+          spawnTargets: ['ui-copywriter'],
           teamName: 'engineering',
           teamRole: 'lead',
           isBuiltIn: true,
@@ -116,30 +116,47 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
     expect(team.mission).not.toBe('custom mission');
   });
 
-  it('seeds mandatory repo knowledge graph persistence instructions', async () => {
+  it('inlines the full coding-guidelines body into code-writing and design/planning specialists only', async () => {
     const db = makeDb();
 
     await new OrgSeedService(db).seed();
 
-    const indexer = db.store.agents.find((a: any) => a.name === 'repo-knowledge-graph-indexer');
-    expect(indexer.model).toBe('opus');
-    expect(indexer.system).toContain('MUST call save_repo_knowledge_graph');
-    expect(indexer.system).toContain('Every indexing job MUST specify exactly one mode');
-    expect(indexer.system).toContain('mandatory_context_map');
-    expect(indexer.system).toContain('graph_mode');
-    expect(indexer.system).toContain('mcp__allen__save_repo_knowledge_graph');
-    expect(indexer.system).toContain('allen_save_artifact');
-    expect(indexer.system).toContain('is not graph persistence');
-    expect(indexer.system).toContain('KNOWLEDGE_GRAPH_VALIDATION_FAILED');
-    expect(indexer.system).toContain('mandatoryForNodeRoles means "always-load workflow node role guideline."');
-    expect(indexer.system).toContain('mandatoryForSpawnedAgentRoles');
-    expect(indexer.system).toContain('mandatoryForSpawnerRoles');
-    expect(indexer.system).toContain('It is valid for a role to have no mandatory mapping');
-    expect(indexer.system).toContain('Command profile files such as package.json');
-    expect(indexer.system).toContain('Cognee uses this graph only to identify Allen mandatory always-load context');
-    expect(indexer.system).toContain('"mandatoryForNodeRoles": []');
-    expect(indexer.system).toContain('"mandatoryForSpawnedAgentRoles": []');
-    expect(indexer.system).toContain('"mandatoryForSpawnerRoles": []');
-    expect(indexer.system).not.toContain('"mandatoryForNodeRoles": ["backend-developer", "qa-lead"]');
+    // Agents that MUST contain the full coding-guidelines body — the 7 code-writing
+    // agents plus the 4 design/planning specialists that produce written artifacts.
+    const guidelineRecipients = [
+      // Code-writing specialists
+      'backend-developer', 'frontend-developer', 'devops-engineer',
+      'pr-creator', 'documentation-writer', 'test-writer', 'pr-review-bot',
+      // Design / planning specialists
+      'solution-architect', 'technical-designer', 'test-planner', 'requirements-analyst',
+    ];
+    for (const agentName of guidelineRecipients) {
+      const agent = db.store.agents.find((a: any) => a.name === agentName);
+      expect(agent, `${agentName} must be seeded`).toBeDefined();
+      expect(agent.system, `${agentName} must contain the # Coding Guidelines heading`).toContain('# Coding Guidelines');
+      expect(agent.system, `${agentName} must contain the ## Think Before Coding section`).toContain('## Think Before Coding');
+      expect(agent.system, `${agentName} must contain the ## Surgical Changes section`).toContain('## Surgical Changes');
+      expect(agent.system, `${agentName} must contain the ## Goal-Driven Execution section`).toContain('## Goal-Driven Execution');
+    }
+
+    // Agents that must NOT contain the coding-guidelines body — leads/team agents
+    // (don't use SPECIALIST_PREAMBLE) and the read-only / review specialists that
+    // were intentionally excluded from the recipient list.
+    const nonRecipients = [
+      // Lead / team agents
+      'engineering-lead', 'codebase-navigator', 'implementation-self-checker',
+      'qa-lead', 'product-manager', 'ceo',
+      // Specialists that read/review but do not produce writeable artifacts
+      'code-reviewer', 'bug-investigator', 'implementation-validator',
+      'acceptance-tester', 'security-specialist', 'doc-auditor', 'pr-workspace-resolver',
+    ];
+    for (const agentName of nonRecipients) {
+      const agent = db.store.agents.find((a: any) => a.name === agentName);
+      expect(agent, `${agentName} must be seeded (update this list if the agent was renamed/removed)`).toBeDefined();
+      expect(
+        agent.system,
+        `${agentName} must NOT contain the coding-guidelines body — it is not a code-writer or design/planning agent`,
+      ).not.toContain('# Coding Guidelines');
+    }
   });
 });

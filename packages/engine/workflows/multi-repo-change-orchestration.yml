@@ -115,6 +115,11 @@ nodes:
 
   clarify_request:
     type: human
+    human:
+      kind: clarify
+      title: "Clarify multi-repo request"
+      summary: "The planner needs more detail before choosing affected repositories."
+      question: "Answer the clarifying questions so the workflow can build a repo-level execution plan."
     fields:
       - name: answers
         label: Answers to clarification questions
@@ -302,16 +307,15 @@ nodes:
 
   review_repo_plan:
     type: human
-    fields:
-      - name: decision
-        label: Decision
-        type: select
-        options: [approve, request_changes, reject]
-        required: true
-      - name: feedback
-        label: Feedback
-        type: textarea
-        required: false
+    human:
+      kind: review
+      widget: approval_gate
+      title: "Approve multi-repo plan"
+      summary: "Review the proposed repositories, phases, and risks before execution starts."
+      question: "Approve the plan, request changes with feedback, or reject the workflow."
+      highlights:
+        - "Summary: {{global_summary}}"
+        - "Strategy: {{execution_strategy}}"
     outputs:
       decision: approve, request_changes, or reject.
       feedback: Human feedback on the repo plan.
@@ -523,17 +527,17 @@ edges:
     condition: "trusted_mode != true"
   - from: review_repo_plan
     to: execute_repo_plan
-    condition: "decision == 'approve'"
+    condition: "human.review_repo_plan.latest.decision == 'approve'"
   - from: review_repo_plan
     to: plan_repo_changes
-    condition: "decision == 'request_changes'"
+    condition: "human.review_repo_plan.latest.decision == 'request_changes'"
     max_retries: 2
     retry_context: |
       Human feedback on the repo plan:
-      {{feedback}}
+      {{human.review_repo_plan.latest.feedback.value}}
   - from: review_repo_plan
     to: END
-    condition: "decision == 'reject'"
+    condition: "human.review_repo_plan.latest.decision == 'reject'"
   - from: execute_repo_plan
     to: final_summary
   - from: final_summary

@@ -8,6 +8,7 @@ import type {
   BuiltInFunction,
   ExecutionLog,
 } from './types.js';
+import { normalizeClaudeUsage, aggregateTokenUsage, tokenUsageFromChildMarkers, type TokenUsageInfo } from './token-usage.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction, outputKeys } from './output-extractor.js';
 import { evaluateCondition } from './condition-parser.js';
@@ -16,6 +17,7 @@ import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { normalizeModelAlias } from './model-alias.js';
 import { hasRepoContextLoadingGuidance, withArtifactsGuidance, withMandatoryRepoContext, withNonInteractiveGuidance, withRepoContextLoadingGuidance } from './agent-file-writer.js';
 import { withRepoContextUsageOutput } from './repo-context-usage.js';
+import { renderClarificationResumePrompt, renderHumanIntervention, renderHumanResumePrompt, renderResumeContextPrompt, renderReviewFeedbackRetryPrompt } from './human-intervention.js';
 import type { MaterializedAgentFileMetadata } from './cli-runner.js';
 import { statSync, mkdirSync } from 'node:fs';
 
@@ -180,6 +182,9 @@ export interface NodeResult {
    */
   sessionKey?: string;
   cost: CostInfo;
+  /** Aggregate token usage for this node across all turns.
+   *  Null when the provider did not report usage data. */
+  tokenUsage?: TokenUsageInfo | null;
   durationMs: number;
   /** Per-tool-call log captured during the node's agent turn(s). Empty
    *  for non-agent node types. See tool-call.ts for record shape. */
@@ -212,6 +217,15 @@ export interface NodeResult {
       sha256: string;
       byteLength: number;
       containsMandatoryRepoContext: boolean;
+      /**
+       * Exact `tools:` allowlist written into the agent file's YAML
+       * frontmatter. Authoritative record of what we put on disk —
+       * the SDK's `system/init` tools array (captured separately as
+       * `toolsAvailable`) can race with MCP `tools/list` discovery and
+       * under-report. Cross-checking the two distinguishes a true
+       * "MCP tool dropped" bug from an init-race artifact.
+       */
+      tools: string[];
       createdAt: Date;
     };
     resolvedModel?: string;
@@ -453,32 +467,32 @@ async function executeAgentNode(
 
   let prompt: string;
   if (promptShape === 'retry') {
-    // Gate-feedback retry — a downstream reviewer rejected this node's
-    // previous output and fired the retry edge. The resumed session carries
-    // the original task and the agent's prior turns; we only hand back the
-    // reviewer's feedback. The agent decides what re-work that requires.
-    //
-    // NOTE on `__retry_source`: this is the REVIEWING node (qa, code_review,
-    // validator, etc.) — the one that decided the retry — NOT the current
-    // node being re-run. The prompt is worded accordingly.
-    const attempt = (state.__retry_attempt as number) ?? 2;
-    const source = (state.__retry_source as string) ?? 'downstream step';
-    const context = (state.retry_context as string) ?? '';
-    prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-REVIEW FEEDBACK — ATTEMPT ${attempt}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Your previous output was rejected by the ${source} step's review. Their
-feedback is below. Apply the fixes and re-emit your JSON output block.
-
-Do NOT redo analysis that is still valid — apply the feedback as a
-targeted fix. You decide what tool calls that requires: re-read the
-files you're about to change, re-run tests after editing, whatever
-your role's contract needs. Do not skip verification to save turns.
-
-━━━ FEEDBACK FROM ${source} ━━━
-${context}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    const clarificationContext = renderClarificationResumePrompt(state.resume_context)
+      || renderClarificationResumePrompt(state.human_input);
+    if (clarificationContext) {
+      prompt = clarificationContext;
+    } else {
+      prompt = renderReviewFeedbackRetryPrompt({
+        resumeContext: state.resume_context,
+        humanInput: state.human_input,
+        retryContext: state.retry_context,
+      });
+    }
   } else if (promptShape === 'forward') {
+    const resumeContext = renderResumeContextPrompt(state.resume_context);
+    const humanContext = renderHumanResumePrompt(state.human_input);
+    const focusedContext = resumeContext || humanContext;
+    if (focusedContext) {
+      prompt = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HUMAN INPUT — RESUME WORKFLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Your role, task, tools, and output schema are UNCHANGED. A human responded
+to a workflow pause. Continue using only the focused human input below and
+the relevant artifacts/outputs already available to this node.
+
+${focusedContext}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    } else {
     // Upstream re-ran. Your task is unchanged, but your inputs changed and
     // your prior outputs are stale.
     //
@@ -523,6 +537,7 @@ the current inputs, even if they happen to match your prior values.
 ━━━ CURRENT WORKFLOW STATE ━━━
 ${renderCurrentState()}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    }
   } else {
     // Full prompt — fresh run (first attempt) or retry with a reset session.
     const renderedTaskPrompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
@@ -532,18 +547,30 @@ ${renderCurrentState()}
     // Retry with no session resume — we can't rely on prior context, so
     // still append the feedback block after the full re-rendered prompt.
     if (isRetryTarget) {
-      const attempt = (state.__retry_attempt as number) ?? 2;
       const source = (state.__retry_source as string) ?? 'previous step';
-      const context = (state.retry_context as string) ?? '';
-      prompt += `
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RETRY FEEDBACK — ATTEMPT ${attempt}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-You are being re-run because the previous attempt of ${source} produced a
+      const clarificationContext = renderClarificationResumePrompt(state.resume_context)
+        || renderClarificationResumePrompt(state.human_input);
+      const resumeContext = clarificationContext ? '' : renderResumeContextPrompt(state.resume_context);
+      const humanContext = clarificationContext || resumeContext ? '' : renderHumanResumePrompt(state.human_input);
+      const retryContext = (state.retry_context as string) ?? '';
+      const context = clarificationContext || [resumeContext || humanContext, retryContext && retryContext !== resumeContext && retryContext !== humanContext ? retryContext : '']
+          .filter((part) => part.trim().length > 0)
+          .join('\n\n');
+      const title = clarificationContext ? '' : 'RETRY FEEDBACK';
+      const intro = clarificationContext
+        ? ''
+        : `You are being re-run because the previous output from ${source} produced a
 result that failed a downstream gate. Address the feedback below in this
 run. Do NOT redo work that is already correct — focus on the issues called
-out here.
+out here.`;
+      prompt += clarificationContext ? `
+
+${context}` : `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${title}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${intro}
 
 ${context}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
@@ -571,6 +598,7 @@ ${context}
   let sessionId: string | undefined;
   let turns = 0;
   let actualCost: number | null = null;
+  let executionTokenUsage: TokenUsageInfo | null = null;
 
   // Throttle agent text logs: buffer text and emit when >= 100 chars or every 5th chunk
   let agentTextBuffer = '';
@@ -635,7 +663,7 @@ ${context}
     }
   } catch { /* MCP not available — continue without */ }
 
-  // Build the effective system prompt with live org chart + delegation targets
+  // Build the effective system prompt with live org chart + spawn targets
   // appended. Runtime injection keeps chat and workflow agent behavior aligned
   // and avoids prompt drift when agents are added/renamed.
   let effectiveSystem: string | undefined = role?.system;
@@ -664,10 +692,10 @@ ${context}
   const repoContextLoadingGuidancePresent = hasRepoContextLoadingGuidance(effectiveSystem);
   const repoContextLoadingGuidanceInjected =
     !repoContextLoadingGuidanceAlreadyPresent && repoContextLoadingGuidancePresent;
-  // Non-interactive guidance — workflow node runs have no live user and no
-  // delegation thread surface, so ask_user / delegate_to_agent must be
-  // disabled. Goes last so it overrides any "use delegate_to_agent" line
-  // that came in via role.system or the org-chart block above.
+  // Non-interactive guidance — workflow node runs have no live user, so
+  // chat-only ask/input tools must be disabled. Goes last so it overrides
+  // any stale interactive instruction that came in via role.system or the
+  // org-chart block above.
   effectiveSystem = withNonInteractiveGuidance(effectiveSystem);
 
   // Captured across all callAgent invocations for this node. First-seen
@@ -693,6 +721,7 @@ ${context}
     text: string;
     sessionId?: string;
     cost: number | null;
+    usage: TokenUsageInfo | null;
     turns: number;
     toolCalls: ToolCallRecord[];
   };
@@ -701,6 +730,7 @@ ${context}
     let localSessionId: string | undefined;
     let localTurns = 0;
     let localCost: number | null = null;
+    let localUsage: TokenUsageInfo | null = null;
     const localToolCalls: ToolCallRecord[] = [];
     const pendingTools = new Map<string, { tool: string; args: Record<string, unknown>; startedAt: Date; startMs: number }>();
 
@@ -798,6 +828,26 @@ ${context}
               byteLength: metadata.byteLength,
               containsMandatoryRepoContext: metadata.containsMandatoryRepoContext,
               createdAt: metadata.createdAt,
+            },
+          });
+          // Dedicated audit event — what tools we passed into the agent file.
+          // Greppable prefix lets ops filter the log stream:
+          //   GET /api/executions/<id>/logs?category=system  → then filter
+          //   message starting with "[agent-tools]".
+          // Pairs with the post-init "[agent-tools] runtime" log below so
+          // file-passed vs runtime-reported can be diffed for the same node.
+          emitLog(deps, nodeName, {
+            level: 'info',
+            category: 'system',
+            message: `[agent-tools] passed to agent file (${metadata.tools.length} tools)`,
+            data: {
+              source: 'frontmatter',
+              agent: nodeDef.agent ?? null,
+              subagentName: metadata.subagentName,
+              toolCount: metadata.tools.length,
+              nativeCount: metadata.tools.filter((t) => !t.startsWith('mcp__')).length,
+              mcpCount: metadata.tools.filter((t) => t.startsWith('mcp__')).length,
+              tools: metadata.tools,
             },
           });
         },
@@ -909,6 +959,37 @@ ${context}
         localSessionId = (message as any).session_id;
         localCost = (message as any).total_cost_usd ?? null;
         localTurns = (message as any).num_turns ?? localTurns;
+        const rawUsage = (message as any).usage ?? null;
+        localUsage = normalizeClaudeUsage(rawUsage);
+        // REQ-009 observability logs
+        if (rawUsage == null) {
+          emitLog(deps, nodeName, {
+            level: 'debug',
+            category: 'system',
+            message: '[token-usage] absent — Claude SDK result message has no usage field',
+          });
+        } else if (localUsage === null) {
+          const rawSample = JSON.stringify(rawUsage).slice(0, 400);
+          emitLog(deps, nodeName, {
+            level: 'warn',
+            category: 'system',
+            message: `[token-usage] unrecognized — Claude usage shape has no expected fields: ${rawSample}`,
+          });
+        } else {
+          const nullFields = Object.entries(localUsage).filter(([, v]) => v === null).map(([k]) => k);
+          if (nullFields.length > 0) {
+            emitLog(deps, nodeName, {
+              level: 'debug',
+              category: 'system',
+              message: `[token-usage] partial — Claude usage has null sub-fields: ${nullFields.join(', ')}`,
+            });
+          }
+          emitLog(deps, nodeName, {
+            level: 'debug',
+            category: 'system',
+            message: `[token-usage] claude result — inputCachedTokens: ${localUsage.inputCachedTokens}, inputNonCachedTokens: ${localUsage.inputNonCachedTokens}, outputTokens: ${localUsage.outputTokens}`,
+          });
+        }
       } else if ((message as any).type === 'system' && (message as any).subtype === 'init') {
         // Capture the list of tools the agent was spawned with on first
         // init. Subsequent retries (JSON-extraction re-prompt, agent-
@@ -916,7 +997,45 @@ ${context}
         // one for the trace.
         if (!capturedToolsAvailable) {
           const tools = (message as any).tools;
-          if (Array.isArray(tools)) capturedToolsAvailable = tools as string[];
+          if (Array.isArray(tools)) {
+            capturedToolsAvailable = tools as string[];
+            // Audit log — what tools the SDK actually exposed at first
+            // init. Pairs with the "[agent-tools] passed" log above (CLI
+            // path) so ops can diff intent vs runtime for any node.
+            const initTools = capturedToolsAvailable;
+            emitLog(deps, nodeName, {
+              level: 'info',
+              category: 'system',
+              message: `[agent-tools] available at runtime (${initTools.length} tools)`,
+              data: {
+                source: 'sdk-init',
+                agent: nodeDef.agent ?? null,
+                toolCount: initTools.length,
+                nativeCount: initTools.filter((t) => !t.startsWith('mcp__')).length,
+                mcpCount: initTools.filter((t) => t.startsWith('mcp__')).length,
+                tools: initTools,
+              },
+            });
+            // Mismatch detector — CLI path only, since SDK path has no
+            // frontmatter to compare against. Catches the known SDK init
+            // race (engineering-lead reported 7 vs the 88 we wrote) so
+            // ops aren't left guessing whether MCP tools got dropped.
+            if (materializedAgentFile && materializedAgentFile.tools.length > initTools.length) {
+              const missing = materializedAgentFile.tools.filter((t) => !initTools.includes(t));
+              emitLog(deps, nodeName, {
+                level: 'warn',
+                category: 'system',
+                message: `[agent-tools] runtime tools (${initTools.length}) < frontmatter tools (${materializedAgentFile.tools.length}) — ${missing.length} entries missing from SDK init (likely race with MCP tools/list; later tool calls may still succeed)`,
+                data: {
+                  agent: nodeDef.agent ?? null,
+                  frontmatterCount: materializedAgentFile.tools.length,
+                  runtimeCount: initTools.length,
+                  missingCount: missing.length,
+                  missing,
+                },
+              });
+            }
+          }
         }
       }
     }
@@ -934,7 +1053,7 @@ ${context}
       }));
     }
 
-    return { text, sessionId: localSessionId, cost: localCost, turns: localTurns, toolCalls: localToolCalls };
+    return { text, sessionId: localSessionId, cost: localCost, usage: localUsage, turns: localTurns, toolCalls: localToolCalls };
   };
 
   // Accumulator for every tool call across the main turn + any extraction
@@ -1016,6 +1135,7 @@ ${context}
   rawResponse = initial.text;
   sessionId = initial.sessionId;
   actualCost = initial.cost;
+  executionTokenUsage = aggregateTokenUsage(executionTokenUsage, initial.usage);
   turns = initial.turns;
 
   // Flush remaining agent text buffer
@@ -1105,6 +1225,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
 
         if (retry.sessionId) sessionId = retry.sessionId;
         if (retry.cost != null) actualCost = (actualCost ?? 0) + retry.cost;
+        executionTokenUsage = aggregateTokenUsage(executionTokenUsage, retry.usage);
         turns += retry.turns;
         allToolCalls.push(...retry.toolCalls);
 
@@ -1287,6 +1408,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
       turns,
       method: actualCost != null ? 'sdk_reported' : 'estimated',
     },
+    tokenUsage: executionTokenUsage,
     durationMs: Date.now() - start,
     toolCalls: allToolCalls,
     // Enrichments
@@ -1371,10 +1493,16 @@ async function executeHumanNode(
 ): Promise<NodeResult> {
   const start = Date.now();
   const prompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, state) : '';
+  const intervention = renderHumanIntervention(nodeName, nodeDef, state);
 
   deps.emitter.emit({
     event: 'input_required',
-    data: { node: nodeName, prompt, fields: nodeDef.fields ?? [] },
+    data: {
+      node: nodeName,
+      prompt: intervention.question || prompt,
+      fields: intervention.fields,
+      intervention,
+    },
   });
 
   return {
@@ -1417,6 +1545,14 @@ async function executeWorkflowNode(
   // For now, estimate based on outputs presence
   const childCostEstimated = (childOutput.__cost_estimated as number) ?? 0;
   const childCostActual = (childOutput.__cost_actual as number | null) ?? null;
+  const childTokenUsage = tokenUsageFromChildMarkers(childOutput as Record<string, unknown>);
+  if (childTokenUsage) {
+    emitLog(deps, nodeName, {
+      level: 'debug',
+      category: 'system',
+      message: `[token-usage] rollup — read child token markers: inputCachedTokens=${childTokenUsage.inputCachedTokens}, inputNonCachedTokens=${childTokenUsage.inputNonCachedTokens}, outputTokens=${childTokenUsage.outputTokens}`,
+    });
+  }
 
   return {
     outputs,
@@ -1425,6 +1561,7 @@ async function executeWorkflowNode(
       estimated: childCostEstimated,
       method: childCostActual != null ? 'sdk_reported' : 'estimated',
     },
+    tokenUsage: childTokenUsage,
     durationMs: Date.now() - start,
   };
 }

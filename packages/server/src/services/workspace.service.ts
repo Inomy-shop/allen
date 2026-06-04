@@ -119,6 +119,13 @@ type WorkspaceDiffFile = {
   modifiedContent: string;
 };
 
+type WorkspaceDiffOptions = {
+  mode?: WorkspaceDiffMode;
+  anchorToCreation?: boolean;
+  includeContent?: boolean;
+  filePath?: string;
+};
+
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
@@ -707,7 +714,7 @@ export class WorkspaceManager {
     }
   }
 
-  async getDiff(id: string, options: { mode?: WorkspaceDiffMode; anchorToCreation?: boolean } = {}): Promise<{ baseBranch: string; baseCommit?: string; mode: WorkspaceDiffMode; files: { path: string; status: string; additions: number; deletions: number; diff: string; originalContent: string; modifiedContent: string }[] }> {
+  async getDiff(id: string, options: WorkspaceDiffOptions = {}): Promise<{ baseBranch: string; baseCommit?: string; mode: WorkspaceDiffMode; files: WorkspaceDiffFile[] }> {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
 
@@ -800,38 +807,43 @@ export class WorkspaceManager {
     const existingPaths = new Set(files.map(f => f.path));
     for (const f of untracked.trim().split('\n').filter(Boolean)) {
       if (!existingPaths.has(f)) {
-        files.push({ path: f, status: 'added', additions: 0, deletions: 0, diff: '', originalContent: '', modifiedContent: '' });
+        const additions = await exec('wc', ['-l', join(ws.worktreePath, f)])
+          .then(result => parseInt(result.stdout.trim().split(/\s+/)[0] ?? '0', 10) || 0)
+          .catch(() => 0);
+        files.push({ path: f, status: 'added', additions, deletions: 0, diff: '', originalContent: '', modifiedContent: '' });
       }
     }
 
-    // Get full diff + full file contents at HEAD and in working tree so the UI
-    // can render a real file-level diff in Monaco (not just the hunk slice).
-    const { readFileSync: rf } = await import('node:fs');
-    await Promise.all(files.map(async (file) => {
-      try {
-        if (file.status === 'added' && !nameStatus.includes(file.path)) {
-          // Untracked file — no HEAD version, read working copy as modified
-          const content = rf(join(ws.worktreePath, file.path), 'utf-8');
-          file.diff = content.split('\n').map(l => `+${l}`).join('\n');
-          file.additions = content.split('\n').length;
-          file.originalContent = '';
-          file.modifiedContent = content;
-        } else {
-          const [{ stdout: diff }, orig, mod] = await Promise.all([
-            exec('git', ['diff', diffRange, '--', file.path], { cwd: ws.worktreePath }),
-            exec('git', ['show', `${baseRef}:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => ''),
-            (async () => {
-              if (file.status === 'deleted') return '';
-              if (!includeUntracked) return exec('git', ['show', `HEAD:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => '');
-              try { return rf(join(ws.worktreePath, file.path), 'utf-8'); } catch { return ''; }
-            })(),
-          ]);
-          file.diff = diff;
-          file.originalContent = orig;
-          file.modifiedContent = mod;
-        }
-      } catch {}
-    }));
+    if (options.includeContent) {
+      const requestedPath = options.filePath ?? '';
+      const filesToHydrate = requestedPath ? files.filter(file => file.path === requestedPath) : files;
+      const { readFileSync: rf } = await import('node:fs');
+      const trackedPaths = new Set(statusLines.map(line => line.split('\t').slice(1).join('\t')));
+      await Promise.all(filesToHydrate.map(async (file) => {
+        try {
+          if (file.status === 'added' && !trackedPaths.has(file.path)) {
+            const content = rf(join(ws.worktreePath, file.path), 'utf-8');
+            file.diff = content.split('\n').map(l => `+${l}`).join('\n');
+            file.additions = content.split('\n').length;
+            file.originalContent = '';
+            file.modifiedContent = content;
+          } else {
+            const [{ stdout: diff }, orig, mod] = await Promise.all([
+              exec('git', ['diff', diffRange, '--', file.path], { cwd: ws.worktreePath }),
+              exec('git', ['show', `${baseRef}:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => ''),
+              (async () => {
+                if (file.status === 'deleted') return '';
+                if (!includeUntracked) return exec('git', ['show', `HEAD:${file.path}`], { cwd: ws.worktreePath }).then(r => r.stdout).catch(() => '');
+                try { return rf(join(ws.worktreePath, file.path), 'utf-8'); } catch { return ''; }
+              })(),
+            ]);
+            file.diff = diff;
+            file.originalContent = orig;
+            file.modifiedContent = mod;
+          }
+        } catch {}
+      }));
+    }
 
     return { baseBranch: ws.baseBranch, baseCommit: ws.baseCommit, mode, files };
   }
@@ -839,17 +851,18 @@ export class WorkspaceManager {
   async listFiles(id: string): Promise<{ path: string; isDir: boolean; status?: string }[]> {
     const ws = await this.get(id);
     if (!ws) throw new Error('Workspace not found');
+    const execOptions = { cwd: ws.worktreePath, timeout: 10_000 };
 
     // Get all tracked + untracked files (including gitignored .env files)
-    const { stdout: tracked } = await exec('git', ['ls-files'], { cwd: ws.worktreePath });
-    const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: ws.worktreePath });
+    const { stdout: tracked } = await exec('git', ['ls-files'], execOptions).catch(() => ({ stdout: '' }));
+    const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], execOptions).catch(() => ({ stdout: '' }));
     // Also include .env files even if gitignored — they're important for workspace config
-    const { stdout: envFiles } = await exec('sh', ['-c', 'find . -name ".env*" -not -path "*/node_modules/*" -not -path "*/.git/*" | sed "s|^\\./||"'], { cwd: ws.worktreePath }).catch(() => ({ stdout: '' }));
+    const { stdout: envFiles } = await exec('sh', ['-c', 'find . \\( -path "*/node_modules/*" -o -path "*/.git/*" -o -path "*/dist/*" -o -path "*/.next/*" -o -path "*/.turbo/*" \\) -prune -o -name ".env*" -print | sed "s|^\\./||"'], execOptions).catch(() => ({ stdout: '' }));
 
     // Get changed files for status highlighting
     const changedMap = new Map<string, string>();
     try {
-      const { stdout: diff } = await exec('git', ['status', '--porcelain'], { cwd: ws.worktreePath });
+      const { stdout: diff } = await exec('git', ['status', '--porcelain'], execOptions);
       for (const line of diff.trim().split('\n').filter(Boolean)) {
         const status = line.substring(0, 2).trim();
         const filePath = line.substring(3);
@@ -1144,6 +1157,8 @@ export class WorkspaceManager {
 
   async linkChat(id: string, chatSessionId: string): Promise<void> {
     const { ObjectId } = await import('mongodb');
+    // Fetch workspace to snapshot its metadata onto the chat session
+    const ws = await this.col.findOne({ _id: new ObjectId(id) }) as Workspace | null;
     await this.col.updateOne(
       { _id: new ObjectId(id) },
       {
@@ -1153,7 +1168,19 @@ export class WorkspaceManager {
     );
     await this.db.collection('chat_sessions').updateOne(
       { _id: new ObjectId(chatSessionId) },
-      { $set: { workspaceId: id, updatedAt: new Date() } },
+      {
+        $set: {
+          workspaceId: id,
+          workspaceName: ws?.name ?? undefined,
+          workspaceRepoId: ws?.repoId ?? undefined,
+          workspaceRepoName: ws?.repoName ?? undefined,
+          workspaceBranch: ws?.branch ?? undefined,
+          workspaceBaseBranch: ws?.baseBranch ?? undefined,
+          workspacePrNumber: ws?.prNumber ?? undefined,
+          workspacePrUrl: ws?.prUrl ?? undefined,
+          updatedAt: new Date(),
+        },
+      },
     );
   }
 }

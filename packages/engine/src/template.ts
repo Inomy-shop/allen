@@ -14,12 +14,29 @@ const templateCache = new Map<string, HandlebarsTemplateDelegate>();
 function prepareContext(context: Record<string, unknown>): Record<string, unknown> {
   const prepared: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(context)) {
-    if (value !== null && typeof value === 'object') {
-      prepared[key] = JSON.stringify(value, null, 2);
-    } else {
-      prepared[key] = value;
-    }
+    prepared[key] = prepareValue(value);
   }
+  return prepared;
+}
+
+function prepareValue(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    const arr = value.map(prepareValue);
+    Object.defineProperty(arr, 'toString', {
+      value: () => JSON.stringify(value, null, 2),
+      enumerable: false,
+    });
+    return arr;
+  }
+  const prepared: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    prepared[key] = prepareValue(child);
+  }
+  Object.defineProperty(prepared, 'toString', {
+    value: () => JSON.stringify(value, null, 2),
+    enumerable: false,
+  });
   return prepared;
 }
 

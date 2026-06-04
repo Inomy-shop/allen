@@ -6,7 +6,6 @@ import {
   hexToRgbChannels,
   normalizeColorMode,
   resolveColorMode,
-  detectSystemThemePreference,
   type ColorMode,
 } from '../lib/theme';
 
@@ -16,7 +15,7 @@ export interface ThemePreset {
   name: string;
   label: string;
   /** When set, selecting this theme auto-switches the color mode. */
-  preferredColorMode?: 'dark' | 'light' | 'system';
+  preferredColorMode?: ColorMode;
   colors: {
     surface: string;
     surface100: string;
@@ -51,16 +50,15 @@ export interface ThemePreset {
 
 export const THEME_PRESETS: ThemePreset[] = [
   {
-    name: 'linear',
-    label: 'Linear',
-    preferredColorMode: 'system',
+    name: 'allen',
+    label: 'Allen',
+    preferredColorMode: 'light',
     colors: {
-      // Light prototype tokens.
-      surface: '#fbfaf8',
+      surface: '#fcfdff',
       surface100: '#ffffff',
-      surface200: '#f6f5f2',
-      border: '#e3e1de',
-      accent: '#2a76e2',
+      surface200: '#f4f6fb',
+      border: '#e2e5ed',
+      accent: '#4763cf',
       accentGreen: '#269e5f',
       accentRed: '#de3b3d',
       accentYellow: '#de9300',
@@ -68,17 +66,16 @@ export const THEME_PRESETS: ThemePreset[] = [
       accentOrange: '#de9300',
     },
     colorsDark: {
-      // Dark prototype tokens.
-      surface: '#06080c',
-      surface100: '#0d1116',
-      surface200: '#0b0f13',
-      border: '#1f2329',
-      accent: '#5ca4ff',
+      surface: '#0f0d0c',
+      surface100: '#171413',
+      surface200: '#201b19',
+      border: '#342c28',
+      accent: '#7d9cba',
       accentGreen: '#43c07a',
       accentRed: '#fa6863',
-      accentYellow: '#f2a618',
+      accentYellow: '#c86f32',
       accentPurple: '#bc88f4',
-      accentOrange: '#f2a618',
+      accentOrange: '#c86f32',
     },
   },
 ];
@@ -288,46 +285,6 @@ export const FONT_PRESETS: FontPreset[] = [
   },
 ];
 
-/* ─── Accent Color Overrides ─── */
-
-export interface AccentOption {
-  name: string;
-  label: string;
-  color: string;
-}
-
-export const ACCENT_OPTIONS_DARK: AccentOption[] = [
-  { name: 'cyan', label: 'Cyan', color: '#00d4ff' },
-  { name: 'blue', label: 'Blue', color: '#3b82f6' },
-  { name: 'green', label: 'Green', color: '#22c55e' },
-  { name: 'purple', label: 'Purple', color: '#a855f7' },
-  { name: 'orange', label: 'Orange', color: '#f97316' },
-  { name: 'red', label: 'Red', color: '#ef4444' },
-  { name: 'pink', label: 'Pink', color: '#ec4899' },
-  { name: 'yellow', label: 'Yellow', color: '#eab308' },
-];
-
-export const ACCENT_OPTIONS_LIGHT: AccentOption[] = [
-  { name: 'blue', label: 'Blue', color: '#2563eb' },
-  { name: 'indigo', label: 'Indigo', color: '#4f46e5' },
-  { name: 'green', label: 'Green', color: '#16a34a' },
-  { name: 'purple', label: 'Purple', color: '#7c3aed' },
-  { name: 'orange', label: 'Orange', color: '#c2410c' },
-  { name: 'red', label: 'Red', color: '#dc2626' },
-  { name: 'pink', label: 'Pink', color: '#db2777' },
-  { name: 'teal', label: 'Teal', color: '#0d9488' },
-  { name: 'terracotta', label: 'Terracotta', color: '#c15f3c' },
-];
-
-/** Get the accent options appropriate for the current resolved color mode. */
-export function getAccentOptions(colorMode: ColorMode): AccentOption[] {
-  const resolved = resolveColorMode(colorMode);
-  return resolved === 'light' ? ACCENT_OPTIONS_LIGHT : ACCENT_OPTIONS_DARK;
-}
-
-/** @deprecated Use getAccentOptions(colorMode) instead. */
-export const ACCENT_OPTIONS = ACCENT_OPTIONS_DARK;
-
 /* ─── Agent Icon Presets ─── */
 
 export interface AgentIconPreset {
@@ -364,11 +321,9 @@ interface PersistedSettings {
 }
 
 function loadFromStorage(): PersistedSettings {
-  // Default theme is Linear (Linear-clean light + Linear-night dark).
-  // The preset itself adapts to the resolved color mode.
   const defaults: PersistedSettings = {
     colorMode: DEFAULT_COLOR_MODE,
-    themeName: 'linear',
+    themeName: 'allen',
     fontName: 'clean',
     customAccent: null,
     agentIcon: 'sparkles',
@@ -382,6 +337,8 @@ function loadFromStorage(): PersistedSettings {
         ...defaults,
         ...parsed,
         colorMode: normalizeColorMode(parsed.colorMode),
+        themeName: 'allen',
+        customAccent: null,
       };
     }
   } catch {
@@ -394,7 +351,7 @@ function saveToStorage(s: PersistedSettings) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
 }
 
-function applyThemeColors(theme: ThemePreset, customAccent: string | null, colorMode: ColorMode) {
+function applyThemeColors(theme: ThemePreset, _customAccent: string | null, colorMode: ColorMode) {
   const root = document.documentElement.style;
   const resolvedMode = resolveColorMode(colorMode);
   const modeTokens = COLOR_MODE_TOKENS[resolvedMode];
@@ -417,10 +374,15 @@ function applyThemeColors(theme: ThemePreset, customAccent: string | null, color
   root.setProperty('--color-surface', hexToRgbChannels(modeTokens.surface ?? surface));
   root.setProperty('--color-surface-100', hexToRgbChannels(modeTokens.surface100 ?? surface100));
   root.setProperty('--color-surface-200', hexToRgbChannels(modeTokens.surface200 ?? surface200));
+  root.setProperty('--color-surface-300', hexToRgbChannels(modeTokens.surface300));
   root.setProperty('--color-border', hexToRgbChannels(modeTokens.border ?? border));
-  const accentHex = customAccent ?? accentBase;
+  root.setProperty('--color-border-strong', hexToRgbChannels(modeTokens.borderStrong));
+  const accentHex = accentBase;
   root.setProperty('--color-accent', hexToRgbChannels(accentHex));
   root.setProperty('--accent-hex', accentHex);
+  root.setProperty('--color-accent-soft', hexToRgbChannels(modeTokens.accentSoft));
+  root.setProperty('--accent-soft-hex', modeTokens.accentSoft);
+  root.setProperty('--color-accent-hover', hexToRgbChannels(modeTokens.accentHover));
   root.setProperty('--color-accent-green', hexToRgbChannels(accentGreen));
   root.setProperty('--color-accent-red', hexToRgbChannels(accentRed));
   root.setProperty('--accent-red-hex', accentRed);
@@ -453,6 +415,16 @@ function applyThemeColors(theme: ThemePreset, customAccent: string | null, color
 }
 
 function applyFontPreset(preset: FontPreset) {
+  const root = document.documentElement.style;
+  if (window.allenDesktop) {
+    document.getElementById('allen-fonts')?.remove();
+    root.setProperty('--font-heading', "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif");
+    root.setProperty('--font-body', "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif");
+    root.setProperty('--font-mono', "'SF Mono', Menlo, Monaco, Consolas, monospace");
+    root.setProperty('--font-label', "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif");
+    return;
+  }
+
   let link = document.getElementById('allen-fonts') as HTMLLinkElement | null;
   if (!link) {
     link = document.createElement('link');
@@ -462,7 +434,6 @@ function applyFontPreset(preset: FontPreset) {
   }
   link.href = preset.googleFontsUrl;
 
-  const root = document.documentElement.style;
   root.setProperty('--font-heading', `'${preset.heading}', sans-serif`);
   root.setProperty('--font-body', `'${preset.body}', sans-serif`);
   root.setProperty('--font-mono', `'${preset.mono}', monospace`);
@@ -506,7 +477,7 @@ interface SettingsState {
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   colorMode: DEFAULT_COLOR_MODE,
-  themeName: 'linear',
+  themeName: 'allen',
   fontName: 'clean',
   customAccent: null,
   agentIcon: 'sparkles',
@@ -527,14 +498,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setTheme: (name: string) => {
     const theme = getTheme(name);
-    // Auto-switch color mode to match the theme's preferred mode (dark/light)
-    const colorMode = theme.preferredColorMode ?? get().colorMode;
-    // Reset custom accent so the theme's built-in accent takes effect.
-    // Prevents a bright-on-dark accent from persisting onto a light theme.
+    const colorMode = get().colorMode;
     const customAccent = null;
     applyThemeColors(theme, customAccent, colorMode);
-    set({ themeName: name, colorMode, customAccent });
-    saveToStorage({ colorMode, themeName: name, fontName: get().fontName, customAccent, agentIcon: get().agentIcon });
+    set({ themeName: theme.name, colorMode, customAccent });
+    saveToStorage({ colorMode, themeName: theme.name, fontName: get().fontName, customAccent, agentIcon: get().agentIcon });
   },
 
   setFont: (name: string) => {
@@ -544,12 +512,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     saveToStorage({ colorMode: get().colorMode, themeName: get().themeName, fontName: name, customAccent: get().customAccent, agentIcon: get().agentIcon });
   },
 
-  setCustomAccent: (color: string | null) => {
+  setCustomAccent: (_color: string | null) => {
     const { colorMode, themeName } = get();
     const theme = getTheme(themeName);
-    applyThemeColors(theme, color, colorMode);
-    set({ customAccent: color });
-    saveToStorage({ colorMode, themeName, fontName: get().fontName, customAccent: color, agentIcon: get().agentIcon });
+    applyThemeColors(theme, null, colorMode);
+    set({ customAccent: null });
+    saveToStorage({ colorMode, themeName, fontName: get().fontName, customAccent: null, agentIcon: get().agentIcon });
   },
 
   setAgentIcon: (icon: string) => {
@@ -560,11 +528,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   resetToDefaults: () => {
     localStorage.removeItem(STORAGE_KEY);
     const colorMode = DEFAULT_COLOR_MODE;
-    const theme = getTheme('linear');
+    const theme = getTheme('allen');
     const font = getFont('clean');
     applyThemeColors(theme, null, colorMode);
     applyFontPreset(font);
-    set({ colorMode, themeName: 'linear', fontName: 'clean', customAccent: null, agentIcon: 'sparkles' });
+    set({ colorMode, themeName: 'allen', fontName: 'clean', customAccent: null, agentIcon: 'sparkles' });
   },
 
   initFromLocalStorage: () => {
@@ -577,19 +545,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   addSystemThemeListener: () => {
-    if (typeof window === 'undefined') return;
-
-    const handleSystemThemeChange = (e: MediaQueryListEvent) => {
-      const { colorMode, themeName, customAccent } = get();
-      if (colorMode === 'system') {
-        const theme = getTheme(themeName);
-        applyThemeColors(theme, customAccent, 'system');
-      }
-    };
+    if (typeof window === 'undefined') return undefined;
 
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    mediaQuery.addEventListener('change', handleSystemThemeChange);
+    const handleSystemThemeChange = () => {
+      const { colorMode, themeName, customAccent } = get();
+      if (colorMode !== 'system') return;
+      applyThemeColors(getTheme(themeName), customAccent, colorMode);
+    };
 
+    mediaQuery.addEventListener('change', handleSystemThemeChange);
     return () => {
       mediaQuery.removeEventListener('change', handleSystemThemeChange);
     };

@@ -26,20 +26,32 @@
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { BuiltInFunction } from '../types.js';
 
-const UPLOADS_DIR = process.env.UPLOADS_DIR ?? join(process.cwd(), '..', '..', 'uploads');
+/**
+ * Resolve the uploads directory.
+ * Priority: UPLOADS_DIR env var > ~/.allen/uploads
+ *
+ * The engine package is intentionally decoupled from the server package,
+ * so we inline the same resolution logic here rather than importing from
+ * packages/server/src/services/upload-storage.ts.
+ */
+function getUploadsDir(): string {
+  return process.env.UPLOADS_DIR ?? join(homedir(), '.allen', 'uploads');
+}
 
-function ensureUploadsDir(): void {
-  if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+function ensureUploadsDir(dir: string): void {
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
 
 function writePublicMarkdown(slug: string, body: string): string {
-  ensureUploadsDir();
+  const uploadsDir = getUploadsDir();
+  ensureUploadsDir(uploadsDir);
   const id = randomUUID();
   const storedName = `${id}-${slug}.md`.replace(/[^a-zA-Z0-9._-]/g, '-');
-  writeFileSync(join(UPLOADS_DIR, storedName), body, 'utf-8');
+  writeFileSync(join(uploadsDir, storedName), body, 'utf-8');
   return `/api/files/${storedName}`;
 }
 

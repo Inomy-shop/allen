@@ -2,6 +2,10 @@ import { useAuthStore } from '../stores/authStore';
 
 const BASE = '/api';
 
+function encodeFilePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
 /**
  * Returns the Authorization header for authenticated API calls.
  * Used by places that need to bypass the `request()` helper — SSE streams,
@@ -96,7 +100,13 @@ async function request<T>(path: string, options: RequestInit = {}, signal?: Abor
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? `Request failed: ${res.status}`);
+    const error = new Error(body.error ?? `Request failed: ${res.status}`) as Error & {
+      status?: number;
+      body?: unknown;
+    };
+    error.status = res.status;
+    error.body = body;
+    throw error;
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -185,6 +195,12 @@ export type RunPhase =
   | 'failed'
   | 'cancelled';
 
+export interface TokenUsageInfo {
+  inputCachedTokens: number | null;
+  inputNonCachedTokens: number | null;
+  outputTokens: number | null;
+}
+
 export interface RunStatus {
   origin: 'chat' | 'linear' | 'workflow' | 'direct_agent';
   runType: 'workflow' | 'agent';
@@ -212,11 +228,15 @@ export interface RunStatus {
     completedAt?: string | null;
     durationMs?: number | null;
     cost?: { actual: number | null; estimated: number } | null;
+    tokenUsage?: TokenUsageInfo | null;
     currentNodes?: string[];
     completedNodes?: string[];
     failedNode?: string | null;
     errorMessage?: string | null;
     isAgentExecution?: boolean;
+    parentExecutionId?: string | null;
+    rootExecutionId?: string | null;
+    spawnDepth?: number | null;
     contextWorkflowEvaluation?: {
       jobId?: string;
       provider?: string;
@@ -321,6 +341,7 @@ export interface RunStatus {
     currentStep?: string | null;
     durationMs?: number | null;
     cost?: { actual: number | null; estimated: number } | null;
+    tokenUsage?: TokenUsageInfo | null;
     errorMessage?: string | null;
   }>;
   workflowSteps: Array<{
@@ -337,6 +358,7 @@ export interface RunStatus {
     completedAt?: string | null;
     durationMs?: number | null;
     cost?: { actual: number | null; estimated: number } | null;
+    tokenUsage?: TokenUsageInfo | null;
     error?: string | null;
     io?: {
       input?: string | null;
@@ -386,6 +408,7 @@ export interface SpawnedChild {
   completedAt: string | null;
   durationMs: number | null;
   cost: { actual: number | null; estimated: number } | null;
+  tokenUsage?: TokenUsageInfo | null;
   failedNode: string | null;
   errorMessage: string | null;
   promptPreview: string;
@@ -415,6 +438,7 @@ export const executions = {
     limit?: number;
     offset?: number;
     includeTotal?: boolean;
+    enrich?: boolean;
   } = {}) => {
     const qs = new URLSearchParams();
     if (params.status) qs.set('status', params.status);
@@ -423,6 +447,7 @@ export const executions = {
     if (params.type) qs.set('type', params.type);
     if (params.search) qs.set('search', params.search);
     if (params.includeTotal) qs.set('includeTotal', 'true');
+    if (params.enrich) qs.set('enrich', 'true');
     qs.set('limit', String(params.limit ?? 50));
     qs.set('offset', String(params.offset ?? 0));
     return request<{ items: any[]; total?: number }>(`/executions?${qs.toString()}`);
@@ -445,6 +470,7 @@ export const executions = {
     runContext?: RunStatus | null;
   }>>(`/executions/chat/${sessionId}`),
   context: (id: string) => request<RunStatus>(`/executions/${id}/context`),
+  contextUsage: (id: string) => request<any>(`/executions/${id}/context-usage`),
   start: (
     workflowId: string,
     input: Record<string, unknown>,
@@ -551,11 +577,11 @@ export const executions = {
 };
 
 // ── Agent Activity (shared shape) ─────────────────────────────────────────
-// Row shape returned by both the delegation and execution activity routes.
+// Row shape returned by agent activity routes.
 // See packages/server/src/services/agent-activity.service.ts PersistedActivityRow.
 export interface ActivityEvent {
   id: string;
-  scope: 'delegation' | 'execution';
+  scope: 'execution';
   refId: string;
   agent: string;
   type: 'text' | 'thinking' | 'tool_call' | 'tool_result';
@@ -593,12 +619,12 @@ export const agents = {
       method: 'PATCH',
       body: JSON.stringify({ teamName, teamRole }),
     }),
-  bulkAssignTeam: (agentNames: string[], teamName: string, autoWireDelegation = true) =>
+  bulkAssignTeam: (agentNames: string[], teamName: string, autoWireSpawnTargets = true) =>
     request<{ moved: string[]; skipped: { name: string; reason: string }[] }>(
       '/agents/bulk-team',
       {
         method: 'POST',
-        body: JSON.stringify({ agentNames, teamName, autoWireDelegation }),
+        body: JSON.stringify({ agentNames, teamName, autoWireSpawnTargets }),
       },
     ),
   run: (name: string, body: { prompt: string; repo_path?: string; session_id?: string }) =>
@@ -623,7 +649,7 @@ export const teams = {
     team: { name: string; displayName: string; description?: string; mission?: string; parentTeamName?: string };
     lead?: { name?: string; displayName?: string; model?: string; reasoningEffort?: string; system?: string };
     memberAgentNames?: string[];
-    autoWireDelegation?: boolean;
+    autoWireSpawnTargets?: boolean;
   }) =>
     request<any>('/teams/with-members', {
       method: 'POST',
@@ -658,6 +684,7 @@ export const interventions = {
     request<any[]>(`/interventions/by-workflow-run/${workflowRunId}`),
   respond: (id: string, body: {
     decision: 'approve' | 'request_changes' | 'reject' | 'answer';
+    action_id?: string;
     field_values?: Record<string, unknown>;
     feedback?: string;
     scope?: 'requirements' | 'architecture' | 'technical_design' | 'all' | null;
@@ -709,15 +736,45 @@ export const repos = {
   getCogneeStatus: (id: string) =>
     request<any>(`/repos/${id}/cognee`),
   refreshCognee: (id: string, options?: { cleanRebuild?: boolean }) =>
-    request<any>(`/repos/${id}/cognee/refresh`, { method: 'POST', body: JSON.stringify({ pullLatest: true, cleanRebuild: options?.cleanRebuild === true }) }),
+    request<any>(`/repos/${id}/cognee/refresh`, { method: 'POST', body: JSON.stringify({ pullLatest: false, cleanRebuild: options?.cleanRebuild === true }) }),
   stopCognee: (id: string) =>
     request<any>(`/repos/${id}/cognee/stop`, { method: 'POST' }),
+  getContextManagement: (id: string) =>
+    request<any>(`/repos/${id}/context-management`),
+  runContextPlayground: (id: string, body: Record<string, unknown>) =>
+    request<any>(`/repos/${id}/context-management/playground`, { method: 'POST', body: JSON.stringify(body) }),
+  getContextGraph: (id: string, params: Record<string, string | number | undefined> = {}) => {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') search.set(key, String(value));
+    });
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return request<any>(`/repos/${id}/context-management/graph${suffix}`);
+  },
+  getContextGraphNode: (id: string, nodeId: string, params: Record<string, string | number | boolean | undefined> = {}) => {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') search.set(key, String(value));
+    });
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return request<any>(`/repos/${id}/context-management/graph/nodes/${encodeURIComponent(nodeId)}${suffix}`);
+  },
+  createCuratedContextEntry: (id: string, body: Record<string, unknown>) =>
+    request<any>(`/repos/${id}/context-management/entries`, { method: 'POST', body: JSON.stringify(body) }),
+  updateCuratedContextEntry: (id: string, entryId: string, body: Record<string, unknown>) =>
+    request<any>(`/repos/${id}/context-management/entries/${encodeURIComponent(entryId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  saveMandatoryContext: (id: string, body: Record<string, unknown>) =>
+    request<any>(`/repos/${id}/context-management/mandatory`, { method: 'POST', body: JSON.stringify(body) }),
+  updateMandatoryContext: (id: string, mappingId: string, body: Record<string, unknown>) =>
+    request<any>(`/repos/${id}/context-management/mandatory/${encodeURIComponent(mappingId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   getAllFiles: (id: string) => request<any[]>(`/repos/${id}/all-files`),
-  getFile: (id: string, path: string) => request<any>(`/repos/${id}/file/${path}`),
+  getFile: (id: string, path: string) => request<any>(`/repos/${id}/file/${encodeFilePath(path)}`),
   context: (id: string) =>
     request<any>(`/repos/${id}/context`),
   rescanContext: (id: string) =>
     request<any>(`/repos/${id}/rescan-context`, { method: 'POST' }),
+  cancelScan: (id: string) =>
+    request<any>(`/repos/${id}/scan/cancel`, { method: 'POST' }),
 };
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
@@ -758,6 +815,14 @@ export interface ChatSession {
   repoPath?: string;
   repoName?: string;
   workspaceId?: string;
+  workspaceName?: string;
+  workspaceRepoId?: string;
+  workspaceRepoName?: string;
+  workspaceBranch?: string;
+  workspaceBaseBranch?: string;
+  workspacePrNumber?: number;
+  workspacePrUrl?: string;
+  streaming?: boolean;
   archivedWorkspace?: {
     id: string;
     name?: string;
@@ -809,7 +874,7 @@ export const chat = {
     const qs = params ? '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => Boolean(v)) as Array<[string, string]>).toString() : '';
     return request<any[]>(`/chat/slash-commands${qs}`);
   },
-  createSession: (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string) =>
+  createSession: (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string, workspaceId?: string) =>
     request<any>('/chat/sessions', {
       method: 'POST',
       body: JSON.stringify({
@@ -817,6 +882,7 @@ export const chat = {
         model,
         ...(agentOverrides ? { agentOverrides } : {}),
         ...(repoId ? { repoId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
       }),
     }),
   getSession: (id: string) => request<any>(`/chat/sessions/${id}`),
@@ -840,19 +906,8 @@ export const chat = {
     request<{ title: string }>(`/chat/sessions/${id}/generate-title`, { method: 'POST' }),
   deleteSession: (id: string) =>
     request<void>(`/chat/sessions/${id}`, { method: 'DELETE' }),
-  getThreads: (id: string) =>
-    request<any[]>(`/chat/sessions/${id}/threads`),
-  // Replay persisted activity for a single delegation (conversation).
-  // Called from useChat on initial load to repopulate liveActivity for
-  // still-running threads so a page refresh doesn't erase their visible
-  // progress feed.
-  getDelegationActivity: (conversationId: string, opts?: { since?: string; limit?: number }) => {
-    const params = new URLSearchParams();
-    if (opts?.since) params.set('since', opts.since);
-    if (opts?.limit) params.set('limit', String(opts.limit));
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    return request<{ events: ActivityEvent[] }>(`/chat/delegations/${conversationId}/activity${qs}`);
-  },
+  getContextUsage: (id: string) =>
+    request<any>(`/chat/sessions/${id}/context-usage`),
   answerAgentQuestion: (id: string, answer: string) =>
     request<any>(`/chat/sessions/${id}/agent-answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
   logs: (params?: Record<string, string>) => {
@@ -872,9 +927,10 @@ export const alerts = {
 
 // ── MCP Servers ──────────────────────────────────────────────────────────
 // MCP records come from either a hardcoded preset or a registered repo.
-// Env/args never carry credentials — users put `ALLEN_<KEY>` vars in Allen's
-// root .env and the server strips the prefix at spawn. `create()` returns
-// 400 with `{ missing: string[] }` if any required ALLEN_* var is absent.
+// Env/args never carry literal credentials. Users provide `ALLEN_<KEY>` values
+// through the desktop secret store (or env in web/dev mode); MCP subprocesses
+// receive only bare `<KEY>` via an allowlist. Creates return 400 with
+// `{ missing: string[] }` if any required credential is absent.
 export type McpServerSource =
   | { kind: 'preset'; presetName: string }
   | { kind: 'repo'; repoId: string; entryPath: string; installPath?: string };
@@ -910,9 +966,11 @@ export interface McpServer {
 export interface McpPreset {
   name: string;
   description: string;
-  type: 'stdio' | 'sse';
+  type: 'stdio' | 'sse' | 'http';
   command?: string;
   args?: string[];
+  url?: string;
+  headers?: Record<string, string>;
   envKeys: string[];
   argKeys?: string[];
   docsUrl: string;
@@ -941,9 +999,9 @@ export const mcp = {
   tools: (options?: { refresh?: boolean }) =>
     request<McpToolGroup[]>(`/mcp/tools${options?.refresh === false ? '?refresh=0' : ''}`),
   /**
-   * Create an MCP server. Preset flow: send `{ name, type, source: { kind: 'preset', presetName } }`
-   * — backend copies command/args/envKeys from the preset and validates ALLEN_* env.
-   * Repo flow: send `{ name, type, source: { kind: 'repo', repoId, entryPath, installPath? }, envKeys }`.
+   * Create an MCP server. Preset flow: send `{ name, type, source: { kind: 'preset', presetName }, credentials? }`
+   * — backend copies command/args/envKeys from the preset and validates app-managed credentials.
+   * Repo flow: send `{ name, type, source: { kind: 'repo', repoId, entryPath, installPath? }, envKeys, credentials? }`.
    */
   create: (body: {
     name: string;
@@ -955,12 +1013,13 @@ export const mcp = {
     argKeys?: string[];
     command?: string;
     args?: string[];
+    credentials?: Record<string, string>;
     url?: string;
     headers?: Record<string, string>;
     /** Python venv config — sent only for .py entries without a manual command override. */
     python?: { interpreter?: string; requirementsPath?: string };
   }) => request<McpServer>('/mcp/servers', { method: 'POST', body: JSON.stringify(body) }),
-  update: (id: string, body: Partial<McpServer>) =>
+  update: (id: string, body: Partial<McpServer> & { credentials?: Record<string, string> }) =>
     request<McpServer>(`/mcp/servers/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   toggle: (id: string) =>
     request<McpServer>(`/mcp/servers/${id}/toggle`, { method: 'PATCH' }),
@@ -1079,6 +1138,47 @@ export const auth = {
 };
 
 // ── System ────────────────────────────────────────────────────────────────
+export type DesktopRuntimeSettingsResponse = {
+  desktop: boolean;
+  editable: boolean;
+  configPath: string | null;
+  contextSetup: {
+    selected: boolean;
+    configuredPython: string | null;
+    pythonPath: string;
+    venvPython: string;
+    cogneeImportOk: boolean;
+    setupRecommended: boolean;
+    detail: string;
+  };
+  groups: Array<{
+    id: string;
+    title: string;
+    description: string;
+    fields: Array<{
+      key: string;
+      label: string;
+      description?: string;
+      kind: 'boolean' | 'number' | 'path' | 'select' | 'string';
+      defaultValue: string;
+      currentValue: string;
+      configuredValue: string | null;
+      source: 'desktop_config' | 'env' | 'default';
+      placeholder?: string;
+      options?: Array<{ label: string; value: string }>;
+      restartRequired: boolean;
+      readOnly: boolean;
+      advanced: boolean;
+      showWhen?: {
+        key: string;
+        equals?: string;
+        notEquals?: string;
+        in?: string[];
+      };
+    }>;
+  }>;
+};
+
 export const system = {
   onboardingStatus: () =>
     request<{
@@ -1086,7 +1186,7 @@ export const system = {
       userCount: number;
       adminCount: number;
       complete: boolean;
-      step: 'account' | 'complete';
+      step: 'account' | 'health' | 'model_defaults' | 'repository' | 'first_workflow' | 'complete';
     }>('/system/onboarding-status'),
   health: () =>
     request<{
@@ -1115,6 +1215,63 @@ export const system = {
         cogneeEnabled: boolean;
       };
     }>('/system/runtime-config'),
+  desktopRuntime: () =>
+    request<{
+      desktop: boolean;
+      paths: {
+        allenHome: string | null;
+        workspaceBaseDir: string | null;
+      };
+      runtime: {
+        terminalWsPort: string | null;
+        mongoUriConfigured: boolean;
+        managedMongo: boolean;
+      };
+      secrets: Array<{
+        key: string;
+        label: string;
+        group: string;
+        configured: boolean;
+        source: 'secret' | 'config' | 'missing';
+      }>;
+    }>('/system/desktop-runtime'),
+  desktopRuntimeSettings: () =>
+    request<DesktopRuntimeSettingsResponse>('/system/desktop-runtime/settings'),
+  updateDesktopRuntimeSettings: (values: Record<string, string | boolean | number | null>) =>
+    request<DesktopRuntimeSettingsResponse>(
+      '/system/desktop-runtime/settings',
+      { method: 'PATCH', body: JSON.stringify({ values }) },
+    ),
+  saveDesktopOnboardingModelDefaults: (body: {
+    chatProvider: 'codex' | 'claude-cli';
+    agentProvider: '' | 'codex' | 'claude-cli';
+    agentModel?: string;
+  }) =>
+    request<{
+      chatProvider: 'codex' | 'claude-cli';
+      agentProvider: '' | 'codex' | 'claude-cli';
+      agentModel: string;
+      settings: DesktopRuntimeSettingsResponse;
+    }>('/system/desktop-runtime/onboarding/model-defaults', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  setupDesktopCogneeContext: (provider: 'cognee' | 'cognee_memory' = 'cognee') =>
+    request<{
+      setup: DesktopRuntimeSettingsResponse['contextSetup'];
+      output: string[];
+      settings: DesktopRuntimeSettingsResponse;
+    }>('/system/desktop-runtime/context/cognee/setup', {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
+    }),
+  setDesktopSecret: (key: string, value: string) =>
+    request<{ key: string; configured: boolean; source: 'secret' }>(
+      '/system/desktop-runtime/secrets',
+      { method: 'PUT', body: JSON.stringify({ key, value }) },
+    ),
+  deleteDesktopSecret: (key: string) =>
+    request<void>(`/system/desktop-runtime/secrets/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   verifySsh: (host = 'github.com') =>
     request<{
       ok: boolean;
@@ -1129,18 +1286,18 @@ export const system = {
     request<{
       complete: boolean;
       skipped: boolean;
-      step: 'health' | 'repository' | 'first_workflow' | 'complete';
+      step: 'health' | 'model_defaults' | 'repository' | 'first_workflow' | 'complete';
       completedAt: string | null;
       skippedAt: string | null;
     }>('/system/onboarding-progress'),
   updateOnboardingProgress: (body: {
-    step?: 'health' | 'repository' | 'first_workflow' | 'complete';
+    step?: 'health' | 'model_defaults' | 'repository' | 'first_workflow' | 'complete';
     action?: 'complete' | 'skip';
   }) =>
     request<{
       complete: boolean;
       skipped: boolean;
-      step: 'health' | 'repository' | 'first_workflow' | 'complete';
+      step: 'health' | 'model_defaults' | 'repository' | 'first_workflow' | 'complete';
       completedAt: string | null;
       skippedAt: string | null;
     }>('/system/onboarding-progress', {

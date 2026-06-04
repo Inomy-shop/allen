@@ -3,20 +3,23 @@ import {
   buildContextQueryIntent,
   contextQueryIntentHash,
   renderedContextQueryHash,
-  renderContextQuery,
+  renderSemanticContextQuery,
+  semanticContextQueryHash,
   type ContextQueryIntent,
 } from '../core/context-query-intent.js';
-import { firstString, isRecord } from '../allen-knowledge-graph/repo-knowledge-graph-utils.js';
+import { firstString, isRecord } from '../common/context-utils.js';
 import type { CogneeInjectionDecision } from './cognee-metadata-enrichment.js';
 
 export const DEFAULT_COGNEE_CANDIDATE_LIMIT = 30;
 export const DEFAULT_COGNEE_MIN_SELECTION_SCORE = 0.45;
 export const DEFAULT_COGNEE_MIN_INJECTION_SCORE = 0.6;
+export const DEFAULT_CURATED_CONTEXT_MIN_SELECTION_SCORE = 0.3;
+export const DEFAULT_CURATED_CONTEXT_MIN_INJECTION_SCORE = 0.55;
 
 export type RetrievalIntentEnvelope = ContextQueryIntent;
 
 export function buildCogneeQuery(input: KnowledgeRetrievalInput): string {
-  return input.renderedContextQuery ?? renderContextQuery(buildRetrievalIntentEnvelope(input));
+  return input.semanticContextQuery ?? renderSemanticContextQuery(buildRetrievalIntentEnvelope(input));
 }
 
 export function retrievalEnvelopeHash(envelope: RetrievalIntentEnvelope): string {
@@ -25,6 +28,10 @@ export function retrievalEnvelopeHash(envelope: RetrievalIntentEnvelope): string
 
 export function renderedQueryHash(query: string): string {
   return renderedContextQueryHash(query);
+}
+
+export function semanticQueryHash(query: string): string {
+  return semanticContextQueryHash(query);
 }
 
 export function buildGraphExpansionQuery(input: KnowledgeRetrievalInput, seeds: KnowledgeCandidateRef[]): string {
@@ -52,13 +59,15 @@ export function selectCogneeRefs(
 } {
   const minSelectionScore = boundedScoreEnv('ALLEN_COGNEE_MIN_SELECTION_SCORE', DEFAULT_COGNEE_MIN_SELECTION_SCORE);
   const minInjectionScore = boundedScoreEnv('ALLEN_COGNEE_MIN_INJECTION_SCORE', DEFAULT_COGNEE_MIN_INJECTION_SCORE);
+  const minCuratedSelectionScore = boundedScoreEnv('ALLEN_CURATED_CONTEXT_MIN_SELECTION_SCORE', DEFAULT_CURATED_CONTEXT_MIN_SELECTION_SCORE);
+  const minCuratedInjectionScore = boundedScoreEnv('ALLEN_CURATED_CONTEXT_MIN_INJECTION_SCORE', DEFAULT_CURATED_CONTEXT_MIN_INJECTION_SCORE);
   const scoredEntries = candidates.map((ref, originalRank) => scoreCogneeRef(ref, input, envelope, originalRank, retrievalStage));
   const scored = scoredEntries
     .filter((entry) => !entry.rejectedByHardFilter)
     .sort((a, b) => b.score - a.score || a.originalRank - b.originalRank);
-  const selectedEntries = scored.filter((entry) => entry.ref.mandatory || entry.score >= minSelectionScore);
+  const selectedEntries = scored.filter((entry) => entry.ref.mandatory || entry.score >= selectionThresholdFor(entry.ref, { minSelectionScore, minCuratedSelectionScore }));
   const scoreRejected = scored
-    .filter((entry) => !entry.ref.mandatory && entry.score < minSelectionScore)
+    .filter((entry) => !entry.ref.mandatory && entry.score < selectionThresholdFor(entry.ref, { minSelectionScore, minCuratedSelectionScore }))
     .map((entry) => withRetrievalPolicy(entry.ref, {
       ...entry,
       selected: false,
@@ -66,8 +75,8 @@ export function selectCogneeRefs(
       injectionDecision: 'manifest_only',
       thresholdRejected: true,
       rejectionReason: 'below_cognee_selection_threshold',
-      minSelectionScore,
-      minInjectionScore,
+      minSelectionScore: selectionThresholdFor(entry.ref, { minSelectionScore, minCuratedSelectionScore }),
+      minInjectionScore: injectionThresholdFor(entry.ref, { minInjectionScore, minCuratedInjectionScore }),
     }));
   const hardRejected = scoredEntries
     .filter((entry) => entry.rejectedByHardFilter)
@@ -79,15 +88,15 @@ export function selectCogneeRefs(
     }));
   const selectedRefs = selectedEntries.map((entry, selectedRank) => {
     const injectable = (entry.injectionDecision === 'mandatory_full' || entry.injectionDecision === 'snippet')
-      && (entry.ref.mandatory || entry.score >= minInjectionScore);
+      && (entry.ref.mandatory || entry.score >= injectionThresholdFor(entry.ref, { minInjectionScore, minCuratedInjectionScore }));
     return withRetrievalPolicy(entry.ref, {
       ...entry,
       selected: true,
       selectedRank,
       injectable,
       injectionDecision: injectable ? entry.injectionDecision : 'manifest_only',
-      minSelectionScore,
-      minInjectionScore,
+      minSelectionScore: selectionThresholdFor(entry.ref, { minSelectionScore, minCuratedSelectionScore }),
+      minInjectionScore: injectionThresholdFor(entry.ref, { minInjectionScore, minCuratedInjectionScore }),
       injectionRejectedReason: injectable ? undefined : 'below_injection_threshold',
     });
   });
@@ -97,11 +106,11 @@ export function selectCogneeRefs(
       ...entry,
       selected: false,
       injectable: false,
-      injectionDecision: entry.score >= minInjectionScore ? entry.injectionDecision : 'manifest_only',
-      thresholdRejected: !entry.ref.mandatory && entry.score < minSelectionScore,
-      rejectionReason: !entry.ref.mandatory && entry.score < minSelectionScore ? 'below_cognee_selection_threshold' : undefined,
-      minSelectionScore,
-      minInjectionScore,
+      injectionDecision: entry.score >= injectionThresholdFor(entry.ref, { minInjectionScore, minCuratedInjectionScore }) ? entry.injectionDecision : 'manifest_only',
+      thresholdRejected: !entry.ref.mandatory && entry.score < selectionThresholdFor(entry.ref, { minSelectionScore, minCuratedSelectionScore }),
+      rejectionReason: !entry.ref.mandatory && entry.score < selectionThresholdFor(entry.ref, { minSelectionScore, minCuratedSelectionScore }) ? 'below_cognee_selection_threshold' : undefined,
+      minSelectionScore: selectionThresholdFor(entry.ref, { minSelectionScore, minCuratedSelectionScore }),
+      minInjectionScore: injectionThresholdFor(entry.ref, { minInjectionScore, minCuratedInjectionScore }),
     })),
     selectedRefs,
     rejectedRefs,
@@ -116,6 +125,8 @@ export function selectCogneeRefs(
       thresholdRejectedCount: scoreRejected.length,
       minSelectionScore,
       minInjectionScore,
+      minCuratedSelectionScore,
+      minCuratedInjectionScore,
       injectableCount: selectedRefs.filter((ref) => isInjectableDecision(ref.providerMetadata?.injectionDecision ?? ref.providerMetadata?.injectionPolicy)).length,
       manifestOnlyCount: selectedRefs.filter((ref) => ref.providerMetadata?.injectionPolicy === 'manifest_only').length,
       injectionDecisionCounts: countInjectionDecisions(selectedRefs),
@@ -127,9 +138,11 @@ export function selectCogneeRefs(
       querySignalSources: envelope.querySignalSources,
       querySignalSections: envelope.querySignalSections,
       querySignalLength: envelope.querySignalLength,
-      renderedQueryLength: buildCogneeQuery(input).length,
+      semanticQueryLength: buildCogneeQuery(input).length,
+      renderedQueryLength: input.renderedContextQueryLength ?? input.renderedContextQuery?.length ?? buildCogneeQuery(input).length,
       retrievalEnvelopeHash: retrievalEnvelopeHash(envelope),
-      renderedQueryHash: renderedQueryHash(buildCogneeQuery(input)),
+      semanticQueryHash: semanticQueryHash(buildCogneeQuery(input)),
+      renderedQueryHash: input.renderedContextQueryHash ?? renderedQueryHash(input.renderedContextQuery ?? buildCogneeQuery(input)),
       message: 'Cognee candidates were selected with Allen retrieval envelope scoring before injection.',
     }],
   };
@@ -165,7 +178,7 @@ function scoreCogneeRef(
   retrievalStage: 'primary' | 'graph_expansion',
 ): {
   ref: KnowledgeCandidateRef;
-  cogneeRawScore: number;
+  cogneeRawScore?: number;
   score: number;
   originalRank: number;
   category: string;
@@ -198,7 +211,22 @@ function scoreCogneeRef(
   const category = documentRole(ref);
   const metadata = isRecord(ref.providerMetadata?.allenMetadata) ? ref.providerMetadata.allenMetadata : {};
   const metadataCategories = Array.isArray(metadata.categories) ? metadata.categories.map(String) : [];
-  const effectiveCategories = uniqueStrings([category, ...metadataCategories, isAgentSystemDoc(ref) ? 'agent_system_doc' : '']);
+  const curationCategory = firstString(ref.providerMetadata?.curationCategory);
+  const effectiveCategories = uniqueStrings([category, ...(curationCategory ? [curationCategory] : []), ...metadataCategories, isAgentSystemDoc(ref) ? 'agent_system_doc' : '']);
+  const curatedPolicy = curatedInjectionPolicy(ref);
+  if (curatedPolicy === 'never_full_auto') {
+    return {
+      ref,
+      cogneeRawScore,
+      score: -Infinity,
+      originalRank,
+      category,
+      reasons: ['curated_policy:never_full_auto'],
+      rejectedByHardFilter: true,
+      injectionDecision: 'never_full_auto',
+      retrievalStage,
+    };
+  }
   const hardNoisyCategory = effectiveCategories.some((candidateCategory) => envelope.exclusionCategories.includes(candidateCategory) && candidateCategory !== 'generated_doc');
   if (hardNoisyCategory) {
     return {
@@ -227,8 +255,16 @@ function scoreCogneeRef(
     };
   }
   const rankBonus = Math.max(0, 0.12 - originalRank * 0.01);
-  let score = cogneeRawScore + rankBonus;
-  const reasons = [`cognee_raw=${round(cogneeRawScore)}`, `rank_bonus=${round(rankBonus)}`];
+  let score = (cogneeRawScore ?? 0) + rankBonus;
+  const reasons = [cogneeRawScore == null ? 'missing_cognee_score' : `cognee_raw=${round(cogneeRawScore)}`, `rank_bonus=${round(rankBonus)}`];
+  const curationResolutionMethod = firstString(ref.providerMetadata?.curationResolutionMethod);
+  if (curationResolutionMethod && curationResolutionMethod !== 'unresolved') {
+    reasons.push(`${curationResolutionMethod}_resolved`);
+  }
+  if (curatedPolicy) {
+    reasons.push(`curated_policy:${curatedPolicy}`);
+    score += 0.08;
+  }
   if (effectiveCategories.some((candidateCategory) => envelope.requiredCategories.includes(candidateCategory))) {
     score += 0.35;
     reasons.push(`required_category:${effectiveCategories.filter((item) => envelope.requiredCategories.includes(item)).join('|')}`);
@@ -275,7 +311,7 @@ function withRetrievalPolicy(
   ref: KnowledgeCandidateRef,
   policy: {
     score: number;
-    cogneeRawScore: number;
+    cogneeRawScore?: number;
     category: string;
     reasons: string[];
     originalRank: number;
@@ -318,9 +354,9 @@ function withRetrievalPolicy(
   };
 }
 
-function normalizeCandidateScore(value: unknown): number {
+function normalizeCandidateScore(value: unknown): number | undefined {
   const score = Number(value);
-  if (!Number.isFinite(score)) return 0.25;
+  if (!Number.isFinite(score)) return undefined;
   if (score < 0) return 0;
   if (score > 1) return Math.min(1, score / 100);
   return score;
@@ -337,13 +373,29 @@ function decideInjection(ref: KnowledgeCandidateRef, score: number): CogneeInjec
   const metadata = isRecord(ref.providerMetadata?.allenMetadata) ? ref.providerMetadata.allenMetadata : {};
   const metadataWarnings = Array.isArray(ref.providerMetadata?.metadataWarnings) ? ref.providerMetadata.metadataWarnings.map(String) : [];
   const defaultDecision = injectionDecisionValue(metadata.injectionDecision);
-  if (defaultDecision === 'never_full_auto') return 'never_full_auto';
   if (ref.mandatory || ref.targetLayer === 'system_prompt') return 'mandatory_full';
+  const curatedPolicy = curatedInjectionPolicy(ref);
+  if (curatedPolicy) return curatedPolicy;
+  if (defaultDecision === 'never_full_auto') return 'never_full_auto';
   if (defaultDecision === 'mandatory_full' && score >= 0.9) return 'mandatory_full';
   if (metadataWarnings.includes('metadata_missing_path')) return 'manifest_only';
   if (ref.content && score >= 0.55) return 'snippet';
   if (defaultDecision === 'snippet' && ref.grounding === 'repo_backed' && score >= 0.7) return 'snippet';
   return 'manifest_only';
+}
+
+function curatedInjectionPolicy(ref: KnowledgeCandidateRef): CogneeInjectionDecision | undefined {
+  const value = ref.providerMetadata?.curatedInjectionPolicy;
+  if (value === 'snippet' || value === 'manifest_only' || value === 'never_full_auto') return value;
+  return undefined;
+}
+
+function selectionThresholdFor(ref: KnowledgeCandidateRef, thresholds: { minSelectionScore: number; minCuratedSelectionScore: number }): number {
+  return curatedInjectionPolicy(ref) ? thresholds.minCuratedSelectionScore : thresholds.minSelectionScore;
+}
+
+function injectionThresholdFor(ref: KnowledgeCandidateRef, thresholds: { minInjectionScore: number; minCuratedInjectionScore: number }): number {
+  return curatedInjectionPolicy(ref) ? thresholds.minCuratedInjectionScore : thresholds.minInjectionScore;
 }
 
 function legacyInjectionPolicy(decision: CogneeInjectionDecision): 'injectable' | 'manifest_only' | 'never_full_auto' {

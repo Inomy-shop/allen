@@ -10,6 +10,8 @@ import {
   type EngineConfig,
   type ExecutionState,
   type WorkflowFeedbackEntry,
+  aggregateTokenUsage,
+  type TokenUsageInfo,
 } from '@allen/engine';
 import { createSSEEmitter } from './stream.service.js';
 import {
@@ -24,7 +26,7 @@ import { ArtifactService } from './artifact.service.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { assertSelfHealingLinearConfig, isSelfHealingWorkflowName } from './self-healing-env.js';
 import { AgentActivityService, type PersistedActivityRow } from './agent-activity.service.js';
-import { RepoKnowledgeGraphService } from './context/allen-knowledge-graph/repo-knowledge-graph.service.js';
+import { RepoContextPacketService } from './context/core/repo-context-packet.service.js';
 import { ContextEvaluationService } from './context/evaluation/context-evaluation.service.js';
 import { ContextWorkflowEvaluationService } from './context/evaluation/context-workflow-evaluation.service.js';
 import { hydrateTraceContextEvaluations } from './context/evaluation/context-evaluation-trace-hydrator.js';
@@ -39,7 +41,7 @@ import { isContextEngineEnabled } from './context/config/context-provider-config
 function buildEngineServices(db: Db): EngineConfig['services'] {
   const wsManager = new WorkspaceManager(db);
   const artifactService = new ArtifactService(db);
-  const repoKnowledge = new RepoKnowledgeGraphService(db);
+  const repoKnowledge = new RepoContextPacketService(db);
   const services: EngineConfig['services'] = {
     workspaces: {
       create: async (payload) => {
@@ -189,6 +191,9 @@ const EXECUTION_LIST_PROJECTION = {
   'meta.requestText': 1,
   'meta.workspaceId': 1,
   'meta.workspacePath': 1,
+  'meta.repoId': 1,
+  'meta.repoPath': 1,
+  'meta.cwd': 1,
   'meta.prUrl': 1,
   'meta.prTitle': 1,
   'meta.prStatus': 1,
@@ -221,6 +226,8 @@ const EXECUTION_LIST_PROJECTION = {
   'state.ticket_url': 1,
   'state.workspace_id': 1,
   'state.worktree_path': 1,
+  'state.repo_id': 1,
+  'state.repo_path': 1,
   'state.pr_url': 1,
   'state.url': 1,
   'state.pr_title': 1,
@@ -315,6 +322,7 @@ function decorateChildRow(
     completedAt: row.completedAt ?? null,
     durationMs: row.durationMs ?? null,
     cost: row.cost ?? null,
+    tokenUsage: row.tokenUsage ?? null,
     failedNode: row.failedNode ?? null,
     errorMessage: row.errorMessage ?? null,
     currentStep: Array.isArray(row.currentNodes) && row.currentNodes.length > 0
@@ -1011,17 +1019,15 @@ export class ExecutionService {
         : {}) ?? {})) ?? {}) as Record<string, unknown>;
     const workflowNodes = ((workflowDoc?.parsed as Record<string, unknown> | undefined)?.nodes ?? workflowSnapshotNodes) as Record<string, unknown>;
     const workflowNodeNames = Object.keys(workflowNodes);
-    const workflowNodeSet = new Set(workflowNodeNames);
-    const completedWorkflowNodes = [...new Set((exec.completedNodes ?? [])
-      .filter((node) => workflowNodeSet.size === 0 || workflowNodeSet.has(node)))];
     const totalNodes = isAgentExecution
       ? 1
-      : workflowNodeNames.length || Math.max(completedWorkflowNodes.length, exec.currentNodes?.length ?? 0);
-    const completedCount = isAgentExecution
-      ? (exec.status === 'completed' ? 1 : 0)
-      : Math.min(completedWorkflowNodes.length, totalNodes);
+      : workflowNodeNames.length || Math.max(exec.completedNodes?.length ?? 0, exec.currentNodes?.length ?? 0);
     const pendingIntervention = interventions.find((i: any) => i.status === 'pending') ?? null;
     const currentStep = this.currentStep(exec, isAgentExecution, traces);
+    const workflowSteps = isAgentExecution ? [] : this.workflowStepContext(exec as unknown as Record<string, unknown>, workflowNodes, traces);
+    const completedCount = isAgentExecution
+      ? (exec.status === 'completed' ? 1 : 0)
+      : Math.min(workflowSteps.filter(step => ['completed', 'skipped'].includes(String(step.status ?? '').toLowerCase())).length, totalNodes);
     const percent = totalNodes > 0 ? Math.round((completedCount / totalNodes) * 100) : 0;
     const origin = this.inferOrigin(row, assignment) as RunOrigin;
     const runType: RunType = isAgentExecution ? 'agent' : 'workflow';
@@ -1074,11 +1080,15 @@ export class ExecutionService {
         completedAt: exec.completedAt ?? null,
         durationMs: exec.durationMs,
         cost: exec.cost,
+        tokenUsage: exec.tokenUsage ?? null,
         currentNodes: exec.currentNodes ?? [],
         completedNodes: exec.completedNodes ?? [],
         failedNode: exec.failedNode ?? null,
         errorMessage: exec.errorMessage ?? null,
         isAgentExecution,
+        parentExecutionId: stringValue(row.parentExecutionId) ?? null,
+        rootExecutionId: stringValue(row.rootExecutionId) ?? null,
+        spawnDepth: typeof row.spawnDepth === 'number' ? row.spawnDepth : null,
         contextWorkflowEvaluation: contextWorkflowEvaluation ?? null,
       },
       progress: {
@@ -1103,7 +1113,7 @@ export class ExecutionService {
       workspace: workspace ? this.workspaceContext(workspace) : null,
       pullRequest: pullRequest ? this.pullRequestContext(pullRequest) : null,
       childAgents: directChildren.map((child) => this.childAgentContext(child)),
-      workflowSteps: isAgentExecution ? [] : this.workflowStepContext(exec as unknown as Record<string, unknown>, workflowNodes, traces),
+      workflowSteps,
       interventions: interventions.map((intervention) => ({ ...intervention })),
       artifacts: artifacts.map((artifact) => this.artifactContext(artifact)),
       recentActivity: this.recentActivity(logs, activity),
@@ -1261,6 +1271,7 @@ export class ExecutionService {
   }
 
   async cancel(id: string): Promise<void> {
+    const execBeforeCancel = await this.stateManager.getExecution(id).catch(() => null);
     // Kill workflow engine if running
     const engine = runningEngines.get(id);
     if (engine) {
@@ -1280,6 +1291,64 @@ export class ExecutionService {
       completedAt: new Date(),
       currentNodes: [],
     });
+    await this.ensureCancelledSpawnTrace(execBeforeCancel).catch((err) => {
+      logger.warn('failed to persist cancelled spawned-agent trace fallback', { executionId: id, error: (err as Error).message });
+    });
+  }
+
+  private async ensureCancelledSpawnTrace(exec: ExecutionState | null): Promise<void> {
+    if (!exec) return;
+    const workflowName = String(exec.workflowName ?? '');
+    const source = String((exec as unknown as Record<string, unknown>).source ?? '');
+    const isSpawnedAgent = workflowName.includes(':spawn_agent/') || source === 'spawn';
+    if (!isSpawnedAgent) return;
+    const input = (exec.input ?? {}) as Record<string, unknown>;
+    const agentName = workflowName.includes(':spawn_agent/')
+      ? workflowName.split(':spawn_agent/')[1]
+      : String(input.agent_name ?? exec.currentNodes?.[0] ?? 'agent');
+    if (!agentName) return;
+    const existing = await this.db.collection('execution_traces')
+      .find({ executionId: exec.id, node: agentName }, { projection: { attempt: 1 } })
+      .sort({ attempt: -1 })
+      .limit(1)
+      .toArray();
+    const attempt = Math.max(1, Number(existing[0]?.attempt ?? 0) + 1);
+    const contextAttempt = await this.db.collection('context_attempts').findOne(
+      { executionId: exec.id, nodeName: agentName },
+      { sort: { createdAt: -1 }, projection: { contextAttemptId: 1 } },
+    );
+    const now = new Date();
+    const startedAt = exec.startedAt ? new Date(exec.startedAt) : now;
+    const durationMs = Math.max(0, now.getTime() - startedAt.getTime());
+    await this.db.collection('execution_traces').updateOne(
+      { executionId: exec.id, node: agentName, attempt },
+      {
+        $setOnInsert: {
+          executionId: exec.id,
+          executionTraceId: randomUUID(),
+          node: agentName,
+          attempt,
+          status: 'cancelled',
+          type: 'agent',
+          agent: agentName,
+          inputState: { prompt: input.prompt },
+          renderedPrompt: typeof input.prompt === 'string' ? input.prompt : '',
+          rawResponse: '',
+          output: { cancelled: true, reason: 'Execution cancelled by user.', session_id: input.session_id },
+          toolCalls: [],
+          activity: [],
+          contextAttemptId: typeof contextAttempt?.contextAttemptId === 'string' ? contextAttempt.contextAttemptId : undefined,
+          runtimeContext: {
+            mandatoryRepoContextInjected: Boolean(contextAttempt),
+          },
+          cost: { actual: 0, estimated: 0, method: 'cancelled_fallback' },
+          durationMs,
+          startedAt,
+          completedAt: now,
+        },
+      },
+      { upsert: true },
+    );
   }
 
   async pause(id: string): Promise<void> {
@@ -1579,16 +1648,97 @@ export class ExecutionService {
 
   async getTraces(executionId: string): Promise<Record<string, unknown>[]> {
     const traces = await this.stateManager.getTraces(executionId);
-    return hydrateTraceContextEvaluations(this.db, executionId, traces);
+    const withHumanInterventions = await this.withSyntheticHumanInterventionTraces(executionId, traces);
+    return hydrateTraceContextEvaluations(this.db, executionId, withHumanInterventions);
   }
 
   async getTracesByNode(executionId: string, node: string): Promise<Record<string, unknown>[]> {
-    const traces = await this.stateManager.getTracesByNode(executionId, node);
-    return hydrateTraceContextEvaluations(this.db, executionId, traces);
+    const traces = await this.getTraces(executionId);
+    return traces.filter((trace) => String(trace.node ?? '') === node);
   }
 
   async getTraceByAttempt(executionId: string, node: string, attempt: number): Promise<Record<string, unknown> | null> {
-    return this.stateManager.getTraceByAttempt(executionId, node, attempt);
+    const traces = await this.getTracesByNode(executionId, node);
+    return traces.find((trace) => Number(trace.attempt ?? 1) === attempt) ?? null;
+  }
+
+  private async withSyntheticHumanInterventionTraces(
+    executionId: string,
+    traces: Record<string, unknown>[],
+  ): Promise<Record<string, unknown>[]> {
+    const interventions = await new InterventionService(this.db).listForWorkflowRun(executionId).catch(() => []);
+    const answered = interventions.filter((item) => item.status === 'answered' || item.status === 'skipped');
+    if (answered.length === 0) return traces;
+
+    const byNode = new Map<string, Record<string, unknown>[]>();
+    for (const trace of traces) {
+      const node = stringValue(trace.node);
+      if (!node) continue;
+      const list = byNode.get(node) ?? [];
+      list.push(trace);
+      byNode.set(node, list);
+    }
+
+    const synthetic: Record<string, unknown>[] = [];
+    for (const intervention of answered) {
+      const node = intervention.stage;
+      if (!node || (byNode.get(node)?.length ?? 0) > 0) continue;
+      const response = intervention.response ?? null;
+      const startedAt = intervention.created_at ?? intervention.answered_at ?? new Date();
+      const completedAt = intervention.answered_at ?? intervention.created_at ?? new Date();
+      const startedMs = new Date(startedAt).getTime();
+      const completedMs = new Date(completedAt).getTime();
+      const durationMs = Number.isFinite(startedMs) && Number.isFinite(completedMs)
+        ? Math.max(0, completedMs - startedMs)
+        : 0;
+
+      synthetic.push({
+        executionId,
+        executionTraceId: `human-${intervention.intervention_id}`,
+        node,
+        attempt: 1,
+        status: intervention.status === 'skipped' ? 'skipped' : 'completed',
+        type: 'human',
+        agent: null,
+        inputState: {
+          question: intervention.question,
+          fields: intervention.fields,
+          intervention_id: intervention.intervention_id,
+        },
+        renderedPrompt: intervention.question ?? intervention.context_summary ?? '',
+        output: {
+          human_input: {
+            kind: intervention.kind,
+            sourceNode: node,
+            decision: response?.decision,
+            summary: response?.decision ? `Human selected ${response.decision}` : undefined,
+            fields: [],
+            fieldsByName: {},
+            feedback: response?.feedback ? { label: 'Feedback', value: response.feedback } : undefined,
+          },
+          intervention_id: intervention.intervention_id,
+          decision: response?.decision,
+          feedback: response?.feedback,
+          answer: response?.answer,
+        },
+        rawResponse: response
+          ? compactJsonValue(response) ?? ''
+          : '',
+        activity: [],
+        cost: { actual: 0, estimated: 0, method: 'human_intervention' },
+        durationMs,
+        startedAt,
+        completedAt,
+        synthetic: true,
+      });
+    }
+
+    if (synthetic.length === 0) return traces;
+    return [...traces, ...synthetic].sort((a, b) => {
+      const aTime = new Date(String(a.startedAt ?? a.completedAt ?? 0)).getTime();
+      const bTime = new Date(String(b.startedAt ?? b.completedAt ?? 0)).getTime();
+      return aTime - bTime;
+    });
   }
 
   async getStats(): Promise<Record<string, unknown>> {
@@ -1654,6 +1804,7 @@ export class ExecutionService {
       || (!item.workflowId && item.source === 'chat');
 
     const workspace = await this.findExecutionWorkspace(input, state, meta);
+    const repository = workspace ? null : await this.findExecutionRepository(input, state, meta);
     const assignment = id ? await this.findExecutionAssignment(id, workspace, input, state, meta) : null;
     const pullRequest = id ? await this.findExecutionPullRequest(id, workspace, input, state, meta, [item]) : null;
     const chatSummary = await this.runChatSummary(input, meta);
@@ -1666,6 +1817,8 @@ export class ExecutionService {
       user: this.runUserSummary(meta, chatSummary),
       chat: chatSummary,
       linear: this.linearContext(assignment, input, state, meta),
+      workspace: workspace ? this.workspaceContext(workspace) : null,
+      repository: repository ? this.repositoryContext(repository) : null,
       pullRequest: pullRequest ? this.pullRequestContext(pullRequest) : null,
     };
   }
@@ -1898,6 +2051,29 @@ export class ExecutionService {
     return null;
   }
 
+  private async findExecutionRepository(
+    input: Record<string, unknown>,
+    state: Record<string, unknown>,
+    meta: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | null> {
+    const repoId =
+      stringValue(meta.repoId)
+      ?? stringValue(state.repo_id)
+      ?? stringValue(input.repo_id);
+    if (repoId && ObjectId.isValid(repoId)) {
+      const repo = await this.db.collection('repos').findOne({ _id: new ObjectId(repoId) });
+      if (repo) return repo;
+    }
+
+    const repoPath =
+      stringValue(meta.repoPath)
+      ?? stringValue(state.repo_path)
+      ?? stringValue(input.repo_path)
+      ?? stringValue(meta.cwd);
+    if (!repoPath) return null;
+    return this.db.collection('repos').findOne({ path: repoPath });
+  }
+
   private async findExecutionAssignment(
     executionId: string,
     workspace: Record<string, unknown> | null,
@@ -2049,6 +2225,16 @@ export class ExecutionService {
     };
   }
 
+  private repositoryContext(repo: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: repo._id ? String(repo._id) : undefined,
+      name: repo.name ?? null,
+      path: repo.path ?? null,
+      defaultBranch: repo.defaultBranch ?? null,
+      status: repo.status ?? null,
+    };
+  }
+
   private pullRequestContext(pr: Record<string, unknown>): Record<string, unknown> {
     return {
       id: pr._id ? String(pr._id) : undefined,
@@ -2073,6 +2259,7 @@ export class ExecutionService {
       currentStep: child.currentStep ?? null,
       durationMs: child.durationMs ?? null,
       cost: child.cost ?? null,
+      tokenUsage: child.tokenUsage ?? null,
       failedNode: child.failedNode ?? null,
       errorMessage: child.errorMessage ?? null,
       promptPreview: child.promptPreview ?? '',
@@ -2121,7 +2308,7 @@ export class ExecutionService {
       tracesByNode.set(node, list);
     }
 
-    return Object.entries(workflowNodes).map(([nodeName, rawNode], index) => {
+    const steps = Object.entries(workflowNodes).map(([nodeName, rawNode], index) => {
       const nodeDef = (rawNode && typeof rawNode === 'object' ? rawNode : {}) as Record<string, unknown>;
       const nodeTraces = tracesByNode.get(nodeName) ?? [];
       const firstTrace = nodeTraces[0] ?? null;
@@ -2131,7 +2318,8 @@ export class ExecutionService {
       const traceStatus = stringValue(lastTrace?.status);
       const status =
         failedNode === nodeName || traceStatus === 'failed' ? 'failed'
-        : completedSet.has(nodeName) || (runStatus === 'completed' && traceStatus === 'completed') ? 'completed'
+        : completedSet.has(nodeName) || traceStatus === 'completed' ? 'completed'
+        : traceStatus === 'skipped' ? 'skipped'
         : currentSet.has(nodeName) && runStatus !== 'completed' ? 'running'
         : CANCELLED_STATUSES.has(runStatus) && currentSet.has(nodeName) ? 'cancelled'
         : 'pending';
@@ -2155,6 +2343,13 @@ export class ExecutionService {
         if (actual != null) total.actual = (total.actual ?? 0) + actual;
         return total;
       }, { estimated: 0, actual: null });
+
+      // Compute aggregate tokenUsage across node traces (per-field null-aware sum)
+      let stepTokenUsage: TokenUsageInfo | null = null;
+      for (const trace of nodeTraces) {
+        const tu = (trace.tokenUsage && typeof trace.tokenUsage === 'object' ? trace.tokenUsage : null) as TokenUsageInfo | null;
+        if (tu) stepTokenUsage = aggregateTokenUsage(stepTokenUsage, tu);
+      }
       const elapsedDurationMs = (() => {
         if (!startedAt) return null;
         const startMs = new Date(startedAt as string | Date).getTime();
@@ -2192,6 +2387,7 @@ export class ExecutionService {
         completedAt,
         durationMs: tracedDurationMs > 0 ? tracedDurationMs : elapsedDurationMs,
         cost: cost.estimated > 0 || cost.actual != null ? cost : null,
+        tokenUsage: stepTokenUsage,
         error: lastTrace?.error ?? (failedNode === nodeName ? exec.errorMessage : null),
         io: {
           input: stepInput ?? null,
@@ -2199,6 +2395,33 @@ export class ExecutionService {
         },
       };
     });
+
+    return this.normalizeSkippedWorkflowSteps(steps);
+  }
+
+  private normalizeSkippedWorkflowSteps(steps: Record<string, unknown>[]): Record<string, unknown>[] {
+    const progressedIndexes = steps
+      .map((step, index) => {
+        const status = String(step.status ?? '').toLowerCase();
+        const hasRunData = this.workflowStepHasRunData(step);
+        return (status !== 'pending' && status !== 'not_started') || hasRunData ? index : -1;
+      })
+      .filter(index => index >= 0);
+    const lastProgressedIndex = progressedIndexes.length > 0 ? Math.max(...progressedIndexes) : -1;
+
+    return steps.map((step, index) => {
+      const status = String(step.status ?? '').toLowerCase();
+      if ((status === 'pending' || status === 'not_started') && !this.workflowStepHasRunData(step) && index < lastProgressedIndex) {
+        return { ...step, status: 'skipped' };
+      }
+      return step;
+    });
+  }
+
+  private workflowStepHasRunData(step: Record<string, unknown>): boolean {
+    const io = (step.io && typeof step.io === 'object' ? step.io : {}) as Record<string, unknown>;
+    return (typeof step.attempts === 'number' && step.attempts > 0)
+      || Boolean(step.startedAt || step.completedAt || step.durationMs || io.input || io.output);
   }
 
   private recentActivity(
@@ -2284,6 +2507,9 @@ export class ExecutionService {
 
         const nodeName = (event.data.node as string) ?? 'unknown';
         const promptText = (event.data.prompt as string) ?? '';
+        const normalizedIntervention = event.data.intervention && typeof event.data.intervention === 'object' && !Array.isArray(event.data.intervention)
+          ? event.data.intervention as Record<string, unknown>
+          : null;
         const rawFields = (event.data.fields as Array<{
           name: string;
           label?: string;
@@ -2294,7 +2520,17 @@ export class ExecutionService {
         }>) ?? [];
         // Normalise into InterventionField shape so the intervention
         // record carries exactly what the UI and respond handler need.
-        const fields: InterventionField[] = rawFields.map(f => ({
+        const normalizedFields = Array.isArray(normalizedIntervention?.fields)
+          ? normalizedIntervention.fields as Array<{
+            name: string;
+            label?: string;
+            type?: string;
+            required?: boolean;
+            options?: string[];
+            placeholder?: string;
+          }>
+          : rawFields;
+        const fields: InterventionField[] = normalizedFields.map(f => ({
           name: f.name,
           label: f.label,
           type: f.type,
@@ -2323,38 +2559,61 @@ export class ExecutionService {
             const execDoc = await db.collection('executions').findOne({ id: executionId });
             const workflowState = (execDoc?.state as Record<string, unknown>) ?? {};
 
-            // Derive severity from the stage name. Convention:
+            // Derive severity from normalized payload when available, else
+            // fall back to the stage-name convention.
             //   *_gate / *_approval → approval (🟢)
             //   *_escalation        → escalation (🔴)
             //   everything else     → question (🟡)
-            let severity: InterventionSeverity = 'question';
+            let severity: InterventionSeverity = normalizedIntervention?.severity === 'approval' || normalizedIntervention?.severity === 'escalation' || normalizedIntervention?.severity === 'question'
+              ? normalizedIntervention.severity as InterventionSeverity
+              : 'question';
             const stageLower = nodeName.toLowerCase();
-            if (stageLower.endsWith('_gate') || stageLower.includes('approval')) {
+            if (!normalizedIntervention && (stageLower.endsWith('_gate') || stageLower.includes('approval'))) {
               severity = 'approval';
-            } else if (stageLower.includes('escalation')) {
+            } else if (!normalizedIntervention && stageLower.includes('escalation')) {
               severity = 'escalation';
             }
 
             // Derive a short title: prefer the node def's displayName, else
             // the humanised node name.
             const nodeDef = workflow.nodes?.[nodeName];
-            const title = (nodeDef as { displayName?: string } | undefined)?.displayName
+            const title = typeof normalizedIntervention?.title === 'string'
+              ? normalizedIntervention.title
+              : (nodeDef as { displayName?: string } | undefined)?.displayName
               ?? humaniseNodeName(nodeName);
+            const summary = typeof normalizedIntervention?.summary === 'string'
+              ? normalizedIntervention.summary
+              : undefined;
 
             // Derive the context summary from the rendered prompt's first
             // 400 chars. The prompt is the only human-readable context we
             // have without introspecting every workflow's state schema.
-            const contextSummary = promptText.slice(0, 400) || `The workflow is paused at node "${nodeName}".`;
+            const contextSummary = (summary ?? promptText.slice(0, 400)) || `The workflow is paused at node "${nodeName}".`;
 
             // Derive the question from the prompt too — the full prompt
             // already contains the question text for most nodes. The
             // Interventions page renders it verbatim.
-            const question = promptText || `Please respond to continue.`;
+            const question = typeof normalizedIntervention?.question === 'string'
+              ? normalizedIntervention.question
+              : promptText || `Please respond to continue.`;
 
             // Build options from the human node's fields. Any field of
             // type "select" becomes a list of options; other fields are
             // surfaced as free-form inputs on the Interventions page.
-            const options = fields.flatMap(f => {
+            const normalizedActions = Array.isArray(normalizedIntervention?.actions)
+              ? normalizedIntervention.actions as Array<Record<string, unknown>>
+              : undefined;
+            const options = normalizedActions && normalizedActions.length > 0
+              ? normalizedActions.map((action) => {
+                const value = typeof action.id === 'string' ? action.id : String(action.label ?? '');
+                return {
+                  label: typeof action.label === 'string' ? action.label : value.replace(/_/g, ' '),
+                  value,
+                  primary: value === 'approve' || value === 'answer' || value === 'retry_with_feedback',
+                  destructive: value === 'reject' || value === 'cancel' || value === 'abandon',
+                };
+              }).filter((option) => option.value)
+              : fields.flatMap(f => {
               if (f.type === 'select' && 'options' in f) {
                 const fieldOpts = (f as unknown as { options?: string[] }).options ?? [];
                 return fieldOpts.map(o => ({
@@ -2393,6 +2652,9 @@ export class ExecutionService {
             // will have prd_url / hla_url / tdd_url set by persist_docs;
             // summary_url set by summary node; etc.
             const docs: InterventionDocLink[] = [];
+            const normalizedEvidence = Array.isArray(normalizedIntervention?.evidence)
+              ? normalizedIntervention.evidence as Array<Record<string, unknown>>
+              : undefined;
             const kindFromKey = (k: string): InterventionDocLink['kind'] => {
               if (k.startsWith('prd')) return 'prd';
               if (k.startsWith('hla')) return 'hla';
@@ -2412,6 +2674,17 @@ export class ExecutionService {
                 });
               }
             }
+            if (normalizedEvidence) {
+              for (const item of normalizedEvidence) {
+                if (typeof item.url !== 'string' || !item.url) continue;
+                docs.push({
+                  label: typeof item.label === 'string' ? item.label : 'Evidence',
+                  url: item.url,
+                  kind: 'external',
+                });
+              }
+            }
+            const dedupedDocs = dedupeInterventionDocs(docs);
 
             // Round info for clarification nodes (best-effort — state
             // may or may not have a clarify_round counter).
@@ -2426,13 +2699,25 @@ export class ExecutionService {
               started_by_user_id: (input.started_by_user_id as string | undefined),
               started_by_user_email: (input.started_by_user_email as string | undefined),
               stage: nodeName,
+              kind: normalizedIntervention?.kind === 'clarify' || normalizedIntervention?.kind === 'review' || normalizedIntervention?.kind === 'recover'
+                ? normalizedIntervention.kind
+                : undefined,
               severity,
               title,
+              summary,
               context_summary: contextSummary,
               question,
               options,
               fields,
-              docs,
+              actions: normalizedActions,
+              highlights: Array.isArray(normalizedIntervention?.highlights)
+                ? normalizedIntervention.highlights.filter((item): item is string => typeof item === 'string')
+                : undefined,
+              evidence: normalizedEvidence,
+              retry_exhaustion: normalizedIntervention?.retryExhaustion && typeof normalizedIntervention.retryExhaustion === 'object' && !Array.isArray(normalizedIntervention.retryExhaustion)
+                ? normalizedIntervention.retryExhaustion as Record<string, unknown>
+                : undefined,
+              docs: dedupedDocs,
               round_info: roundInfo,
               user_request: (input.user_request as string | undefined)
                 ?? (input.bug_report as string | undefined)
@@ -2457,4 +2742,25 @@ function humaniseNodeName(name: string): string {
     .filter(Boolean)
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
+}
+
+function dedupeInterventionDocs(docs: InterventionDocLink[]): InterventionDocLink[] {
+  const byUrl = new Map<string, InterventionDocLink>();
+  for (const doc of docs) {
+    const url = doc.url.trim();
+    if (!url) continue;
+    const existing = byUrl.get(url);
+    if (!existing || isGenericInterventionDocLabel(existing.label)) {
+      byUrl.set(url, { ...doc, url });
+    }
+  }
+  return [...byUrl.values()];
+}
+
+function isGenericInterventionDocLabel(label: string): boolean {
+  const normalized = label.trim().toLowerCase();
+  return normalized === 'evidence'
+    || normalized === 'external'
+    || normalized === 'artifact'
+    || normalized.endsWith('artifact');
 }

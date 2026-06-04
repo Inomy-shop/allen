@@ -8,7 +8,7 @@
  * available may call them.
  *
  * Also verifies that destructive safeguards (confirm=true) still function
- * and that update_agent no longer blocks non-canDelegateTo field updates.
+ * and that update_agent no longer blocks non-spawnTargets field updates.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -176,7 +176,6 @@ const CALLER_SCENARIOS = [
         chatSessionId: 'sess-1',
         parentMessageId: 'msg-1',
         currentAgent: 'codebase-navigator',
-        delegationDepth: 1,
         broadcastEvent: vi.fn(),
         pendingBackgroundTasks: 0,
       }),
@@ -188,7 +187,6 @@ const CALLER_SCENARIOS = [
         chatSessionId: 'sess-2',
         parentMessageId: 'msg-2',
         currentAgent: 'workflow-builder-agent',
-        delegationDepth: 1,
         broadcastEvent: vi.fn(),
         pendingBackgroundTasks: 0,
       }),
@@ -200,7 +198,6 @@ const CALLER_SCENARIOS = [
         chatSessionId: 'sess-3',
         parentMessageId: 'msg-3',
         currentAgent: 'team-builder-agent',
-        delegationDepth: 1,
         broadcastEvent: vi.fn(),
         pendingBackgroundTasks: 0,
       }),
@@ -365,12 +362,11 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
       });
     }
 
-    it('allows updating fields other than canDelegateTo (old agent-builder restriction removed)', async () => {
+    it('allows updating fields other than spawnTargets (old agent-builder restriction removed)', async () => {
       vi.mocked(resolveActiveSession).mockReturnValue({
         chatSessionId: 'sess-ab',
         parentMessageId: 'msg-ab',
         currentAgent: 'agent-builder-agent',
-        delegationDepth: 1,
         broadcastEvent: vi.fn(),
         pendingBackgroundTasks: 0,
       });
@@ -386,7 +382,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
         ],
       });
 
-      // In the old code, agent-builder-agent could ONLY update canDelegateTo.
+      // In the old code, agent-builder-agent could ONLY update spawnTargets.
       // Now any field should be accepted — update system + model + displayName.
       const result = await tool.execute(
         {
@@ -399,7 +395,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
       );
 
       expect(result).not.toMatchObject({
-        error: expect.stringContaining('can only update canDelegateTo'),
+        error: expect.stringContaining('can only update spawnTargets'),
       });
       expect(result).toMatchObject({
         success: true,
@@ -418,7 +414,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
             isBuiltIn: true,
             teamName: 'engineering',
             teamRole: 'lead',
-            canDelegateTo: ['frontend-developer'],
+            spawnTargets: ['frontend-developer'],
           },
         ],
       });
@@ -426,7 +422,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
       const result = await tool.execute(
         {
           name: 'engineering-lead',
-          canDelegateTo: ['frontend-developer', 'ui-copywriter'],
+          spawnTargets: ['frontend-developer', 'ui-copywriter'],
           system: 'Updated built-in lead prompt.',
         },
         db,
@@ -435,7 +431,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
       expect(result).not.toMatchObject({ error: expect.stringContaining('built-in') });
       expect(result).toMatchObject({
         success: true,
-        updated: expect.arrayContaining(['canDelegateTo', 'system']),
+        updated: expect.arrayContaining(['spawnTargets', 'system']),
       });
     });
   });

@@ -4,7 +4,9 @@ import { useAgents } from '../hooks/useAgents';
 import { agents as agentsApi, teams as teamsApi, repos as reposApi, executions as executionsApi, skills as skillsApi, type SkillRecord } from '../services/api';
 import RoleIcon from '../components/common/RoleIcon';
 import RoleDialog from '../components/common/RoleDialog';
+import Select from '../components/common/Select';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
+import IconTooltipButton from '../components/common/IconTooltipButton';
 import { useToast } from '../components/common/Toast';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 import {
@@ -13,7 +15,7 @@ import {
   ChevronRight, GitBranch, ExternalLink,
   Layers, Tag, FileText, Monitor, Download, ScanSearch, Settings, BookOpen,
 } from 'lucide-react';
-import { DelegationGraph } from '../components/agents/DelegationGraph';
+import { SpawnTargetGraph } from '../components/agents/SpawnTargetGraph';
 import McpServerManager from '../components/settings/McpServerManager';
 import {
   ImportAgentsFromRepoDialog,
@@ -46,7 +48,7 @@ function AgentDetailPanel({
 }) {
   const system = (agent.system as string) ?? '';
   const capabilities = (agent.capabilities as string[] | undefined) ?? [];
-  const delegateTargets = (agent.canDelegateTo as string[] | undefined) ?? [];
+  const spawnTargets = (agent.spawnTargets as string[] | undefined) ?? [];
   const tools = (agent.tools as string[] | undefined) ?? [];
   const externalMcpServers = Array.isArray(agent.externalMcpServers)
     ? agent.externalMcpServers as string[]
@@ -72,23 +74,23 @@ function AgentDetailPanel({
   const teamName = agent.teamName as string | undefined;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-stretch bg-black/70 backdrop-blur-md p-4 sm:p-6" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-6 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="card w-full max-w-[1400px] mx-auto my-auto h-[94vh] overflow-hidden shadow-popover animate-in fade-in zoom-in-95 duration-200 flex flex-col"
+        className="flex h-[90vh] w-full max-w-[1180px] flex-col overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200"
         onClick={e => e.stopPropagation()}
       >
         {/* ── Header ────────────────────────────────────────────────── */}
-        <div className="px-6 py-4 border-b border-app shrink-0 flex items-start justify-between gap-4">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-app px-6 py-5">
           <div className="flex items-start gap-4 min-w-0">
             <div
-              className="w-14 h-14 rounded-xl flex items-center justify-center shrink-0"
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-app"
               style={{ backgroundColor: ((agent.color as string) ?? '#2a76e2') + '20' }}
             >
-              <RoleIcon icon={agent.icon as string} color={agent.color as string} size={30} />
+              <RoleIcon icon={agent.icon as string} color={agent.color as string} size={22} />
             </div>
             <div className="min-w-0 flex flex-col gap-1">
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-[22px] font-semibold text-theme-primary tracking-tight truncate">
+                <h2 className="truncate text-[22px] font-semibold tracking-tight text-theme-primary">
                   {(agent.displayName as string) ?? (agent.name as string)}
                 </h2>
                 {isLead && (
@@ -101,7 +103,7 @@ function AgentDetailPanel({
                   {runs7d > 0 ? `${runs7d} run${runs7d === 1 ? '' : 's'} · 7d` : 'Idle · 7d'}
                 </span>
               </div>
-              <div className="flex items-center gap-2 text-[12px] font-mono text-theme-muted">
+              <div className="flex items-center gap-2 font-mono text-[12px] text-theme-muted">
                 <span className="text-theme-subtle">{agent.name as string}</span>
                 {teamName && (
                   <>
@@ -123,13 +125,9 @@ function AgentDetailPanel({
                 <Play className="w-3.5 h-3.5" /> Run agent
               </button>
             )}
-            <button
-              onClick={onClose}
-              className="p-2 rounded-md text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors"
-              title="Close"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <IconTooltipButton label="Close" onClick={onClose} className="h-9 w-9">
+              <X className="h-4 w-4" />
+            </IconTooltipButton>
           </div>
         </div>
 
@@ -152,7 +150,7 @@ function AgentDetailPanel({
           </div>
 
           {/* Metadata rail */}
-          <aside className="w-[320px] shrink-0 border-l border-app overflow-y-auto bg-app-muted/30">
+          <aside className="w-[320px] shrink-0 overflow-y-auto border-l border-app bg-app-muted/25">
             <div className="p-5 space-y-5">
               <DetailSection label="Model">
                 <div className="flex flex-col gap-1.5">
@@ -250,10 +248,10 @@ function AgentDetailPanel({
                 </div>
               </DetailSection>
 
-              {delegateTargets.length > 0 && (
-                <DetailSection label={`Delegates to · ${delegateTargets.length}`}>
+              {spawnTargets.length > 0 && (
+                <DetailSection label={`Can spawn · ${spawnTargets.length}`}>
                   <div className="flex flex-col gap-0.5">
-                    {delegateTargets.map(t => (
+                    {spawnTargets.map(t => (
                       <div key={t} className="flex items-center gap-1.5 text-[12px] font-mono text-theme-secondary">
                         <ArrowRight className="w-3 h-3 text-theme-subtle" />
                         {t}
@@ -267,8 +265,8 @@ function AgentDetailPanel({
         </div>
 
         {/* ── Footer ──────────────────────────────────────────────── */}
-        <div className="px-6 py-3 border-t border-app bg-app-muted/40 shrink-0 flex items-center justify-between gap-3">
-          <div className="text-[11px] font-mono text-theme-muted">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-app bg-app-muted/25 px-6 py-4">
+          <div className="font-mono text-[11px] text-theme-muted">
             Read-only view · {teamName ? `Member of ${teamName}` : 'Unassigned'} · {provider}/{model}
           </div>
           <div className="flex items-center gap-2">
@@ -409,21 +407,25 @@ function RunAgentDialog({
             <label className="block text-[10px] font-mono text-theme-muted uppercase tracking-wider mb-1.5">
               Repository <span className="text-theme-subtle normal-case">(optional)</span>
             </label>
-            <select
+            <Select
               value={repoId}
-              onChange={e => setRepoId(e.target.value)}
+              onChange={setRepoId}
               disabled={loadingRepos}
-              className="w-full px-3 py-2 rounded-lg bg-app-muted border border-app text-sm text-theme-primary focus:outline-none focus:border-accent-blue/50 disabled:opacity-50"
-            >
-              <option value="">
-                {loadingRepos ? 'Loading repos…' : '— No repository (agent runs without a repo) —'}
-              </option>
-              {repoList.map(r => (
-                <option key={String(r._id)} value={String(r._id)}>
-                  {r.name}{r.path ? ` · ${r.path}` : ''}
-                </option>
-              ))}
-            </select>
+              placeholder={loadingRepos ? 'Loading repos...' : 'No repository'}
+              options={[
+                {
+                  value: '',
+                  label: loadingRepos ? 'Loading repos...' : 'No repository',
+                  sublabel: 'Agent runs without a repository',
+                },
+                ...repoList.map(r => ({
+                  value: String(r._id),
+                  label: r.name,
+                  sublabel: r.path,
+                })),
+              ]}
+              searchPlaceholder="Search repositories..."
+            />
             {selectedRepo?.path && (
               <div className="mt-1.5 text-[10px] font-mono text-theme-subtle">
                 Path: <span className="text-theme-muted">{selectedRepo.path}</span>
@@ -526,6 +528,7 @@ export default function RoleManagerPage() {
   // Agent CRUD dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingRole, setEditingRole] = useState<Agent | null>(null);
+  const [creatingForTeam, setCreatingForTeam] = useState<Team | null>(null);
   const [deletingRole, setDeletingRole] = useState<string | null>(null);
   const [viewingAgent, setViewingAgent] = useState<Agent | null>(null);
   const [runningAgent, setRunningAgent] = useState<Agent | null>(null);
@@ -565,13 +568,24 @@ export default function RoleManagerPage() {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-  function handleCreate() {
-    const teamList = allTeams.length > 0 ? allTeams.map(t => t.name).join(', ') : '(no teams yet)';
-    navigate(`/chat?${new URLSearchParams({ agent: 'agent-builder-agent', prompt: `Add a new agent. Available teams: ${teamList}` }).toString()}`);
+  function closeRoleDialog() {
+    setDialogOpen(false);
+    setEditingRole(null);
+    setCreatingForTeam(null);
+  }
+
+  function handleCreate(team?: Team) {
+    setEditingRole(null);
+    setCreatingForTeam(team ?? null);
+    setDialogOpen(true);
   }
 
   function handleRun(agent: Agent) { setRunningAgent(agent); }
-  function handleEdit(role: Agent) { setEditingRole(role); setDialogOpen(true); }
+  function handleEdit(role: Agent) {
+    setCreatingForTeam(null);
+    setEditingRole(role);
+    setDialogOpen(true);
+  }
 
   async function handleDeleteAgent() {
     if (!deletingRole) return;
@@ -584,10 +598,25 @@ export default function RoleManagerPage() {
   }
 
   async function handleSaveAgent(data: Record<string, unknown>) {
-    if (!editingRole) return;
-    const updated = await agentsApi.update(data.name as string, data);
-    setEditingRole({ ...editingRole, ...data, ...(updated ?? {}) });
-    toast.success('Agent updated.');
+    if (editingRole) {
+      const updated = await agentsApi.update(data.name as string, data);
+      setEditingRole({ ...editingRole, ...data, ...(updated ?? {}) });
+      toast.success('Agent updated.');
+      await refresh();
+      return;
+    }
+
+    const targetTeamName = typeof data.teamName === 'string' && data.teamName
+      ? data.teamName
+      : creatingForTeam?.name;
+    const { teamName: _teamName, ...agentData } = data;
+    const created = await agentsApi.create(agentData);
+    if (targetTeamName) {
+      await agentsApi.moveToTeam(String(created?.name ?? data.name), targetTeamName, 'member');
+    }
+    toast.success(creatingForTeam
+      ? `Agent created in ${creatingForTeam.displayName}.`
+      : 'Agent created.');
     await refresh();
   }
 
@@ -618,14 +647,8 @@ export default function RoleManagerPage() {
     }
   }
 
-  function handleAddAgentToTeamWithAi(team: Team) {
-    const memberNames =
-      allAgents
-        .filter((a: any) => a.teamName === team.name)
-        .map((m: any) => m.displayName ?? m.name)
-        .join(', ') || '(no members yet)';
-    const prompt = `Add a new agent to the "${team.displayName}" team.\n\nCurrent members: ${memberNames}\nMission: ${team.mission ?? team.description}\n\nWhat role would you like to add?`;
-    navigate(`/chat?${new URLSearchParams({ agent: 'agent-builder-agent', prompt }).toString()}`);
+  function handleAddAgentToTeam(team: Team) {
+    handleCreate(team);
   }
 
   function handleBuildTeamWithAi() {
@@ -772,36 +795,35 @@ export default function RoleManagerPage() {
 
   if (loading) {
     return (
-      <div className="lib-shell">
-        <aside className="lib-rail">
-          <div className="lib-rail-head">
-            <div className="h-5 w-20 rounded bg-app-muted animate-pulse" />
-            <div className="mt-2 h-8 w-full rounded bg-app-muted animate-pulse" />
+      <div className="w-full px-8 py-8">
+        <div className="mb-5 flex items-center justify-between">
+          <div>
+            <div className="h-8 w-56 rounded-md bg-app-muted animate-pulse" />
+            <div className="mt-2 h-4 w-80 rounded bg-app-muted/70 animate-pulse" />
           </div>
-          <div className="lib-rail-list">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="h-14 rounded-lg bg-app-muted animate-pulse" />
-            ))}
+          <div className="h-9 w-32 rounded-md bg-app-muted animate-pulse" />
+        </div>
+        <div className="grid grid-cols-[280px_minmax(0,1fr)] gap-4">
+          <div className="h-[560px] rounded-md border border-app bg-app-card p-3">
+            {Array.from({ length: 7 }).map((_, i) => <div key={i} className="mb-2 h-14 rounded-md bg-app-muted animate-pulse" />)}
           </div>
-        </aside>
-        <div className="lib-pane p-6">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="mb-3 h-20 rounded-lg bg-app-muted animate-pulse" />
-          ))}
+          <div className="h-[560px] rounded-md border border-app bg-app-card p-4">
+            {Array.from({ length: 6 }).map((_, i) => <div key={i} className="mb-3 h-16 rounded-md bg-app-muted animate-pulse" />)}
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="lib-shell" data-screen-label="library">
-      <main className="lib-pane scroll-hide">
+    <div className="h-full overflow-auto" data-screen-label="library">
+      <main className="min-h-full">
         {selectedAgents.size > 0 && (
-          <div className="lib-selection-bar">
-            <span>{selectedAgents.size} selected</span>
-            <button onClick={() => setAssignOpen(true)}><ArrowRight className="w-3 h-3" /> assign to team</button>
-            <button onClick={() => setCreateTeamOpen(true)}><Plus className="w-3 h-3" /> create team</button>
-            <button onClick={clearSelection}><X className="w-3 h-3" /> clear</button>
+          <div className="fixed bottom-6 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-md border border-app bg-[rgb(var(--color-text-primary))] px-3 py-2 text-[12px] text-[rgb(var(--color-surface-100))] shadow-lg">
+            <span className="font-mono">{selectedAgents.size} selected</span>
+            <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={() => setAssignOpen(true)}><ArrowRight className="h-3.5 w-3.5" /> Assign</button>
+            <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={() => setCreateTeamOpen(true)}><Plus className="h-3.5 w-3.5" /> Create team</button>
+            <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={clearSelection}><X className="h-3.5 w-3.5" /> Clear</button>
           </div>
         )}
 
@@ -819,11 +841,11 @@ export default function RoleManagerPage() {
             onRunAgent={handleRun}
             onCreateTeam={() => setCreateTeamOpen(true)}
             onBuildTeamWithAi={handleBuildTeamWithAi}
-            onCreateAgent={handleCreate}
+            onCreateAgent={() => handleCreate()}
             onImportAgents={() => setImportOpen(true)}
             onEditTeam={(team) => setTeamDialog({ type: 'edit', team })}
             onDeleteTeam={setDeletingTeam}
-            onAddAgentToTeam={handleAddAgentToTeamWithAi}
+            onAddAgentToTeam={handleAddAgentToTeam}
             onRefresh={() => { refresh(); void reloadTeams(); void reloadActivity(); }}
           />
         )}
@@ -868,7 +890,14 @@ export default function RoleManagerPage() {
           }}
         />
       )}
-      <RoleDialog open={dialogOpen} onClose={() => setDialogOpen(false)} onSave={handleSaveAgent} role={editingRole} />
+      <RoleDialog
+        open={dialogOpen}
+        onClose={closeRoleDialog}
+        onSave={handleSaveAgent}
+        role={editingRole}
+        teams={allTeams}
+        initialTeamName={creatingForTeam?.name ?? ''}
+      />
       <DeleteConfirmDialog open={!!deletingRole} resourceType="agent" resourceName={deletingRole ?? ''} onConfirm={handleDeleteAgent} onCancel={() => setDeletingRole(null)} />
       <ImportAgentsFromRepoDialog
         open={importOpen}
@@ -904,7 +933,7 @@ export default function RoleManagerPage() {
   );
 }
 
-const ROUTE_OPTIONS = ['direct_answer', 'data_query', 'spawn_agent', 'delegate_to_agent', 'run_workflow'];
+const ROUTE_OPTIONS = ['direct_answer', 'data_query', 'spawn_agent', 'run_workflow'];
 
 function csvToArray(value: string): string[] {
   return value.split(',').map(part => part.trim()).filter(Boolean);
@@ -1328,194 +1357,276 @@ function LibraryTeamsAgentsPane({
   const showingAllAgents = !activeTeam;
 
   return (
-    <div className="lib-team-shell">
-      <aside className="lib-team-list scroll-hide">
-        <div className="lib-team-head">
-          <div className="lib-team-meta">
-            <span>teams</span>
-            <em>{teams.length} · {totalAgents} agents</em>
+    <div className="flex w-full flex-col gap-5 px-8 py-8">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-app bg-app-card text-accent">
+            <Users className="h-5 w-5" />
           </div>
-          <div className="lib-search">
-            <Search className="h-3 w-3" />
-            <input placeholder="search teams or leads..." value={teamQuery} onChange={e => setTeamQuery(e.target.value)} />
-          </div>
-          <div className="lib-team-actions">
-            <button className="btn btn-secondary btn-sm" onClick={onImportAgents}><FolderGit2 className="w-3 h-3" /> import</button>
-            <button className="btn btn-secondary btn-sm" onClick={onCreateTeam}><Plus className="w-3 h-3" /> new team</button>
+          <div className="min-w-0">
+            <h1 className="text-[24px] font-semibold tracking-tight text-theme-primary">Teams & Agents</h1>
+            <p className="mt-1 text-[13px] text-theme-muted">Organize specialist agents, leads, and team ownership.</p>
           </div>
         </div>
-        <div className="lib-team-body">
-          <button
-            className={`lib-team-row ${showingAllAgents ? 'active' : ''}`}
-            onClick={() => setActiveName('all')}
-          >
-            <span className="lib-team-row-head">
-              <span>All agents</span>
-              <em>{totalAgents}</em>
-            </span>
-            <span className="lib-team-row-sub">grouped by team</span>
+        <div className="flex items-center gap-2">
+          <IconTooltipButton label="Refresh" onClick={onRefresh} className="h-9 w-9 rounded-md border border-app bg-app-card">
+            <RefreshCw className="h-4 w-4" />
+          </IconTooltipButton>
+          <button className="btn btn-secondary btn-sm h-9" onClick={onImportAgents}>
+            <FolderGit2 className="h-3.5 w-3.5" /> Import
           </button>
-          {filteredTeams.length === 0 && <div className="lib-empty compact">no teams match "{teamQuery}"</div>}
-          {filteredTeams.map(team => (
+          <button className="btn btn-secondary btn-sm h-9" onClick={onCreateTeam}>
+            <Plus className="h-3.5 w-3.5" /> New team
+          </button>
+          <button className="btn btn-primary btn-sm h-9" onClick={activeTeam ? () => onAddAgentToTeam(activeTeam) : onCreateAgent}>
+            <Sparkles className="h-3.5 w-3.5" /> Add agent
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-4 rounded-md border border-app bg-app-card px-4 py-3">
+        <div className="relative w-[360px] max-w-full">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-muted" />
+          <input
+            value={agentQuery}
+            onChange={event => setAgentQuery(event.target.value)}
+            placeholder="Search agents or capabilities..."
+            className="h-10 w-full rounded-md border border-app bg-app-muted pl-9 pr-3 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+          />
+        </div>
+        <div className="flex items-center gap-1 rounded-md border border-app bg-app-muted p-1">
+          {(['all', 'lead', 'member'] as const).map(filter => (
             <button
-              key={team.name}
-              className={`lib-team-row ${activeTeam?.name === team.name ? 'active' : ''}`}
-              onClick={() => setActiveName(team.name)}
+              key={filter}
+              onClick={() => setRoleFilter(filter)}
+              className={`h-8 rounded px-3 text-[12px] font-medium transition-colors ${
+                roleFilter === filter
+                  ? 'bg-app-card text-theme-primary shadow-sm'
+                  : 'text-theme-muted hover:text-theme-primary'
+              }`}
             >
-              <span className="lib-team-row-head">
-                <span>{team.displayName}</span>
-                <em>{agentsByTeam.get(team.name)?.length ?? 0}</em>
-              </span>
-              <span className="lib-team-row-sub">{team.leadAgentName || 'no lead assigned'}</span>
+              {filter === 'all' ? 'All roles' : filter === 'lead' ? 'Leads' : 'Members'}
             </button>
           ))}
         </div>
-      </aside>
+        <div className="hidden items-center gap-2 font-mono text-[12px] text-theme-muted md:flex">
+          <span>{teams.length} teams</span>
+          <span className="text-theme-subtle">·</span>
+          <span>{totalAgents} agents</span>
+          <span className="text-theme-subtle">·</span>
+          <span>{leadCount} leads</span>
+        </div>
+      </div>
 
-      <section className="lib-team-detail scroll-hide">
-        {teams.length > 0 || showingAllAgents ? (
-          <>
-            <header className="lib-team-detail-head">
-              <div>
-                <h2>{activeTeam ? activeTeam.displayName : 'all agents'}</h2>
-                <p>
-                  {activeTeam
-                    ? activeTeam.mission || activeTeam.description || 'No mission defined.'
-                    : 'Browse every agent, grouped by team. Search across names, teams, and capabilities.'}
-                </p>
-              </div>
-              <div className="lib-actions">
-                <button className="btn btn-secondary btn-sm" onClick={onRefresh}><RefreshCw className="w-3 h-3" /></button>
-                <button className="btn btn-secondary btn-sm" onClick={onImportAgents}><FolderGit2 className="w-3 h-3" /> import from repo</button>
-                {activeTeam && <button className="btn btn-secondary btn-sm" onClick={() => onEditTeam(activeTeam)}><Pencil className="w-3 h-3" /> edit</button>}
-                <button className="btn btn-primary btn-sm" onClick={() => activeTeam ? onAddAgentToTeam(activeTeam) : onCreateAgent()}><Plus className="w-3 h-3" /> add agent</button>
-              </div>
-            </header>
-
-            <div className="lib-team-stats">
-              {activeTeam ? (
-                <>
-                  <div><span>lead</span><strong>{activeLead?.displayName ?? activeLead?.name ?? activeTeam.leadAgentName ?? 'none'}</strong></div>
-                  <div><span>agents</span><strong className="mono">{activeMembers.length}</strong></div>
-                  <div><span>id</span><strong className="mono">{activeTeam.name}</strong></div>
-                </>
-              ) : (
-                <>
-                  <div><span>teams</span><strong className="mono">{teams.length}</strong></div>
-                  <div><span>agents</span><strong className="mono">{totalAgents}</strong></div>
-                  <div><span>leads</span><strong className="mono">{leadCount}</strong></div>
-                </>
-              )}
+      <div className="grid min-h-[560px] grid-cols-[280px_minmax(0,1fr)] gap-4">
+        <aside className="overflow-hidden rounded-md border border-app bg-app-card">
+          <div className="border-b border-app p-3">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="overline">Teams</span>
+              <span className="font-mono text-[11px] text-theme-muted">{filteredTeams.length}</span>
             </div>
-
-            <div className="lib-team-section-head">
-              <h3>agents <span>{filteredMembers.length}</span></h3>
-              <div className="lib-actions">
-                <input className="lib-mini-search wide" placeholder="search agents..." value={agentQuery} onChange={e => setAgentQuery(e.target.value)} />
-                <select className="lib-mini-select" value={roleFilter} onChange={event => setRoleFilter(event.target.value as 'all' | 'lead' | 'member')}>
-                  <option value="all">All roles</option>
-                  <option value="lead">Leads</option>
-                  <option value="member">Members</option>
-                </select>
-                <button className="btn btn-ghost btn-sm" onClick={onRefresh}><RefreshCw className="w-3 h-3" /></button>
-              </div>
-            </div>
-
-            {showingAllAgents ? (
-              <div className="lib-agent-group-list">
-                {visibleGroupCount === 0 ? (
-                  <div className="lib-empty">no agents match these filters</div>
-                ) : (
-                  <>
-                    {groupedFilteredMembers.map(group => (
-                      <div className="lib-agent-group" key={group.team.name}>
-                        <button className="lib-agent-group-head" onClick={() => setActiveName(group.team.name)}>
-                          <span>{group.team.displayName}</span>
-                          <em>{group.members.length}</em>
-                        </button>
-                        <div className="lib-agent-list">
-                          {group.members.map(agent => (
-                            <LibraryAgentListRow
-                              key={agent.name}
-                              agent={agent}
-                              runs7d={activityByAgent.get(agent.name as string) ?? 0}
-                              selected={selectedAgents.has(agent.name)}
-                              onToggle={() => onToggleSelect(agent.name)}
-                              onView={() => onViewAgent(agent)}
-                              onEdit={() => onEditAgent(agent)}
-                              onDelete={() => onDeleteAgent(agent.name)}
-                              onRun={() => onRunAgent(agent)}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                    {unassignedMembers.length > 0 && (
-                      <div className="lib-agent-group">
-                        <div className="lib-agent-group-head">
-                          <span>Unassigned</span>
-                          <em>{unassignedMembers.length}</em>
-                        </div>
-                        <div className="lib-agent-list">
-                          {unassignedMembers.map(agent => (
-                            <LibraryAgentListRow
-                              key={agent.name}
-                              agent={agent}
-                              runs7d={activityByAgent.get(agent.name as string) ?? 0}
-                              selected={selectedAgents.has(agent.name)}
-                              onToggle={() => onToggleSelect(agent.name)}
-                              onView={() => onViewAgent(agent)}
-                              onEdit={() => onEditAgent(agent)}
-                              onDelete={() => onDeleteAgent(agent.name)}
-                              onRun={() => onRunAgent(agent)}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            ) : (
-              <div className="lib-agent-list">
-                {filteredMembers.length === 0 ? (
-                  <div className="lib-empty">no agents match these filters</div>
-                ) : filteredMembers.map(agent => (
-                  <LibraryAgentListRow
-                    key={agent.name}
-                    agent={agent}
-                    runs7d={activityByAgent.get(agent.name as string) ?? 0}
-                    selected={selectedAgents.has(agent.name)}
-                    onToggle={() => onToggleSelect(agent.name)}
-                    onView={() => onViewAgent(agent)}
-                    onEdit={() => onEditAgent(agent)}
-                    onDelete={() => onDeleteAgent(agent.name)}
-                    onRun={() => onRunAgent(agent)}
-                  />
-                ))}
-              </div>
-            )}
-
-            {activeTeam && !activeTeam.isBuiltIn && (
-              <div className="lib-danger-row">
-                <span>team management</span>
-                <button className="btn btn-ghost btn-sm hover:text-accent-red" onClick={() => onDeleteTeam(activeTeam)}>
-                  <Trash2 className="w-3 h-3" /> delete team
-                </button>
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="lib-empty">
-            no teams yet
-            <div className="mt-3 flex justify-center gap-2">
-              <button className="btn btn-secondary btn-sm" onClick={onBuildTeamWithAi}>build with AI</button>
-              <button className="btn btn-secondary btn-sm" onClick={onImportAgents}>import from repo</button>
-              <button className="btn btn-primary btn-sm" onClick={onCreateAgent}>new agent</button>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
+              <input
+                placeholder="Search teams..."
+                value={teamQuery}
+                onChange={event => setTeamQuery(event.target.value)}
+                className="h-9 w-full rounded-md border border-app bg-app-muted pl-8 pr-3 text-[12px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+              />
             </div>
           </div>
-        )}
-      </section>
+          <div className="max-h-[calc(100vh-310px)] overflow-auto p-2">
+            <button
+              className={`mb-1 flex w-full items-center justify-between rounded-md px-3 py-2.5 text-left transition-colors ${
+                showingAllAgents ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:bg-app-muted/60 hover:text-theme-primary'
+              }`}
+              onClick={() => setActiveName('all')}
+            >
+              <span>
+                <span className="block text-[13px] font-semibold">All agents</span>
+                <span className="mt-0.5 block text-[11px] text-theme-muted">Grouped by team</span>
+              </span>
+              <span className="font-mono text-[11px] text-theme-muted">{totalAgents}</span>
+            </button>
+            {filteredTeams.length === 0 && (
+              <div className="px-3 py-6 text-center text-[12px] text-theme-muted">No teams match "{teamQuery}".</div>
+            )}
+            {filteredTeams.map(team => {
+              const active = activeTeam?.name === team.name;
+              const count = agentsByTeam.get(team.name)?.length ?? 0;
+              return (
+                <button
+                  key={team.name}
+                  className={`mb-1 flex w-full items-center justify-between rounded-md px-3 py-2.5 text-left transition-colors ${
+                    active ? 'bg-accent-soft text-theme-primary' : 'text-theme-muted hover:bg-app-muted/60 hover:text-theme-primary'
+                  }`}
+                  onClick={() => setActiveName(team.name)}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-[13px] font-semibold">{team.displayName}</span>
+                    <span className="mt-0.5 block truncate text-[11px] text-theme-muted">
+                      {team.leadAgentName ? `Lead ${team.leadAgentName}` : 'No lead assigned'}
+                    </span>
+                  </span>
+                  <span className="ml-3 shrink-0 font-mono text-[11px] text-theme-muted">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        <section className="min-w-0 overflow-hidden rounded-md border border-app bg-app-card">
+          {teams.length > 0 || showingAllAgents ? (
+            <>
+              <header className="flex items-start justify-between gap-4 border-b border-app px-5 py-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h2 className="truncate text-[18px] font-semibold tracking-tight text-theme-primary">
+                      {activeTeam ? activeTeam.displayName : 'All agents'}
+                    </h2>
+                    {activeTeam?.isBuiltIn && <span className="badge badge-muted">built-in</span>}
+                  </div>
+                  <p className="mt-1 max-w-[720px] text-[13px] text-theme-muted">
+                    {activeTeam
+                      ? activeTeam.mission || activeTeam.description || 'No mission defined.'
+                      : 'Browse every agent grouped by team. Search across names, roles, and capabilities.'}
+                  </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-3 font-mono text-[11px] text-theme-muted">
+                    {activeTeam ? (
+                      <>
+                        <span>{activeMembers.length} agents</span>
+                        <span className="text-theme-subtle">·</span>
+                        <span>Lead {activeLead?.displayName ?? activeLead?.name ?? activeTeam.leadAgentName ?? 'none'}</span>
+                        <span className="text-theme-subtle">·</span>
+                        <span>{activeTeam.name}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>{teams.length} teams</span>
+                        <span className="text-theme-subtle">·</span>
+                        <span>{totalAgents} agents</span>
+                        <span className="text-theme-subtle">·</span>
+                        <span>{leadCount} leads</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {activeTeam && (
+                    <IconTooltipButton label="Edit team" onClick={() => onEditTeam(activeTeam)} className="h-9 w-9 rounded-md border border-app">
+                      <Pencil className="h-4 w-4" />
+                    </IconTooltipButton>
+                  )}
+                  {activeTeam && !activeTeam.isBuiltIn && (
+                    <IconTooltipButton label="Delete team" tone="danger" onClick={() => onDeleteTeam(activeTeam)} className="h-9 w-9 rounded-md border border-app">
+                      <Trash2 className="h-4 w-4" />
+                    </IconTooltipButton>
+                  )}
+                </div>
+              </header>
+
+              <div className="max-h-[calc(100vh-360px)] overflow-auto p-4">
+                {showingAllAgents ? (
+                  <div className="space-y-4">
+                    {visibleGroupCount === 0 ? (
+                      <div className="rounded-md border border-dashed border-app px-4 py-12 text-center text-[13px] text-theme-muted">
+                        No agents match these filters.
+                      </div>
+                    ) : (
+                      <>
+                        {groupedFilteredMembers.map(group => (
+                          <div className="overflow-hidden rounded-md border border-app" key={group.team.name}>
+                            <button
+                              className="flex w-full items-center justify-between border-b border-app bg-app-muted/45 px-4 py-2.5 text-left transition-colors hover:bg-app-muted"
+                              onClick={() => setActiveName(group.team.name)}
+                            >
+                              <span className="text-[13px] font-semibold text-theme-primary">{group.team.displayName}</span>
+                              <span className="font-mono text-[11px] text-theme-muted">{group.members.length} agents</span>
+                            </button>
+                            <div className="[&>*+*]:border-t [&>*+*]:border-app">
+                              {group.members.map(agent => (
+                                <LibraryAgentListRow
+                                  key={agent.name}
+                                  agent={agent}
+                                  runs7d={activityByAgent.get(agent.name as string) ?? 0}
+                                  selected={selectedAgents.has(agent.name)}
+                                  onToggle={() => onToggleSelect(agent.name)}
+                                  onView={() => onViewAgent(agent)}
+                                  onEdit={() => onEditAgent(agent)}
+                                  onDelete={() => onDeleteAgent(agent.name)}
+                                  onRun={() => onRunAgent(agent)}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                        {unassignedMembers.length > 0 && (
+                          <div className="overflow-hidden rounded-md border border-app">
+                            <div className="flex items-center justify-between border-b border-app bg-app-muted/45 px-4 py-2.5">
+                              <span className="text-[13px] font-semibold text-theme-primary">Unassigned</span>
+                              <span className="font-mono text-[11px] text-theme-muted">{unassignedMembers.length} agents</span>
+                            </div>
+                            <div className="[&>*+*]:border-t [&>*+*]:border-app">
+                              {unassignedMembers.map(agent => (
+                                <LibraryAgentListRow
+                                  key={agent.name}
+                                  agent={agent}
+                                  runs7d={activityByAgent.get(agent.name as string) ?? 0}
+                                  selected={selectedAgents.has(agent.name)}
+                                  onToggle={() => onToggleSelect(agent.name)}
+                                  onView={() => onViewAgent(agent)}
+                                  onEdit={() => onEditAgent(agent)}
+                                  onDelete={() => onDeleteAgent(agent.name)}
+                                  onRun={() => onRunAgent(agent)}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="overflow-hidden rounded-md border border-app">
+                    {filteredMembers.length === 0 ? (
+                      <div className="px-4 py-12 text-center text-[13px] text-theme-muted">No agents match these filters.</div>
+                    ) : (
+                      <div className="[&>*+*]:border-t [&>*+*]:border-app">
+                        {filteredMembers.map(agent => (
+                          <LibraryAgentListRow
+                            key={agent.name}
+                            agent={agent}
+                            runs7d={activityByAgent.get(agent.name as string) ?? 0}
+                            selected={selectedAgents.has(agent.name)}
+                            onToggle={() => onToggleSelect(agent.name)}
+                            onView={() => onViewAgent(agent)}
+                            onEdit={() => onEditAgent(agent)}
+                            onDelete={() => onDeleteAgent(agent.name)}
+                            onRun={() => onRunAgent(agent)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex h-full min-h-[420px] flex-col items-center justify-center px-6 text-center">
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-app bg-accent-soft text-accent">
+                <Users className="h-5 w-5" />
+              </div>
+              <h2 className="text-[18px] font-semibold text-theme-primary">No teams yet</h2>
+              <p className="mt-2 max-w-sm text-[13px] text-theme-muted">Import agents from a repository or create a focused team for Allen to dispatch work.</p>
+              <div className="mt-5 flex justify-center gap-2">
+                <button className="btn btn-secondary btn-sm" onClick={onBuildTeamWithAi}>Build with AI</button>
+                <button className="btn btn-secondary btn-sm" onClick={onImportAgents}>Import</button>
+                <button className="btn btn-primary btn-sm" onClick={onCreateAgent}>New agent</button>
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }
@@ -1532,20 +1643,54 @@ function LibraryAgentListRow({
   onDelete: () => void;
   onRun: () => void;
 }) {
+  const isLead = agent.teamRole === 'lead';
+  const isBuiltIn = !!agent.isBuiltIn;
+  const provider = String(agent.provider ?? 'claude');
+  const model = String(agent.model ?? 'sonnet');
+
   return (
-    <div className="lib-agent-row">
-      <input type="checkbox" checked={selected} onChange={onToggle} aria-label={`Select ${agent.displayName ?? agent.name}`} />
-      <button className="lib-agent-main" onClick={onView}>
-        <div className="lib-agent-icon"><Users className="h-3 w-3" /></div>
-        <span>
-          <strong>{agent.displayName ?? agent.name}</strong>
-          <em className="mono">{agent.model ?? 'sonnet'} · {runs7d} runs · {agent.teamRole === 'lead' ? 'lead' : 'member'}</em>
+    <div className="grid grid-cols-[28px_minmax(0,1fr)_120px_116px] items-center gap-3 px-4 py-3 transition-colors hover:bg-app-muted/30">
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={onToggle}
+        aria-label={`Select ${agent.displayName ?? agent.name}`}
+        className="h-4 w-4 rounded border-app bg-app-muted text-accent focus:ring-accent"
+      />
+      <button className="flex min-w-0 items-center gap-3 text-left" onClick={onView}>
+        <span className="min-w-0">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <strong className="truncate text-[13.5px] font-semibold text-theme-primary">{agent.displayName ?? agent.name}</strong>
+            {isLead && <Crown className="h-3.5 w-3.5 shrink-0 text-accent-yellow" />}
+            {isBuiltIn && <span className="shrink-0 font-mono text-[10px] text-theme-subtle">built-in</span>}
+          </span>
+          <span className="mt-1 block truncate font-mono text-[11px] text-theme-muted">
+            {agent.name}
+          </span>
         </span>
       </button>
-      <span className={`lib-pill ${runs7d > 0 ? 'ok' : 'waiting'}`}>{runs7d > 0 ? 'active' : 'idle'}</span>
-      <button className="btn btn-ghost btn-sm" onClick={onRun}><Play className="w-3 h-3" /></button>
-      <button className="btn btn-ghost btn-sm" onClick={onEdit}><Pencil className="w-3 h-3" /></button>
-      <button className="btn btn-ghost btn-sm hover:text-accent-red" onClick={onDelete}><Trash2 className="w-3 h-3" /></button>
+      <div className="min-w-0 font-mono text-[11px] text-theme-muted">
+        <div className="truncate text-theme-secondary">{provider}</div>
+        <div className="truncate text-theme-muted">{model}</div>
+      </div>
+      <div className="flex items-center justify-end gap-1">
+        <IconTooltipButton label="Run agent" side="left" onClick={onRun} className="h-8 w-8">
+          <Play className="h-3.5 w-3.5" />
+        </IconTooltipButton>
+        <IconTooltipButton label="Edit agent" side="left" onClick={onEdit} className="h-8 w-8">
+          <Pencil className="h-3.5 w-3.5" />
+        </IconTooltipButton>
+        {!isBuiltIn && (
+          <IconTooltipButton label="Delete agent" side="left" tone="danger" onClick={onDelete} className="h-8 w-8">
+            <Trash2 className="h-3.5 w-3.5" />
+          </IconTooltipButton>
+        )}
+        {isBuiltIn && (
+          <IconTooltipButton label="Built-in agent" side="left" disabled className="h-8 w-8">
+            <Trash2 className="h-3.5 w-3.5" />
+          </IconTooltipButton>
+        )}
+      </div>
     </div>
   );
 }
@@ -1647,7 +1792,7 @@ function LibraryIntegrationsPane() {
 //   • Breadcrumb + Agents h1 + tab row (Directory / Teams / Graph / Models)
 //   • Directory: 3-col grid of agent cards grouped by team
 //   • Teams: card per team
-//   • Graph: existing DelegationGraph
+//   • Graph: existing SpawnTargetGraph
 //   • Models: provider + model distribution
 
 interface DirectoryShellProps {
@@ -1735,7 +1880,7 @@ function DirectoryShell({
         {([
           { id: 'directory', label: 'Directory' },
           { id: 'teams', label: 'Teams', count: teamsCount },
-          { id: 'graph', label: 'Delegation graph' },
+          { id: 'graph', label: 'Spawn target graph' },
           { id: 'models', label: 'Models' },
         ] as { id: 'directory' | 'teams' | 'graph' | 'models'; label: string; count?: number }[]).map((t) => (
           <button
@@ -1792,10 +1937,10 @@ function DirectoryShell({
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-3">
             <LayoutGrid className="w-4 h-4 text-accent" />
-            <span className="overline">Delegation graph</span>
+            <span className="overline">Spawn target graph</span>
           </div>
           {allAgents.length > 0 ? (
-            <DelegationGraph agents={allAgents} />
+            <SpawnTargetGraph agents={allAgents} />
           ) : (
             <div className="text-[12px] text-theme-muted italic font-body py-8 text-center">
               No agents yet. Create one to get started.
@@ -2106,10 +2251,10 @@ function OverviewContent({
       <div className="rounded-xl border border-app bg-app-muted/40 p-4">
         <div className="flex items-center gap-2 mb-3">
           <LayoutGrid className="w-4 h-4 text-accent-blue" />
-          <span className="overline">Delegation Graph</span>
+          <span className="overline">Spawn Target Graph</span>
         </div>
         {allAgents.length > 0 ? (
-          <DelegationGraph agents={allAgents} />
+          <SpawnTargetGraph agents={allAgents} />
         ) : (
           <div className="text-[11px] text-theme-muted italic font-body py-8 text-center">
             No agents yet. Create one to get started.

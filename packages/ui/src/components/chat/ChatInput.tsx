@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle, type ReactNode } from 'react';
-import { ArrowUp, Square, ChevronDown, Paperclip, Loader2, X, Sparkles, ShieldCheck, Plus } from 'lucide-react';
+import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle, type ReactNode, type RefObject, type SVGProps } from 'react';
+import { ArrowUp, Square, ChevronDown, Paperclip, Loader2, X, Sparkles, ShieldCheck, Plus, Check, FolderGit2, CornerDownLeft } from 'lucide-react';
 import MentionAutocomplete, { type MentionOption } from './MentionAutocomplete';
 import { authHeaders, linear, type LinearIssueSummary } from '../../services/api';
 import { CHAT_PLACEHOLDER } from '../../lib/brand';
@@ -63,12 +63,50 @@ interface ChatInputProps {
   slashCommands?: SlashCommandOption[];
   onSlashCommand?: (command: SlashCommandOption, raw: string) => boolean | void;
   extraControls?: ReactNode;
+  maxVisibleLines?: number;
+  fixedVisibleLines?: boolean;
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
   codex: 'text-accent-green',
-  'claude-cli': 'text-accent-blue',
+  claude: 'text-accent',
+  'claude-cli': 'text-accent',
 };
+
+function OpenAIIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+      <path
+        d="M12 3.4a4.1 4.1 0 0 1 3.9 2.8 4.1 4.1 0 0 1 4.2 4.1 4.2 4.2 0 0 1-1.8 3.4 4.1 4.1 0 0 1-5.9 5.5 4.1 4.1 0 0 1-6.3-2.3 4.1 4.1 0 0 1-2.2-7.5A4.1 4.1 0 0 1 8.6 4a4.1 4.1 0 0 1 3.4-.6Z"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M8.7 4.1 15 7.7v7.2l-6.3 3.6M4 9.4l6.3 3.6 6.2-3.6M6.1 16.9V9.8l6.2-3.6M18.3 13.7l-6.2-3.6-6.2 3.6M12.3 19.2v-7.1l6.2-3.6"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ClaudeIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+      <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="12" cy="12" r="2.4" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ProviderIcon({ provider, className }: { provider?: string | null; className?: string }) {
+  if (provider === 'codex') return <OpenAIIcon className={className} />;
+  if (provider === 'claude' || provider === 'claude-cli') return <ClaudeIcon className={className} />;
+  return <Sparkles className={className} />;
+}
 
 const EFFORT_OPTIONS: Array<{ value: ReasoningEffortValue; label: string; description: string }> = [
   { value: 'off', label: 'Off', description: 'No extended thinking' },
@@ -78,11 +116,49 @@ const EFFORT_OPTIONS: Array<{ value: ReasoningEffortValue; label: string; descri
   { value: 'max', label: 'Max', description: 'Opus only' },
 ];
 
-const TEXTAREA_MIN_HEIGHT = 40;
-const TEXTAREA_MAX_HEIGHT = 150;
+const pickerPanelClass = 'fixed z-50 min-w-[220px] overflow-hidden rounded-md border border-app bg-app-card p-2 shadow-2xl';
+const pickerHeaderClass = 'px-3 pb-2 pt-1 text-[13px] font-medium text-theme-muted';
+const pickerRowBaseClass = 'flex min-h-11 w-full items-center gap-3 rounded-md px-3 py-2 text-left text-[14px] transition-colors hover:bg-app-muted';
+const modelPickerRowClass = 'flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-app-muted';
+const effortPickerRowClass = 'flex min-h-9 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-app-muted';
+
+const TEXTAREA_MIN_HEIGHT = 76;
+const TEXTAREA_MAX_HEIGHT = 200;
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function pickerPositionFor(
+  ref: RefObject<HTMLElement | null>,
+  panelWidth: number,
+  estimatedHeight: number,
+): { top: number; left: number; maxHeight: number; width: number } {
+  const margin = 12;
+  const gap = 6;
+  const rect = ref.current?.getBoundingClientRect();
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const width = Math.min(panelWidth, viewportWidth - (margin * 2));
+
+  if (!rect) {
+    return { top: margin, left: margin, maxHeight: viewportHeight - (margin * 2), width };
+  }
+
+  const spaceAbove = rect.top - margin - gap;
+  const spaceBelow = viewportHeight - rect.bottom - margin - gap;
+  const dropDown = spaceBelow >= Math.min(estimatedHeight, spaceAbove);
+  const maxHeight = Math.max(160, dropDown ? spaceBelow : spaceAbove);
+  const top = dropDown
+    ? rect.bottom + gap
+    : Math.max(margin, rect.top - Math.min(estimatedHeight, maxHeight) - gap);
+  const left = clamp(rect.left, margin, viewportWidth - width - margin);
+
+  return { top, left, maxHeight, width };
 }
 
 /**
@@ -124,6 +200,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     slashCommands = [],
     onSlashCommand,
     extraControls,
+    maxVisibleLines,
+    fixedVisibleLines,
   },
   ref,
 ) {
@@ -145,9 +223,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [showEffortPicker, setShowEffortPicker] = useState(false);
   const [showRepoPicker, setShowRepoPicker] = useState(false);
-  const [modelPlacement, setModelPlacement] = useState<'up' | 'down'>('up');
-  const [effortPlacement, setEffortPlacement] = useState<'up' | 'down'>('up');
-  const [repoPlacement, setRepoPlacement] = useState<'up' | 'down'>('up');
+  const [modelPickerPos, setModelPickerPos] = useState<{ top: number; left: number; maxHeight: number; width: number } | null>(null);
+  const [effortPickerPos, setEffortPickerPos] = useState<{ top: number; left: number; maxHeight: number; width: number } | null>(null);
+  const [repoPickerPos, setRepoPickerPos] = useState<{ top: number; left: number; maxHeight: number; width: number } | null>(null);
   const effortPickerRef = useRef<HTMLDivElement>(null);
   const repoPickerRef = useRef<HTMLDivElement>(null);
 
@@ -240,14 +318,6 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     }
   }, []);
 
-  function placementFor(ref: React.RefObject<HTMLElement | null>, estimatedHeight = 300): 'up' | 'down' {
-    const rect = ref.current?.getBoundingClientRect();
-    if (!rect) return 'up';
-    const spaceAbove = rect.top;
-    const spaceBelow = window.innerHeight - rect.bottom;
-    if (spaceAbove < estimatedHeight && spaceBelow > spaceAbove) return 'down';
-    return 'up';
-  }
   const [attachments, setAttachments] = useState<{ name: string; url: string }[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -255,11 +325,28 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const pickerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  function textareaMaxHeight(el: HTMLTextAreaElement): number {
+    if (!maxVisibleLines || maxVisibleLines <= 0) return TEXTAREA_MAX_HEIGHT;
+    const style = window.getComputedStyle(el);
+    const lineHeight = Number.parseFloat(style.lineHeight) || 22;
+    const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
+    const borderTop = Number.parseFloat(style.borderTopWidth) || 0;
+    const borderBottom = Number.parseFloat(style.borderBottomWidth) || 0;
+    return Math.ceil((lineHeight * maxVisibleLines) + paddingTop + paddingBottom + borderTop + borderBottom);
+  }
+
   function resizeTextarea(el: HTMLTextAreaElement): void {
+    const maxHeight = textareaMaxHeight(el);
     el.style.height = 'auto';
-    const nextHeight = Math.min(Math.max(el.scrollHeight, TEXTAREA_MIN_HEIGHT), TEXTAREA_MAX_HEIGHT);
+    const nextHeight = fixedVisibleLines && maxVisibleLines
+      ? maxHeight
+      : Math.min(Math.max(el.scrollHeight, TEXTAREA_MIN_HEIGHT), maxHeight);
     el.style.height = `${nextHeight}px`;
-    el.style.overflowY = el.scrollHeight > TEXTAREA_MAX_HEIGHT ? 'auto' : 'hidden';
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    if (el.scrollHeight > maxHeight) {
+      el.scrollTop = el.scrollHeight;
+    }
   }
 
   useImperativeHandle(ref, () => ({
@@ -470,8 +557,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     setLinearIssues([]);
     setLinearError(null);
     if (textareaRef.current) {
-      textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT}px`;
-      textareaRef.current.style.overflowY = 'hidden';
+      resizeTextarea(textareaRef.current);
     }
   }, [value, attachments, disabled, onSend, slashCommands, onSlashCommand]);
 
@@ -499,10 +585,11 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
       />
 
       {slashVisible && (
-        <div className="absolute left-0 right-0 bottom-full z-50 mb-2 overflow-hidden rounded-lg border border-app bg-surface-100 shadow-xl">
-          <div className="max-h-72 overflow-y-auto py-1">
+        <div className="absolute bottom-full left-0 right-0 z-50 mb-2 overflow-hidden rounded-lg border border-app bg-app-card p-2 shadow-2xl">
+          <div className="px-3 pb-2 pt-1 text-[13px] font-medium text-theme-muted">Commands</div>
+          <div className="max-h-72 overflow-y-auto">
             {filteredSlashCommands.length === 0 ? (
-              <div className="px-3 py-3 text-xs text-theme-subtle">No slash commands found</div>
+              <div className="px-3 py-5 text-center text-[13px] text-theme-muted">No slash commands found</div>
             ) : filteredSlashCommands.map((command, index) => {
               const selected = index === slashSelectedIdx;
               return (
@@ -512,18 +599,19 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   disabled={!command.dispatchable}
                   onMouseEnter={() => setSlashSelectedIdx(index)}
                   onClick={() => command.dispatchable && handleSlashSelect(command)}
-                  className={`flex w-full items-start gap-3 px-3 py-2 text-left transition-colors ${
+                  className={`flex min-h-11 w-full items-center gap-3 rounded-md px-3 py-2 text-left text-[14px] transition-colors ${
                     selected ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary hover:bg-app-muted/70'
                   } ${!command.dispatchable ? 'cursor-not-allowed opacity-55' : ''}`}
                   title={command.unavailableReason}
                 >
-                  <span className="mt-0.5 font-mono text-xs text-accent-blue">{command.name}</span>
+                  <span className="font-mono text-[13px] text-accent">{command.name}</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs">{command.description}</span>
-                    <span className="mt-0.5 block truncate font-mono text-[10px] text-theme-subtle">
+                    <span className="block truncate">{command.description}</span>
+                    <span className="mt-0.5 block truncate font-mono text-[12px] text-theme-muted">
                       {command.dispatchable ? `${command.source} · ${command.provider}` : command.unavailableReason}
                     </span>
                   </span>
+                  {selected && <Check className="h-4 w-4 shrink-0 text-theme-secondary" />}
                 </button>
               );
             })}
@@ -565,6 +653,19 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             <span className="text-xs text-accent-blue font-mono">Drop files to attach</span>
           </div>
         )}
+        <div
+          className="pointer-events-none absolute right-2 top-2 hidden items-center gap-1 font-mono text-[9px] text-theme-subtle sm:flex"
+          aria-label="Shift Enter for new line"
+          title="Shift + Enter for new line"
+        >
+          <span className="inline-flex h-5 items-center justify-center rounded-md border border-app bg-app-muted px-1.5 text-theme-subtle">
+            Shift
+          </span>
+          <span>+</span>
+          <span className="inline-flex h-5 w-5 items-center justify-center rounded-md border border-app bg-app-muted text-theme-subtle">
+            <CornerDownLeft className="h-3 w-3" />
+          </span>
+        </div>
         {/* Textarea */}
         <textarea
           ref={textareaRef}
@@ -580,8 +681,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         />
 
         {/* Bottom bar inside the input — model selector + send button */}
-        <div className="chat-input-controls cc-foot">
-          {/* ── Left cluster: model, effort, plan, attach ── */}
+        <div className="chat-input-controls cc-foot !mt-0 !pt-0">
+          {/* ── Left cluster: model, effort, plan ── */}
           <div className="flex flex-wrap items-center gap-1">
             {onOpenQuickCommands && (
               <button
@@ -603,7 +704,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
               <button
                 onClick={() => {
                   if (modelLocked) return;
-                  setModelPlacement(placementFor(pickerRef, 320));
+                  setModelPickerPos(pickerPositionFor(pickerRef, 224, 360));
                   setShowModelPicker(!showModelPicker);
                 }}
                 disabled={modelLocked}
@@ -614,6 +715,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                     : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-100/50 cursor-pointer'
                 }`}
               >
+                <ProviderIcon provider={selectedProvider} className={`h-3 w-3 shrink-0 ${PROVIDER_COLORS[selectedProvider ?? ''] ?? 'text-theme-muted'}`} />
                 <span className={PROVIDER_COLORS[selectedProvider ?? ''] ?? 'text-theme-muted'}>
                   {currentProvider?.label ?? selectedProvider}
                 </span>
@@ -625,25 +727,37 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
             {/* Model picker dropdown — opens upward */}
             {showModelPicker && !modelLocked && (
-              <div className={`absolute left-0 z-30 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden min-w-[220px] ${
-                modelPlacement === 'down' ? 'top-full mt-1' : 'bottom-full mb-1'
-              }`}>
-                {providers?.map(p => (
-                  <div key={p.provider}>
-                    <div className="px-3 py-1 bg-app-muted/50 border-b border-app">
-                      <span className={`overline ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`}>{p.label}</span>
+              <div
+                className={`${pickerPanelClass} overflow-y-auto`}
+                style={{
+                  top: modelPickerPos?.top ?? 12,
+                  left: modelPickerPos?.left ?? 12,
+                  width: modelPickerPos?.width ?? 224,
+                  maxHeight: Math.min(modelPickerPos?.maxHeight ?? 360, 360),
+                }}
+              >
+                {providers?.map((p, providerIndex) => (
+                  <div key={p.provider} className={providerIndex > 0 ? 'mt-2 border-t border-app pt-2' : ''}>
+                    <div className="flex items-center gap-2 px-2 pb-1.5 pt-0.5 text-[12px] font-medium text-theme-muted">
+                      <ProviderIcon provider={p.provider} className={`h-3.5 w-3.5 shrink-0 ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`} />
+                      <span>{p.label}</span>
                     </div>
-                    {p.models.map(m => (
+                    {p.models.map((m) => {
+                      const active = selectedProvider === p.provider && selectedModel === m;
+                      return (
                       <button
                         key={`${p.provider}-${m}`}
                         onClick={() => { onProviderChange?.(p.provider, m); setShowModelPicker(false); }}
-                        className={`w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-app-muted transition-colors ${
-                          selectedProvider === p.provider && selectedModel === m ? 'text-accent-blue bg-accent-blue/5' : 'text-theme-secondary'
+                        className={`${modelPickerRowClass} ${
+                          active ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary'
                         }`}
                       >
-                        {m}
+                        <ProviderIcon provider={p.provider} className={`h-3.5 w-3.5 shrink-0 ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`} />
+                        <span className="min-w-0 flex-1 truncate">{m}</span>
+                        {active && <Check className="h-3.5 w-3.5 shrink-0 text-theme-secondary" />}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 ))}
               </div>
@@ -655,7 +769,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             <button
               type="button"
               onClick={() => {
-                setEffortPlacement(placementFor(effortPickerRef, 280));
+                setEffortPickerPos(pickerPositionFor(effortPickerRef, 240, 260));
                 setShowEffortPicker((v) => !v);
               }}
               title="Reasoning effort"
@@ -671,14 +785,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             </button>
 
             {showEffortPicker && (
-              <div className={`absolute left-0 z-30 bg-surface-100 border border-app rounded-lg shadow-2xl overflow-hidden min-w-[220px] ${
-                effortPlacement === 'down' ? 'top-full mt-1' : 'bottom-full mb-1'
-              }`}>
-                <div className="px-3 py-1 bg-app-muted/50 border-b border-app">
-                  <span className="overline">
-                    Reasoning Effort
-                  </span>
-                </div>
+              <div
+                className={pickerPanelClass}
+                style={{
+                  top: effortPickerPos?.top ?? 12,
+                  left: effortPickerPos?.left ?? 12,
+                  width: effortPickerPos?.width ?? 240,
+                }}
+              >
+                <div className="px-2 pb-1.5 pt-0.5 text-[12px] font-medium text-theme-muted">Reasoning effort</div>
                 {EFFORT_OPTIONS.map((opt) => {
                   const isActive = effectiveEffort === opt.value;
                   const isInheritedDefault =
@@ -687,16 +802,18 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                     <button
                       key={opt.value}
                       onClick={() => setEffort(opt.value)}
-                      className={`w-full text-left px-3 py-1.5 text-xs font-mono transition-colors hover:bg-app-muted flex items-center justify-between gap-2 ${
-                        isActive ? 'text-accent-blue bg-accent-blue/5' : 'text-theme-secondary'
+                      className={`${effortPickerRowClass} ${
+                        isActive ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary'
                       }`}
                     >
-                      <span className="flex items-center gap-1.5">
-                        <span>{opt.label}</span>
-                        <span className="text-[10px] text-theme-subtle">— {opt.description}</span>
+                      <Sparkles className="h-3.5 w-3.5 shrink-0 text-theme-muted" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate">{opt.label}</span>
+                        <span className="block truncate text-[11px] text-theme-muted">{opt.description}</span>
                       </span>
+                      {isActive && <Check className="h-3.5 w-3.5 shrink-0 text-theme-secondary" />}
                       {isInheritedDefault && (
-                        <span className="text-[9px] text-theme-subtle uppercase tracking-wider">
+                        <span className="rounded border border-app bg-app px-1.5 py-0.5 font-mono text-[9.5px] uppercase text-theme-muted">
                           default
                         </span>
                       )}
@@ -752,7 +869,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                 disabled={repoLocked}
                 onClick={() => {
                   if (repoLocked) return;
-                  setRepoPlacement(placementFor(repoPickerRef, 280));
+                  setRepoPickerPos(pickerPositionFor(repoPickerRef, 360, 320));
                   setShowRepoPicker(v => !v);
                 }}
                 className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
@@ -764,10 +881,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                 }`}
                 title={repoLocked ? `Repo: ${selectedRepoName ?? 'none'}` : 'Select repository'}
               >
-                <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round"
-                    d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-                </svg>
+                <FolderGit2 className="h-3 w-3 shrink-0" />
                 <span className="max-w-[120px] truncate">
                   {selectedRepoName ?? 'Auto'}
                 </span>
@@ -775,43 +889,59 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
               </button>
 
               {showRepoPicker && !repoLocked && (
-                <div className={`absolute left-0 bg-surface-100 border border-app
-                                rounded-lg shadow-xl z-50 min-w-[240px] max-h-[260px] overflow-y-auto py-1 ${
-                  repoPlacement === 'down' ? 'top-full mt-1' : 'bottom-full mb-1'
-                }`}>
+                <div
+                  className={`${pickerPanelClass} overflow-y-auto`}
+                  style={{
+                    top: repoPickerPos?.top ?? 12,
+                    left: repoPickerPos?.left ?? 12,
+                    width: repoPickerPos?.width ?? 360,
+                    maxHeight: Math.min(repoPickerPos?.maxHeight ?? 320, 320),
+                  }}
+                >
+                  <div className={pickerHeaderClass}>Repository</div>
                   <button
-                    className="w-full text-left px-3 py-1.5 text-xs font-mono text-accent hover:bg-app-muted"
+                    className={`${pickerRowBaseClass} ${selectedRepoName == null ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary'}`}
                     onClick={() => { onRepoChange?.(null); setShowRepoPicker(false); }}
                   >
-                    Auto
+                    <FolderGit2 className="h-4 w-4 shrink-0 text-theme-muted" />
+                    <span className="min-w-0 flex-1 truncate">Auto</span>
+                    {selectedRepoName == null && <Check className="h-4 w-4 shrink-0 text-theme-secondary" />}
                   </button>
-                  <div className="h-px bg-app my-1" />
                   {repos.map(repo => (
                     <button
                       key={repo._id}
-                      className={`w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-app-muted ${
-                        selectedRepoName === repo.name ? 'text-accent-blue bg-accent-blue/5' : 'text-theme-secondary'
+                      className={`${pickerRowBaseClass} ${
+                        selectedRepoName === repo.name ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary'
                       }`}
                       onClick={() => { onRepoChange?.(repo); setShowRepoPicker(false); }}
                     >
-                      <span className="block truncate">{repo.name}</span>
-                      <span className="block truncate text-[10px] text-theme-subtle">{repo.path}</span>
+                      <FolderGit2 className="h-4 w-4 shrink-0 text-theme-muted" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate">{repo.name}</span>
+                        <span className="block truncate text-[12px] text-theme-muted">{repo.path}</span>
+                      </span>
+                      {selectedRepoName === repo.name && <Check className="h-4 w-4 shrink-0 text-theme-secondary" />}
                     </button>
                   ))}
                 </div>
               )}
             </div>
           )}
-          {/* Attach button */}
-          <button onClick={() => fileInputRef.current?.click()} disabled={uploading || disabled}
-            className="p-1 text-theme-muted hover:text-theme-secondary rounded transition-colors disabled:opacity-30" title="Attach file">
-            {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Paperclip className="w-3.5 h-3.5" />}
-          </button>
           </div>
           {/* ── /Left cluster ── */}
 
           {/* ── Right cluster: send ── */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading || disabled}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-theme-muted transition-colors hover:bg-surface-100/50 hover:text-theme-secondary disabled:cursor-not-allowed disabled:opacity-30"
+              title="Attach file"
+              aria-label="Attach file"
+            >
+              {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+            </button>
             {/* Send / Stop button */}
             {streaming && (
               <button

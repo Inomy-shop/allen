@@ -1,0 +1,6 @@
+dist/
+node_modules/
+release/
+assets/mongo-binaries/*
+!assets/mongo-binaries/.gitignore
+!assets/mongo-binaries/.gitkeep

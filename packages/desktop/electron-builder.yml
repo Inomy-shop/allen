@@ -1,0 +1,98 @@
+appId: com.allen.desktop
+productName: Allen
+copyright: Copyright 2026 Allen
+
+directories:
+  output: packages/desktop/release
+
+extraMetadata:
+  name: allen-desktop
+  main: packages/desktop/dist/main.js
+  type: module
+  dependencies:
+    "@allen/server": "*"
+    electron-updater: "^6.8.3"
+    mongodb-memory-server: "^11.0.1"
+
+files:
+  - package.json
+  - package-lock.json
+  - packages/desktop/package.json
+  - packages/desktop/preload.cjs
+  - packages/desktop/dist/**/*
+  - packages/server/package.json
+  - packages/server/dist/**/*
+  - packages/engine/package.json
+  - packages/engine/dist/**/*
+  - packages/engine/workflows/**/*
+  - packages/ui/package.json
+  - packages/ui/dist/**/*
+  - '!**/*.ts'
+  - '!**/*.tsx'
+  - '!**/*.map'
+  - '!**/*.test.*'
+  - '!**/*.spec.*'
+  - '!**/node_modules/.cache/**/*'
+  - '!**/node_modules/@anthropic-ai/claude-code/vendor/claude-code-jetbrains-plugin/**/*'
+  - '!node_modules/@allen/desktop/**/*'
+  - '!packages/desktop/release/**/*'
+  - '!packages/desktop/assets/mongo-binaries/.gitkeep'
+  - '!packages/desktop/assets/mongo-binaries/.gitignore'
+
+extraResources:
+  - from: packages/desktop/assets/mongo-binaries
+    to: mongo-binaries
+    filter:
+      - '**/*'
+      - '!.gitkeep'
+      - '!.gitignore'
+  - from: scripts/setup-context-engine.sh
+    to: scripts/setup-context-engine.sh
+  - from: packages/server/src/scripts/cognee-context-provider.py
+    to: server-scripts/cognee-context-provider.py
+  - from: packages/server/src/scripts/cognee_context_provider
+    to: server-scripts/cognee_context_provider
+    filter:
+      - '**/*.py'
+
+asar: true
+asarUnpack:
+  - node_modules/node-pty/**/*
+  - node_modules/bcrypt/**/*
+  - node_modules/@xenova/transformers/**/*
+
+mac:
+  icon: packages/desktop/build/icon.icns
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  notarize: true
+  entitlements: packages/desktop/build/entitlements.mac.plist
+  entitlementsInherit: packages/desktop/build/entitlements.mac.plist
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
+
+dmg:
+  background: packages/desktop/build/dmg-background.tiff
+  window:
+    width: 660
+    height: 400
+  iconSize: 96
+  contents:
+    - x: 220
+      y: 220
+      type: file
+    - x: 440
+      y: 220
+      type: link
+      path: /Applications
+  sign: false
+
+publish:
+  - provider: generic
+    url: https://askallen.build/releases

@@ -12,6 +12,15 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('skills').createIndex({ triggers: 1 });
 
   // Agents
+  const legacySpawnTargetsField = 'can' + 'DelegateTo';
+  await db.collection('agents').updateMany(
+    { spawnTargets: { $exists: false }, [legacySpawnTargetsField]: { $exists: true } },
+    [{ $set: { spawnTargets: `$${legacySpawnTargetsField}` } }],
+  );
+  await db.collection('agents').updateMany(
+    { [legacySpawnTargetsField]: { $exists: true } },
+    { $unset: { [legacySpawnTargetsField]: '' } },
+  );
   await db.collection('agents').createIndex({ name: 1 }, { unique: true });
   // Lookup imported agents by source repo — used by the import preview to
   // detect "already imported" rows and by the UI to badge agents by origin.
@@ -102,22 +111,6 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Lookup by repoId is hot — every agent spawn into a registered repo hits this.
   await db.collection('repo_contexts').createIndex({ repoId: 1 }, { unique: true });
 
-  // Repo Knowledge Graphs — structured repo/module/skill/production-knowledge graph.
-  await db.collection('repo_knowledge_indexes').createIndex({ repoId: 1, latest: 1, indexedAt: -1 });
-  await db.collection('repo_knowledge_indexes').createIndex({ repoId: 1, graphMode: 1, latest: 1, indexedAt: -1 });
-  await db.collection('repo_knowledge_indexes').createIndex(
-    { repoId: 1, graphMode: 1, headSha: 1, indexVersion: 1 },
-    { partialFilterExpression: { headSha: { $exists: true } } },
-  );
-  // Drop the early PoC unique index if present. Knowledge nodes must be
-  // versioned by indexId so old graph versions remain queryable/revertible.
-  await db.collection('knowledge_nodes').dropIndex('repoId_1_stableKey_1').catch(() => {});
-  await db.collection('knowledge_nodes').createIndex({ repoId: 1, indexId: 1, stableKey: 1 }, { unique: true });
-  await db.collection('knowledge_nodes').createIndex({ repoId: 1, indexId: 1, kind: 1 });
-  await db.collection('knowledge_nodes').createIndex({ repoId: 1, path: 1 });
-  await db.collection('knowledge_edges').createIndex({ repoId: 1, indexId: 1 });
-  await db.collection('knowledge_edges').createIndex({ repoId: 1, fromNodeId: 1 });
-  await db.collection('knowledge_edges').createIndex({ repoId: 1, toNodeId: 1 });
   await db.collection('context_attempts').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
   await db.collection('context_attempts').createIndex({ contextAttemptId: 1 }, { unique: true });
   await db.collection('context_attempts').createIndex({ rootExecutionId: 1, createdAt: 1 });
@@ -174,6 +167,8 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Workspaces
   await db.collection('workspaces').createIndex({ status: 1, updatedAt: -1 });
   await db.collection('workspaces').createIndex({ updatedAt: -1 });
+  // CWD resolution: findOne({ chatSessionId: sessionId }) in chat.service.ts (TDD §1.1)
+  await db.collection('workspaces').createIndex({ chatSessionId: 1 });
 
   // Alerts
   await db.collection('alerts').createIndex({ read: 1, createdAt: -1 });
@@ -210,6 +205,8 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { automationKey: 1 },
     { unique: true, sparse: true, name: 'automationKey_unique_sparse' },
   );
+  // Workspace-linked chat lookups and tab ordering (REQ-04, REQ-13)
+  await db.collection('chat_sessions').createIndex({ workspaceId: 1, lastMessageAt: -1 });
 
   // Chat Messages
   await db.collection('chat_messages').createIndex({ sessionId: 1, createdAt: 1 });
@@ -220,13 +217,13 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { name: 'idx_msg_sender_session_created', sparse: true },
   );
 
-  // Agent Conversations (delegation threads)
+  // Historical agent conversations
   await db.collection('agent_conversations').createIndex({ chatSessionId: 1, startedAt: -1 });
   await db.collection('agent_conversations').createIndex({ fromAgent: 1, toAgent: 1 });
   await db.collection('agent_conversations').createIndex({ status: 1 });
 
   // Agent Activity — running log of intermediate events emitted by
-  // delegations and spawned executions. Queried by refId for wait tools
+  // spawned-agent executions. Queried by refId for wait tools
   // and UI replay; TTL keeps the collection bounded (7 days) because the
   // final response is already persisted in agent_conversations/traces.
   await db.collection('agent_activity').createIndex({ refId: 1, timestamp: 1 });
@@ -285,6 +282,12 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { processedAt: 1 },
     { expireAfterSeconds: 86400 }, // 24h TTL
   );
+
+  // Uploaded Files — flat /api/files uploads metadata.
+  // fileId is the stored filename (UUID + ext) — unique lookup key for
+  // the public GET /api/files/:filename route to find the storage location.
+  await db.collection('uploaded_files').createIndex({ fileId: 1 }, { unique: true });
+  await db.collection('uploaded_files').createIndex({ createdAt: -1 });
 
   console.log('Database indexes ensured');
 }

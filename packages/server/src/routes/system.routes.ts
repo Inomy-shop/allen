@@ -1,14 +1,263 @@
 import { Router, type Request, type Response } from 'express';
 import { execFile } from 'node:child_process';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { ObjectId, type Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import { runSystemHealth } from '../services/system-health.service.js';
 import { contextProviderRuntimeConfig } from '../services/context/config/context-provider-config.js';
 import { requireAuth, type AuthedRequest } from '../middleware/requireAuth.js';
+import { requireAdmin } from '../middleware/requireAdmin.js';
+import { getRuntimeConfigProvider, getRuntimeSecretsProvider } from '../runtime/config.js';
+import { mcpCredentialEnvKey } from '../runtime/mcp-credentials.js';
+import { MCP_PRESETS } from '../services/mcp.service.js';
+import { OrgSeedService } from '../services/org-seed.js';
+import { seedDefaultWorkflows } from '../seed.js';
 
 const exec = promisify(execFile);
-const ONBOARDING_STEPS = new Set(['health', 'repository', 'first_workflow', 'complete']);
+const ONBOARDING_STEPS = new Set(['health', 'model_defaults', 'repository', 'first_workflow', 'complete']);
+
+type RuntimeSettingKind = 'boolean' | 'number' | 'path' | 'select' | 'string';
+
+type RuntimeSettingOption = {
+  label: string;
+  value: string;
+};
+
+type RuntimeSettingShowWhen = {
+  key: string;
+  equals?: string;
+  notEquals?: string;
+  in?: string[];
+};
+
+type RuntimeSettingDef = {
+  key: string;
+  label: string;
+  description?: string;
+  kind: RuntimeSettingKind;
+  defaultValue: string;
+  placeholder?: string;
+  options?: RuntimeSettingOption[];
+  restartRequired?: boolean;
+  readOnly?: boolean;
+  advanced?: boolean;
+  showWhen?: RuntimeSettingShowWhen;
+};
+
+type RuntimeSettingGroupDef = {
+  id: string;
+  title: string;
+  description: string;
+  fields: RuntimeSettingDef[];
+};
+
+type DesktopCogneeSetupStatus = {
+  selected: boolean;
+  configuredPython: string | null;
+  pythonPath: string;
+  venvPython: string;
+  cogneeImportOk: boolean;
+  setupRecommended: boolean;
+  detail: string;
+};
+
+const PROVIDER_OPTIONS = [
+  { label: 'Codex', value: 'codex' },
+  { label: 'Claude CLI', value: 'claude-cli' },
+] as const;
+
+const AGENT_MODEL_OPTIONS = [
+  { label: 'Provider default', value: '' },
+  { label: 'sonnet', value: 'sonnet' },
+  { label: 'opus', value: 'opus' },
+  { label: 'haiku', value: 'haiku' },
+  { label: 'gpt-5.5', value: 'gpt-5.5' },
+  { label: 'gpt-5.4', value: 'gpt-5.4' },
+  { label: 'gpt-5.3-codex', value: 'gpt-5.3-codex' },
+  { label: 'gpt-5.2-codex', value: 'gpt-5.2-codex' },
+  { label: 'gpt-5.1-codex-max', value: 'gpt-5.1-codex-max' },
+  { label: 'gpt-5.2', value: 'gpt-5.2' },
+  { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini' },
+] as const;
+
+const CLAUDE_AGENT_MODEL_OPTIONS = new Set(['', 'sonnet', 'opus', 'haiku']);
+const CODEX_AGENT_MODEL_OPTIONS = new Set([
+  '',
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.3-codex',
+  'gpt-5.2-codex',
+  'gpt-5.1-codex-max',
+  'gpt-5.2',
+  'gpt-5.1-codex-mini',
+]);
+
+const CONTEXT_LLM_MODEL_OPTIONS = [
+  { label: 'gpt-5.5', value: 'gpt-5.5' },
+  { label: 'gpt-5.4', value: 'gpt-5.4' },
+  { label: 'gpt-5.3-codex', value: 'gpt-5.3-codex' },
+  { label: 'gpt-5.2-codex', value: 'gpt-5.2-codex' },
+  { label: 'sonnet', value: 'sonnet' },
+  { label: 'opus', value: 'opus' },
+  { label: 'haiku', value: 'haiku' },
+] as const;
+
+const RERANKER_MODEL_OPTIONS = [
+  { label: 'BAAI/bge-reranker-base', value: 'BAAI/bge-reranker-base' },
+  { label: 'BAAI/bge-reranker-large', value: 'BAAI/bge-reranker-large' },
+  { label: 'BAAI/bge-reranker-v2-m3', value: 'BAAI/bge-reranker-v2-m3' },
+] as const;
+
+const COGNEE_EMBEDDING_MODEL_OPTIONS = [
+  { label: 'BAAI/bge-small-en-v1.5', value: 'BAAI/bge-small-en-v1.5' },
+  { label: 'BAAI/bge-base-en-v1.5', value: 'BAAI/bge-base-en-v1.5' },
+  { label: 'BAAI/bge-large-en-v1.5', value: 'BAAI/bge-large-en-v1.5' },
+] as const;
+
+const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
+  {
+    id: 'runtime',
+    title: 'Local Runtime',
+    description: 'Desktop-owned paths and startup behavior. Changes here are written to the desktop runtime config, not the repo .env file.',
+    fields: [
+      { key: 'ALLEN_HOME', label: 'Allen home directory', kind: 'path', defaultValue: '~/.allen', readOnly: true },
+      { key: 'WORKSPACE_BASE_DIR', label: 'Workspace directory', kind: 'path', defaultValue: '~/.allen/workspaces', readOnly: true },
+      { key: 'UPLOADS_DIR', label: 'Local uploads directory', kind: 'path', defaultValue: '~/.allen/uploads', readOnly: true },
+      { key: 'MCP_BUNDLES_DIR', label: 'MCP bundles directory', kind: 'path', defaultValue: '~/.allen/mcp-servers', readOnly: true, advanced: true },
+      { key: 'SEED_OVERRIDE', label: 'Refresh built-ins on startup', description: 'Overwrite seeded agents, workflows, skills, and schedules from the bundled definitions.', kind: 'boolean', defaultValue: 'false', restartRequired: true },
+      { key: 'TERMINAL_WS_PORT', label: 'Terminal websocket port', description: 'Leave empty to let desktop choose a local port.', kind: 'number', defaultValue: 'auto', restartRequired: true, advanced: true },
+      { key: 'ALLEN_DISABLE_AUTO_UPDATE', label: 'Disable auto update', kind: 'boolean', defaultValue: 'false', restartRequired: true, advanced: true },
+    ],
+  },
+  {
+    id: 'artifacts',
+    title: 'Artifacts & Uploads',
+    description: 'Controls where generated artifacts and uploaded files are stored and how public links are created.',
+    fields: [
+      { key: 'S3_UPLOAD_ENABLED', label: 'Store uploads in S3', kind: 'boolean', defaultValue: 'false' },
+      { key: 'S3_UPLOAD_BUCKET', label: 'S3 bucket', kind: 'string', defaultValue: '', showWhen: { key: 'S3_UPLOAD_ENABLED', equals: 'true' } },
+      { key: 'S3_UPLOAD_REGION', label: 'S3 region', kind: 'string', defaultValue: 'us-east-1', placeholder: 'us-east-1', showWhen: { key: 'S3_UPLOAD_ENABLED', equals: 'true' } },
+      { key: 'S3_UPLOAD_PREFIX', label: 'S3 key prefix', kind: 'string', defaultValue: '', showWhen: { key: 'S3_UPLOAD_ENABLED', equals: 'true' } },
+      { key: 'S3_UPLOAD_ENDPOINT', label: 'Custom S3 endpoint', kind: 'string', defaultValue: '', advanced: true, showWhen: { key: 'S3_UPLOAD_ENABLED', equals: 'true' } },
+      { key: 'S3_UPLOAD_FORCE_PATH_STYLE', label: 'Use path-style S3 URLs', kind: 'boolean', defaultValue: 'false', advanced: true, showWhen: { key: 'S3_UPLOAD_ENABLED', equals: 'true' } },
+      { key: 'ALLEN_APP_BASE_URL', label: 'App base URL for approvals', kind: 'string', defaultValue: '', advanced: true },
+    ],
+  },
+  {
+    id: 'agents',
+    title: 'Agents & Workflows Model Configuration',
+    description: 'Defaults for new chat sessions, seeded workflow agents, and Claude/Codex execution behavior.',
+    fields: [
+      { key: 'ALLEN_DEFAULT_CHAT_PROVIDER', label: 'Default chat provider', kind: 'select', defaultValue: 'codex', options: [...PROVIDER_OPTIONS] },
+      { key: 'ALLEN_DEFAULT_AGENT_PROVIDER', label: 'Default workflow agent provider', description: 'Preserve keeps the role-specific provider mix from seed definitions.', kind: 'select', defaultValue: 'preserve seeded mix', options: [{ label: 'Preserve seeded mix', value: '' }, ...PROVIDER_OPTIONS], restartRequired: true },
+      { key: 'ALLEN_DEFAULT_AGENT_MODEL', label: 'Default workflow agent model', description: 'Used when a flattened workflow agent provider is selected.', kind: 'select', defaultValue: 'provider default', options: [...AGENT_MODEL_OPTIONS], restartRequired: true, showWhen: { key: 'ALLEN_DEFAULT_AGENT_PROVIDER', notEquals: '' } },
+      { key: 'CLAUDE_BIN', label: 'Claude CLI path', kind: 'path', defaultValue: 'auto from PATH' },
+      { key: 'ALLEN_SYSTEM_PROMPT_MODE', label: 'System prompt mode', kind: 'select', defaultValue: 'append', options: [{ label: 'Append', value: 'append' }, { label: 'Custom', value: 'custom' }], advanced: true },
+      { key: 'ALLEN_AGENT_SKIP_LEARNINGS', label: 'Skip learned context in prompts', kind: 'boolean', defaultValue: 'false', advanced: true },
+      { key: 'CHAT_PERSISTENT_RUNTIME_ENABLED', label: 'Keep chat runtime warm', kind: 'boolean', defaultValue: 'true', advanced: true },
+      { key: 'CHAT_RUNTIME_IDLE_MS', label: 'Chat runtime idle timeout', kind: 'number', defaultValue: '900000', advanced: true },
+      { key: 'CHAT_RUNTIME_LOGS_ENABLED', label: 'Enable runtime logs', kind: 'boolean', defaultValue: 'false', advanced: true },
+    ],
+  },
+  {
+    id: 'context',
+    title: 'Context',
+    description: 'Controls repository context, Cognee memory, semantic reranking, and context injection budgets.',
+    fields: [
+      { key: 'ALLEN_CONTEXT_PROVIDER', label: 'Cognee context', description: 'Enable Cognee-backed repository context. Saving this change applies to future context builds without restarting the app.', kind: 'select', defaultValue: 'disabled', options: [{ label: 'Disabled', value: '' }, { label: 'Allen', value: 'allen' }, { label: 'Cognee', value: 'cognee' }, { label: 'Cognee Memory', value: 'cognee_memory' }] },
+      { key: 'ALLEN_CONTEXT_LLM_PROVIDER', label: 'Context LLM provider', kind: 'select', defaultValue: 'codex', options: [...PROVIDER_OPTIONS], showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
+      { key: 'ALLEN_CONTEXT_LLM_MODEL', label: 'Context LLM model', kind: 'select', defaultValue: 'gpt-5.5', options: [...CONTEXT_LLM_MODEL_OPTIONS], showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
+      { key: 'ALLEN_PYTHON', label: 'Python environment path', kind: 'path', defaultValue: 'system Python', readOnly: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
+      { key: 'ALLEN_CONTEXT_MAX_FILE_CHARS', label: 'Max chars per context file', kind: 'number', defaultValue: '60000', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
+      { key: 'ALLEN_CONTEXT_MAX_TOTAL_CHARS', label: 'Max total context chars', kind: 'number', defaultValue: '180000', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
+      { key: 'ALLEN_CONTEXT_MAX_INJECTED_REFS', label: 'Max injected refs', kind: 'number', defaultValue: '12', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
+      { key: 'ALLEN_CONTEXT_RERANKER', label: 'Semantic reranker', kind: 'select', defaultValue: 'disabled', options: [{ label: 'Disabled', value: '' }, { label: 'BGE', value: 'bge' }], showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
+      { key: 'ALLEN_CONTEXT_RERANKER_MODEL', label: 'Reranker model', kind: 'select', defaultValue: 'BAAI/bge-reranker-base', options: [...RERANKER_MODEL_OPTIONS], showWhen: { key: 'ALLEN_CONTEXT_RERANKER', equals: 'bge' } },
+      { key: 'ALLEN_CONTEXT_RERANKER_TIMEOUT_MS', label: 'Reranker timeout', kind: 'number', defaultValue: '120000', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_RERANKER', equals: 'bge' } },
+      { key: 'ALLEN_COGNEE_DATA_DIR', label: 'Cognee data directory', kind: 'path', defaultValue: '~/.allen/cognee', readOnly: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
+      { key: 'ALLEN_COGNEE_TIMEOUT_MS', label: 'Cognee timeout', kind: 'number', defaultValue: '14400000 ingest / 120000 search', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
+      { key: 'ALLEN_COGNEE_EMBEDDING_PROVIDER', label: 'Cognee embedding provider', kind: 'select', defaultValue: 'local', options: [{ label: 'Local', value: 'local' }], advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
+      { key: 'ALLEN_COGNEE_EMBEDDING_MODEL', label: 'Cognee embedding model', kind: 'select', defaultValue: 'BAAI/bge-small-en-v1.5', options: [...COGNEE_EMBEDDING_MODEL_OPTIONS], advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
+      { key: 'ALLEN_CONTEXT_SEMANTIC_EVALUATOR', label: 'Semantic evaluator', kind: 'select', defaultValue: 'disabled', options: [{ label: 'Disabled', value: '' }, { label: 'DeepEval', value: 'deepeval' }], advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
+      { key: 'ALLEN_DEEPEVAL_SCRIPT', label: 'DeepEval script', kind: 'path', defaultValue: 'bundled evaluator', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_SEMANTIC_EVALUATOR', equals: 'deepeval' } },
+    ],
+  },
+  {
+    id: 'developer',
+    title: 'Developer & Diagnostics',
+    description: 'Low-level settings for local troubleshooting. Most users should leave these at defaults.',
+    fields: [
+      { key: 'LOG_LEVEL', label: 'Log level', kind: 'select', defaultValue: 'info', options: [{ label: 'Default', value: '' }, { label: 'Debug', value: 'debug' }, { label: 'Info', value: 'info' }, { label: 'Warn', value: 'warn' }, { label: 'Error', value: 'error' }], advanced: true },
+      { key: 'LOG_FORMAT', label: 'Log format', kind: 'select', defaultValue: 'pretty', options: [{ label: 'Pretty', value: 'pretty' }, { label: 'JSON', value: 'json' }], advanced: true },
+      { key: 'ALLEN_TERMINAL_SHELL', label: 'Terminal shell', kind: 'path', defaultValue: 'system shell', advanced: true },
+      { key: 'GIT_SSH_COMMAND', label: 'Git SSH command', kind: 'string', defaultValue: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new', advanced: true },
+      { key: 'ALLEN_DISABLE_SWEEPER', label: 'Disable MCP orphan cleanup', kind: 'boolean', defaultValue: 'false', advanced: true },
+      { key: 'ALLEN_DESKTOP_MONGOD_BINARY', label: 'Custom MongoDB binary', kind: 'path', defaultValue: 'bundled MongoDB', restartRequired: true, advanced: true },
+    ],
+  },
+];
+
+const DESKTOP_RUNTIME_SETTING_DEFS = new Map(
+  DESKTOP_RUNTIME_SETTING_GROUPS.flatMap((group) => group.fields.map((field) => [field.key, field] as const)),
+);
+
+const COGNEE_CONTEXT_PROVIDERS = new Set(['cognee', 'cognee_memory']);
+const COGNEE_CONTEXT_VENV_DIR = resolve(homedir(), '.allen/python/context-eval');
+const COGNEE_CONTEXT_VENV_PYTHON = resolve(COGNEE_CONTEXT_VENV_DIR, 'bin/python');
+const COGNEE_CONTEXT_DATA_DIR = resolve(homedir(), '.allen/cognee');
+
+const BASE_SECRET_DEFS = [
+  { key: 'ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN', label: 'GitHub personal access token', group: 'GitHub' },
+  { key: 'ALLEN_LINEAR_ACCESS_TOKEN', label: 'Linear access token', group: 'Linear' },
+  { key: 'ALLEN_SLACK_BOT_TOKEN', label: 'Slack bot token', group: 'Slack' },
+  { key: 'ALLEN_SLACK_SIGNING_SECRET', label: 'Slack signing secret', group: 'Slack' },
+  { key: 'ALLEN_SLACK_TEAM_ID', label: 'Slack team ID', group: 'Slack' },
+] as const;
+
+async function secretDefinitions(db: Db): Promise<Array<{ key: string; label: string; group: string }>> {
+  const defs = new Map<string, { key: string; label: string; group: string }>();
+  for (const def of BASE_SECRET_DEFS) defs.set(def.key, def);
+  for (const preset of MCP_PRESETS) {
+    for (const rawKey of [...(preset.envKeys ?? []), ...(preset.argKeys ?? [])]) {
+      const key = mcpCredentialEnvKey(rawKey);
+      if (!defs.has(key)) {
+        defs.set(key, {
+          key,
+          label: key,
+          group: `MCP: ${preset.name}`,
+        });
+      }
+    }
+  }
+  const servers = await db.collection('mcp_servers')
+    .find({}, { projection: { name: 1, envKeys: 1, argKeys: 1 } })
+    .toArray();
+  for (const server of servers) {
+    const serverName = typeof server.name === 'string' && server.name ? server.name : 'Custom';
+    for (const rawKey of [...(server.envKeys ?? []), ...(server.argKeys ?? [])]) {
+      const key = mcpCredentialEnvKey(String(rawKey));
+      if (!defs.has(key)) {
+        defs.set(key, {
+          key,
+          label: key,
+          group: `MCP: ${serverName}`,
+        });
+      }
+    }
+  }
+  return Array.from(defs.values()).sort((a, b) => a.group.localeCompare(b.group) || a.key.localeCompare(b.key));
+}
+
+async function validateRuntimeSecretKey(input: unknown, db: Db): Promise<string> {
+  const key = String(input ?? '').trim();
+  const allowed = new Set((await secretDefinitions(db)).map((def) => def.key));
+  if (!allowed.has(key)) throw new Error('unsupported_secret_key');
+  return key;
+}
 
 function dateIso(value: unknown): string | null {
   if (value instanceof Date) return value.toISOString();
@@ -17,6 +266,359 @@ function dateIso(value: unknown): string | null {
     return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
   }
   return null;
+}
+
+function readDesktopRuntimeConfigFile(configPath: string | undefined): Record<string, string> {
+  if (!configPath || !existsSync(configPath)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'string') out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeDesktopRuntimeConfigFile(configPath: string, values: Record<string, string>): void {
+  writeFileSync(configPath, JSON.stringify(values, null, 2) + '\n', { mode: 0o600 });
+  chmodSync(configPath, 0o600);
+}
+
+async function detectPathCommand(command: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await exec('/bin/zsh', ['-lc', `command -v ${command} || true`], { timeout: 1500 });
+    const value = stdout.trim().split('\n')[0]?.trim();
+    return value || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function detectedRuntimeDefaults(configPath: string | undefined): Promise<Record<string, string>> {
+  void configPath;
+  const allenRoot = resolve(homedir(), '.allen');
+  const [claudeBin, pythonBin] = await Promise.all([
+    detectPathCommand('claude'),
+    detectPathCommand('python3 || command -v python'),
+  ]);
+
+  return {
+    ALLEN_HOME: allenRoot,
+    WORKSPACE_BASE_DIR: resolve(allenRoot, 'workspaces'),
+    UPLOADS_DIR: resolve(allenRoot, 'uploads'),
+    MCP_BUNDLES_DIR: resolve(allenRoot, 'mcp-servers'),
+    ALLEN_COGNEE_DATA_DIR: COGNEE_CONTEXT_DATA_DIR,
+    ...(claudeBin ? { CLAUDE_BIN: claudeBin } : {}),
+    ...(pythonBin ? { ALLEN_PYTHON: pythonBin, PYTHON: pythonBin } : {}),
+    ...(process.env.SHELL ? { ALLEN_TERMINAL_SHELL: process.env.SHELL } : {}),
+  };
+}
+
+function normalizeRuntimeSettingValue(field: RuntimeSettingDef, raw: unknown): string | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  if (field.kind === 'boolean') {
+    if (typeof raw === 'boolean') return raw ? 'true' : 'false';
+    return String(raw).trim().toLowerCase() === 'true' ? 'true' : 'false';
+  }
+
+  const value = String(raw).trim();
+  if (!value) {
+    if (field.kind === 'path') {
+      return undefined;
+    }
+    if (field.kind === 'select') {
+      const allowed = new Set((field.options ?? []).map((option) => option.value));
+      if (!allowed.has('')) throw new Error(`invalid_value:${field.key}`);
+    }
+    return '';
+  }
+  if (field.kind === 'select') {
+    const allowed = new Set((field.options ?? []).map((option) => option.value));
+    if (!allowed.has(value) && !field.key.endsWith('_MODEL')) {
+      throw new Error(`invalid_value:${field.key}`);
+    }
+  }
+  if (field.kind === 'number') {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new Error(`invalid_value:${field.key}`);
+    }
+  }
+  return value;
+}
+
+function runtimeSettingValue(
+  field: RuntimeSettingDef,
+  persisted: Record<string, string>,
+  detectedDefaults: Record<string, string>,
+): {
+  currentValue: string;
+  configuredValue: string | null;
+  source: 'desktop_config' | 'env' | 'default';
+  defaultValue: string;
+} {
+  const defaultValue = detectedDefaults[field.key] ?? field.defaultValue;
+  if (persisted[field.key] !== undefined) {
+    return {
+      currentValue: persisted[field.key],
+      configuredValue: persisted[field.key],
+      source: 'desktop_config',
+      defaultValue,
+    };
+  }
+
+  const configValue = getRuntimeConfigProvider().get(field.key);
+  if (configValue !== undefined) {
+    return {
+      currentValue: configValue,
+      configuredValue: null,
+      source: 'env',
+      defaultValue,
+    };
+  }
+
+  const currentDefault = defaultValue === 'disabled'
+    || defaultValue === 'auto'
+    || defaultValue.startsWith('<')
+    || defaultValue.includes(' ')
+    ? ''
+    : defaultValue;
+  return {
+    currentValue: field.kind === 'boolean' ? (defaultValue === 'true' ? 'true' : 'false') : currentDefault,
+    configuredValue: null,
+    source: 'default',
+    defaultValue,
+  };
+}
+
+function currentRuntimeSettingValue(
+  key: string,
+  persisted: Record<string, string>,
+  detectedDefaults: Record<string, string>,
+): string {
+  const field = DESKTOP_RUNTIME_SETTING_DEFS.get(key);
+  if (!field) return '';
+  return runtimeSettingValue(field, persisted, detectedDefaults).currentValue;
+}
+
+async function pythonCanImportCognee(pythonPath: string): Promise<{ ok: boolean; detail: string }> {
+  if (!pythonPath) return { ok: false, detail: 'Python path is empty.' };
+  if (pythonPath.includes('/') && !existsSync(pythonPath)) {
+    return { ok: false, detail: `Python executable does not exist: ${pythonPath}` };
+  }
+
+  try {
+    await exec(pythonPath, [
+      '-c',
+      'import cognee; from fastembed import TextEmbedding; print("ok")',
+    ], { timeout: 15000, maxBuffer: 1024 * 1024 });
+    return { ok: true, detail: 'Cognee and fastembed import successfully.' };
+  } catch (err) {
+    const output = err as ExecErrorWithOutput;
+    const detail = (output.stderr || output.stdout || output.message).trim();
+    return { ok: false, detail: detail || 'Cognee import check failed.' };
+  }
+}
+
+async function desktopCogneeSetupStatus(
+  persisted: Record<string, string>,
+  detectedDefaults: Record<string, string>,
+  options: { verifyImport?: boolean } = {},
+): Promise<DesktopCogneeSetupStatus> {
+  const provider = currentRuntimeSettingValue('ALLEN_CONTEXT_PROVIDER', persisted, detectedDefaults);
+  const configuredPython = persisted.ALLEN_PYTHON ?? getRuntimeConfigProvider().get('ALLEN_PYTHON') ?? null;
+  const pythonPath = configuredPython
+    ?? detectedDefaults.ALLEN_PYTHON
+    ?? detectedDefaults.PYTHON
+    ?? 'python3';
+  const selected = COGNEE_CONTEXT_PROVIDERS.has(provider);
+  const importCheck = options.verifyImport
+    ? await pythonCanImportCognee(pythonPath)
+    : {
+      ok: Boolean(configuredPython),
+      detail: configuredPython
+        ? 'Python import check is deferred until setup runs.'
+        : `ALLEN_PYTHON is not set. Desktop setup will create ${COGNEE_CONTEXT_VENV_PYTHON} and use it for Cognee.`,
+    };
+  const setupRecommended = selected && (!configuredPython || !importCheck.ok);
+
+  return {
+    selected,
+    configuredPython,
+    pythonPath,
+    venvPython: COGNEE_CONTEXT_VENV_PYTHON,
+    cogneeImportOk: importCheck.ok,
+    setupRecommended,
+    detail: importCheck.detail,
+  };
+}
+
+async function desktopRuntimeSettingsPayload() {
+  const config = getRuntimeConfigProvider();
+  const desktop = config.get('ALLEN_DESKTOP') === '1';
+  const configPath = config.get('ALLEN_DESKTOP_CONFIG_PATH');
+  const persisted = readDesktopRuntimeConfigFile(configPath);
+  const defaults = await detectedRuntimeDefaults(configPath);
+
+  return {
+    desktop,
+    editable: desktop && Boolean(configPath),
+    configPath: desktop ? configPath ?? null : null,
+    contextSetup: desktop
+      ? await desktopCogneeSetupStatus(persisted, defaults)
+      : {
+        selected: false,
+        configuredPython: null,
+        pythonPath: '',
+        venvPython: COGNEE_CONTEXT_VENV_PYTHON,
+        cogneeImportOk: false,
+        setupRecommended: false,
+        detail: 'Desktop-only setup is unavailable in web mode.',
+      },
+    groups: DESKTOP_RUNTIME_SETTING_GROUPS.map((group) => ({
+      ...group,
+      fields: group.fields.map((field) => ({
+        ...field,
+        restartRequired: Boolean(field.restartRequired),
+        readOnly: Boolean(field.readOnly),
+        advanced: Boolean(field.advanced),
+        ...runtimeSettingValue(field, persisted, defaults),
+      })),
+    })),
+  };
+}
+
+function updateRuntimeProviderValue(key: string, value: string | undefined): void {
+  const provider = getRuntimeConfigProvider() as {
+    set?: (runtimeKey: string, runtimeValue: string) => void;
+    delete?: (runtimeKey: string) => void;
+  };
+  if (value === undefined) {
+    delete process.env[key];
+    provider.delete?.(key);
+    return;
+  }
+  provider.set?.(key, value);
+  if (value === '') delete process.env[key];
+  else process.env[key] = value;
+}
+
+function isProviderValue(value: string): value is 'codex' | 'claude-cli' {
+  return value === 'codex' || value === 'claude-cli';
+}
+
+function validateAgentModelForProvider(provider: 'codex' | 'claude-cli' | '', model: string): void {
+  if (!provider) {
+    if (model) throw new Error('agent_model_requires_agent_provider');
+    return;
+  }
+  const allowed = provider === 'codex' ? CODEX_AGENT_MODEL_OPTIONS : CLAUDE_AGENT_MODEL_OPTIONS;
+  if (!allowed.has(model)) throw new Error('invalid_agent_model_for_provider');
+}
+
+async function refreshDesktopSeedDefaults(db: Db): Promise<void> {
+  const previousSeedOverride = process.env.SEED_OVERRIDE;
+  process.env.SEED_OVERRIDE = 'true';
+  try {
+    await new OrgSeedService(db).seed();
+    await seedDefaultWorkflows(db);
+  } finally {
+    if (previousSeedOverride === undefined) delete process.env.SEED_OVERRIDE;
+    else process.env.SEED_OVERRIDE = previousSeedOverride;
+  }
+}
+
+function findContextSetupScript(): string | null {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  const candidates = [
+    ...(resourcesPath ? [resolve(resourcesPath, 'scripts/setup-context-engine.sh')] : []),
+    resolve(process.cwd(), 'scripts/setup-context-engine.sh'),
+    resolve(process.cwd(), '../../scripts/setup-context-engine.sh'),
+    resolve(here, '../../../../scripts/setup-context-engine.sh'),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+function desktopCogneeRuntimeDefaults(provider: string): Record<string, string> {
+  return {
+    ALLEN_CONTEXT_PROVIDER: COGNEE_CONTEXT_PROVIDERS.has(provider) ? provider : 'cognee',
+    ALLEN_PYTHON: COGNEE_CONTEXT_VENV_PYTHON,
+    ALLEN_COGNEE_DATA_DIR: COGNEE_CONTEXT_DATA_DIR,
+    ALLEN_COGNEE_EMBEDDING_PROVIDER: 'local',
+    ALLEN_COGNEE_EMBEDDING_MODEL: 'BAAI/bge-small-en-v1.5',
+    ALLEN_CONTEXT_LLM_PROVIDER: getRuntimeConfigProvider().get('ALLEN_CONTEXT_LLM_PROVIDER') ?? 'codex',
+    ALLEN_CONTEXT_LLM_MODEL: getRuntimeConfigProvider().get('ALLEN_CONTEXT_LLM_MODEL') ?? 'gpt-5.5',
+    ALLEN_CONTEXT_RERANKER: getRuntimeConfigProvider().get('ALLEN_CONTEXT_RERANKER') ?? 'bge',
+    ALLEN_CONTEXT_RERANKER_MODEL: getRuntimeConfigProvider().get('ALLEN_CONTEXT_RERANKER_MODEL') ?? 'BAAI/bge-reranker-base',
+  };
+}
+
+function persistDesktopRuntimeValues(
+  configPath: string,
+  values: Record<string, string>,
+  options: { overwrite?: Set<string> } = {},
+): void {
+  const persisted = readDesktopRuntimeConfigFile(configPath);
+  for (const [key, value] of Object.entries(values)) {
+    const shouldOverwrite = options.overwrite?.has(key) ?? false;
+    if (!shouldOverwrite && persisted[key] !== undefined && persisted[key].trim() !== '') continue;
+    persisted[key] = value;
+    updateRuntimeProviderValue(key, value);
+  }
+  writeDesktopRuntimeConfigFile(configPath, persisted);
+}
+
+async function runDesktopCogneeSetup(configPath: string, provider: string): Promise<{
+  output: string[];
+  setup: DesktopCogneeSetupStatus;
+}> {
+  const scriptPath = findContextSetupScript();
+  if (!scriptPath) {
+    throw new Error('context_setup_script_missing');
+  }
+
+  const defaults = await detectedRuntimeDefaults(configPath);
+  const bootstrapPython = defaults.PYTHON ?? defaults.ALLEN_PYTHON ?? process.env.PYTHON ?? 'python3';
+  let stdout = '';
+  let stderr = '';
+  try {
+    const result = await exec('bash', [
+      scriptPath,
+      '--no-env',
+      '--skip-warmup',
+      '--python',
+      bootstrapPython,
+    ], {
+      timeout: 15 * 60 * 1000,
+      maxBuffer: 20 * 1024 * 1024,
+      env: {
+        ...process.env,
+        ALLEN_CONTEXT_VENV_DIR: COGNEE_CONTEXT_VENV_DIR,
+      },
+    });
+    stdout = result.stdout;
+    stderr = result.stderr;
+  } catch (err) {
+    const output = err as ExecErrorWithOutput;
+    const detail = (output.stderr || output.stdout || output.message).trim();
+    throw new Error(`context_setup_failed:${detail || 'unknown error'}`);
+  }
+
+  persistDesktopRuntimeValues(configPath, desktopCogneeRuntimeDefaults(provider), {
+    overwrite: new Set(['ALLEN_CONTEXT_PROVIDER', 'ALLEN_PYTHON', 'ALLEN_COGNEE_DATA_DIR']),
+  });
+
+  const persisted = readDesktopRuntimeConfigFile(configPath);
+  const detected = await detectedRuntimeDefaults(configPath);
+  const output = `${stdout}\n${stderr}`.trim().split('\n').filter(Boolean).slice(-80);
+  return {
+    output,
+    setup: await desktopCogneeSetupStatus(persisted, detected, { verifyImport: true }),
+  };
 }
 
 function onboardingProgressPayload(onboarding: Record<string, unknown>) {
@@ -32,6 +634,21 @@ function onboardingProgressPayload(onboarding: Record<string, unknown>) {
     completedAt,
     skippedAt,
   };
+}
+
+type OnboardingProgressPayload = ReturnType<typeof onboardingProgressPayload>;
+
+async function adminSetupProgress(db: Db): Promise<OnboardingProgressPayload> {
+  const adminUsers = await db.collection('users')
+    .find({ role: 'admin' }, { projection: { onboarding: 1, updatedAt: 1, createdAt: 1 } })
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .toArray();
+
+  const adminProgress = adminUsers.map(user => onboardingProgressPayload((user.onboarding ?? {}) as Record<string, unknown>));
+  const complete = adminProgress.find(progress => progress.complete);
+  if (complete) return complete;
+
+  return adminProgress.find(progress => progress.step !== 'health') ?? adminProgress[0] ?? onboardingProgressPayload({});
 }
 
 type ExecErrorWithOutput = Error & {
@@ -84,12 +701,13 @@ export function systemRoutes(db: Db): Router {
         users.countAdmins(),
       ]);
       const isFirstRun = userCount === 0;
+      const setupProgress = isFirstRun ? onboardingProgressPayload({ step: 'account' }) : await adminSetupProgress(db);
       return res.json({
         isFirstRun,
         userCount,
         adminCount,
-        complete: !isFirstRun,
-        step: isFirstRun ? 'account' : 'complete',
+        complete: isFirstRun ? false : setupProgress.complete,
+        step: isFirstRun ? 'account' : setupProgress.step,
       });
     } catch (err) {
       console.error('[system/onboarding-status]', err);
@@ -118,16 +736,225 @@ export function systemRoutes(db: Db): Router {
     });
   });
 
+  router.get('/desktop-runtime', requireAuth, async (_req: AuthedRequest, res: Response) => {
+    try {
+      const config = getRuntimeConfigProvider();
+      const secrets = getRuntimeSecretsProvider();
+      const secretStatus = await Promise.all((await secretDefinitions(db)).map(async (def) => {
+        const secretValue = await secrets.getSecret(def.key);
+        const configValue = config.get(def.key);
+        return {
+          ...def,
+          configured: Boolean(secretValue || configValue),
+          source: secretValue ? 'secret' : configValue ? 'config' : 'missing',
+        };
+      }));
+
+      return res.json({
+        desktop: config.get('ALLEN_DESKTOP') === '1',
+        paths: {
+          allenHome: config.get('ALLEN_HOME') ?? null,
+          workspaceBaseDir: config.get('WORKSPACE_BASE_DIR') ?? null,
+        },
+        runtime: {
+          terminalWsPort: config.get('TERMINAL_WS_PORT') ?? null,
+          mongoUriConfigured: Boolean(config.get('MONGODB_URI')),
+          managedMongo: config.get('ALLEN_DESKTOP') === '1' && !config.get('MONGODB_URI'),
+        },
+        secrets: secretStatus,
+      });
+    } catch (err) {
+      console.error('[system/desktop-runtime]', err);
+      return res.status(500).json({ error: 'desktop_runtime_status_failed' });
+    }
+  });
+
+  router.get('/desktop-runtime/settings', requireAuth, async (_req: AuthedRequest, res: Response) => {
+    try {
+      return res.json(await desktopRuntimeSettingsPayload());
+    } catch (err) {
+      console.error('[system/desktop-runtime/settings]', err);
+      return res.status(500).json({ error: 'desktop_runtime_settings_failed' });
+    }
+  });
+
+  router.patch('/desktop-runtime/settings', requireAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const config = getRuntimeConfigProvider();
+      if (config.get('ALLEN_DESKTOP') !== '1') {
+        return res.status(400).json({ error: 'desktop_runtime_settings_are_desktop_only' });
+      }
+      const configPath = config.get('ALLEN_DESKTOP_CONFIG_PATH');
+      if (!configPath) {
+        return res.status(400).json({ error: 'desktop_runtime_config_path_missing' });
+      }
+
+      const values = req.body?.values;
+      if (!values || typeof values !== 'object' || Array.isArray(values)) {
+        return res.status(400).json({ error: 'values_required' });
+      }
+
+      const persisted = readDesktopRuntimeConfigFile(configPath);
+      for (const [key, rawValue] of Object.entries(values as Record<string, unknown>)) {
+        const field = DESKTOP_RUNTIME_SETTING_DEFS.get(key);
+        if (!field) return res.status(400).json({ error: `unsupported_runtime_setting:${key}` });
+        if (field.readOnly) continue;
+        const normalized = normalizeRuntimeSettingValue(field, rawValue);
+        if (normalized === undefined) {
+          delete persisted[key];
+          updateRuntimeProviderValue(key, undefined);
+        } else {
+          persisted[key] = normalized;
+          updateRuntimeProviderValue(key, normalized);
+        }
+      }
+
+      writeDesktopRuntimeConfigFile(configPath, persisted);
+      return res.json(await desktopRuntimeSettingsPayload());
+    } catch (err) {
+      const message = (err as Error).message;
+      const status = message.startsWith('invalid_value:') ? 400 : 500;
+      console.error('[system/desktop-runtime/settings:update]', err);
+      return res.status(status).json({ error: message });
+    }
+  });
+
+  router.post('/desktop-runtime/onboarding/model-defaults', requireAuth, requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const config = getRuntimeConfigProvider();
+      if (config.get('ALLEN_DESKTOP') !== '1') {
+        return res.status(400).json({ error: 'desktop_model_defaults_are_desktop_only' });
+      }
+      const configPath = config.get('ALLEN_DESKTOP_CONFIG_PATH');
+      if (!configPath) {
+        return res.status(400).json({ error: 'desktop_runtime_config_path_missing' });
+      }
+
+      const chatProviderRaw = String(req.body?.chatProvider ?? '').trim();
+      const agentProviderRaw = String(req.body?.agentProvider ?? '').trim();
+      const agentModel = String(req.body?.agentModel ?? '').trim();
+      if (!isProviderValue(chatProviderRaw)) {
+        return res.status(400).json({ error: 'invalid_chat_provider' });
+      }
+      if (agentProviderRaw && !isProviderValue(agentProviderRaw)) {
+        return res.status(400).json({ error: 'invalid_agent_provider' });
+      }
+      validateAgentModelForProvider(agentProviderRaw as 'codex' | 'claude-cli' | '', agentModel);
+
+      const persisted = readDesktopRuntimeConfigFile(configPath);
+      persisted.ALLEN_DEFAULT_CHAT_PROVIDER = chatProviderRaw;
+      updateRuntimeProviderValue('ALLEN_DEFAULT_CHAT_PROVIDER', chatProviderRaw);
+      if (agentProviderRaw) {
+        persisted.ALLEN_DEFAULT_AGENT_PROVIDER = agentProviderRaw;
+        updateRuntimeProviderValue('ALLEN_DEFAULT_AGENT_PROVIDER', agentProviderRaw);
+      } else {
+        delete persisted.ALLEN_DEFAULT_AGENT_PROVIDER;
+        updateRuntimeProviderValue('ALLEN_DEFAULT_AGENT_PROVIDER', undefined);
+      }
+      if (agentProviderRaw && agentModel) {
+        persisted.ALLEN_DEFAULT_AGENT_MODEL = agentModel;
+        updateRuntimeProviderValue('ALLEN_DEFAULT_AGENT_MODEL', agentModel);
+      } else {
+        delete persisted.ALLEN_DEFAULT_AGENT_MODEL;
+        updateRuntimeProviderValue('ALLEN_DEFAULT_AGENT_MODEL', undefined);
+      }
+      writeDesktopRuntimeConfigFile(configPath, persisted);
+
+      await refreshDesktopSeedDefaults(db);
+      return res.json({
+        chatProvider: chatProviderRaw,
+        agentProvider: agentProviderRaw,
+        agentModel: agentProviderRaw ? agentModel : '',
+        settings: await desktopRuntimeSettingsPayload(),
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      const status = [
+        'agent_model_requires_agent_provider',
+        'invalid_agent_model_for_provider',
+      ].includes(message) ? 400 : 500;
+      console.error('[system/desktop-runtime/onboarding/model-defaults]', err);
+      return res.status(status).json({ error: message });
+    }
+  });
+
+  router.post('/desktop-runtime/context/cognee/setup', requireAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const config = getRuntimeConfigProvider();
+      if (config.get('ALLEN_DESKTOP') !== '1') {
+        return res.status(400).json({ error: 'desktop_context_setup_is_desktop_only' });
+      }
+      const configPath = config.get('ALLEN_DESKTOP_CONFIG_PATH');
+      if (!configPath) {
+        return res.status(400).json({ error: 'desktop_runtime_config_path_missing' });
+      }
+
+      const requestedProvider = typeof req.body?.provider === 'string' ? req.body.provider : '';
+      const provider = COGNEE_CONTEXT_PROVIDERS.has(requestedProvider) ? requestedProvider : 'cognee';
+      const setupResult = await runDesktopCogneeSetup(configPath, provider);
+
+      return res.json({
+        ...setupResult,
+        settings: await desktopRuntimeSettingsPayload(),
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      const status = message === 'context_setup_script_missing' ? 404 : 500;
+      console.error('[system/desktop-runtime/context/cognee/setup]', err);
+      return res.status(status).json({ error: message });
+    }
+  });
+
+  router.put('/desktop-runtime/secrets', requireAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const key = await validateRuntimeSecretKey(req.body?.key, db);
+      const value = String(req.body?.value ?? '');
+      if (!value.trim()) return res.status(400).json({ error: 'secret_value_required' });
+      const secrets = getRuntimeSecretsProvider();
+      if (!secrets.setSecret) return res.status(400).json({ error: 'runtime_secrets_are_read_only' });
+      await secrets.setSecret(key, value);
+      process.env[key] = value;
+      return res.json({ key, configured: true, source: 'secret' });
+    } catch (err) {
+      const message = (err as Error).message;
+      const status = message === 'unsupported_secret_key' ? 400 : 500;
+      return res.status(status).json({ error: message });
+    }
+  });
+
+  router.delete('/desktop-runtime/secrets/:key', requireAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const config = getRuntimeConfigProvider();
+      if (config.get('ALLEN_DESKTOP') !== '1') return res.status(400).json({ error: 'desktop_runtime_only' });
+      const key = await validateRuntimeSecretKey(req.params.key, db);
+      const secrets = getRuntimeSecretsProvider();
+      if (!secrets.deleteSecret) return res.status(400).json({ error: 'runtime_secrets_are_read_only' });
+      await secrets.deleteSecret(key);
+      (config as { delete?: (runtimeKey: string) => void }).delete?.(key);
+      delete process.env[key];
+      return res.status(204).send();
+    } catch (err) {
+      const message = (err as Error).message;
+      const status = message === 'unsupported_secret_key' ? 400 : 500;
+      return res.status(status).json({ error: message });
+    }
+  });
+
   router.get('/onboarding-progress', requireAuth, async (req: AuthedRequest, res: Response) => {
     try {
       const userId = req.user?.sub;
       if (!userId) return res.status(401).json({ error: 'unauthorized' });
-      const user = await db.collection('users').findOne(
-        { _id: new ObjectId(userId) },
-        { projection: { onboarding: 1 } },
-      );
-      const onboarding = (user?.onboarding ?? {}) as Record<string, unknown>;
-      return res.json(onboardingProgressPayload(onboarding));
+      if (req.user?.role !== 'admin') {
+        return res.json({
+          complete: true,
+          skipped: false,
+          step: 'complete',
+          completedAt: null,
+          skippedAt: null,
+        });
+      }
+      void userId;
+      return res.json(await adminSetupProgress(db));
     } catch (err) {
       console.error('[system/onboarding-progress]', err);
       return res.status(500).json({ error: 'onboarding_progress_failed' });
@@ -138,6 +965,7 @@ export function systemRoutes(db: Db): Router {
     try {
       const userId = req.user?.sub;
       if (!userId) return res.status(401).json({ error: 'unauthorized' });
+      if (req.user?.role !== 'admin') return res.status(403).json({ error: 'admin_only' });
 
       const step = typeof req.body?.step === 'string' ? req.body.step : undefined;
       const action = typeof req.body?.action === 'string' ? req.body.action : undefined;

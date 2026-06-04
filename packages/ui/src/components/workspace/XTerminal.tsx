@@ -15,17 +15,95 @@ interface XTerminalProps {
 }
 
 type Status = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
+type RuntimeInfo = Awaited<ReturnType<NonNullable<typeof window.allenDesktop>['getRuntimeInfo']>>;
 
 // Reconnect tuning
 const MAX_RECONNECT_ATTEMPTS = 20;
 const BASE_DELAY_MS = 500;
 const MAX_DELAY_MS = 10_000;
+const MAX_TERMINAL_BUFFER_CHARS = 500_000;
+const terminalBuffers = new Map<string, string>();
+
+function terminalBufferKey(sourceType: 'workspace' | 'repo', sourceId: string, terminalId: string): string {
+  return `allen-terminal-buffer:${sourceType}:${sourceId}:${terminalId}`;
+}
+
+function readTerminalBuffer(key: string): string {
+  const cached = terminalBuffers.get(key);
+  if (cached != null) return cached;
+  try {
+    const stored = sessionStorage.getItem(key) ?? '';
+    if (stored) terminalBuffers.set(key, stored);
+    return stored;
+  } catch {
+    return '';
+  }
+}
+
+function writeTerminalBuffer(key: string, value: string): void {
+  const next = value.length > MAX_TERMINAL_BUFFER_CHARS
+    ? value.slice(value.length - MAX_TERMINAL_BUFFER_CHARS)
+    : value;
+  terminalBuffers.set(key, next);
+  try {
+    sessionStorage.setItem(key, next);
+  } catch {
+    // Best effort: the in-memory cache still covers tab switches.
+  }
+}
+
+function appendTerminalBuffer(key: string, value: string): void {
+  if (!value) return;
+  writeTerminalBuffer(key, `${readTerminalBuffer(key)}${value}`);
+}
+
+function terminalWebSocketUrl(sourceType: 'workspace' | 'repo', sourceId: string, terminalId: string, runtimeInfo: RuntimeInfo | null): string {
+  const sourceSegment = sourceType === 'repo' ? 'repos' : 'workspaces';
+  const path = `/ws/${sourceSegment}/${sourceId}/terminal/${terminalId}`;
+  if (runtimeInfo?.terminalWsUrl) {
+    try {
+      return new URL(path, runtimeInfo.terminalWsUrl).toString();
+    } catch {
+      // Fall through to browser-origin construction.
+    }
+  }
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}${path}`;
+}
+
+function writeTerminalPayload(term: XTerm, payload: unknown, bufferKey: string): void {
+  if (typeof payload !== 'string') {
+    const text = String(payload);
+    term.write(text);
+    appendTerminalBuffer(bufferKey, text);
+    return;
+  }
+  try {
+    const parsed = JSON.parse(payload) as { type?: string; data?: unknown };
+    if (parsed?.type === 'error') {
+      term.write(`\r\n\x1b[31m${String(parsed.data ?? 'Terminal error')}\x1b[0m\r\n`);
+      return;
+    }
+    if (parsed?.type === 'replay') {
+      const replay = String(parsed.data ?? '');
+      term.reset();
+      term.write(replay);
+      writeTerminalBuffer(bufferKey, replay);
+      return;
+    }
+  } catch {
+    // Regular terminal bytes.
+  }
+  term.write(payload);
+  appendTerminalBuffer(bufferKey, payload);
+}
 
 export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'workspace', className, initialCommand }: XTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const runtimeInfoRef = useRef<RuntimeInfo | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const attemptRef = useRef(0);
   // Flip to true in cleanup so onclose handler knows not to reconnect
@@ -35,6 +113,7 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
 
   const [status, setStatus] = useState<Status>('connecting');
   const [attempt, setAttempt] = useState(0);
+  const [runtimeMode, setRuntimeMode] = useState<'desktop' | 'web'>('web');
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -46,39 +125,39 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
     // Create terminal ONCE — preserved across reconnects so scrollback/history stays.
     const term = new XTerm({
       cursorBlink: true,
-      cursorStyle: 'bar',
-      fontSize: 11,
-      fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace",
-      lineHeight: 1.3,
+      cursorStyle: 'block',
+      fontSize: 12,
+      fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', 'MesloLGS NF', 'Symbols Nerd Font Mono', 'SF Mono', Menlo, Monaco, 'Cascadia Mono', 'Segoe UI Mono', Consolas, monospace",
+      lineHeight: 1.25,
       letterSpacing: 0,
-      // Prototype dark palette. Terminals stay dark in both light and
-      // dark page themes since terminals are universally expected to be dark.
       theme: {
-        background: '#0d1116',
-        foreground: '#a7abb1',
-        cursor: '#5ca4ff',
-        cursorAccent: '#0d1116',
-        selectionBackground: '#5ca4ff44',
-        selectionForeground: '#dbdee2',
-        black: '#181c22',
-        red: '#fa6863',
-        green: '#43c07a',
-        yellow: '#f2a618',
-        blue: '#5ca4ff',
-        magenta: '#bc88f4',
-        cyan: '#00b8e1',
-        white: '#c2c3c8',
-        brightBlack: '#5c5d63',
-        brightRed: '#ff7676',
-        brightGreen: '#5ad99c',
-        brightYellow: '#ffc35c',
-        brightBlue: '#8f8eff',
-        brightMagenta: '#d2a8ff',
-        brightCyan: '#56cdf6',
-        brightWhite: '#f4f4f5',
+        background: '#0b0f14',
+        foreground: '#d0d4da',
+        cursor: '#d0d4da',
+        cursorAccent: '#0b0f14',
+        selectionBackground: '#3b82f666',
+        selectionForeground: '#f5f7fa',
+        black: '#0b0f14',
+        red: '#ff6b6b',
+        green: '#4ade80',
+        yellow: '#fbbf24',
+        blue: '#60a5fa',
+        magenta: '#c084fc',
+        cyan: '#22d3ee',
+        white: '#d0d4da',
+        brightBlack: '#626a73',
+        brightRed: '#ff8585',
+        brightGreen: '#74e8a3',
+        brightYellow: '#ffd166',
+        brightBlue: '#8abfff',
+        brightMagenta: '#d6adff',
+        brightCyan: '#67e8f9',
+        brightWhite: '#ffffff',
       },
       scrollback: 10000,
       allowProposedApi: true,
+      macOptionIsMeta: true,
+      rightClickSelectsWord: true,
     });
 
     const fitAddon = new FitAddon();
@@ -99,6 +178,12 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
     termRef.current = term;
     fitRef.current = fitAddon;
 
+    const bufferKey = terminalBufferKey(sourceType, workspaceId, terminalId);
+    const restoredBuffer = readTerminalBuffer(bufferKey);
+    if (restoredBuffer) {
+      term.write(restoredBuffer);
+    }
+
     // xterm should own keyboard input while focused. This lets terminal
     // shortcuts reach the PTY without triggering surrounding app shortcuts
     // such as command palettes, panel toggles, or canvas/editor hotkeys.
@@ -118,16 +203,24 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
     });
 
-    const connect = () => {
+    const connect = async () => {
+      if (unmountedRef.current) return;
+      if (window.allenDesktop?.getRuntimeInfo && !runtimeInfoRef.current) {
+        try {
+          runtimeInfoRef.current = await window.allenDesktop.getRuntimeInfo();
+          setRuntimeMode('desktop');
+        } catch {
+          runtimeInfoRef.current = null;
+          setRuntimeMode('web');
+        }
+      }
       if (unmountedRef.current) return;
 
       const attemptNum = attemptRef.current;
       setAttempt(attemptNum);
       setStatus(attemptNum === 0 ? 'connecting' : 'reconnecting');
 
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const sourceSegment = sourceType === 'repo' ? 'repos' : 'workspaces';
-      const wsUrl = `${protocol}//${window.location.host}/ws/${sourceSegment}/${workspaceId}/terminal/${terminalId}`;
+      const wsUrl = terminalWebSocketUrl(sourceType, workspaceId, terminalId, runtimeInfoRef.current);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -149,7 +242,7 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
         }
       };
 
-      ws.onmessage = (evt) => { term.write(evt.data); };
+      ws.onmessage = (evt) => { writeTerminalPayload(term, evt.data, bufferKey); };
 
       ws.onerror = () => { /* let onclose drive the reconnect */ };
 
@@ -237,10 +330,10 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
   })();
 
   return (
-    <div className={`relative ${className ?? ''}`}>
-      <div ref={containerRef} className="w-full h-full" />
+    <div className={`relative min-h-0 overflow-hidden bg-[#0b0f14] ${className ?? ''}`} data-terminal-runtime={runtimeMode}>
+      <div ref={containerRef} className="allen-terminal h-full w-full px-3 py-2" />
       {badge && (
-        <div className={`absolute top-2 right-2 text-[10px] font-mono px-2 py-0.5 rounded border ${badge.cls}`}>
+        <div className={`absolute right-2 top-2 text-[10px] font-mono px-2 py-0.5 rounded border ${badge.cls}`}>
           {badge.text}
         </div>
       )}

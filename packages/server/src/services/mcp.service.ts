@@ -6,6 +6,8 @@
 
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
+import { buildMcpSourceEnvForServer } from '../runtime/mcp-credentials.js';
+import type { BuildMcpConfigOptions } from '@allen/engine';
 
 // MCP env/args come from Allen's root .env via the ALLEN_ prefix convention.
 // See mcp-loader.ts for the resolution rules.
@@ -50,6 +52,7 @@ export interface McpServerRecord {
    * keys are forwarded — the child never sees Allen's other env.
    */
   envKeys?: string[];
+  argKeys?: string[];
 
   /**
    * Python-specific config. Set when source is a repo entry ending in .py
@@ -100,9 +103,11 @@ export type McpServerInput = Omit<McpServerRecord, '_id' | 'status' | 'createdAt
 export interface McpPreset {
   name: string;
   description: string;
-  type: 'stdio' | 'sse';
+  type: 'stdio' | 'sse' | 'http';
   command?: string;
   args?: string[];
+  url?: string;
+  headers?: Record<string, string>;
   /**
    * BARE env var names that the spawned subprocess reads (e.g.
    * `LINEAR_ACCESS_TOKEN`). The user adds `ALLEN_<NAME>` to Allen's root
@@ -121,6 +126,42 @@ export interface McpPreset {
 
 export const MCP_PRESETS: McpPreset[] = [
   {
+    name: 'google-workspace',
+    description: 'Google Workspace — Gmail, Drive, Docs, Sheets, Calendar, Chat, and more',
+    type: 'stdio',
+    command: 'uvx',
+    args: ['workspace-mcp'],
+    envKeys: ['GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET', 'OAUTHLIB_INSECURE_TRANSPORT'],
+    docsUrl: 'https://workspacemcp.com/',
+  },
+  {
+    name: 'google-docs',
+    description: 'Google Docs — read, create, and update docs through Workspace MCP',
+    type: 'stdio',
+    command: 'uvx',
+    args: ['workspace-mcp', '--tools', 'docs', 'drive'],
+    envKeys: ['GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET', 'OAUTHLIB_INSECURE_TRANSPORT'],
+    docsUrl: 'https://pypi.org/project/workspace-mcp/',
+  },
+  {
+    name: 'google-sheets',
+    description: 'Google Sheets — inspect and update spreadsheets through Workspace MCP',
+    type: 'stdio',
+    command: 'uvx',
+    args: ['workspace-mcp', '--tools', 'sheets', 'drive'],
+    envKeys: ['GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET', 'OAUTHLIB_INSECURE_TRANSPORT'],
+    docsUrl: 'https://pypi.org/project/workspace-mcp/',
+  },
+  {
+    name: 'google-meet',
+    description: 'Google Meet — schedule and update Meet links through Google Calendar',
+    type: 'stdio',
+    command: 'uvx',
+    args: ['workspace-mcp', '--tools', 'calendar'],
+    envKeys: ['GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET', 'OAUTHLIB_INSECURE_TRANSPORT'],
+    docsUrl: 'https://pypi.org/project/workspace-mcp/',
+  },
+  {
     name: 'linear',
     description: 'Linear — issues, projects, teams, comments',
     type: 'stdio',
@@ -138,6 +179,23 @@ export const MCP_PRESETS: McpPreset[] = [
     args: ['-y', '@modelcontextprotocol/server-github'],
     envKeys: ['GITHUB_PERSONAL_ACCESS_TOKEN'],
     docsUrl: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/github',
+  },
+  {
+    name: 'jira',
+    description: 'Jira — search, read, and update Jira issues through Atlassian MCP',
+    type: 'stdio',
+    command: 'uvx',
+    args: ['mcp-atlassian'],
+    envKeys: ['JIRA_URL', 'JIRA_USERNAME', 'JIRA_API_TOKEN'],
+    docsUrl: 'https://mcp-atlassian.soomiles.com/docs/configuration',
+  },
+  {
+    name: 'figma',
+    description: 'Figma Desktop — design context from the local Figma Dev Mode MCP server',
+    type: 'http',
+    url: 'http://127.0.0.1:3845/mcp',
+    envKeys: [],
+    docsUrl: 'https://developers.figma.com/docs/figma-mcp-server/local-server-installation/',
   },
   {
     name: 'postgres',
@@ -162,6 +220,15 @@ export const MCP_PRESETS: McpPreset[] = [
     docsUrl: 'https://github.com/kiliczsh/mcp-mongo-server',
   },
   {
+    name: 'mysql',
+    description: 'MySQL — read-only queries, schema inspection, and table metadata',
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', '@matpb/mysql-mcp-server'],
+    envKeys: ['MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_USER', 'MYSQL_PASSWORD', 'MYSQL_DATABASE'],
+    docsUrl: 'https://github.com/matpb/mysql-mcp-server',
+  },
+  {
     name: 'slack',
     description: 'Slack — channels, messages, users (legacy package, still functional)',
     type: 'stdio',
@@ -170,25 +237,15 @@ export const MCP_PRESETS: McpPreset[] = [
     envKeys: ['SLACK_BOT_TOKEN', 'SLACK_TEAM_ID'],
     docsUrl: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/slack',
   },
-  {
-    // Default allowed directory is /tmp. Edit args after creation to allow more.
-    name: 'filesystem',
-    description: 'Local filesystem — read/write inside /tmp by default (edit args to allow more)',
-    type: 'stdio',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
-    envKeys: [],
-    docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem',
-  },
-  {
-    name: 'memory',
-    description: 'Knowledge graph — persistent entity & relationship memory',
-    type: 'stdio',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-memory'],
-    envKeys: [],
-    docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/memory',
-  },
+  // {
+  //   name: 'memory',
+  //   description: 'Knowledge graph — persistent entity & relationship memory',
+  //   type: 'stdio',
+  //   command: 'npx',
+  //   args: ['-y', '@modelcontextprotocol/server-memory'],
+  //   envKeys: [],
+  //   docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/memory',
+  // },
 ];
 
 // ── Service ──
@@ -286,7 +343,8 @@ export class McpService {
     for (const s of servers) {
       if (allowedExternal && !allowedExternal.has(s.name)) continue;
       if (s.type === 'stdio') {
-        const cfg = await buildSingleServerConfig(s as unknown as Record<string, unknown>, this.db);
+        const options = { sourceEnv: await buildMcpSourceEnvForServer(s) } satisfies BuildMcpConfigOptions;
+        const cfg = await buildSingleServerConfig(s as unknown as Record<string, unknown>, this.db, options);
         if (cfg) config[s.name] = cfg;
       } else if (s.type === 'sse') {
         config[s.name] = { type: 'sse', url: s.url, headers: s.headers ?? {} };

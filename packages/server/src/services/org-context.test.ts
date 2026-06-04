@@ -29,7 +29,7 @@ const AGENTS = [
     description: 'Top-level orchestrator.',
     teamName: 'executive',
     teamRole: 'lead',
-    canDelegateTo: ['product-manager'],
+    spawnTargets: ['product-manager'],
   },
   {
     name: 'product-manager',
@@ -37,7 +37,7 @@ const AGENTS = [
     description: 'Owns product strategy.',
     teamName: 'product',
     teamRole: 'lead',
-    canDelegateTo: [],
+    spawnTargets: [],
   },
   {
     name: 'team-builder-agent',
@@ -45,7 +45,7 @@ const AGENTS = [
     description: 'Designs new teams.',
     teamName: 'meta',
     teamRole: 'lead',
-    canDelegateTo: [],
+    spawnTargets: [],
   },
 ];
 
@@ -80,13 +80,13 @@ describe('server org-context — buildOrgContextBlock', () => {
     expect(result).not.toContain('- ceo (lead) — Top-level orchestrator.');
   });
 
-  it('renders per-agent delegation targets for the requesting agent', async () => {
+  it('renders per-agent spawn targets for the requesting agent', async () => {
     const db = mockDb(TEAMS, AGENTS);
     const result = await buildOrgContextBlock(db, {
       forAgent: 'ceo',
       includeFullChart: false,
     });
-    expect(result).toContain('## Your delegation targets');
+    expect(result).toContain('## Suggested spawn targets');
     expect(result).toContain('product-manager [product]');
   });
 

@@ -5,6 +5,11 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { MCP_SERVER_NAME } from '@allen/engine';
 import { loadExternalMcpServers } from './chat-mcp.js';
+import {
+  getRuntimeApiBaseUrl,
+  getRuntimeJwtAccessSecret,
+  getRuntimePublicBaseUrl,
+} from '../runtime/config.js';
 
 export interface ControlledMcpOptions {
   db: Db;
@@ -26,21 +31,34 @@ function getAllenMcpServerPath(): string {
   return resolve(thisDir, 'allen-mcp-server.js');
 }
 
+function getAllenMcpServerRunner(serverPath: string): { command: string; args: string[]; env: Record<string, string> } {
+  if (serverPath.endsWith('.ts')) {
+    return { command: 'npx', args: ['tsx', serverPath], env: {} };
+  }
+  if (serverPath.includes('.asar/')) {
+    return {
+      command: process.execPath,
+      args: [serverPath],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    };
+  }
+  return { command: 'node', args: [serverPath], env: {} };
+}
+
 function getAllenMcpServerConfig(chatSessionId: string | undefined, runtimeId: string): Record<string, unknown> {
   const serverPath = getAllenMcpServerPath();
-  const runner = serverPath.endsWith('.ts')
-    ? { command: 'npx', args: ['tsx', serverPath] }
-    : { command: 'node', args: [serverPath] };
+  const runner = getAllenMcpServerRunner(serverPath);
 
   return {
     type: 'stdio',
     command: runner.command,
     args: runner.args,
     env: {
-      ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
-      ALLEN_PUBLIC_URL: process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`,
-      JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
+      ALLEN_API_URL: getRuntimeApiBaseUrl(),
+      ALLEN_PUBLIC_URL: getRuntimePublicBaseUrl(),
+      JWT_ACCESS_SECRET: getRuntimeJwtAccessSecret(),
       AI_RUNTIME_ID: runtimeId,
+      ...runner.env,
       ...(chatSessionId
         ? {
             ALLEN_ARTIFACT_ROOT_TYPE: 'chat',

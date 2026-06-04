@@ -54,7 +54,7 @@ input:
     required: true
     widget: repo_picker
     label: Target repo
-    description: Registered repo where implementation should happen.
+    description: Where the milestones get implemented. Pass your current worktree path if working inside a workspace/worktree; otherwise pass the registered repo root.
   prd_artifact_url:
     type: string
     required: false
@@ -670,6 +670,16 @@ nodes:
   # when an override edge fires.
   milestone_escalation_review:
     type: human
+    human:
+      kind: recover
+      title: "Recover blocked milestone workflow"
+      summary: "A milestone node blocked or exhausted its retry budget."
+      question: "Choose whether to retry with feedback, override and continue, or abandon the run."
+      highlights:
+        - "Exhausted from: {{default __retry_exhausted_from \"direct block\"}}"
+        - "Current milestone: {{default current_milestone \"none selected\"}}"
+        - "Implementer status: {{default implementer_status \"n/a\"}}"
+        - "Blockers: {{default blockers \"none reported\"}}"
     fields:
       - name: escalation_decision
         label: "What now?"
@@ -782,41 +792,41 @@ edges:
   #
   # abandon → END
   - { from: milestone_escalation_review, to: END,
-      condition: "escalation_decision == 'abandon'" }
+      condition: "human.milestone_escalation_review.latest.decision == 'abandon'" }
 
   # retry_with_feedback — condition-only re-route edges (no max_retries).
   # The engine resets retry counters targeting the destination.
   - from: milestone_escalation_review
     to: milestone_implementer
-    condition: "escalation_decision == 'retry_with_feedback' AND (__retry_exhausted_from == 'milestone_validator' OR implementer_status == 'blocked')"
+    condition: "human.milestone_escalation_review.latest.decision == 'retry_with_feedback' AND (__retry_exhausted_from == 'milestone_validator' OR implementer_status == 'blocked')"
     retry_context: |
       Human intervened on milestone validation failure or implementer blocker.
-      Feedback: {{escalation_feedback}}
+      Feedback: {{human.milestone_escalation_review.latest.feedback.value}}
 
       Re-attempt the current milestone from the implementer. Budget reset.
   - from: milestone_escalation_review
     to: milestone_implementer
-    condition: "escalation_decision == 'retry_with_feedback' AND __retry_exhausted_from == 'final_implementation_validator'"
+    condition: "human.milestone_escalation_review.latest.decision == 'retry_with_feedback' AND __retry_exhausted_from == 'final_implementation_validator'"
     retry_context: |
       Human intervened on final-validation exhaustion.
-      Feedback: {{escalation_feedback}}
+      Feedback: {{human.milestone_escalation_review.latest.feedback.value}}
 
       Re-attempt the final repair milestone from the implementer. Budget reset.
   - from: milestone_escalation_review
     to: select_next_milestone
-    condition: "escalation_decision == 'retry_with_feedback' AND milestone_selection_status == 'blocked'"
+    condition: "human.milestone_escalation_review.latest.decision == 'retry_with_feedback' AND milestone_selection_status == 'blocked'"
     retry_context: |
       Human intervened on a blocked milestone selection.
-      Feedback: {{escalation_feedback}}
+      Feedback: {{human.milestone_escalation_review.latest.feedback.value}}
 
       Re-evaluate milestone_state and pick the next available milestone.
 
   # force_continue — skip the failed stage.
   - { from: milestone_escalation_review, to: select_next_milestone,
-      condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'milestone_validator'" }
+      condition: "human.milestone_escalation_review.latest.decision == 'force_continue' AND __retry_exhausted_from == 'milestone_validator'" }
   - { from: milestone_escalation_review, to: pr_creator,
-      condition: "escalation_decision == 'force_continue' AND __retry_exhausted_from == 'final_implementation_validator'" }
+      condition: "human.milestone_escalation_review.latest.decision == 'force_continue' AND __retry_exhausted_from == 'final_implementation_validator'" }
   - { from: milestone_escalation_review, to: final_implementation_validator,
-      condition: "escalation_decision == 'force_continue' AND milestone_selection_status == 'blocked'" }
+      condition: "human.milestone_escalation_review.latest.decision == 'force_continue' AND milestone_selection_status == 'blocked'" }
   - { from: milestone_escalation_review, to: select_next_milestone,
-      condition: "escalation_decision == 'force_continue' AND implementer_status == 'blocked'" }
+      condition: "human.milestone_escalation_review.latest.decision == 'force_continue' AND implementer_status == 'blocked'" }

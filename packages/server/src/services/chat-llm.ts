@@ -6,7 +6,7 @@
  */
 
 import type { Db } from 'mongodb';
-import { MCP_SERVER_NAME, normalizeModelAlias } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias, getAllenMcpConfig } from '@allen/engine';
 import {
   type ChatProvider,
   type ProviderCallbacks,
@@ -106,49 +106,29 @@ async function runClaudeCLI(
   chatSessionId?: string,
 ): Promise<{ text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] }> {
   const { query } = await import('@anthropic-ai/claude-code');
-  const { resolve, dirname } = await import('node:path');
 
   // Build MCP servers: Allen + external
   const mcpServers: Record<string, unknown> = {};
   if (!skipTools) {
-    // Allen MCP server (our built-in tools)
-    // Resolve relative to THIS file — works in both dev (src/) and prod (dist/)
-    const thisDir = dirname(new URL(import.meta.url).pathname);
-    const tsPath = resolve(thisDir, 'allen-mcp-server.ts');
-    const jsPath = resolve(thisDir, 'allen-mcp-server.js');
-    const { existsSync } = await import('node:fs');
-    // Dev: .ts file → run with npx tsx. Prod: .js file → run with node.
-    const serverPath = existsSync(tsPath) ? tsPath : jsPath;
-    const runner = serverPath.endsWith('.ts') ? { command: 'npx', args: ['tsx', serverPath] } : { command: 'node', args: [serverPath] };
-    mcpServers[MCP_SERVER_NAME] = {
-      type: 'stdio',
-      command: runner.command,
-      args: runner.args,
-      env: {
-        ALLEN_API_URL: `http://localhost:${process.env.PORT ?? '4023'}`,
-        ALLEN_PUBLIC_URL: process.env.ALLEN_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? '4023'}`,
-        // Shared with the MCP subprocess so it can mint its own access token
-        // when calling back into /api/* — see allen-mcp-server.ts.
-        JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? '',
-        // Artifact-root context for `allen_save_artifact` — files saved
-        // by the chat agent get filed under this chat session. Without
-        // these the MCP returns "ALLEN_ARTIFACT_ROOT_TYPE / ID env vars
-        // not set". Only set when we have a chat session id (callers
-        // that don't supply one shouldn't be saving chat-scoped
-        // artifacts anyway).
-        ...(chatSessionId
-          ? {
-              ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
-              ALLEN_ARTIFACT_ROOT_ID: chatSessionId,
-              // Session-scope marker. The MCP forwards this as an
-              // x-allen-chat-session-id header on every outbound
-              // /api/chat/* call so the server can route tools to the
-              // exact chat context.
-              ALLEN_CHAT_SESSION_ID: chatSessionId,
-            }
-          : {}),
-      },
-    };
+    // Allen MCP — chat-scoped. The helper resolves the server file
+    // (module-anchored, .ts→.js, with ALLEN_MCP_SERVER_PATH override),
+    // picks the right runner, and assembles env. Returns null if the
+    // server file can't be found, in which case the chat session falls
+    // back to external MCPs only.
+    const allenConfig = getAllenMcpConfig({
+      ...(chatSessionId
+        ? {
+            ALLEN_ARTIFACT_ROOT_TYPE: 'chat',
+            ALLEN_ARTIFACT_ROOT_ID: chatSessionId,
+            // Session-scope marker. The MCP forwards this as an
+            // x-allen-chat-session-id header on every outbound
+            // /api/chat/* call so the server can route tools to the
+            // exact chat context.
+            ALLEN_CHAT_SESSION_ID: chatSessionId,
+          }
+        : {}),
+    });
+    if (allenConfig) mcpServers[MCP_SERVER_NAME] = allenConfig;
 
     // External MCP servers (Linear, GitHub, etc.)
     const external = await loadExternalMcpServers(db);

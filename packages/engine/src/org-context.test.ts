@@ -29,7 +29,7 @@ const AGENTS = [
     description: 'Top-level orchestrator.',
     teamName: 'executive',
     teamRole: 'lead',
-    canDelegateTo: ['engineering-lead'],
+    spawnTargets: ['engineering-lead'],
   },
   {
     name: 'engineering-lead',
@@ -37,7 +37,7 @@ const AGENTS = [
     description: 'Designs implementation plans.',
     teamName: 'engineering',
     teamRole: 'lead',
-    canDelegateTo: ['backend-developer'],
+    spawnTargets: ['backend-developer'],
   },
   {
     name: 'backend-developer',
@@ -45,7 +45,7 @@ const AGENTS = [
     description: 'Writes server-side code.',
     teamName: 'engineering',
     teamRole: 'member',
-    canDelegateTo: [],
+    spawnTargets: [],
   },
   {
     name: 'team-builder-agent',
@@ -53,7 +53,7 @@ const AGENTS = [
     description: 'Designs and creates new teams.',
     teamName: 'meta',
     teamRole: 'lead',
-    canDelegateTo: [],
+    spawnTargets: [],
   },
 ];
 
@@ -93,25 +93,25 @@ describe('buildOrgContextBlock', () => {
     expect(result).not.toContain('team-builder-agent');
   });
 
-  it('renders per-agent delegation targets when forAgent is set', async () => {
+  it('renders per-agent spawn targets when forAgent is set', async () => {
     const db = mockDb(TEAMS, AGENTS);
     const result = await buildOrgContextBlock(db, {
       forAgent: 'ceo',
       includeFullChart: false,
     });
-    expect(result).toContain('## Your delegation targets');
+    expect(result).toContain('## Suggested spawn targets');
     expect(result).toContain('engineering-lead');
     expect(result).toContain('[engineering]');
     expect(result).toContain('Designs implementation plans.');
   });
 
-  it('does not render delegation targets section for agents with no canDelegateTo', async () => {
+  it('does not render spawn targets section for agents with no spawnTargets', async () => {
     const db = mockDb(TEAMS, AGENTS);
     const result = await buildOrgContextBlock(db, {
       forAgent: 'backend-developer',
       includeFullChart: false,
     });
-    expect(result).not.toContain('## Your delegation targets');
+    expect(result).not.toContain('## Suggested spawn targets');
   });
 
   it('returns empty string when DB throws (defensive)', async () => {

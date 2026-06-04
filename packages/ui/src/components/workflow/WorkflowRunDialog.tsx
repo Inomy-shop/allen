@@ -258,16 +258,16 @@ export default function WorkflowRunDialog({ workflow, onClose, onStarted }: Work
                   )}
 
                   {widget === 'select' && (
-                    <select
+                    <Select
                       value={value}
-                      onChange={(e) => setRunInput((prev) => ({ ...prev, [key]: e.target.value }))}
-                      className="input w-full text-sm"
-                    >
-                      {!isRequired && <option value="">— none —</option>}
-                      {(schema?.enum ?? []).map((opt: string) => (
-                        <option key={opt} value={opt}>{opt}</option>
-                      ))}
-                    </select>
+                      onChange={(next) => setRunInput((prev) => ({ ...prev, [key]: next }))}
+                      searchable={(schema?.enum ?? []).length > 6}
+                      placeholder="Select value"
+                      options={[
+                        ...(!isRequired ? [{ value: '', label: 'None' }] : []),
+                        ...(schema?.enum ?? []).map((opt: string) => ({ value: opt, label: opt })),
+                      ]}
+                    />
                   )}
 
                   {widget === 'number' && (

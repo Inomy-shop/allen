@@ -14,6 +14,7 @@ import { TicketAssignmentService, type TicketAssignment } from './ticket-assignm
 import { WorkspaceManager } from './workspace.service.js';
 import { executeChatTool } from './chat-tools.js';
 import { ExecutionService } from './execution.service.js';
+import { getRuntimeSecretsProvider } from '../runtime/config.js';
 
 // TTL caches — Linear's rate limit is 4500 req/hr. Without caching a naive
 // page refresh can easily hit hundreds of requests because every `issue.state`,
@@ -208,7 +209,7 @@ export class LinearService {
   }
 
   private async getToken(): Promise<string | null> {
-    return process.env[LINEAR_TOKEN_ENV_KEY] ?? null;
+    return await getRuntimeSecretsProvider().getSecret(LINEAR_TOKEN_ENV_KEY) ?? null;
   }
 
   private async getClient(): Promise<LinearClient | null> {

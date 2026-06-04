@@ -35,7 +35,7 @@ Allen runs a multi-team organization of AI agents against your codebases. You ta
 - **A seeded agent org.** On first boot Allen seeds 6 teams (executive, product, engineering, quality, meta, unassigned) and 20+ agents — team leads that orchestrate and specialists that write code, review, test, document, investigate bugs, and resolve PR feedback.
 - **YAML workflows.** Multi-step pipelines with agent nodes, code nodes, conditionals, parallel branches, sub-workflows, and human checkpoints. Nine workflows ship built-in (planning, bug fix, feature implementation, PR review resolution, self-healing, and more).
 - **Isolated workspaces.** Every coding task runs in a dedicated git worktree with a live terminal (WebSocket PTY), file watcher, and a reverse proxy to preview dev servers.
-- **Full execution observability.** Traces, per-node logs, tool calls, costs, checkpoints, artifacts, and a Mermaid graph of every workflow.
+- **Full execution observability.** Traces, per-node logs, tool calls, costs and token usage breakdown (cached input, non-cached input, output), checkpoints, artifacts, and a Mermaid graph of every workflow.
 - **Human-in-the-loop.** Workflows pause at intervention points (approval, question, escalation) and wait for a person.
 - **Integrations.** GitHub (PR sync, CodeRabbit comment resolution), Linear (ticket dispatch to agents/workflows), Slack (chat from a thread), and MCP servers (Postgres, custom tools, etc.).
 - **Self-healing.** An hourly monitor watches Allen's own runtime, fingerprints incidents, files Linear tickets, and can auto-dispatch a bug-fix workflow.
@@ -91,7 +91,8 @@ The setup script, in order:
 4. Installs the Codex CLI via npm if missing.
 5. Runs `npm install` across all workspace packages.
 6. Creates `.env` from `.env.example`, generates `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET`, and auto-pins `CLAUDE_BIN` to the verified standalone CLI.
-7. Runs `npm run health` and prints PASS/FAIL per dependency.
+7. Prompts whether to install the optional Cognee-backed context engine. Pressing Enter skips it; run `npm run setup:context` later to install it.
+8. Runs `npm run health` and prints PASS/FAIL per dependency.
 
 Re-running is safe — it skips work already done and preserves your `.env`. If a step fails the script exits with a red error line; see [docs/troubleshooting.md → Setup Script Fails](docs/troubleshooting.md#setup-script-fails) for the fix matrix.
 
@@ -156,9 +157,9 @@ See [`docs/first-workflow.md`](docs/first-workflow.md) for a step-by-step walkth
 
 **Visual workflow builder.** Build workflows in the UI (`/workflows/new`) by wiring agent/condition/parallel/human nodes, or check YAML into `packages/engine/workflows/`. The engine validates structure on load and renders a Mermaid graph.
 
-**Workspaces.** Each coding task gets a git worktree under `<ALLEN_HOME>/worktrees/`. The Workspaces page gives you a live terminal (real PTY over WebSocket), a file browser with live diffs, an embedded chat, and a reverse proxy so you can preview a dev server the agent started.
+**Workspaces.** Each coding task gets a git worktree under `<ALLEN_HOME>/worktrees/`. Clicking a workspace in the sidebar opens it in a **workspace-mode chat** (`/chat?workspaceId=…`): a browser-style tab strip of linked chats with `+ New Chat`, close/restore, and a context bar showing the repo, branch, and worktree path. Agents in a workspace-linked chat automatically run with `cwd` set to the worktree. The Workspaces page (accessible from the context bar) still gives you the live terminal, file browser, and dev-server preview proxy.
 
-**Executions & traces.** The Executions page lists running and recent runs (paginated, filterable). Drill into any execution for the node timeline, per-node logs, tool calls with payloads, token/cost accounting, checkpoints, and artifacts.
+**Executions & traces.** The Executions page lists running and recent runs (paginated, filterable). Drill into any execution for the node timeline, per-node logs, tool calls with payloads, token usage breakdown (cached input, non-cached input, output — per-node and execution totals), cost accounting, checkpoints, and artifacts.
 
 **Interventions.** When a workflow hits a human node it creates an intervention (approval / question / escalation) with a deadline. The Interventions page lists what needs you; answering resumes the run.
 
