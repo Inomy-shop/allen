@@ -23,7 +23,14 @@ interface EmbeddedChatProps {
   onLinkedSession?: (sessionId: string) => void;
 }
 
-export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedSessionId, onClose, onLinkedSession }: EmbeddedChatProps) {
+export function EmbeddedChat({
+  workspaceId,
+  workspaceName,
+  worktreePath,
+  linkedSessionId,
+  onClose,
+  onLinkedSession,
+}: EmbeddedChatProps) {
   const navigate = useNavigate();
   const {
     sessions, activeSessionId, messages, streaming, streamText,

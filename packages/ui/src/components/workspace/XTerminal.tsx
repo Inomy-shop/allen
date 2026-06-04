@@ -3,6 +3,7 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
+import { openExternalUrl } from '../../lib/workspace-preview';
 import '@xterm/xterm/css/xterm.css';
 
 interface XTerminalProps {
@@ -12,6 +13,8 @@ interface XTerminalProps {
   className?: string;
   /** Command to auto-run after terminal connects */
   initialCommand?: string;
+  /** Send Ctrl+C to the PTY before closing this terminal view. */
+  interruptOnUnmount?: boolean;
 }
 
 type Status = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
@@ -23,9 +26,14 @@ const BASE_DELAY_MS = 500;
 const MAX_DELAY_MS = 10_000;
 const MAX_TERMINAL_BUFFER_CHARS = 500_000;
 const terminalBuffers = new Map<string, string>();
+const activeTerminalInputs = new Map<string, (data: string) => boolean>();
 
 function terminalBufferKey(sourceType: 'workspace' | 'repo', sourceId: string, terminalId: string): string {
   return `allen-terminal-buffer:${sourceType}:${sourceId}:${terminalId}`;
+}
+
+export function sendTerminalInput(sourceType: 'workspace' | 'repo', sourceId: string, terminalId: string, data: string): boolean {
+  return activeTerminalInputs.get(terminalBufferKey(sourceType, sourceId, terminalId))?.(data) ?? false;
 }
 
 function readTerminalBuffer(key: string): string {
@@ -98,7 +106,7 @@ function writeTerminalPayload(term: XTerm, payload: unknown, bufferKey: string):
   appendTerminalBuffer(bufferKey, payload);
 }
 
-export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'workspace', className, initialCommand }: XTerminalProps) {
+export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'workspace', className, initialCommand, interruptOnUnmount = false }: XTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -162,7 +170,10 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
-    term.loadAddon(new WebLinksAddon());
+    term.loadAddon(new WebLinksAddon((event, uri) => {
+      event.preventDefault();
+      void openExternalUrl(uri);
+    }));
     term.loadAddon(new SearchAddon());
 
     term.open(containerRef.current);
@@ -179,6 +190,12 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
     fitRef.current = fitAddon;
 
     const bufferKey = terminalBufferKey(sourceType, workspaceId, terminalId);
+    activeTerminalInputs.set(bufferKey, (data: string) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(data);
+      return true;
+    });
     const restoredBuffer = readTerminalBuffer(bufferKey);
     if (restoredBuffer) {
       term.write(restoredBuffer);
@@ -314,6 +331,12 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
+      activeTerminalInputs.delete(bufferKey);
+      try {
+        if (interruptOnUnmount && wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send('\x03');
+        }
+      } catch {}
       try { wsRef.current?.close(); } catch {}
       term.dispose();
       termRef.current = null;

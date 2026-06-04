@@ -9,6 +9,7 @@ import {
   ChevronRight, Plus,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
   SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain,
+  Trash2, AlertTriangle,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
@@ -471,6 +472,8 @@ export default function App() {
   const [workspaceSearch, setWorkspaceSearch] = useState('');
   const [sidebarWorkspaces, setSidebarWorkspaces] = useState<SidebarWorkspace[]>([]);
   const [sidebarWorkspacesLoading, setSidebarWorkspacesLoading] = useState(false);
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
+  const [confirmDeleteWorkspace, setConfirmDeleteWorkspace] = useState<SidebarWorkspace | null>(null);
   const [workspaceCreateRepo, setWorkspaceCreateRepo] = useState<WorkspaceCreateRepo | null>(null);
   const [collapsedWorkspaceRepos, setCollapsedWorkspaceRepos] = useState<Set<string>>(() => loadCollapsedWorkspaceRepos());
   const [appVersion, setAppVersion] = useState(__ALLEN_APP_VERSION__);
@@ -538,6 +541,28 @@ export default function App() {
 
   function prependSidebarWorkspace(workspace: SidebarWorkspace) {
     setSidebarWorkspaces(prev => [workspace, ...prev.filter(item => item._id !== workspace._id)]);
+  }
+
+  async function deleteSidebarWorkspace(workspace: SidebarWorkspace) {
+    setDeletingWorkspaceId(workspace._id);
+    try {
+      window.dispatchEvent(new CustomEvent('allen:workspace-servers-stop', { detail: { workspaceId: workspace._id } }));
+      await workspacesApi.archive(workspace._id);
+      setSidebarWorkspaces(prev => prev.filter(item => item._id !== workspace._id));
+      try {
+        localStorage.removeItem(`allen-ws-chat-tabs:${workspace._id}`);
+      } catch {}
+      if (activeWorkspaceId === workspace._id) {
+        setChatSessionWorkspaceId(null);
+        setActiveWorkspaceName(null);
+        navigate('/chat');
+      }
+      setConfirmDeleteWorkspace(null);
+    } catch (err: any) {
+      window.alert(err?.message ?? 'Failed to delete workspace');
+    } finally {
+      setDeletingWorkspaceId(null);
+    }
   }
 
   useEffect(() => {
@@ -979,19 +1004,38 @@ export default function App() {
                             <div className="mt-1 space-y-1">
                               {group.items.map((workspace) => {
                                 const active = workspace._id === activeWorkspaceId;
+                                const deleting = deletingWorkspaceId === workspace._id;
                                 return (
-                                  <button
+                                  <div
                                     key={workspace._id}
-                                    type="button"
-                                    onClick={() => navigate(`/chat?workspaceId=${workspace._id}`)}
-                                    className={`group flex w-full items-center rounded-md border px-2.5 py-1.5 text-left transition-colors ${
+                                    className={`group flex w-full items-center rounded-md border py-1.5 pl-2.5 pr-1 transition-colors ${
                                       active
                                         ? 'border-accent/30 bg-accent-soft text-accent'
                                         : 'border-transparent text-theme-secondary hover:bg-app-muted hover:text-theme-primary'
                                     }`}
                                   >
-                                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-5">{workspace.name}</span>
-                                  </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => navigate(`/chat?workspaceId=${workspace._id}`)}
+                                      className="min-w-0 flex-1 truncate text-left text-[12.5px] font-medium leading-5"
+                                      disabled={deleting}
+                                    >
+                                      {workspace.name}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setConfirmDeleteWorkspace(workspace);
+                                      }}
+                                      disabled={deleting}
+                                      className="ml-1 grid h-6 w-6 shrink-0 place-items-center rounded-sm text-theme-subtle opacity-0 transition-colors hover:bg-accent-red/10 hover:text-accent-red focus:opacity-100 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                      title={`Delete ${workspace.name}`}
+                                      aria-label={`Delete ${workspace.name}`}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
                                 );
                               })}
                             </div>
@@ -1106,6 +1150,16 @@ export default function App() {
         onClose={() => setCommandOpen(false)}
         onNavigate={(to) => navigate(to)}
       />
+      {confirmDeleteWorkspace && (
+        <WorkspaceDeleteConfirmDialog
+          workspace={confirmDeleteWorkspace}
+          deleting={deletingWorkspaceId === confirmDeleteWorkspace._id}
+          onCancel={() => {
+            if (!deletingWorkspaceId) setConfirmDeleteWorkspace(null);
+          }}
+          onConfirm={() => void deleteSidebarWorkspace(confirmDeleteWorkspace)}
+        />
+      )}
       {workspaceCreateRepo && (
         <WorkspaceCreateDialog
           repo={workspaceCreateRepo}
@@ -1119,6 +1173,66 @@ export default function App() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+function WorkspaceDeleteConfirmDialog({
+  workspace,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  workspace: SidebarWorkspace;
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Delete workspace"
+      onClick={() => {
+        if (!deleting) onCancel();
+      }}
+    >
+      <div
+        className="w-full max-w-md overflow-hidden rounded-lg border border-app bg-app-card shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-3 border-b border-app px-5 py-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent-red/25 bg-accent-red/10">
+            <AlertTriangle className="h-4 w-4 text-accent-red" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold text-theme-primary">Delete workspace</h2>
+            <p className="mt-1 text-[12px] leading-5 text-theme-muted">
+              This will delete <span className="font-medium text-theme-primary">{workspace.name}</span> from your workspace list.
+            </p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-4">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={deleting}
+            className="btn btn-secondary btn-sm"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={deleting}
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-sm border border-accent-red/35 bg-accent-red px-3 text-[12px] font-medium text-white transition-colors hover:bg-accent-red/90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {deleting ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

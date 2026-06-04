@@ -17,6 +17,7 @@ import Select from '../components/common/Select';
 import { useSidebarCollapsed } from '../hooks/useSidebarCollapsed';
 import { usePanelLayout } from '../hooks/usePanelLayout';
 import { setupMonaco, getMonacoTheme } from '../lib/monaco-theme';
+import { openExternalUrl, previewUrlFor } from '../lib/workspace-preview';
 import Editor, { DiffEditor } from '@monaco-editor/react';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 
@@ -236,24 +237,6 @@ function DiffView({ diff }: { diff: string }) {
 
 // ── Main ──
 
-// Pick a preview URL the browser can actually load.
-// Localhost / IP / dev: hit the service port directly. The path-based
-// proxy at /api/workspaces/:id/preview only works for trivial pages —
-// any app with relative asset URLs (Vite, Next, CRA …) would 404
-// because the browser resolves /assets/foo.js against the Allen origin,
-// not through the proxy. Using the direct port avoids that entirely.
-// Production: prepend <service>-<wsId> as a subdomain of whatever host
-// the UI is being served from. The server's WORKSPACE_SUBDOMAIN_REGEX
-// matches any host of that shape, so this works on any deployment
-// domain without a hardcoded value here.
-function previewUrlFor(svc: { name: string; port: number } | undefined, workspaceId: string): string {
-  if (!svc) return '';
-  const { hostname, protocol } = window.location;
-  const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
-  if (isLocal) return `http://${hostname}:${svc.port}`;
-  return `${protocol}//${svc.name}-${workspaceId}.${hostname}`;
-}
-
 function PreviewBar({ id, previewService, setPreviewService, services, onClose }: {
   id: string; previewService: string; setPreviewService: (s: string) => void; services: any[]; onClose: () => void;
 }) {
@@ -382,7 +365,7 @@ function ServicesPanel({ workspaceId, services, onRefresh }: {
   }
 
   function openPreview(svc: any) {
-    window.open(previewUrlFor(svc, workspaceId), '_blank');
+    void openExternalUrl(previewUrlFor(svc, workspaceId));
   }
 
   if (logService) {

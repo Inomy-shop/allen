@@ -2832,6 +2832,74 @@
     @apply inline-flex shrink-0 items-center gap-1.5 rounded-md border border-app bg-app-card px-2.5 py-1.5 text-[12px] font-medium text-theme-secondary transition-colors hover:border-accent/25 hover:bg-app-muted hover:text-accent disabled:opacity-50;
   }
 
+  .ws-servers-list {
+    @apply flex min-h-0 flex-col overflow-y-auto border-r border-app bg-app-card px-2 py-2;
+  }
+
+  .ws-server-row {
+    @apply flex min-w-0 items-center rounded-sm border border-transparent px-2 py-2 text-left text-theme-secondary transition-colors hover:bg-app-muted hover:text-theme-primary;
+  }
+
+  .ws-server-row.active {
+    @apply border-app-strong bg-app-muted text-theme-primary;
+  }
+
+  .ws-server-select {
+    @apply flex min-w-0 flex-1 items-center gap-2 text-left;
+  }
+
+  .ws-server-dot {
+    @apply h-1.5 w-1.5 shrink-0 rounded-full bg-app-muted;
+  }
+
+  .ws-server-dot.running {
+    @apply bg-accent-green;
+  }
+
+  .ws-server-main {
+    @apply flex min-w-0 flex-1 items-center gap-2;
+  }
+
+  .ws-server-main strong {
+    @apply truncate font-mono text-[12px] font-medium text-theme-primary;
+  }
+
+  .ws-server-meta {
+    @apply ml-auto flex shrink-0 items-center gap-1.5 font-mono text-[10px] text-theme-subtle;
+  }
+
+  .ws-server-status {
+    @apply rounded-sm border border-app bg-app-muted px-1.5 py-0.5 font-mono text-[10px] text-theme-muted;
+  }
+
+  .ws-server-status.running {
+    @apply border-accent-green/25 bg-accent-green/10 text-accent-green;
+  }
+
+  .ws-server-header-status {
+    @apply font-mono text-[10px] text-theme-subtle;
+  }
+
+  .ws-server-header-status.running {
+    @apply text-accent-green;
+  }
+
+  .ws-server-icon-btn {
+    @apply grid h-7 w-7 shrink-0 place-items-center rounded-sm border border-app bg-app-card text-theme-muted transition-colors hover:border-accent/25 hover:bg-app-muted hover:text-accent;
+  }
+
+  .ws-server-toolbar {
+    @apply flex min-h-[42px] shrink-0 items-center gap-2 border-b border-app bg-app-card px-3;
+  }
+
+  .ws-server-title {
+    @apply flex min-w-0 items-center gap-2 font-mono text-[12px] text-theme-primary;
+  }
+
+  .ws-server-toolbar .btn {
+    @apply rounded-sm;
+  }
+
   .ws-meta {
     @apply flex min-w-0 flex-wrap items-center gap-1.5 overflow-hidden text-[11.5px] text-theme-muted;
   }
