@@ -17,7 +17,7 @@ import { ShieldCheck, Sparkles } from 'lucide-react';
 import Select from '../common/Select';
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
-export type Provider = 'claude-cli' | 'codex';
+export type Provider = 'claude-cli' | 'codex' | 'deepseek';
 
 export interface AgentSettingsValue {
   provider?: Provider | null;
@@ -39,6 +39,8 @@ interface Props {
   onChange: (next: AgentSettingsValue) => void;
 }
 
+const DEEPSEEK_MODEL_SUGGESTIONS = ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'];
+
 const EFFORT_OPTIONS: Array<{ value: ReasoningEffort; label: string; description: string }> = [
   { value: 'off', label: 'Off', description: 'No extended thinking' },
   { value: 'low', label: 'Low', description: 'Quick thinking' },
@@ -57,6 +59,7 @@ export default function AgentSettingsForm({
 }: Props) {
   const isOverrideMode = mode !== 'agent-default';
   const isClaudeProvider = provider === 'claude-cli';
+  const isDeepSeekProvider = provider === 'deepseek';
 
   // Model display: show selected, or "(inherit)" + ghost text in override mode
   const modelValue = value.model ?? '';
@@ -92,20 +95,36 @@ export default function AgentSettingsForm({
         <label className="block overline mb-1.5">
           Model
         </label>
-        <Select
-          value={modelValue}
-          onChange={(next) => setField('model', next || null)}
-          searchPlaceholder="Search models..."
-          options={[
-            ...(isOverrideMode
-              ? [{ value: '', label: 'Inherit', sublabel: modelInherited }]
-              : []),
-            ...modelOptions.map((option) => ({
-              value: option.value,
-              label: option.label,
-            })),
-          ]}
-        />
+        {isDeepSeekProvider ? (
+          <div>
+            <input
+              type="text"
+              list="deepseek-model-suggestions"
+              value={modelValue}
+              onChange={(e) => setField('model', e.target.value || null)}
+              placeholder="e.g. deepseek-v4-pro[1m]"
+              className="w-full rounded border border-app bg-surface px-3 py-1.5 text-[12px] text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+            <datalist id="deepseek-model-suggestions">
+              {DEEPSEEK_MODEL_SUGGESTIONS.map(m => <option key={m} value={m} />)}
+            </datalist>
+          </div>
+        ) : (
+          <Select
+            value={modelValue}
+            onChange={(next) => setField('model', next || null)}
+            searchPlaceholder="Search models..."
+            options={[
+              ...(isOverrideMode
+                ? [{ value: '', label: 'Inherit', sublabel: modelInherited }]
+                : []),
+              ...modelOptions.map((option) => ({
+                value: option.value,
+                label: option.label,
+              })),
+            ]}
+          />
+        )}
       </div>
 
       {/* ── Reasoning Effort ─────────────────────────────────────── */}
@@ -166,7 +185,7 @@ export default function AgentSettingsForm({
             Plan Mode
           </label>
           <div className="px-3 py-2 bg-surface-50 border border-app rounded-sm text-xs text-theme-subtle">
-            Claude only. Not supported for Codex agents.
+            Claude only. Not supported for this provider.
           </div>
         </div>
       )}

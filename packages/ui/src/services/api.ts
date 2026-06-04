@@ -1243,13 +1243,13 @@ export const system = {
       { method: 'PATCH', body: JSON.stringify({ values }) },
     ),
   saveDesktopOnboardingModelDefaults: (body: {
-    chatProvider: 'codex' | 'claude-cli';
-    agentProvider: '' | 'codex' | 'claude-cli';
+    chatProvider: 'codex' | 'claude-cli' | 'deepseek';
+    agentProvider: '' | 'codex' | 'claude-cli' | 'deepseek';
     agentModel?: string;
   }) =>
     request<{
-      chatProvider: 'codex' | 'claude-cli';
-      agentProvider: '' | 'codex' | 'claude-cli';
+      chatProvider: 'codex' | 'claude-cli' | 'deepseek';
+      agentProvider: '' | 'codex' | 'claude-cli' | 'deepseek';
       agentModel: string;
       settings: DesktopRuntimeSettingsResponse;
     }>('/system/desktop-runtime/onboarding/model-defaults', {

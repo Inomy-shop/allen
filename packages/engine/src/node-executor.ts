@@ -284,11 +284,13 @@ export async function executeNode(
       // (or vice versa) without mutating the agent document.
       const overrideProvider = nodeDef.agentOverrides?.provider;
       const effectiveProvider =
-        overrideProvider === 'codex' || overrideProvider === 'claude-cli'
+        overrideProvider === 'codex' || overrideProvider === 'claude-cli' || overrideProvider === 'deepseek'
           ? overrideProvider
           : role?.provider === 'codex'
             ? 'codex'
-            : 'claude';
+            : role?.provider === 'deepseek'
+              ? 'deepseek'
+              : 'claude';
       if (effectiveProvider === 'codex') {
         const existingSession = sessions[resolveSessionKey(nodeName, nodeDef, state)];
         return executeCodexNode(
@@ -332,6 +334,12 @@ async function executeAgentNode(
   if (nodeDef.agent && !role) {
     throw new Error(`Role not found: ${nodeDef.agent}`);
   }
+
+  // Detect DeepSeek provider so the queryViaCli spawn can receive an env overlay
+  // that redirects the Claude Code CLI to the DeepSeek API instead of Anthropic's.
+  const overrideProviderForAgent = nodeDef.agentOverrides?.provider;
+  const isDeepSeekProvider =
+    overrideProviderForAgent === 'deepseek' || role?.provider === 'deepseek';
 
   // Resolve cwd in priority order:
   //   1. worktree_path — set by create-workspace once an isolated git worktree exists.
@@ -795,6 +803,27 @@ ${context}
           console.warn(`[node:${nodeName}] MCP tool discovery failed:`, (err as Error).message);
         }
       }
+      // For DeepSeek agents, overlay the DeepSeek credentials so the claude binary
+      // redirects requests to the DeepSeek API instead of Anthropic's.
+      const resolvedEnv: NodeJS.ProcessEnv = (() => {
+        if (!isDeepSeekProvider) return { ...process.env, ...spawnContextEnv };
+        const apiKey = process.env.ALLEN_DEEPSEEK_API_KEY ?? '';
+        const baseUrl = process.env.ALLEN_DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1';
+        const dsModel = process.env.ALLEN_DEEPSEEK_MODEL ?? resolvedModel;
+        const flashModel = process.env.ALLEN_DEEPSEEK_FLASH_MODEL ?? 'deepseek-v4-flash';
+        if (!apiKey) throw new Error('ALLEN_DEEPSEEK_API_KEY is not set');
+        return {
+          ...process.env,
+          ...spawnContextEnv,
+          ANTHROPIC_BASE_URL: baseUrl,
+          ANTHROPIC_AUTH_TOKEN: apiKey,
+          ANTHROPIC_MODEL: dsModel,
+          ANTHROPIC_DEFAULT_OPUS_MODEL: dsModel,
+          ANTHROPIC_DEFAULT_SONNET_MODEL: dsModel,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: flashModel,
+          CLAUDE_CODE_SUBAGENT_MODEL: dsModel,
+        };
+      })();
       conv = queryViaCli({
         agent: {
           name: nodeDef.agent ?? 'unknown',
@@ -812,7 +841,7 @@ ${context}
         model: resolvedModel,
         resume: opts.resumeSession,
         permissionMode: resolvedPlanMode ? 'plan' : 'bypassPermissions',
-        env: { ...process.env, ...spawnContextEnv },
+        env: resolvedEnv,
         mcpServers: mcpServers && Object.keys(mcpServers).length > 0 ? (mcpServers as Record<string, unknown>) : undefined,
         abortSignal: deps.abortSignal,
         onMaterializedAgentFile: (metadata) => {

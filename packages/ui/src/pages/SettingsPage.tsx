@@ -424,6 +424,179 @@ function RuntimeSettingControl({
   );
 }
 
+function DeepSeekPanel({
+  editable,
+  runtime,
+  runtimeSettings,
+  runtimeValues,
+  onRuntimeRefresh,
+  onRuntimeSettingsRefresh,
+  onUpdateRuntimeValue,
+}: {
+  editable: boolean;
+  runtime: Awaited<ReturnType<typeof systemApi.desktopRuntime>> | null;
+  runtimeSettings: RuntimeSettings | null;
+  runtimeValues: Record<string, string>;
+  onRuntimeRefresh: () => void;
+  onRuntimeSettingsRefresh: (updated: RuntimeSettings) => void;
+  onUpdateRuntimeValue: (key: string, value: string) => void;
+}) {
+  const apiKeySecret = runtime?.secrets.find((s) => s.key === 'ALLEN_DEEPSEEK_API_KEY');
+  const apiKeyConfigured = Boolean(apiKeySecret?.configured);
+
+  const [enabled, setEnabled] = useState(apiKeyConfigured);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  useEffect(() => {
+    setEnabled(apiKeyConfigured);
+  }, [apiKeyConfigured]);
+
+  const deepseekGroup = runtimeSettings?.groups.find((g) => g.id === 'deepseek');
+
+  async function saveDeepSeekSettings() {
+    setSaving(true);
+    setSaveError(null);
+    setSaveSuccess(false);
+    try {
+      if (apiKeyInput.trim()) {
+        await systemApi.setDesktopSecret('ALLEN_DEEPSEEK_API_KEY', apiKeyInput.trim());
+        setApiKeyInput('');
+        onRuntimeRefresh();
+      }
+      const nonSecretValues: Record<string, string> = {};
+      for (const key of ['ALLEN_DEEPSEEK_BASE_URL', 'ALLEN_DEEPSEEK_MODEL', 'ALLEN_DEEPSEEK_FLASH_MODEL']) {
+        if (runtimeValues[key] !== undefined) {
+          nonSecretValues[key] = runtimeValues[key];
+        }
+      }
+      if (Object.keys(nonSecretValues).length > 0) {
+        const updated = await systemApi.updateDesktopRuntimeSettings(nonSecretValues);
+        onRuntimeSettingsRefresh(updated);
+      }
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteApiKey() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await systemApi.deleteDesktopSecret('ALLEN_DEEPSEEK_API_KEY');
+      setEnabled(false);
+      onRuntimeRefresh();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SettingsPanel
+      title="DeepSeek"
+      description="DeepSeek API provider. Allen uses the Claude Code binary with your DeepSeek credentials. Enable to configure API access."
+      action={
+        <SettingsSwitch
+          checked={enabled}
+          disabled={!editable}
+          onClick={() => {
+            if (enabled && apiKeyConfigured) {
+              void deleteApiKey();
+            } else {
+              setEnabled((v) => !v);
+            }
+          }}
+        />
+      }
+    >
+      {!enabled && (
+        <SettingsRow label="Status">
+          <SettingsBadge tone="neutral">Disabled — toggle on to configure</SettingsBadge>
+        </SettingsRow>
+      )}
+
+      {enabled && (
+        <>
+          <SettingsRow
+            label="API key"
+            description={apiKeyConfigured ? 'Key is configured. Enter a new value to replace it.' : 'Required to use DeepSeek. Stored securely — never displayed.'}
+          >
+            <div className="settings-field-control">
+              <input
+                type="password"
+                className="settings-edit-input"
+                placeholder={apiKeyConfigured ? '••••••••  (configured — enter to replace)' : 'sk-...'}
+                value={apiKeyInput}
+                disabled={!editable}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                autoComplete="off"
+              />
+              <div className="settings-field-meta">
+                <span>{apiKeyConfigured ? '✓ Key configured' : 'Not configured'}</span>
+                <span>Stored via secrets API</span>
+              </div>
+            </div>
+          </SettingsRow>
+
+          {deepseekGroup?.fields.map((field) => (
+            <SettingsRow
+              key={field.key}
+              label={field.label}
+              description={field.description ?? field.key}
+            >
+              <div className="settings-field-control">
+                <input
+                  type="text"
+                  className="settings-edit-input"
+                  placeholder={field.placeholder ?? field.defaultValue}
+                  value={runtimeValues[field.key] ?? ''}
+                  disabled={!editable || field.readOnly}
+                  onChange={(e) => onUpdateRuntimeValue(field.key, e.target.value)}
+                />
+                <div className="settings-field-meta">
+                  <span>Default: {field.defaultValue || 'empty'}</span>
+                  <span>Source: {field.source === 'desktop_config' ? 'Desktop setting' : field.source === 'env' ? 'Runtime env' : 'Default'}</span>
+                </div>
+              </div>
+            </SettingsRow>
+          ))}
+
+          {editable && (
+            <SettingsRow label="Save">
+              <div className="settings-field-control">
+                <div className="settings-inline-action">
+                  <button
+                    type="button"
+                    className="settings-secondary-button"
+                    disabled={saving}
+                    onClick={() => void saveDeepSeekSettings()}
+                  >
+                    {saving ? 'Saving...' : 'Save DeepSeek settings'}
+                  </button>
+                  {saveSuccess && <SettingsBadge tone="ok">Saved</SettingsBadge>}
+                </div>
+                {saveError && (
+                  <div className="settings-field-meta">
+                    <span className="text-accent-red">{saveError}</span>
+                  </div>
+                )}
+              </div>
+            </SettingsRow>
+          )}
+        </>
+      )}
+    </SettingsPanel>
+  );
+}
+
 function RuntimeTab() {
   const [runtime, setRuntime] = useState<Awaited<ReturnType<typeof systemApi.desktopRuntime>> | null>(null);
   const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
@@ -463,6 +636,13 @@ function RuntimeTab() {
       }
       return next;
     });
+  }
+
+  async function refreshRuntime() {
+    try {
+      const updated = await systemApi.desktopRuntime();
+      setRuntime(updated);
+    } catch { /* non-fatal */ }
   }
 
   async function saveRuntimeSettings() {
@@ -554,6 +734,7 @@ function RuntimeTab() {
               && field.key !== 'ALLEN_AGENT_EXECUTION_MODE'
               && !(isCogneeContextGroup && field.key === 'ALLEN_CONTEXT_PROVIDER')
             ));
+            if (group.id === 'deepseek') return null; // rendered separately below
             if (fields.length === 0 && !isCogneeContextGroup) return null;
             return (
               <SettingsPanel
@@ -652,6 +833,19 @@ function RuntimeTab() {
               </SettingsPanel>
             );
           })}
+
+          <DeepSeekPanel
+            editable={runtimeSettings.editable}
+            runtime={runtime}
+            runtimeSettings={runtimeSettings}
+            runtimeValues={runtimeValues}
+            onRuntimeRefresh={() => void refreshRuntime()}
+            onRuntimeSettingsRefresh={(updated) => {
+              setRuntimeSettings(updated);
+              setRuntimeValues(settingsValueMap(updated));
+            }}
+            onUpdateRuntimeValue={updateRuntimeValue}
+          />
 
           <div className="settings-floating-actions">
             <button

@@ -13,6 +13,7 @@ import {
   PROVIDERS,
   runCodexCLI,
   AGENT_FALLBACK_CWD,
+  buildDeepSeekEnvOverlay,
 } from './chat-providers.js';
 import { loadExternalMcpServers } from './chat-mcp.js';
 import {
@@ -252,6 +253,42 @@ async function runClaudeCLI(
   return { text: fullText, costUsd, sessionId: llmSessionId, trace };
 }
 
+// ── DeepSeek Provider ──
+
+/**
+ * Run a chat turn using DeepSeek by temporarily overlaying the process env
+ * with DeepSeek credentials so the Claude Code SDK redirects to the DeepSeek
+ * API. Env vars are saved before the call and restored in a finally block so
+ * concurrent calls to other providers are not affected.
+ */
+async function runDeepSeekChatCLI(
+  db: Db,
+  systemPrompt: string,
+  messages: ChatLLMMessage[],
+  model: string,
+  callbacks: ProviderCallbacks,
+  resumeSessionId?: string,
+  skipTools?: boolean,
+  cwd?: string,
+  resolved?: ResolvedSettings,
+  chatSessionId?: string,
+): Promise<{ text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] }> {
+  const overlay = buildDeepSeekEnvOverlay(model);
+  const saved: Record<string, string | undefined> = {};
+  for (const key of Object.keys(overlay)) {
+    saved[key] = process.env[key];
+    process.env[key] = overlay[key];
+  }
+  try {
+    return await runClaudeCLI(db, systemPrompt, messages, model, callbacks, resumeSessionId, skipTools, cwd, resolved, chatSessionId);
+  } finally {
+    for (const key of Object.keys(overlay)) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
+}
+
 // ── Main Router ──
 
 export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatLLMResult> {
@@ -312,6 +349,9 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
         break;
       case 'claude-cli':
         result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
+        break;
+      case 'deepseek':
+        result = await runDeepSeekChatCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
         break;
       default:
         throw new Error(`Unknown provider: ${provider}`);

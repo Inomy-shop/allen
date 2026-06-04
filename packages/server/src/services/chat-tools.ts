@@ -1963,6 +1963,20 @@ async function runSpawnInBackground(
           disabledMcpToolNames: disallowedMcpToolNames,
         },
       });
+      // For DeepSeek agents: build the per-spawn env overlay so the Claude binary
+      // is redirected to the DeepSeek endpoint. Isolated to this child process only.
+      let deepseekEnvOverlay: Record<string, string> = {};
+      if (provider === 'deepseek') {
+        try {
+          const { buildDeepSeekEnvOverlay } = await import('./chat-providers.js');
+          deepseekEnvOverlay = buildDeepSeekEnvOverlay(model as string);
+        } catch (err) {
+          // Fail loudly so the agent errors with a useful message rather than
+          // silently calling Anthropic with no API key.
+          throw new Error(`DeepSeek env overlay failed: ${(err as Error).message}`);
+        }
+      }
+
       const sdkOptions: Record<string, unknown> = {
         model, permissionMode: 'bypassPermissions',
         // Pin cwd so the SDK doesn't implicitly inherit the server's own
@@ -1971,7 +1985,7 @@ async function runSpawnInBackground(
         // Also set env on the claude-cli subprocess itself, so any logic
         // inside the CLI (or tools that fall back to process.env) can see
         // the spawn tree. Merged on top of parent env.
-        env: { ...process.env, ...spawnContextEnv },
+        env: { ...process.env, ...spawnContextEnv, ...deepseekEnvOverlay },
         ...(disallowedMcpToolNames.length > 0 ? { disallowedTools: disallowedMcpToolNames } : {}),
         ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
       };

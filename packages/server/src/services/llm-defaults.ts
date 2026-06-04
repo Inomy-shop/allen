@@ -47,9 +47,10 @@ function readEnvProvider(): ChatProvider | undefined {
 function readEnvModel(provider: ChatProvider): string | undefined {
   const cfg = PROVIDERS.find((p) => p.provider === provider);
   const raw = process.env.ALLEN_DEFAULT_AGENT_MODEL?.trim();
-  if (raw && cfg?.models.includes(raw)) {
-    return raw;
-  }
+  if (!raw) return undefined;
+  // Open providers (e.g. DeepSeek) accept any non-empty model string.
+  if (cfg?.open) return raw;
+  if (cfg?.models.includes(raw)) return raw;
   return undefined;
 }
 
@@ -97,7 +98,7 @@ export function getRequiredProviders(): { claude: boolean; codex: boolean } {
     : 'codex';
 
   return {
-    claude: chat === 'claude-cli' || agentRaw === 'claude-cli',
+    claude: chat === 'claude-cli' || agentRaw === 'claude-cli' || chat === 'deepseek' || agentRaw === 'deepseek',
     codex: chat === 'codex' || agentRaw === 'codex',
   };
 }
@@ -186,7 +187,11 @@ export function resolveAgentProviderModel(
       ? (seedProvider as ChatProvider)
       : FALLBACK_PROVIDER;
     const cfg = PROVIDERS.find((p) => p.provider === sp);
-    const model = cfg?.models.includes(seedModel) ? seedModel : cfg?.defaultModel ?? FALLBACK_MODEL;
+    const model = (cfg?.open && seedModel)
+      ? seedModel
+      : cfg?.models.includes(seedModel)
+        ? seedModel
+        : cfg?.defaultModel ?? FALLBACK_MODEL;
     return { provider: sp, model };
   }
 
@@ -194,8 +199,8 @@ export function resolveAgentProviderModel(
   const envModel = readEnvModel(envProvider) ?? providerCfg?.defaultModel ?? FALLBACK_MODEL;
 
   // Mode 2: same-provider hybrid — preserve role-specific model when valid.
-  if (seedProvider === envProvider && providerCfg?.models.includes(seedModel)) {
-    return { provider: envProvider, model: seedModel };
+  if (seedProvider === envProvider && (providerCfg?.open ? Boolean(seedModel) : providerCfg?.models.includes(seedModel))) {
+    return { provider: envProvider, model: seedModel || (providerCfg?.defaultModel ?? FALLBACK_MODEL) };
   }
 
   // Mode 3: cross-provider mismatch — env wins so the agent runs on the

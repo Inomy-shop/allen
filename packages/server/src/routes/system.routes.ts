@@ -68,6 +68,7 @@ type DesktopCogneeSetupStatus = {
 const PROVIDER_OPTIONS = [
   { label: 'Codex', value: 'codex' },
   { label: 'Claude CLI', value: 'claude-cli' },
+  { label: 'DeepSeek', value: 'deepseek' },
 ] as const;
 
 const AGENT_MODEL_OPTIONS = [
@@ -199,6 +200,37 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
       { key: 'ALLEN_DESKTOP_MONGOD_BINARY', label: 'Custom MongoDB binary', kind: 'path', defaultValue: 'bundled MongoDB', restartRequired: true, advanced: true },
     ],
   },
+  {
+    id: 'deepseek',
+    title: 'DeepSeek',
+    description: 'DeepSeek API provider configuration. Allen uses the Claude Code binary with your DeepSeek credentials. Set the API key in the DeepSeek section to enable this provider.',
+    fields: [
+      {
+        key: 'ALLEN_DEEPSEEK_BASE_URL',
+        label: 'API base URL',
+        description: 'Leave blank to use the default DeepSeek endpoint (https://api.deepseek.com/v1).',
+        kind: 'string' as const,
+        defaultValue: 'https://api.deepseek.com/v1',
+        placeholder: 'https://api.deepseek.com/v1',
+      },
+      {
+        key: 'ALLEN_DEEPSEEK_MODEL',
+        label: 'Default model',
+        description: 'Primary DeepSeek model for chat and agents. Open text — enter any DeepSeek model ID.',
+        kind: 'string' as const,
+        defaultValue: 'deepseek-v4-pro[1m]',
+        placeholder: 'deepseek-v4-pro[1m]',
+      },
+      {
+        key: 'ALLEN_DEEPSEEK_FLASH_MODEL',
+        label: 'Flash model',
+        description: 'Fast/lightweight model for quick operations (haiku-equivalent role).',
+        kind: 'string' as const,
+        defaultValue: 'deepseek-v4-flash',
+        placeholder: 'deepseek-v4-flash',
+      },
+    ],
+  },
 ];
 
 const DESKTOP_RUNTIME_SETTING_DEFS = new Map(
@@ -211,6 +243,7 @@ const COGNEE_CONTEXT_VENV_PYTHON = resolve(COGNEE_CONTEXT_VENV_DIR, 'bin/python'
 const COGNEE_CONTEXT_DATA_DIR = resolve(homedir(), '.allen/cognee');
 
 const BASE_SECRET_DEFS = [
+  { key: 'ALLEN_DEEPSEEK_API_KEY', label: 'DeepSeek API key', group: 'DeepSeek' },
   { key: 'ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN', label: 'GitHub personal access token', group: 'GitHub' },
   { key: 'ALLEN_LINEAR_ACCESS_TOKEN', label: 'Linear access token', group: 'Linear' },
   { key: 'ALLEN_SLACK_BOT_TOKEN', label: 'Slack bot token', group: 'Slack' },
@@ -506,13 +539,17 @@ function updateRuntimeProviderValue(key: string, value: string | undefined): voi
   else process.env[key] = value;
 }
 
-function isProviderValue(value: string): value is 'codex' | 'claude-cli' {
-  return value === 'codex' || value === 'claude-cli';
+function isProviderValue(value: string): value is 'codex' | 'claude-cli' | 'deepseek' {
+  return value === 'codex' || value === 'claude-cli' || value === 'deepseek';
 }
 
-function validateAgentModelForProvider(provider: 'codex' | 'claude-cli' | '', model: string): void {
+function validateAgentModelForProvider(provider: 'codex' | 'claude-cli' | 'deepseek' | '', model: string): void {
   if (!provider) {
     if (model) throw new Error('agent_model_requires_agent_provider');
+    return;
+  }
+  if (provider === 'deepseek') {
+    // DeepSeek uses open model field — any string is valid
     return;
   }
   const allowed = provider === 'codex' ? CODEX_AGENT_MODEL_OPTIONS : CLAUDE_AGENT_MODEL_OPTIONS;
@@ -839,7 +876,7 @@ export function systemRoutes(db: Db): Router {
       if (agentProviderRaw && !isProviderValue(agentProviderRaw)) {
         return res.status(400).json({ error: 'invalid_agent_provider' });
       }
-      validateAgentModelForProvider(agentProviderRaw as 'codex' | 'claude-cli' | '', agentModel);
+      validateAgentModelForProvider(agentProviderRaw as 'codex' | 'claude-cli' | 'deepseek' | '', agentModel);
 
       const persisted = readDesktopRuntimeConfigFile(configPath);
       persisted.ALLEN_DEFAULT_CHAT_PROVIDER = chatProviderRaw;

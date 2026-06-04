@@ -133,7 +133,7 @@ function getOrCreateRuntime(key: string, input: RuntimeTurnInput): RuntimeEntry 
 function createRuntime(input: RuntimeCreateInput): PersistentChatRuntime {
   if (input.provider === 'claude-cli') return new ClaudePersistentRuntime(input);
   if (input.provider === 'codex') return new CodexAppServerRuntime(input);
-  throw new Error(`Unsupported persistent chat provider: ${input.provider satisfies never}`);
+  throw new Error(`Unsupported persistent chat provider: ${input.provider}`);
 }
 
 function runtimeKey(input: RuntimeTurnInput): string {

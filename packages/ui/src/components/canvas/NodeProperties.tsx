@@ -337,7 +337,7 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
 /* ── Agent override sub-component ─────────────────────────────────────── */
 
 type EffortValue = 'off' | 'low' | 'medium' | 'high' | 'max';
-type ProviderValue = 'claude-cli' | 'codex';
+type ProviderValue = 'claude-cli' | 'codex' | 'deepseek';
 
 interface AgentOverridesValue {
   provider?: ProviderValue | null;
@@ -354,6 +354,7 @@ interface AgentOverridesValue {
 // vice versa) on just this workflow node.
 const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
 const CODEX_MODELS = ['default', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex'];
+const DEEPSEEK_MODEL_SUGGESTIONS = ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'];
 
 // Compound value in the <select>. Encodes both provider and model so a single
 // dropdown can span two providers without a separate provider picker.
@@ -364,12 +365,14 @@ function decodeModelOption(value: string): { provider: ProviderValue; model: str
   if (!value) return null;
   const [p, ...rest] = value.split('::');
   if (!rest.length) return null;
-  if (p !== 'claude-cli' && p !== 'codex') return null;
-  return { provider: p, model: rest.join('::') };
+  if (p !== 'claude-cli' && p !== 'codex' && p !== 'deepseek') return null;
+  return { provider: p as ProviderValue, model: rest.join('::') };
 }
 
 function normalizeProvider(p: string | undefined): ProviderValue {
-  return p === 'codex' ? 'codex' : 'claude-cli';
+  if (p === 'codex') return 'codex';
+  if (p === 'deepseek') return 'deepseek';
+  return 'claude-cli';
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -461,7 +464,9 @@ function AgentNodeOverrides({
       ? encodeModelOption(overrides.provider ?? agentProvider, overrides.model)
       : '';
 
-  const inheritedModelLabel = `${agentProvider === 'claude-cli' ? 'Claude' : 'Codex'} / ${agentModel ?? '(CLI default)'}`;
+  const inheritedModelLabel = agentProvider === 'deepseek'
+    ? `DeepSeek / ${agentModel ?? '(provider default)'}`
+    : `${agentProvider === 'claude-cli' ? 'Claude' : 'Codex'} / ${agentModel ?? '(CLI default)'}`;
   const inheritedEffortLabel = agentEffort ?? '(CLI default)';
   const inheritedPlanLabel =
     agentPlan === true ? 'on' : agentPlan === false ? 'off' : '(CLI default: off)';
@@ -500,8 +505,8 @@ function AgentNodeOverrides({
       provider: decoded.provider,
       model: decoded.model,
     };
-    // Moving to Codex? Drop any explicit plan-mode override.
-    if (decoded.provider === 'codex' && next.planMode === true) next.planMode = null;
+    // Moving to Codex or DeepSeek? Drop any explicit plan-mode override.
+    if ((decoded.provider === 'codex' || decoded.provider === 'deepseek') && next.planMode === true) next.planMode = null;
     update(next);
   }
 
@@ -596,8 +601,45 @@ function AgentNodeOverrides({
                   label: model,
                   sublabel: 'Codex',
                 })),
+                ...DEEPSEEK_MODEL_SUGGESTIONS.map((model) => ({
+                  value: encodeModelOption('deepseek', model),
+                  label: model,
+                  sublabel: 'DeepSeek',
+                })),
               ]}
             />
+            {/* Custom model text input — shown when effective provider is DeepSeek */}
+            {(effectiveProvider === 'deepseek') && (
+              <div className="mt-1.5">
+                <input
+                  type="text"
+                  list="node-deepseek-model-suggestions"
+                  value={overrides.model ?? ''}
+                  onChange={(e) => {
+                    const val = e.target.value.trim();
+                    if (!val) {
+                      handleModelChange('');
+                    } else {
+                      const decoded = decodeModelOption(modelSelectValue);
+                      if (!decoded || decoded.provider !== 'deepseek') {
+                        // Set provider to deepseek with the typed model
+                        update({ ...overrides, provider: 'deepseek', model: val });
+                      } else {
+                        update({ ...overrides, provider: 'deepseek', model: val });
+                      }
+                    }
+                  }}
+                  placeholder="Custom DeepSeek model (e.g. deepseek-v4-pro[1m])"
+                  className="w-full rounded border border-app bg-surface px-2 py-1 text-[11px] text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+                <datalist id="node-deepseek-model-suggestions">
+                  {DEEPSEEK_MODEL_SUGGESTIONS.map((m) => <option key={m} value={m} />)}
+                </datalist>
+                <p className="text-[10px] text-theme-subtle mt-0.5">
+                  DeepSeek uses open model names. Type any model ID or pick a suggestion.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Effort */}
@@ -643,8 +685,8 @@ function AgentNodeOverrides({
             </div>
           ) : (
             <div className="text-[10px] text-theme-subtle font-body leading-relaxed">
-              Plan mode is Claude-only — this node currently resolves to Codex, so plan
-              mode is unavailable. Switch the model back to a Claude option to use it.
+              Plan mode is Claude-only — this node currently resolves to {effectiveProvider === 'deepseek' ? 'DeepSeek' : 'Codex'}, so plan
+              mode is unavailable. Switch the model to a Claude option to use it.
             </div>
           )}
 

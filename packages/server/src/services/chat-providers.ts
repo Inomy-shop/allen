@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url';
 
 // ── Shared Types ──
 
-export type ChatProvider = 'codex' | 'claude-cli';
+export type ChatProvider = 'codex' | 'claude-cli' | 'deepseek';
 
 export interface ProviderMessage {
   role: 'user' | 'assistant' | 'system';
@@ -72,6 +72,10 @@ export interface ProviderConfig {
   supportsMcp: boolean;
   supportsStreaming: boolean;
   supportsSessionResume: boolean;
+  /** Whether this provider uses an open (user-supplied) model string. */
+  open?: boolean;
+  /** Suggested model strings for open providers. */
+  modelSuggestions?: string[];
 }
 
 // ── Provider Registry ──
@@ -93,6 +97,18 @@ export const PROVIDERS: ProviderConfig[] = [
     models: ['sonnet', 'opus', 'haiku'],
     defaultModel: 'sonnet',
     requiresKey: null,
+    supportsMcp: true,
+    supportsStreaming: true,
+    supportsSessionResume: true,
+  },
+  {
+    provider: 'deepseek',
+    label: 'DeepSeek',
+    models: [],
+    modelSuggestions: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
+    open: true,
+    defaultModel: 'deepseek-v4-pro[1m]',
+    requiresKey: 'ALLEN_DEEPSEEK_API_KEY',
     supportsMcp: true,
     supportsStreaming: true,
     supportsSessionResume: true,
@@ -571,4 +587,31 @@ export async function runCodexCLI(
       resolve({ text: rawResponse, costUsd: 0, sessionId: threadId, trace });
     });
   });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PROVIDER: DeepSeek (via Claude Code SDK with env overlay)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build a process-env overlay that redirects the Claude Code SDK / CLI to use
+ * the DeepSeek API instead of Anthropic's. The overlay is applied temporarily
+ * per-call and restored after so parallel chat sessions don't bleed into each other.
+ */
+export function buildDeepSeekEnvOverlay(model?: string): Record<string, string> {
+  const apiKey = process.env.ALLEN_DEEPSEEK_API_KEY ?? '';
+  const baseUrl = process.env.ALLEN_DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1';
+  const defaultModel = process.env.ALLEN_DEEPSEEK_MODEL ?? 'deepseek-v4-pro[1m]';
+  const flashModel = process.env.ALLEN_DEEPSEEK_FLASH_MODEL ?? 'deepseek-v4-flash';
+  const effectiveModel = model && model !== 'default' ? model : defaultModel;
+  if (!apiKey) throw new Error('ALLEN_DEEPSEEK_API_KEY is not set. Configure this secret in Allen Settings > Secrets.');
+  return {
+    ANTHROPIC_BASE_URL: baseUrl,
+    ANTHROPIC_AUTH_TOKEN: apiKey,
+    ANTHROPIC_MODEL: effectiveModel,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: effectiveModel,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: effectiveModel,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: flashModel,
+    CLAUDE_CODE_SUBAGENT_MODEL: effectiveModel,
+  };
 }

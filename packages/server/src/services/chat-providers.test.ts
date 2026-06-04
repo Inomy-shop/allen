@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { PROVIDERS, buildDeepSeekEnvOverlay } from './chat-providers.js';
 
 /**
  * Test for ENG-1437: Fix Codex resume failure when resumed chat prompt starts with a dash
@@ -293,6 +294,58 @@ describe('ALLEN_PUBLIC_URL propagation in Allen MCP env', () => {
     const addArgs: string[] = addCall![1] as string[];
     const argsStr = addArgs.join(' ');
     expect(argsStr).toContain('ALLEN_PUBLIC_URL=https://test.example.com');
+  });
+});
+
+describe('DeepSeek provider registry', () => {
+  it('deepseek is in PROVIDERS with correct shape', () => {
+    const ds = PROVIDERS.find(p => p.provider === 'deepseek');
+    expect(ds).toBeDefined();
+    expect(ds?.label).toBe('DeepSeek');
+    expect(ds?.open).toBe(true);
+    expect(ds?.modelSuggestions).toContain('deepseek-v4-pro[1m]');
+    expect(ds?.modelSuggestions).toContain('deepseek-v4-flash');
+    expect(ds?.requiresKey).toBe('ALLEN_DEEPSEEK_API_KEY');
+  });
+});
+
+describe('buildDeepSeekEnvOverlay', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    // Restore env
+    for (const key of ['ALLEN_DEEPSEEK_API_KEY', 'ALLEN_DEEPSEEK_BASE_URL', 'ALLEN_DEEPSEEK_MODEL',
+      'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL']) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+  });
+
+  it('throws when API key is missing', () => {
+    delete process.env.ALLEN_DEEPSEEK_API_KEY;
+    expect(() => buildDeepSeekEnvOverlay()).toThrow('ALLEN_DEEPSEEK_API_KEY');
+  });
+
+  it('returns correct overlay keys when API key is set', () => {
+    process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key-123';
+    const overlay = buildDeepSeekEnvOverlay();
+    expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('test-key-123');
+    expect(overlay.ANTHROPIC_BASE_URL).toBeDefined();
+    expect(overlay.ANTHROPIC_MODEL).toBeDefined();
+    expect(overlay.CLAUDE_CODE_SUBAGENT_MODEL).toBeDefined();
+  });
+
+  it('does not mutate process.env', () => {
+    process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key-123';
+    const beforeAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    buildDeepSeekEnvOverlay();
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe(beforeAuthToken); // unchanged
+  });
+
+  it('uses model override when provided', () => {
+    process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key-123';
+    const overlay = buildDeepSeekEnvOverlay('deepseek-v4-flash');
+    expect(overlay.ANTHROPIC_MODEL).toBe('deepseek-v4-flash');
   });
 });
 

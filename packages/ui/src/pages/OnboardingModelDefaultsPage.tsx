@@ -13,7 +13,7 @@ import { OnboardingShell } from '../components/onboarding/OnboardingShell';
 import { useOnboardingGate } from '../hooks/useOnboardingGate';
 import { system } from '../services/api';
 
-type Provider = 'codex' | 'claude-cli';
+type Provider = 'codex' | 'claude-cli' | 'deepseek';
 type AgentProvider = '' | Provider;
 
 interface HealthCheck {
@@ -41,6 +41,11 @@ const CODEX_MODELS = [
   { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini', sublabel: 'Lower-latency Codex agent model' },
 ];
 
+const DEEPSEEK_MODEL_SUGGESTIONS = [
+  { label: 'deepseek-v4-pro[1m]', value: 'deepseek-v4-pro[1m]', sublabel: 'High-capability DeepSeek model' },
+  { label: 'deepseek-v4-flash', value: 'deepseek-v4-flash', sublabel: 'Fast DeepSeek model' },
+];
+
 function checkPassed(summary: HealthSummary | null, id: string): boolean {
   return Boolean(summary?.checks.some(check => check.id === id && check.status === 'pass'));
 }
@@ -48,6 +53,7 @@ function checkPassed(summary: HealthSummary | null, id: string): boolean {
 function defaultAgentModel(provider: AgentProvider): string {
   if (provider === 'claude-cli') return 'opus';
   if (provider === 'codex') return 'gpt-5.5';
+  if (provider === 'deepseek') return 'deepseek-v4-pro[1m]';
   return '';
 }
 
@@ -66,7 +72,9 @@ export default function OnboardingModelDefaultsPage() {
   const providerState = useMemo(() => {
     const claudeReady = checkPassed(health, 'claude_cli') && checkPassed(health, 'claude_auth');
     const codexReady = checkPassed(health, 'codex_cli') && checkPassed(health, 'codex_auth');
-    return { claudeReady, codexReady };
+    // DeepSeek uses an API key (not a CLI), so it is always selectable; the key is verified at runtime.
+    const deepseekReady = false as boolean;
+    return { claudeReady, codexReady, deepseekReady };
   }, [health]);
 
   useEffect(() => {
@@ -120,6 +128,12 @@ export default function OnboardingModelDefaultsPage() {
         : 'Disabled until Claude CLI and auth pass health',
       disabled: !providerState.claudeReady,
     },
+    {
+      label: 'DeepSeek',
+      value: 'deepseek',
+      sublabel: 'Requires ALLEN_DEEPSEEK_API_KEY to be configured in Settings > Secrets',
+      disabled: false,
+    },
   ];
   const agentProviderOptions = [
     {
@@ -136,16 +150,18 @@ export default function OnboardingModelDefaultsPage() {
         : `Use ${option.label} for all inbuilt agents and workflows`,
     })),
   ];
-  const modelOptions = agentProvider === 'claude-cli' ? CLAUDE_MODELS : CODEX_MODELS;
+  const modelOptions = agentProvider === 'claude-cli' ? CLAUDE_MODELS : agentProvider === 'deepseek' ? [] : CODEX_MODELS;
   const canSave = !loading
     && !saving
-    && (chatProvider === 'codex' ? providerState.codexReady : providerState.claudeReady)
+    && (chatProvider === 'deepseek' ? true : chatProvider === 'codex' ? providerState.codexReady : providerState.claudeReady)
     && (
       agentProvider === ''
         ? providerState.claudeReady && providerState.codexReady
         : agentProvider === 'codex'
           ? providerState.codexReady
-          : providerState.claudeReady
+          : agentProvider === 'deepseek'
+            ? true
+            : providerState.claudeReady
     );
 
   async function saveDefaults() {
@@ -248,7 +264,7 @@ export default function OnboardingModelDefaultsPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <div className={`rounded-md border px-3 py-2 ${providerState.codexReady ? 'border-accent-green/25 bg-accent-green/10' : 'border-accent-yellow/25 bg-accent-yellow/10'}`}>
                 <div className="flex items-center gap-2 text-[12px] font-semibold text-theme-primary">
                   {providerState.codexReady ? <CheckCircle2 className="h-3.5 w-3.5 text-accent-green" /> : <AlertTriangle className="h-3.5 w-3.5 text-accent-yellow" />}
@@ -265,6 +281,15 @@ export default function OnboardingModelDefaultsPage() {
                 </div>
                 <div className="mt-1 font-mono text-[10.5px] text-theme-muted">
                   {providerState.claudeReady ? 'cli + auth ready' : 'run claude login, then recheck health'}
+                </div>
+              </div>
+              <div className="rounded-md border border-accent-blue/25 bg-accent-blue/10 px-3 py-2">
+                <div className="flex items-center gap-2 text-[12px] font-semibold text-theme-primary">
+                  <Circle className="h-3.5 w-3.5 text-accent-blue" />
+                  DeepSeek
+                </div>
+                <div className="mt-1 font-mono text-[10.5px] text-theme-muted">
+                  configure ALLEN_DEEPSEEK_API_KEY in Settings
                 </div>
               </div>
             </div>
@@ -302,12 +327,28 @@ export default function OnboardingModelDefaultsPage() {
             {agentProvider && (
               <div className="space-y-1.5">
                 <label className="block font-mono text-[11px] font-medium lowercase text-theme-muted">model for inbuilt agents and workflows</label>
-                <Select
-                  value={agentModel}
-                  onChange={setAgentModel}
-                  options={modelOptions}
-                  searchable={false}
-                />
+                {agentProvider === 'deepseek' ? (
+                  <>
+                    <input
+                      type="text"
+                      list="deepseek-model-suggestions-onboarding"
+                      value={agentModel}
+                      onChange={e => setAgentModel(e.target.value)}
+                      placeholder="e.g. deepseek-v4-pro[1m]"
+                      className="w-full rounded border border-app bg-surface px-3 py-1.5 text-[12px] text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:ring-1 focus:ring-accent"
+                    />
+                    <datalist id="deepseek-model-suggestions-onboarding">
+                      {DEEPSEEK_MODEL_SUGGESTIONS.map(s => <option key={s.value} value={s.value} />)}
+                    </datalist>
+                  </>
+                ) : (
+                  <Select
+                    value={agentModel}
+                    onChange={setAgentModel}
+                    options={modelOptions}
+                    searchable={false}
+                  />
+                )}
                 <p className="text-[11px] leading-4 text-theme-subtle">
                   Used when all inbuilt agents and workflow templates are set to the same provider.
                 </p>

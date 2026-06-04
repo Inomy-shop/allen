@@ -8,7 +8,8 @@ import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
 
 const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
 const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'];
-const PROVIDERS = ['claude', 'codex'];
+const DEEPSEEK_MODEL_SUGGESTIONS = ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'];
+const PROVIDERS = ['claude', 'codex', 'deepseek'];
 const TOOLS = ['filesystem', 'terminal', 'git', 'web-search', 'web-fetch', 'database'];
 const EFFORT_LEVELS = [
   { value: '', label: '(CLI default)' },
@@ -39,14 +40,23 @@ const TOOL_LABELS: Record<string, string> = {
 };
 
 function getModelsForProvider(provider: string): string[] {
-  return provider === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
+  if (provider === 'codex') return CODEX_MODELS;
+  if (provider === 'deepseek') return [];
+  return CLAUDE_MODELS;
 }
 
-// Backend stores `provider` as 'claude-cli' (for Claude agents) or 'codex'.
-// The dropdown offers 'claude' | 'codex'. Normalize on load so the Select matches.
+// Backend stores `provider` as 'claude-cli' (for Claude agents), 'codex', or 'deepseek'.
+// The dropdown offers 'claude' | 'codex' | 'deepseek'. Normalize on load so the Select matches.
 function normalizeProviderForUi(p: unknown): string {
   if (p === 'codex') return 'codex';
+  if (p === 'deepseek') return 'deepseek';
   return 'claude';
+}
+
+// Map the UI provider value back to the backend-expected value.
+function providerToBackendValue(uiProvider: string): string {
+  if (uiProvider === 'claude') return 'claude-cli';
+  return uiProvider; // 'codex' and 'deepseek' pass through as-is
 }
 
 function withConfiguredMcpGroups(
@@ -201,8 +211,12 @@ export default function RoleDialog({
 
   function handleProviderChange(val: string) {
     setProvider(val);
-    const models = getModelsForProvider(val);
-    setModel(models[0]);
+    if (val === 'deepseek') {
+      setModel('');
+    } else {
+      const models = getModelsForProvider(val);
+      setModel(models[0] ?? '');
+    }
   }
 
   function toggleTool(tool: string) {
@@ -245,7 +259,7 @@ export default function RoleDialog({
         name: name.trim(),
         displayName: displayName.trim() || name.trim(),
         system: system.trim(),
-        provider,
+        provider: providerToBackendValue(provider),
         model,
         reasoningEffort: reasoningEffort || undefined,
         planMode: planMode === '' ? undefined : planMode === 'on',
@@ -274,7 +288,7 @@ export default function RoleDialog({
         name: role.name as string,
         system: role.previousSystemPrompt as string,
         previousSystemPrompt: null,
-        provider,
+        provider: providerToBackendValue(provider),
         model,
         tools,
         icon,
@@ -292,7 +306,10 @@ export default function RoleDialog({
   if (!open) return null;
 
   const modelOptions = getModelsForProvider(provider).map(m => ({ value: m, label: m }));
-  const providerOptions = PROVIDERS.map(p => ({ value: p, label: p }));
+  const providerOptions = PROVIDERS.map(p => ({
+    value: p,
+    label: p === 'deepseek' ? 'DeepSeek' : p,
+  }));
   const iconOptions = ICONS.map(i => ({ value: i, label: i }));
   const typeOptions = AGENT_TYPES.map(t => ({ value: t.value, label: t.label }));
   const teamOptions = teams.map(team => ({
@@ -413,7 +430,23 @@ export default function RoleDialog({
                   </div>
                   <div>
                     <label className="mb-1.5 block overline">Model</label>
-                    <Select value={model} onChange={setModel} options={modelOptions} />
+                    {provider === 'deepseek' ? (
+                      <>
+                        <input
+                          type="text"
+                          list="deepseek-models"
+                          value={model}
+                          onChange={e => setModel(e.target.value)}
+                          placeholder="e.g. deepseek-v4-pro[1m]"
+                          className="input w-full"
+                        />
+                        <datalist id="deepseek-models">
+                          {DEEPSEEK_MODEL_SUGGESTIONS.map(m => <option key={m} value={m} />)}
+                        </datalist>
+                      </>
+                    ) : (
+                      <Select value={model} onChange={setModel} options={modelOptions} />
+                    )}
                   </div>
                   <div>
                     <label className="mb-1.5 block overline">Reasoning</label>
