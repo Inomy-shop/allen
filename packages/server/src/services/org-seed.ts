@@ -172,6 +172,7 @@ const FORCE_UPDATE_AGENT_NAMES = new Set([
   'repo-context-curator',
   'repo-context-curation-worker',
   'repo-mandatory-context-mapper',
+  'pr-creator',
 ]);
 
 // ── Design Team — Allen Library skill helpers ──────────────────────────────
@@ -964,10 +965,46 @@ YOUR ONLY JOB: take a worktree with uncommitted changes and turn it into a merge
 STEP-BY-STEP CONTRACT
 ═══════════════════════════════════════════════════════════════════════
 
-1. SET UP GIT IDENTITY (if not configured)
+1. SET UP GIT IDENTITY FROM AUTHENTICATED GITHUB USER
    cd <worktree_path>
-   git config user.email "allen@local"
-   git config user.name "Allen Agent"
+
+   # Verify gh is authenticated — fail clearly if not
+   gh auth status || { echo "ERROR: gh is not authenticated. Run 'gh auth login' first."; exit 1; }
+
+   # Fetch login, numeric id, display name, and public email from GitHub API
+   GH_LOGIN=$(gh api user --jq '.login // empty' 2>/dev/null)
+   GH_NAME=$(gh api user --jq '.name // empty' 2>/dev/null)
+   GH_ID=$(gh api user --jq '.id // empty' 2>/dev/null)
+   GH_PUBLIC_EMAIL=$(gh api user --jq '.email // empty' 2>/dev/null)
+
+   # Fail clearly if login or id are missing — nothing works without them
+   [ -z "$GH_LOGIN" ] && { echo "ERROR: Could not fetch GitHub login from 'gh api user'. Ensure gh auth is complete."; exit 1; }
+   [ -z "$GH_ID" ] && { echo "ERROR: Could not fetch GitHub user id from 'gh api user'. Ensure gh auth is complete."; exit 1; }
+
+   # Try to get primary verified email (requires 'user' OAuth scope — tolerate failure silently)
+   GH_VERIFIED_EMAIL=$(gh api user/emails --jq '[.[] | select(.primary == true and .verified == true)] | .[0].email // empty' 2>/dev/null || true)
+
+   # Choose email in order: primary verified > public email > noreply fallback
+   if [ -n "$GH_VERIFIED_EMAIL" ]; then
+     GH_AUTHOR_EMAIL="$GH_VERIFIED_EMAIL"
+   elif [ -n "$GH_PUBLIC_EMAIL" ]; then
+     GH_AUTHOR_EMAIL="$GH_PUBLIC_EMAIL"
+   else
+     GH_AUTHOR_EMAIL="\${GH_ID}+\${GH_LOGIN}@users.noreply.github.com"
+   fi
+
+   # Choose name: GitHub display name if present, otherwise login (login is always correct)
+   if [ -n "$GH_NAME" ]; then
+     GH_AUTHOR_NAME="$GH_NAME"
+   else
+     GH_AUTHOR_NAME="$GH_LOGIN"
+   fi
+
+   git config user.name "$GH_AUTHOR_NAME"
+   git config user.email "$GH_AUTHOR_EMAIL"
+
+   # Note: gh pr create sets the PR author to the authenticated gh account.
+   # git config above controls commit author identity (git log, blame, etc.).
 
 2. STAGE AND COMMIT
    git add -A
