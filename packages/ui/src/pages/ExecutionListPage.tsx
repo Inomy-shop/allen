@@ -238,7 +238,7 @@ function ExecutionRow({ exec, nowMs }: { exec: any; nowMs: number }) {
   return (
     <Link
       to={`/executions/${id}`}
-      className="group grid min-h-[58px] grid-cols-[minmax(0,1fr)_116px_132px_96px_36px] items-center gap-4 border-t border-app px-4 py-2.5 transition-colors first:border-t-0 hover:bg-app-muted/30"
+      className="group grid min-h-[58px] grid-cols-[minmax(0,1fr)_176px_132px_96px_36px] items-center gap-4 border-t border-app px-4 py-2.5 transition-colors first:border-t-0 hover:bg-app-muted/30"
     >
       <div className="flex min-w-0 items-center gap-3">
         <div className="min-w-0">
@@ -473,7 +473,7 @@ export default function ExecutionListPage() {
 
         <section className="overflow-hidden rounded-md border border-app bg-app-card">
           {visibleExecs.length > 0 && (
-            <div className="grid grid-cols-[minmax(0,1fr)_116px_132px_96px_36px] items-center gap-4 border-b border-app bg-app-muted/25 px-4 py-2 font-mono text-[10.5px] uppercase tracking-[0.14em] text-theme-muted">
+            <div className="grid grid-cols-[minmax(0,1fr)_176px_132px_96px_36px] items-center gap-4 border-b border-app bg-app-muted/25 px-4 py-2 font-mono text-[10.5px] uppercase tracking-[0.14em] text-theme-muted">
               <span>Execution</span>
               <span>Status</span>
               <span>Started</span>

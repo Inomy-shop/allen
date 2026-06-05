@@ -205,11 +205,20 @@ function localGreeting(date = new Date()): string {
 }
 
 function isActiveRun(run: ExecutionItem): boolean {
-  return ['running', 'queued', 'waiting_for_input'].includes(run.status);
+  return ['running', 'queued', 'waiting_for_input', 'waiting_for_human'].includes(run.status);
+}
+
+function canNeedHumanInput(run?: ExecutionItem): boolean {
+  if (!run) return false;
+  return !['completed', 'failed', 'cancelled', 'canceled'].includes(run.status);
+}
+
+function isWaitingForHumanInput(run: ExecutionItem): boolean {
+  return run.status === 'waiting_for_input' || run.status === 'waiting_for_human';
 }
 
 function statusLabel(status: string): string {
-  if (status === 'waiting_for_input') return 'Waiting';
+  if (status === 'waiting_for_input' || status === 'waiting_for_human') return 'Waiting';
   if (status === 'completed') return 'Done';
   return humanizeLabel(status);
 }
@@ -225,7 +234,7 @@ function humanizeLabel(value?: string): string {
 }
 
 function stepLabel(run: ExecutionItem): string | null {
-  if (run.status === 'waiting_for_input') return 'waiting on you';
+  if (isWaitingForHumanInput(run)) return 'waiting on you';
   if (run.status === 'queued') return 'queued';
   if (run.status === 'failed') return run.failedNode ? `${humanizeLabel(run.failedNode)} failed` : 'failed';
   const current = Array.isArray(run.currentNodes)
@@ -927,15 +936,20 @@ export default function DashboardPage() {
       .slice(0, 8);
   }, [allPullRequests, chatDiffSummaries, chatSessionById, chatSessions, runningConversationIds, runs]);
   const humanApprovals = useMemo(
-    () => dedupeApprovals([
-      ...pendingInterventions.map((item) => approvalItemFromIntervention(
-        item,
-        runs.find((run) => run.id === item.workflow_run_id),
-      )),
-      ...runs
-        .filter((run) => run.status === 'waiting_for_input')
-        .map(approvalItemFromWaitingRun),
-    ]).sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()),
+    () => {
+      const runById = new Map(runs.map((run) => [run.id, run]));
+      return dedupeApprovals([
+        ...pendingInterventions
+          .map((item) => {
+            const run = runById.get(item.workflow_run_id);
+            return canNeedHumanInput(run) ? approvalItemFromIntervention(item, run) : null;
+          })
+          .filter((item): item is HumanApprovalItem => Boolean(item)),
+        ...runs
+          .filter(isWaitingForHumanInput)
+          .map(approvalItemFromWaitingRun),
+      ]).sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
+    },
     [pendingInterventions, runs],
   );
   const firstName = (user?.name || user?.email?.split('@')[0] || 'there').split(/\s+/)[0];

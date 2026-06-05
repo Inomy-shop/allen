@@ -68,6 +68,16 @@ const API_PROVIDER_OPTIONS: Array<{
       { label: 'mimo-v2.5-pro', value: 'mimo-v2.5-pro', sublabel: 'Default Xiaomi MiMo model' },
     ],
   },
+  {
+    label: 'Kimi',
+    value: 'kimi',
+    apiKey: 'ALLEN_KIMI_API_KEY',
+    defaultModel: 'kimi-k2.5',
+    suggestions: [
+      { label: 'kimi-k2.6', value: 'kimi-k2.6', sublabel: 'Kimi opus-equivalent model' },
+      { label: 'kimi-k2.5', value: 'kimi-k2.5', sublabel: 'Kimi sonnet and flash model' },
+    ],
+  },
 ];
 
 function apiProviderOption(provider: string): (typeof API_PROVIDER_OPTIONS)[number] | undefined {

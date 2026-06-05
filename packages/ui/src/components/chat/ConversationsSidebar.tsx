@@ -9,6 +9,7 @@ const PROV: Record<string, { label: string; color: string }> = {
   'claude-cli': { label: 'Claude', color: 'text-accent' },
   deepseek: { label: 'DeepSeek', color: 'text-accent-blue' },
   'xiaomi-mimo': { label: 'MiMo', color: 'text-accent-blue' },
+  kimi: { label: 'Kimi', color: 'text-accent-blue' },
 };
 
 function timeAgo(dateStr: string): string {

@@ -42,6 +42,7 @@ interface Props {
 const OPEN_PROVIDER_MODEL_SUGGESTIONS: Partial<Record<Provider, string[]>> = {
   deepseek: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
   'xiaomi-mimo': ['mimo-v2.5-pro'],
+  kimi: ['kimi-k2.6', 'kimi-k2.5'],
 };
 
 const EFFORT_OPTIONS: Array<{ value: ReasoningEffort; label: string; description: string }> = [

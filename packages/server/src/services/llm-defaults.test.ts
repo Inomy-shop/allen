@@ -54,6 +54,20 @@ describe('readEnvModel — open provider (Xiaomi MiMo)', () => {
   });
 });
 
+describe('readEnvModel — open provider (Kimi)', () => {
+  it('accepts any non-empty model string for kimi', () => {
+    process.env.ALLEN_DEFAULT_AGENT_PROVIDER = 'kimi';
+    process.env.ALLEN_DEFAULT_AGENT_MODEL = 'kimi-k2.5';
+    expect(getDefaultAgentModel()).toBe('kimi-k2.5');
+  });
+
+  it('falls back to provider default when Kimi model env is not set', () => {
+    process.env.ALLEN_DEFAULT_AGENT_PROVIDER = 'kimi';
+    delete process.env.ALLEN_DEFAULT_AGENT_MODEL;
+    expect(getDefaultAgentModel()).toBe('kimi-k2.5');
+  });
+});
+
 describe('resolveAgentProviderModel — deepseek (Mode 1: preserve, env unset)', () => {
   it('preserves deepseek seed model when env is unset', () => {
     delete process.env.ALLEN_DEFAULT_AGENT_PROVIDER;

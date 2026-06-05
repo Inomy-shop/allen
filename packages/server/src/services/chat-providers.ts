@@ -87,9 +87,11 @@ export interface ClaudeCompatibleProviderConfig {
   apiKeyEnv: string;
   baseUrlEnv: string;
   modelEnv: string;
+  opusModelEnv?: string;
   flashModelEnv: string;
   defaultBaseUrl: string;
   defaultModel: string;
+  defaultOpusModel?: string;
   defaultFlashModel: string;
   modelSuggestions: string[];
   apiKeyPlaceholder: string;
@@ -124,6 +126,22 @@ export const CLAUDE_COMPATIBLE_PROVIDER_CONFIGS: ClaudeCompatibleProviderConfig[
     modelSuggestions: ['mimo-v2.5-pro'],
     apiKeyPlaceholder: 'xm-...',
     baseUrlDescription: 'Leave blank to use the default MiMo Anthropic-compatible endpoint (https://api.xiaomimimo.com/anthropic). Token Plan users can enter their subscription base URL.',
+  },
+  {
+    provider: 'kimi',
+    label: 'Kimi',
+    apiKeyEnv: 'ALLEN_KIMI_API_KEY',
+    baseUrlEnv: 'ALLEN_KIMI_BASE_URL',
+    modelEnv: 'ALLEN_KIMI_MODEL',
+    opusModelEnv: 'ALLEN_KIMI_OPUS_MODEL',
+    flashModelEnv: 'ALLEN_KIMI_FLASH_MODEL',
+    defaultBaseUrl: 'https://api.moonshot.ai/anthropic',
+    defaultModel: 'kimi-k2.5',
+    defaultOpusModel: 'kimi-k2.6',
+    defaultFlashModel: 'kimi-k2.5',
+    modelSuggestions: ['kimi-k2.6', 'kimi-k2.5'],
+    apiKeyPlaceholder: 'sk-...',
+    baseUrlDescription: 'Leave blank to use the default Kimi Anthropic-compatible endpoint (https://api.moonshot.ai/anthropic).',
   },
 ];
 
@@ -189,13 +207,25 @@ export function getDefaultChatProvider(): ChatProvider {
   return 'codex';
 }
 
+export function getDefaultChatModel(provider: ChatProvider = getDefaultChatProvider()): string {
+  const cfg = PROVIDERS.find((p) => p.provider === provider);
+  const fallback = cfg?.defaultModel ?? 'gpt-5.5';
+  const raw = process.env.ALLEN_DEFAULT_CHAT_MODEL?.trim();
+  if (!raw) return fallback;
+  if (cfg?.open) return raw;
+  return cfg?.models.includes(raw) ? raw : fallback;
+}
+
 /**
  * Return the registered providers with the env-configured default first, so
  * UI consumers that pick the head of the list naturally honor the setting.
  */
 export function getProvidersInDefaultOrder(): ProviderConfig[] {
   const def = getDefaultChatProvider();
-  return [...PROVIDERS].sort((a, b) => {
+  const defaultChatModel = getDefaultChatModel(def);
+  return [...PROVIDERS].map((provider) => (
+    provider.provider === def ? { ...provider, defaultModel: defaultChatModel } : provider
+  )).sort((a, b) => {
     if (a.provider === def && b.provider !== def) return -1;
     if (b.provider === def && a.provider !== def) return 1;
     return 0;
@@ -712,6 +742,9 @@ export async function buildClaudeCompatibleEnvOverlay(provider: string, model?: 
     ? normalizeDeepSeekAnthropicBaseUrl(configuredBaseUrl)
     : configuredBaseUrl;
   const defaultModel = runtimeConfig.get(config.modelEnv) ?? process.env[config.modelEnv] ?? config.defaultModel;
+  const opusModel = config.opusModelEnv
+    ? runtimeConfig.get(config.opusModelEnv) ?? process.env[config.opusModelEnv] ?? config.defaultOpusModel ?? defaultModel
+    : defaultModel;
   const flashModel = runtimeConfig.get(config.flashModelEnv) ?? process.env[config.flashModelEnv] ?? config.defaultFlashModel;
   const effectiveModel = model && model !== 'default' ? model : defaultModel;
   if (!apiKey) throw new Error(`${config.apiKeyEnv} is not set. Configure this secret in Allen Settings > Secrets.`);
@@ -719,7 +752,7 @@ export async function buildClaudeCompatibleEnvOverlay(provider: string, model?: 
     ANTHROPIC_BASE_URL: baseUrl,
     ANTHROPIC_AUTH_TOKEN: apiKey,
     ANTHROPIC_MODEL: effectiveModel,
-    ANTHROPIC_DEFAULT_OPUS_MODEL: effectiveModel,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: config.opusModelEnv ? opusModel : effectiveModel,
     ANTHROPIC_DEFAULT_SONNET_MODEL: effectiveModel,
     ANTHROPIC_DEFAULT_HAIKU_MODEL: flashModel,
     CLAUDE_CODE_SUBAGENT_MODEL: flashModel,
@@ -733,4 +766,8 @@ export function buildDeepSeekEnvOverlay(model?: string): Promise<Record<string, 
 
 export function buildXiaomiMimoEnvOverlay(model?: string): Promise<Record<string, string>> {
   return buildClaudeCompatibleEnvOverlay('xiaomi-mimo', model);
+}
+
+export function buildKimiEnvOverlay(model?: string): Promise<Record<string, string>> {
+  return buildClaudeCompatibleEnvOverlay('kimi', model);
 }

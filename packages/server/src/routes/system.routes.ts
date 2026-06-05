@@ -162,6 +162,7 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
     description: 'Defaults for new chat sessions, seeded workflow agents, and Claude/Codex execution behavior.',
     fields: [
       { key: 'ALLEN_DEFAULT_CHAT_PROVIDER', label: 'Default chat provider', kind: 'select', defaultValue: 'codex', options: [...PROVIDER_OPTIONS] },
+      { key: 'ALLEN_DEFAULT_CHAT_MODEL', label: 'Default chat model', description: 'Used when new chat sessions are created.', kind: 'select', defaultValue: 'provider default', options: [...AGENT_MODEL_OPTIONS], showWhen: { key: 'ALLEN_DEFAULT_CHAT_PROVIDER', notEquals: '' } },
       { key: 'ALLEN_DEFAULT_AGENT_PROVIDER', label: 'Default workflow agent provider', description: 'Preserve keeps the role-specific provider mix from seed definitions.', kind: 'select', defaultValue: 'preserve seeded mix', options: [{ label: 'Preserve seeded mix', value: '' }, ...PROVIDER_OPTIONS], restartRequired: true },
       { key: 'ALLEN_DEFAULT_AGENT_MODEL', label: 'Default workflow agent model', description: 'Used when a flattened workflow agent provider is selected.', kind: 'select', defaultValue: 'provider default', options: [...AGENT_MODEL_OPTIONS], restartRequired: true, showWhen: { key: 'ALLEN_DEFAULT_AGENT_PROVIDER', notEquals: '' } },
       { key: 'CLAUDE_BIN', label: 'Claude CLI path', kind: 'path', defaultValue: 'auto from PATH' },
@@ -227,12 +228,20 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
         },
         {
           key: config.modelEnv,
-          label: 'Default model',
-          description: `Primary ${config.label} model for chat and agents. Open text — enter any ${config.label} model ID.`,
+          label: config.opusModelEnv ? 'Default/Sonnet model' : 'Default model',
+          description: `Primary ${config.label} model for chat and agents${config.opusModelEnv ? ' (sonnet-equivalent role)' : ''}. Open text — enter any ${config.label} model ID.`,
           kind: 'string',
           defaultValue: config.defaultModel,
           placeholder: config.defaultModel,
         },
+        ...(config.opusModelEnv ? [{
+          key: config.opusModelEnv,
+          label: 'Opus model',
+          description: `High-capability ${config.label} model used for opus-equivalent roles.`,
+          kind: 'string' as const,
+          defaultValue: config.defaultOpusModel ?? config.defaultModel,
+          placeholder: config.defaultOpusModel ?? config.defaultModel,
+        }] : []),
         {
           key: config.flashModelEnv,
           label: 'Fast model',
@@ -249,6 +258,27 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
 const DESKTOP_RUNTIME_SETTING_DEFS = new Map(
   DESKTOP_RUNTIME_SETTING_GROUPS.flatMap((group) => group.fields.map((field) => [field.key, field] as const)),
 );
+
+function chatModelOptionsForProvider(provider: string): RuntimeSettingOption[] {
+  if (provider === 'claude-cli') {
+    return [...CLAUDE_AGENT_MODEL_OPTIONS]
+      .filter((value) => value !== '')
+      .map((value) => ({ label: value, value }));
+  }
+  if (provider === 'codex') {
+    return [...CODEX_AGENT_MODEL_OPTIONS]
+      .filter((value) => value !== '')
+      .map((value) => ({ label: value, value }));
+  }
+  const config = CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.find((item) => item.provider === provider);
+  return (config?.modelSuggestions ?? []).map((value) => ({ label: value, value }));
+}
+
+function fallbackChatModelForProvider(provider: string): string {
+  if (provider === 'claude-cli') return 'sonnet';
+  if (provider === 'codex') return 'gpt-5.5';
+  return CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.find((item) => item.provider === provider)?.defaultModel ?? 'gpt-5.5';
+}
 
 const COGNEE_CONTEXT_PROVIDERS = new Set(['cognee', 'cognee_memory']);
 const COGNEE_CONTEXT_VENV_DIR = resolve(homedir(), '.allen/python/context-eval');
@@ -530,6 +560,22 @@ async function desktopRuntimeSettingsPayload() {
         options: enabledProviderOptions,
         ...value,
         currentValue: enabledProviderValues.has(value.currentValue) ? value.currentValue : enabledProviderOptions[0]?.value ?? 'codex',
+      };
+    }
+    if (field.key === 'ALLEN_DEFAULT_CHAT_MODEL') {
+      const chatProvider = currentRuntimeSettingValue('ALLEN_DEFAULT_CHAT_PROVIDER', persisted, defaults);
+      const normalizedProvider = enabledProviderValues.has(chatProvider) ? chatProvider : enabledProviderOptions[0]?.value ?? 'codex';
+      const modelOptions = chatModelOptionsForProvider(normalizedProvider);
+      const fallbackModel = fallbackChatModelForProvider(normalizedProvider);
+      const modelValues = new Set(modelOptions.map((option) => option.value));
+      const currentValue = value.currentValue && (modelValues.has(value.currentValue) || modelOptions.length === 0)
+        ? value.currentValue
+        : fallbackModel;
+      return {
+        ...field,
+        options: modelOptions.length > 0 ? modelOptions : [{ label: currentValue, value: currentValue }],
+        ...value,
+        currentValue,
       };
     }
     if (field.key === 'ALLEN_DEFAULT_AGENT_PROVIDER') {

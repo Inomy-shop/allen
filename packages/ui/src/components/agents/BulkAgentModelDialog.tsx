@@ -34,6 +34,7 @@ function providerLabel(provider: string, enabledProviders: EnabledProvider[]): s
   if (configured?.label) return configured.label;
   if (provider === 'deepseek') return 'DeepSeek';
   if (provider === 'xiaomi-mimo') return 'Xiaomi MiMo';
+  if (provider === 'kimi') return 'Kimi';
   return provider;
 }
 

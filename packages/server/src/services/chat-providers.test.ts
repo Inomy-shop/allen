@@ -3,6 +3,7 @@ import {
   PROVIDERS,
   buildClaudeCompatibleEnvOverlay,
   buildDeepSeekEnvOverlay,
+  buildKimiEnvOverlay,
   getEnabledProvidersInDefaultOrder,
   normalizeDeepSeekAnthropicBaseUrl,
 } from './chat-providers.js';
@@ -327,11 +328,23 @@ describe('Xiaomi MiMo provider registry', () => {
   });
 });
 
+describe('Kimi provider registry', () => {
+  it('kimi is in PROVIDERS with correct shape', () => {
+    const kimi = PROVIDERS.find(p => p.provider === 'kimi');
+    expect(kimi).toBeDefined();
+    expect(kimi?.label).toBe('Kimi');
+    expect(kimi?.open).toBe(true);
+    expect(kimi?.modelSuggestions).toContain('kimi-k2.6');
+    expect(kimi?.modelSuggestions).toContain('kimi-k2.5');
+    expect(kimi?.requiresKey).toBe('ALLEN_KIMI_API_KEY');
+  });
+});
+
 describe('enabled provider registry', () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
-    for (const key of ['ALLEN_DEEPSEEK_API_KEY', 'ALLEN_XIAOMI_MIMO_API_KEY']) {
+    for (const key of ['ALLEN_DEEPSEEK_API_KEY', 'ALLEN_XIAOMI_MIMO_API_KEY', 'ALLEN_KIMI_API_KEY']) {
       if (originalEnv[key] === undefined) delete process.env[key];
       else process.env[key] = originalEnv[key];
     }
@@ -340,20 +353,35 @@ describe('enabled provider registry', () => {
   it('hides Claude-compatible API providers without configured API keys', async () => {
     delete process.env.ALLEN_DEEPSEEK_API_KEY;
     delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
+    delete process.env.ALLEN_KIMI_API_KEY;
 
     const providers = await getEnabledProvidersInDefaultOrder();
     expect(providers.map((provider) => provider.provider)).toEqual(expect.arrayContaining(['codex', 'claude-cli']));
     expect(providers.some((provider) => provider.provider === 'deepseek')).toBe(false);
     expect(providers.some((provider) => provider.provider === 'xiaomi-mimo')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'kimi')).toBe(false);
   });
 
   it('shows a Claude-compatible API provider when its key is configured', async () => {
     process.env.ALLEN_DEEPSEEK_API_KEY = 'deepseek-key';
     delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
+    delete process.env.ALLEN_KIMI_API_KEY;
 
     const providers = await getEnabledProvidersInDefaultOrder();
     expect(providers.some((provider) => provider.provider === 'deepseek')).toBe(true);
     expect(providers.some((provider) => provider.provider === 'xiaomi-mimo')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'kimi')).toBe(false);
+  });
+
+  it('shows Kimi when its key is configured', async () => {
+    delete process.env.ALLEN_DEEPSEEK_API_KEY;
+    delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
+    process.env.ALLEN_KIMI_API_KEY = 'kimi-key';
+
+    const providers = await getEnabledProvidersInDefaultOrder();
+    expect(providers.some((provider) => provider.provider === 'deepseek')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'xiaomi-mimo')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'kimi')).toBe(true);
   });
 });
 
@@ -372,6 +400,11 @@ describe('buildDeepSeekEnvOverlay', () => {
       'ALLEN_XIAOMI_MIMO_BASE_URL',
       'ALLEN_XIAOMI_MIMO_MODEL',
       'ALLEN_XIAOMI_MIMO_FLASH_MODEL',
+      'ALLEN_KIMI_API_KEY',
+      'ALLEN_KIMI_BASE_URL',
+      'ALLEN_KIMI_MODEL',
+      'ALLEN_KIMI_OPUS_MODEL',
+      'ALLEN_KIMI_FLASH_MODEL',
       'ANTHROPIC_BASE_URL',
       'ANTHROPIC_AUTH_TOKEN',
       'ANTHROPIC_MODEL',
@@ -445,6 +478,18 @@ describe('buildDeepSeekEnvOverlay', () => {
     expect(overlay.ANTHROPIC_BASE_URL).toBe('https://api.xiaomimimo.com/anthropic');
     expect(overlay.ANTHROPIC_MODEL).toBe('mimo-v2.5-pro');
     expect(overlay.CLAUDE_CODE_SUBAGENT_MODEL).toBe('mimo-v2.5-pro');
+  });
+
+  it('builds Kimi overlay from generic Claude-compatible provider config', async () => {
+    process.env.ALLEN_KIMI_API_KEY = 'kimi-key-123';
+    const overlay = await buildKimiEnvOverlay();
+    expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('kimi-key-123');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://api.moonshot.ai/anthropic');
+    expect(overlay.ANTHROPIC_MODEL).toBe('kimi-k2.5');
+    expect(overlay.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('kimi-k2.6');
+    expect(overlay.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('kimi-k2.5');
+    expect(overlay.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('kimi-k2.5');
+    expect(overlay.CLAUDE_CODE_SUBAGENT_MODEL).toBe('kimi-k2.5');
   });
 });
 

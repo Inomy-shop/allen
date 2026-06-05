@@ -1150,15 +1150,23 @@
   }
 
   .settings-switch {
-    @apply flex h-5 w-10 items-center rounded-full bg-app-muted p-0.5 transition-colors;
+    @apply flex h-5 w-10 items-center rounded-full p-0.5 transition-colors;
+    border: 1px solid rgb(var(--color-border-strong));
+    background: rgb(var(--color-surface-200));
   }
 
   .settings-switch span {
-    @apply block h-4 w-4 rounded-full bg-app-card shadow-sm transition-transform;
+    @apply block h-4 w-4 rounded-full shadow-sm transition-transform;
+    background: rgb(var(--color-text-muted));
   }
 
   .settings-switch.active {
     @apply bg-accent;
+    border-color: rgb(var(--color-accent-hover));
+  }
+
+  .settings-switch.active span {
+    background: rgb(var(--color-surface-100));
   }
 
   .settings-switch.active span {
@@ -1251,6 +1259,107 @@
     line-height: 1.3;
   }
 
+  .settings-field-meta:empty {
+    display: none;
+  }
+
+  .settings-field-unsaved {
+    color: rgb(var(--color-accent));
+  }
+
+  .settings-field-warning {
+    color: rgb(var(--color-accent-yellow));
+    font-weight: 600;
+  }
+
+  .settings-model-defaults-panel .settings-panel-head {
+    align-items: flex-start;
+  }
+
+  .settings-model-defaults-panel .settings-row {
+    grid-template-columns: minmax(240px, 0.86fr) minmax(520px, 1.4fr);
+    align-items: center;
+    padding-top: 15px;
+    padding-bottom: 15px;
+  }
+
+  .settings-model-defaults-panel .settings-row-control {
+    justify-content: flex-end;
+  }
+
+  .settings-model-defaults-panel .settings-field-control {
+    display: flex;
+    width: min(100%, 360px);
+    flex-direction: column;
+    align-items: stretch;
+    gap: 7px;
+  }
+
+  .settings-model-defaults-panel .settings-field-meta {
+    justify-content: flex-start;
+    font-family: var(--font-body);
+    font-size: 11.5px;
+    gap: 6px 12px;
+  }
+
+  .settings-model-defaults-panel .settings-runtime-select,
+  .settings-model-defaults-panel .settings-edit-input {
+    min-width: 0;
+    font-size: 12.5px;
+  }
+
+  .settings-model-defaults-panel .settings-runtime-select > button {
+    height: 32px;
+    font-size: 12.5px;
+  }
+
+  .settings-model-providers-panel .settings-provider-details .settings-row {
+    grid-template-columns: minmax(240px, 0.86fr) minmax(520px, 1.4fr);
+    align-items: center;
+    padding-top: 15px;
+    padding-bottom: 15px;
+  }
+
+  .settings-model-providers-panel .settings-provider-details .settings-row-control {
+    justify-content: flex-end;
+  }
+
+  .settings-model-providers-panel .settings-provider-details .settings-field-control {
+    width: min(100%, 360px);
+    gap: 7px;
+  }
+
+  .settings-model-providers-panel .settings-provider-details .settings-field-meta {
+    justify-content: flex-start;
+    font-family: var(--font-body);
+    font-size: 11.5px;
+    gap: 6px 12px;
+  }
+
+  .settings-model-providers-panel .settings-provider-details .settings-edit-input {
+    min-width: 0;
+    font-size: 12.5px;
+  }
+
+  .settings-model-panel-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .settings-primary-save-button:not(:disabled) {
+    border-color: rgb(var(--color-accent-hover));
+    background: rgb(var(--color-accent));
+    color: white;
+  }
+
+  .settings-primary-save-button:not(:disabled):hover {
+    border-color: rgb(var(--color-accent-hover));
+    background: rgb(var(--color-accent-hover));
+    color: white;
+  }
+
   .settings-runtime-log {
     width: min(100%, 560px);
     max-height: 160px;
@@ -1275,6 +1384,13 @@
   .settings-provider-list {
     display: flex;
     flex-direction: column;
+  }
+
+  .settings-provider-save-error {
+    border-bottom: 1px solid rgb(var(--color-border));
+    color: rgb(var(--color-accent-red));
+    padding: 10px 18px;
+    font-size: 12px;
   }
 
   .settings-provider-item {
@@ -1330,6 +1446,13 @@
     min-width: 0;
     flex-direction: column;
     gap: 2px;
+  }
+
+  .settings-provider-title-line {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
   }
 
   .settings-provider-copy strong {
@@ -3829,7 +3952,7 @@
 
   /* ─── Badges / pills ─── */
   .badge {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full;
+    @apply inline-flex items-center gap-1 whitespace-nowrap px-2 py-0.5 rounded-full;
     @apply text-[11.5px] font-mono font-medium;
     text-transform: none;
     letter-spacing: 0;
@@ -7154,7 +7277,7 @@
 
   .chat-pr-float {
     position: absolute;
-    top: 16px;
+    top: 42px;
     right: 62px;
     z-index: 28;
     width: fit-content;

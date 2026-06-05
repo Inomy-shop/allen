@@ -48,7 +48,7 @@ function readEnvModel(provider: ChatProvider): string | undefined {
   const cfg = PROVIDERS.find((p) => p.provider === provider);
   const raw = process.env.ALLEN_DEFAULT_AGENT_MODEL?.trim();
   if (!raw) return undefined;
-  // Open providers (e.g. DeepSeek, Xiaomi MiMo) accept any non-empty model string.
+  // Open providers (e.g. DeepSeek, Xiaomi MiMo, Kimi) accept any non-empty model string.
   if (cfg?.open) return raw;
   if (cfg?.models.includes(raw)) return raw;
   return undefined;

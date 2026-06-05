@@ -337,7 +337,7 @@ export default function RoleDialog({
     ...enabledProviders.filter((item) => item.open).map((item) => item.provider),
   ].filter((p, index, all) => all.indexOf(p) === index).map(p => ({
     value: p,
-    label: p === 'deepseek' ? 'DeepSeek' : p === 'xiaomi-mimo' ? 'Xiaomi MiMo' : p,
+    label: p === 'deepseek' ? 'DeepSeek' : p === 'xiaomi-mimo' ? 'Xiaomi MiMo' : p === 'kimi' ? 'Kimi' : p,
   }));
   const iconOptions = ICONS.map(i => ({ value: i, label: i }));
   const typeOptions = AGENT_TYPES.map(t => ({ value: t.value, label: t.label }));

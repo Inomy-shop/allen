@@ -8,7 +8,7 @@ import {
   FolderGit2, TicketCheck, Workflow,
   ChevronRight, Plus,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
-  SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain,
+  SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain, Cpu,
   Trash2, AlertTriangle,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
@@ -127,6 +127,7 @@ const SETTINGS_NAV_GROUPS: NavGroup[] = [
   { id: 'settings-primary', items: [
     { to: '/settings/general', icon: SlidersHorizontal, label: 'General', activePrefixes: ['/settings/general'], end: true },
     { to: '/settings/runtime', icon: HardDrive, label: 'Runtime', activePrefixes: ['/settings/runtime'] },
+    { to: '/settings/models', icon: Cpu, label: 'Models', activePrefixes: ['/settings/models'] },
     { to: '/settings/mcp', icon: Server, label: 'MCP Servers', activePrefixes: ['/settings/mcp'] },
   ]},
   { id: 'settings-allen', label: 'Allen', items: [
@@ -170,6 +171,7 @@ const COMMANDS: CommandItem[] = [
   { id: 'workspaces', label: 'Open workspaces', group: 'Sources', to: '/workspaces', icon: FolderGit2 },
   { id: 'settings-general', label: 'Open settings', group: 'Settings', to: '/settings/general', icon: SlidersHorizontal },
   { id: 'settings-runtime', label: 'Open runtime settings', group: 'Settings', to: '/settings/runtime', icon: HardDrive },
+  { id: 'settings-models', label: 'Open model settings', group: 'Settings', to: '/settings/models', icon: Cpu },
   { id: 'settings-mcp', label: 'Open MCP servers', group: 'Settings', to: '/settings/mcp', icon: Server },
   { id: 'settings-schedules', label: 'Open schedules', group: 'Settings', to: '/settings/schedules', icon: CalendarClock },
   { id: 'settings-learnings', label: 'Open learnings', group: 'Settings', to: '/settings/learnings', icon: Brain },
@@ -185,6 +187,7 @@ const SIDEBAR_PANEL_LABELS: Record<SidebarPanelId, string> = {
 const WORKSPACE_REPO_COLLAPSE_KEY = 'allen-app-sidebar-collapsed-workspace-repos';
 const SETTINGS_ROUTE_DETAILS: Array<{ prefix: string; label: string }> = [
   { prefix: '/settings/runtime', label: 'Runtime' },
+  { prefix: '/settings/models', label: 'Models' },
   { prefix: '/settings/mcp', label: 'MCP Servers' },
   { prefix: '/settings/schedules', label: 'Schedules' },
   { prefix: '/settings/learnings', label: 'Learnings' },

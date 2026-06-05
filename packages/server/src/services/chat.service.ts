@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import type { TokenUsageInfo } from '@allen/engine';
 import type { Response } from 'express';
 import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
-import { getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getTitleGenProviderModel, isClaudeCompatibleProvider } from './chat-providers.js';
+import { getDefaultChatModel, getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getTitleGenProviderModel, isClaudeCompatibleProvider } from './chat-providers.js';
 import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
 import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
@@ -943,6 +943,7 @@ export class ChatService {
     owner?: { userId?: string; name?: string; email?: string },
   ): Promise<ChatSession> {
     const now = new Date();
+    const effectiveModel = model ?? getDefaultChatModel(provider);
     let repoPath: string | undefined;
     let repoName: string | undefined;
     if (repoId) {
@@ -958,7 +959,7 @@ export class ChatService {
     }
     const doc: ChatSession = {
       title: 'New Conversation', titleSource: 'default', status: 'active', messageCount: 0,
-      lastMessageAt: now, totalCostUsd: 0, provider, model,
+      lastMessageAt: now, totalCostUsd: 0, provider, model: effectiveModel,
       source,
       ...(slackContext ? { slackContext } : {}),
       ...(repoId && repoPath ? { repoId, repoPath, repoName } : {}),
