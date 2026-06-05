@@ -13,9 +13,15 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   // Agents
   const legacySpawnTargetsField = 'can' + 'DelegateTo';
+  // Copy the legacy field onto spawnTargets via $rename rather than an
+  // aggregation-pipeline update ([{ $set: ... }]): AWS DocumentDB does not
+  // support pipeline-form updates and rejects them with
+  // "MongoServerError: Wrong type for parameter u", which crash-loops boot.
+  // $rename moves the field, so only docs that had BOTH fields still carry
+  // the legacy key afterwards — the $unset below mops those up.
   await db.collection('agents').updateMany(
     { spawnTargets: { $exists: false }, [legacySpawnTargetsField]: { $exists: true } },
-    [{ $set: { spawnTargets: `$${legacySpawnTargetsField}` } }],
+    { $rename: { [legacySpawnTargetsField]: 'spawnTargets' } },
   );
   await db.collection('agents').updateMany(
     { [legacySpawnTargetsField]: { $exists: true } },
