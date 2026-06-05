@@ -65,6 +65,7 @@ export interface Workspace {
   repoId: string;
   repoName: string;
   repoPath: string;
+  repoDefaultBranch?: string;
   worktreePath: string;
   branch: string;
   baseBranch: string;
@@ -175,6 +176,30 @@ export class WorkspaceManager {
   }
 
   private get col() { return this.db.collection('workspaces'); }
+
+  private repoDefaultBranch(repo: Record<string, unknown> | null | undefined): string | undefined {
+    const detected = repo?.detected as { defaultBranch?: unknown } | undefined;
+    const value = typeof detected?.defaultBranch === 'string' && detected.defaultBranch.trim()
+      ? detected.defaultBranch.trim()
+      : typeof repo?.defaultBranch === 'string' && repo.defaultBranch.trim()
+        ? repo.defaultBranch.trim()
+        : typeof repo?.branch === 'string' && repo.branch.trim()
+          ? repo.branch.trim()
+          : '';
+    return value || undefined;
+  }
+
+  private async repoDefaultBranchForInput(params: { repoId?: string; repoPath?: string; repoName?: string }): Promise<string | undefined> {
+    const clauses: Record<string, unknown>[] = [];
+    if (params.repoId && ObjectId.isValid(params.repoId)) clauses.push({ _id: new ObjectId(params.repoId) });
+    if (params.repoPath) clauses.push({ path: params.repoPath });
+    if (params.repoName) clauses.push({ name: params.repoName });
+    if (clauses.length === 0) return undefined;
+    const repo = await this.db.collection('repos')
+      .findOne({ $or: clauses }, { projection: { detected: 1, defaultBranch: 1, branch: 1 } })
+      .catch(() => null);
+    return this.repoDefaultBranch(repo);
+  }
   private get configCol() { return this.db.collection('workspace_configs'); }
 
   // ── Port Assignment ──
@@ -207,7 +232,37 @@ export class WorkspaceManager {
   // ── Workspace CRUD ──
 
   async list(): Promise<Workspace[]> {
-    return this.col.find({ status: { $ne: 'archived' } }).sort({ updatedAt: -1 }).toArray() as Promise<Workspace[]>;
+    const rows = await this.col.find({ status: { $ne: 'archived' } }).sort({ updatedAt: -1 }).toArray() as Workspace[];
+    const repoIds = Array.from(new Set(rows.map(ws => ws.repoId).filter((id): id is string => Boolean(id) && ObjectId.isValid(id))));
+
+    const repoOr = [
+      ...repoIds.map(id => ({ _id: new ObjectId(id) })),
+      ...rows.map(ws => ws.repoPath).filter(Boolean).map(path => ({ path })),
+      ...rows.map(ws => ws.repoName).filter(Boolean).map(name => ({ name })),
+    ];
+    if (repoOr.length === 0) return rows;
+
+    const repos = await this.db.collection('repos')
+      .find({ $or: repoOr }, { projection: { name: 1, path: 1, detected: 1, defaultBranch: 1, branch: 1 } })
+      .toArray()
+      .catch(() => []);
+    const defaultBranchByRepoId = new Map<string, string>();
+    const defaultBranchByRepoPath = new Map<string, string>();
+    const defaultBranchByRepoName = new Map<string, string>();
+    for (const repo of repos) {
+      const defaultBranch = this.repoDefaultBranch(repo);
+      if (defaultBranch) defaultBranchByRepoId.set(String(repo._id), defaultBranch);
+      if (defaultBranch && typeof repo.path === 'string') defaultBranchByRepoPath.set(repo.path, defaultBranch);
+      if (defaultBranch && typeof repo.name === 'string') defaultBranchByRepoName.set(repo.name, defaultBranch);
+    }
+
+    return rows.map(ws => ({
+      ...ws,
+      repoDefaultBranch: defaultBranchByRepoId.get(ws.repoId)
+        ?? defaultBranchByRepoPath.get(ws.repoPath)
+        ?? defaultBranchByRepoName.get(ws.repoName)
+        ?? ws.repoDefaultBranch,
+    }));
   }
 
   async listAll(): Promise<Workspace[]> {
@@ -224,6 +279,20 @@ export class WorkspaceManager {
     const { ObjectId } = await import('mongodb');
     const id = new ObjectId();
     const worktreePath = join(WORKSPACE_BASE, id.toString());
+    const requestedBaseBranch = params.baseBranch.trim();
+    const savedDefaultBranch = params.source === 'pr'
+      ? undefined
+      : await this.repoDefaultBranchForInput(params);
+    const baseBranch = savedDefaultBranch ?? requestedBaseBranch;
+    if (savedDefaultBranch && savedDefaultBranch !== requestedBaseBranch) {
+      console.info('[workspace-create-debug] workspace create base branch overridden from repo default', {
+        repoId: params.repoId,
+        repoName: params.repoName,
+        repoPath: params.repoPath,
+        requestedBaseBranch,
+        savedDefaultBranch,
+      });
+    }
 
     const workspace: Workspace = {
       _id: id,
@@ -233,7 +302,7 @@ export class WorkspaceManager {
       repoPath: params.repoPath,
       worktreePath,
       branch: params.branch,
-      baseBranch: params.baseBranch,
+      baseBranch,
       status: 'creating',
       source: params.source ?? 'new',
       prNumber: params.prNumber,
@@ -252,7 +321,7 @@ export class WorkspaceManager {
     await this.col.insertOne(workspace);
 
     // Run creation in background
-    this.setupWorkspace(id.toString(), params.repoPath, worktreePath, params.branch, params.baseBranch, params.source === 'pr').catch(err => {
+    this.setupWorkspace(id.toString(), params.repoPath, worktreePath, params.branch, baseBranch, params.source === 'pr').catch(err => {
       const setupError = errorMessage(err);
       console.error(`[workspace] Setup failed for ${id}:`, err);
       this.col.updateOne({ _id: id }, {

@@ -1,14 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Loader2, Monitor, X } from 'lucide-react';
 import IconTooltipButton from '../common/IconTooltipButton';
 import { workspaces as wsApi } from '../../services/workspaceService';
 import { SetupProgressDialog } from './SetupProgressDialog';
+import { workspaceCreateBaseBranch } from '../../lib/workspace-create';
 
 export interface WorkspaceCreateRepo {
   _id: string;
   name: string;
   path?: string;
+  branch?: string;
+  defaultBranch?: string;
   detected?: {
     defaultBranch?: string;
   };
@@ -30,11 +33,27 @@ const PRIMARY_BUTTON_CLASS = 'inline-flex h-9 items-center justify-center gap-2 
 
 export function WorkspaceCreateDialog({ repo, onClose, onCreated, onCreatedPending }: Props) {
   const [branch, setBranch] = useState('');
-  const [baseBranch, setBaseBranch] = useState(repo.detected?.defaultBranch ?? 'main');
+  const defaultBaseBranch = workspaceCreateBaseBranch(repo);
+  const [baseBranch, setBaseBranch] = useState(defaultBaseBranch);
   const [name, setName] = useState('');
   const [creating, setCreating] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    setBaseBranch(defaultBaseBranch);
+    console.info('[workspace-create-debug] create dialog repo received', {
+      repo: {
+        id: repo._id,
+        name: repo.name,
+        path: repo.path,
+        branch: repo.branch,
+        defaultBranch: repo.defaultBranch,
+        detectedDefaultBranch: repo.detected?.defaultBranch,
+        resolvedBaseBranch: defaultBaseBranch,
+      },
+    });
+  }, [defaultBaseBranch, repo._id]);
 
   async function handleCreate(event?: FormEvent) {
     event?.preventDefault();
@@ -51,7 +70,7 @@ export function WorkspaceCreateDialog({ repo, onClose, onCreated, onCreatedPendi
         repoName: repo.name,
         repoPath: repo.path ?? '',
         branch: branch.trim(),
-        baseBranch: baseBranch.trim() || 'main',
+        baseBranch: baseBranch.trim() || defaultBaseBranch,
         name: name.trim(),
       });
       onCreatedPending?.(workspace);

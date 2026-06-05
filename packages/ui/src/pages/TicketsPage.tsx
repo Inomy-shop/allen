@@ -15,6 +15,7 @@ import { type AgentOption, type TeamOption } from '../components/agents/AgentAss
 import DispatchModal, { type DispatchTarget, type WorkflowOption } from '../components/linear/DispatchModal';
 import RunStatusCard from '../components/executions/RunStatusCard';
 import Select from '../components/common/Select';
+import { workspaceChatPath } from '../lib/workspace-routes';
 import {
   AlertCircle, ChevronDown, ChevronRight, Circle, Clock, ExternalLink,
   FolderGit2, KeyRound, Loader2, MinusCircle, Play, RefreshCw, Search, X, Sparkles, CheckCircle,
@@ -1247,7 +1248,7 @@ function TicketDrawer({
               <div className="flex items-center gap-2 pt-1">
                 {assignee.workspaceId && (
                   <button
-                    onClick={() => navigate(`/workspaces/${assignee.workspaceId}`)}
+                    onClick={() => navigate(workspaceChatPath(assignee.workspaceId!))}
                     className="inline-flex h-8 items-center gap-1.5 rounded-md border border-accent/25 bg-accent/10 px-2.5 font-mono text-[10.5px] text-accent transition-colors hover:border-accent/40 hover:bg-accent/15"
                   >
                     <FolderGit2 className="h-3.5 w-3.5" />

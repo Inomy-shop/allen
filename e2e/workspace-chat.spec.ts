@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { API, UI } from './helpers';
 
 
-test.describe('Workspace Embedded Chat', () => {
+test.describe.skip('Workspace Embedded Chat (legacy workspace detail page)', () => {
 
   test('chat panel opens with linked session', async ({ page }) => {
     await page.setViewportSize({ width: 1400, height: 800 });

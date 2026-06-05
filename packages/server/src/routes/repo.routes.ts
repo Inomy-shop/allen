@@ -300,6 +300,19 @@ function readRepoFile(repoPath: string, rawFilePath: string): Record<string, unk
   return { path: rawFilePath, content: readFileSync(fullPath, 'utf-8'), isImage: false };
 }
 
+function repoBranchDebug(repo: Record<string, unknown> | null | undefined) {
+  if (!repo) return null;
+  const detected = repo.detected as { defaultBranch?: unknown } | undefined;
+  return {
+    id: String(repo._id ?? ''),
+    name: stringValue(repo.name),
+    path: stringValue(repo.path),
+    branch: stringValue(repo.branch),
+    defaultBranch: stringValue(repo.defaultBranch),
+    detectedDefaultBranch: stringValue(detected?.defaultBranch),
+  };
+}
+
 export function repoRoutes(db: Db): Router {
   const router = Router();
   const service = new RepoService(db);
@@ -313,6 +326,10 @@ export function repoRoutes(db: Db): Router {
   router.get('/', async (_req: Request, res: Response) => {
     try {
       const repos = await service.list();
+      console.info('[workspace-create-debug] repo api list', {
+        count: repos.length,
+        repos: repos.map(repoBranchDebug),
+      });
       res.json(repos);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -549,6 +566,7 @@ export function repoRoutes(db: Db): Router {
     try {
       const repo = await service.getById(param(req, 'id'));
       if (!repo) return res.status(404).json({ error: 'Not found' });
+      console.info('[workspace-create-debug] repo api get', repoBranchDebug(repo));
       res.json(repo);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

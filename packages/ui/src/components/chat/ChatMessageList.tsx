@@ -14,6 +14,7 @@ import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc } from
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { WorkflowInterventionAction } from '../execution/WorkflowInterventionAction';
 import { sanitizeChatAssistantResponse } from '../../lib/chat-response-sanitize';
+import { workspaceChatPath } from '../../lib/workspace-routes';
 
 const ChatExecutionsPanel = React.lazy(() =>
   import('./ChatRunSidebar').then(module => ({ default: module.ExecutionsPanel })),
@@ -1712,7 +1713,7 @@ function RunProgressCard({ run }: { run: SpawnedAgent }) {
 
       <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[10px]">
         {context?.workspace?.id && (
-          <a href={`/workspaces/${context.workspace.id}`} className="flex items-center gap-1.5 text-theme-muted hover:text-accent min-w-0">
+          <a href={workspaceChatPath(context.workspace.id)} className="flex items-center gap-1.5 text-theme-muted hover:text-accent min-w-0">
             <FolderGit2 className="w-3 h-3 shrink-0" />
             <span className="truncate">{context.workspace.repoName ?? context.workspace.name ?? 'Workspace'} · {context.workspace.branch ?? 'branch'}</span>
           </a>

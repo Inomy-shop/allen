@@ -9,6 +9,7 @@ import {
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 import { executions as executionsApi, system as systemApi, workflows as workflowsApi } from '../services/api';
 import IconTooltipButton from '../components/common/IconTooltipButton';
+import { workspaceChatPath } from '../lib/workspace-routes';
 
 const STATUS_FILTERS = [
   { id: 'open', label: 'Open' },
@@ -376,7 +377,7 @@ export default function PullRequestListPage() {
         {pendingWsId && (
           <SetupProgressDialog
             workspaceId={pendingWsId}
-            onComplete={(ws) => { setPendingWsId(null); navigate(`/workspaces/${ws._id}`); }}
+            onComplete={(ws) => { setPendingWsId(null); navigate(workspaceChatPath(ws._id)); }}
             onFailed={() => setPendingWsId(null)}
           />
         )}

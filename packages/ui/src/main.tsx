@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
-import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
+import { createBrowserRouter, Navigate, RouterProvider, useParams } from 'react-router-dom';
 import App from './App';
 import './index.css';
 
@@ -31,6 +31,7 @@ import ForbiddenPage from './pages/ForbiddenPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import { ToastProvider } from './components/common/Toast';
 import { useSettingsStore } from './stores/settingsStore';
+import { workspaceChatPath } from './lib/workspace-routes';
 
 if (typeof window !== 'undefined') {
   if (window.allenDesktop) {
@@ -40,6 +41,11 @@ if (typeof window !== 'undefined') {
     }
   }
   useSettingsStore.getState().initFromLocalStorage();
+}
+
+function WorkspaceChatRedirect() {
+  const { id } = useParams<{ id: string }>();
+  return <Navigate to={id ? workspaceChatPath(id) : '/workspaces'} replace />;
 }
 
 const router = createBrowserRouter([
@@ -76,7 +82,7 @@ const router = createBrowserRouter([
           { path: 'chat', element: <ChatPage /> },
           { path: 'chat/:sessionId', element: <ChatPage /> },
           { path: 'workspaces', element: <WorkspaceListPage /> },
-          { path: 'workspaces/:id', element: <WorkspaceListPage /> },
+          { path: 'workspaces/:id', element: <WorkspaceChatRedirect /> },
           { path: 'pull-requests', element: <PullRequestListPage /> },
           { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
           { path: 'crons', element: <Navigate to="/settings/schedules" replace /> },

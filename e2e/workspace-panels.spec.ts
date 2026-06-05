@@ -4,7 +4,7 @@ import { UI } from './helpers';
 const WORKSPACE_ID = '69d520cd51ffbb1176abcb73';
 const WS_URL = `${UI}/workspaces/${WORKSPACE_ID}`;
 
-test.describe('Workspace Resizable/Collapsible Panels', () => {
+test.describe.skip('Workspace Resizable/Collapsible Panels (legacy workspace detail page)', () => {
 
   // ─── File Explorer ──────────────────────────────────────────────────────────
 

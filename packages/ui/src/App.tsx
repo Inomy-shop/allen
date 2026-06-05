@@ -19,10 +19,13 @@ import {
   chat as chatApi,
   executions as executionsApi,
   interventions as interventionsApi,
+  repos as reposApi,
 } from './services/api';
 import { workspaces as workspacesApi } from './services/workspaceService';
 import { usePanelLayout } from './hooks/usePanelLayout';
 import { WorkspaceCreateDialog, type WorkspaceCreateRepo } from './components/workspace/WorkspaceCreateDialog';
+import { workspaceChatPath } from './lib/workspace-routes';
+import { workspaceCreateBaseBranch } from './lib/workspace-create';
 
 interface NavItem {
   to: string;
@@ -55,12 +58,49 @@ interface SidebarWorkspace {
   repoId?: string;
   repoName?: string;
   repoPath?: string;
+  repoDefaultBranch?: string;
   branch?: string;
+  baseBranch?: string;
   status?: string;
   source?: string;
   prNumber?: number;
   updatedAt?: string;
   createdAt?: string;
+}
+
+interface SidebarRepo {
+  _id: string;
+  name: string;
+  path?: string;
+  branch?: string;
+  defaultBranch?: string;
+  detected?: {
+    defaultBranch?: string;
+  };
+}
+
+function workspaceCreateRepoDebug(repo?: WorkspaceCreateRepo | SidebarRepo | null) {
+  if (!repo) return null;
+  return {
+    id: repo._id,
+    name: repo.name,
+    path: repo.path,
+    branch: repo.branch,
+    defaultBranch: repo.defaultBranch,
+    detectedDefaultBranch: repo.detected?.defaultBranch,
+    resolvedBaseBranch: workspaceCreateBaseBranch(repo),
+  };
+}
+
+function sidebarRepoForWorkspace(repos: SidebarRepo[], workspace?: SidebarWorkspace | null, label?: string): SidebarRepo | null {
+  if (!workspace) return null;
+  return repos.find(repo => {
+    if (workspace.repoId && repo._id === workspace.repoId) return true;
+    if (workspace.repoPath && repo.path === workspace.repoPath) return true;
+    if (workspace.repoName && repo.name === workspace.repoName) return true;
+    if (label && repo.name === label) return true;
+    return false;
+  }) ?? null;
 }
 
 // ── Nav Groups (Allen design system: flat navigation with subtle dividers) ──
@@ -471,6 +511,7 @@ export default function App() {
   const [sidebarPanel, setSidebarPanel] = useState<SidebarPanelId>('navigation');
   const [workspaceSearch, setWorkspaceSearch] = useState('');
   const [sidebarWorkspaces, setSidebarWorkspaces] = useState<SidebarWorkspace[]>([]);
+  const [sidebarRepos, setSidebarRepos] = useState<SidebarRepo[]>([]);
   const [sidebarWorkspacesLoading, setSidebarWorkspacesLoading] = useState(false);
   const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
   const [confirmDeleteWorkspace, setConfirmDeleteWorkspace] = useState<SidebarWorkspace | null>(null);
@@ -508,35 +549,56 @@ export default function App() {
   const detail = isWorkspaceChatRoute ? activeWorkspaceName ?? 'Workspace' : routeBaseDetail;
   const workspaceGroups = useMemo(() => {
     const query = workspaceSearch.trim().toLowerCase();
-    const visible = sidebarWorkspaces
-      .filter((workspace) => {
-        if (!query) return true;
-        return workspace.name.toLowerCase().includes(query)
-          || workspaceRepoLabel(workspace).toLowerCase().includes(query)
-          || (workspace.branch ?? '').toLowerCase().includes(query);
-      })
-      .sort((a, b) => sidebarWorkspaceTime(b) - sidebarWorkspaceTime(a));
+    const repoById = new Map(sidebarRepos.map(repo => [repo._id, repo]));
+    const groups = new Map<string, { key: string; label: string; repo?: SidebarRepo; items: SidebarWorkspace[]; latest: number }>();
+    for (const repo of sidebarRepos) {
+      if (query && !repo.name.toLowerCase().includes(query) && !(repo.path ?? '').toLowerCase().includes(query)) continue;
+      groups.set(repo._id, { key: repo._id, label: repo.name, repo, items: [], latest: 0 });
+    }
 
-    const groups = new Map<string, { key: string; label: string; items: SidebarWorkspace[]; latest: number }>();
-    for (const workspace of visible) {
-      const label = workspaceRepoLabel(workspace);
-      const key = workspace.repoId ?? `repo:${label.toLowerCase()}`;
+    for (const workspace of sidebarWorkspaces) {
+      const repo = workspace.repoId ? repoById.get(workspace.repoId) ?? sidebarRepoForWorkspace(sidebarRepos, workspace) : sidebarRepoForWorkspace(sidebarRepos, workspace);
+      const label = repo?.name ?? workspaceRepoLabel(workspace);
+      const key = repo?._id ?? workspace.repoId ?? `repo:${label.toLowerCase()}`;
+      if (query && !workspace.name.toLowerCase().includes(query) && !label.toLowerCase().includes(query) && !(workspace.branch ?? '').toLowerCase().includes(query)) continue;
       const latest = sidebarWorkspaceTime(workspace);
       const existing = groups.get(key);
       if (existing) {
         existing.items.push(workspace);
         existing.latest = Math.max(existing.latest, latest);
       } else {
-        groups.set(key, { key, label, items: [workspace], latest });
+        groups.set(key, { key, label, repo: repo ?? undefined, items: [workspace], latest });
       }
     }
 
     return Array.from(groups.values()).sort((a, b) => b.latest - a.latest);
-  }, [sidebarWorkspaces, workspaceSearch]);
+  }, [sidebarRepos, sidebarWorkspaces, workspaceSearch]);
 
-  function openCreateWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
+  async function openCreateWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
     if (!repo) return;
-    setWorkspaceCreateRepo(repo);
+    console.info('[workspace-create-debug] app-sidebar plus clicked', {
+      candidateRepo: workspaceCreateRepoDebug(repo),
+    });
+    const savedRepo = await reposApi.get(repo._id).catch((error) => {
+      console.warn('[workspace-create-debug] app-sidebar repo fetch failed', {
+        repoId: repo._id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    });
+    const modalRepo = {
+      ...repo,
+      name: savedRepo?.name ?? repo.name,
+      path: savedRepo?.path ?? repo.path,
+      branch: savedRepo?.branch ?? repo.branch,
+      defaultBranch: savedRepo?.defaultBranch ?? repo.defaultBranch,
+      detected: savedRepo?.detected ?? repo.detected,
+    };
+    console.info('[workspace-create-debug] app-sidebar modal repo prepared', {
+      fetchedRepo: workspaceCreateRepoDebug(savedRepo),
+      modalRepo: workspaceCreateRepoDebug(modalRepo),
+    });
+    setWorkspaceCreateRepo(modalRepo);
   }
 
   function prependSidebarWorkspace(workspace: SidebarWorkspace) {
@@ -667,12 +729,23 @@ export default function App() {
     if (sidebarPanel !== 'workspaces') return;
     let cancelled = false;
     setSidebarWorkspacesLoading(true);
-    workspacesApi.list()
-      .then((items) => {
+    Promise.all([
+      workspacesApi.list().catch(() => []),
+      reposApi.list().catch(() => []),
+    ])
+      .then(([items, repoItems]) => {
         if (!cancelled) setSidebarWorkspaces((items ?? []) as SidebarWorkspace[]);
+        if (!cancelled) setSidebarRepos((repoItems ?? []) as SidebarRepo[]);
+        if (!cancelled) {
+          console.info('[workspace-create-debug] app-sidebar data loaded', {
+            workspaceCount: (items ?? []).length,
+            repos: ((repoItems ?? []) as SidebarRepo[]).map(workspaceCreateRepoDebug),
+          });
+        }
       })
       .catch(() => {
         if (!cancelled) setSidebarWorkspaces([]);
+        if (!cancelled) setSidebarRepos([]);
       })
       .finally(() => {
         if (!cancelled) setSidebarWorkspacesLoading(false);
@@ -973,10 +1046,45 @@ export default function App() {
                       const collapsed = collapsedWorkspaceRepos.has(group.key);
                       const hasActive = group.items.some((workspace) => workspace._id === activeWorkspaceId);
                       const showItems = !collapsed || hasActive;
-                      const repoWorkspace = group.items.find((workspace) => workspace.repoId) ?? group.items[0];
-                      const repo = repoWorkspace?.repoId
-                        ? { _id: repoWorkspace.repoId, name: group.label, path: repoWorkspace.repoPath }
+                      const repoWorkspace = group.items.find((workspace) => workspace.repoId) ?? group.items[0] ?? null;
+                      const savedRepo = group.repo ?? sidebarRepoForWorkspace(sidebarRepos, repoWorkspace, group.label);
+                      const repo = savedRepo
+                        ? {
+                            _id: savedRepo._id,
+                            name: savedRepo.name,
+                            path: savedRepo.path ?? repoWorkspace?.repoPath,
+                            branch: savedRepo.branch,
+                            defaultBranch: savedRepo.defaultBranch,
+                            detected: savedRepo.detected,
+                          }
+                        : repoWorkspace?.repoId
+                        ? {
+                            _id: repoWorkspace.repoId,
+                            name: group.label,
+                            path: repoWorkspace.repoPath,
+                            detected: { defaultBranch: repoWorkspace.repoDefaultBranch ?? repoWorkspace.baseBranch },
+                          }
                         : null;
+                      const handleCreateClick = () => {
+                        console.info('[workspace-create-debug] app-sidebar group plus source', {
+                          groupKey: group.key,
+                          groupLabel: group.label,
+                          repoWorkspace: repoWorkspace
+                            ? {
+                                id: repoWorkspace._id,
+                                repoId: repoWorkspace.repoId,
+                                repoName: repoWorkspace.repoName,
+                                repoPath: repoWorkspace.repoPath,
+                                repoDefaultBranch: repoWorkspace.repoDefaultBranch,
+                                baseBranch: repoWorkspace.baseBranch,
+                                branch: repoWorkspace.branch,
+                              }
+                            : null,
+                          savedRepo: workspaceCreateRepoDebug(savedRepo),
+                          clickRepo: workspaceCreateRepoDebug(repo),
+                        });
+                        void openCreateWorkspaceForRepo(repo);
+                      };
                       return (
                         <div key={group.key}>
                           <div className="mb-1 flex items-center gap-1">
@@ -991,7 +1099,7 @@ export default function App() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => openCreateWorkspaceForRepo(repo)}
+                              onClick={handleCreateClick}
                               disabled={!repo}
                               className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
                               title={`New workspace in ${group.label}`}
@@ -1016,7 +1124,7 @@ export default function App() {
                                   >
                                     <button
                                       type="button"
-                                      onClick={() => navigate(`/chat?workspaceId=${workspace._id}`)}
+                                      onClick={() => navigate(workspaceChatPath(workspace._id))}
                                       className="min-w-0 flex-1 truncate text-left text-[12.5px] font-medium leading-5"
                                       disabled={deleting}
                                     >
@@ -1169,7 +1277,7 @@ export default function App() {
             prependSidebarWorkspace(workspace as SidebarWorkspace);
             setWorkspaceCreateRepo(null);
             setActiveWorkspaceName(workspace.name ?? null);
-            navigate(`/chat?workspaceId=${workspace._id}`);
+            navigate(workspaceChatPath(workspace._id));
           }}
         />
       )}

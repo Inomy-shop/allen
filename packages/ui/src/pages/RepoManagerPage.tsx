@@ -11,8 +11,10 @@ import { useNavigate } from 'react-router-dom';
 import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
 import { workspaces as wsApi } from '../services/workspaceService';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
+import { workspaceCreateBaseBranch } from '../lib/workspace-create';
 import { useToast } from '../components/common/Toast';
 import IconTooltipButton from '../components/common/IconTooltipButton';
+import { workspaceChatPath } from '../lib/workspace-routes';
 
 interface Repo {
   _id: string;
@@ -929,7 +931,7 @@ export default function RepoManagerPage() {
           onCancel={() => setDeletingRepo(null)}
         />
         {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
-        {wsCreateRepo && <QuickWorkspaceDialog repo={wsCreateRepo} onClose={() => setWsCreateRepo(null)} onCreated={(id) => { setWsCreateRepo(null); navigate(`/workspaces/${id}`); }} />}
+        {wsCreateRepo && <QuickWorkspaceDialog repo={wsCreateRepo} onClose={() => setWsCreateRepo(null)} onCreated={(id) => { setWsCreateRepo(null); navigate(workspaceChatPath(id)); }} />}
       </div>
     </div>
   );
@@ -937,7 +939,7 @@ export default function RepoManagerPage() {
 
 function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClose: () => void; onCreated: (id: string) => void }) {
   const [branch, setBranch] = useState('');
-  const [baseBranch, setBaseBranch] = useState(repo.detected?.defaultBranch ?? 'main');
+  const [baseBranch, setBaseBranch] = useState(workspaceCreateBaseBranch(repo));
   const [name, setName] = useState('');
   const [creating, setCreating] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -947,7 +949,7 @@ function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClos
     if (!branch.trim() || !name.trim()) { setError('Branch and name required'); return; }
     setCreating(true); setError('');
     try {
-      const ws = await wsApi.create({ repoId: repo._id, repoName: repo.name, repoPath: repo.path, branch: branch.trim(), baseBranch, name: name.trim() });
+      const ws = await wsApi.create({ repoId: repo._id, repoName: repo.name, repoPath: repo.path, branch: branch.trim(), baseBranch: baseBranch.trim() || workspaceCreateBaseBranch(repo), name: name.trim() });
       setPendingId(ws._id);
     } catch (err: any) { setError(err.message); setCreating(false); }
   }

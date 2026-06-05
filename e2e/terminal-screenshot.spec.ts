@@ -29,7 +29,7 @@ test.describe('Workspace Full Feature Test', () => {
     expect(delRes.ok()).toBeTruthy();
   });
 
-  test('resizable sidebar and terminal', async ({ page }) => {
+  test.skip('resizable sidebar and terminal (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(3000);
 
@@ -41,7 +41,7 @@ test.describe('Workspace Full Feature Test', () => {
     expect(await rowResizer.count()).toBeGreaterThan(0);
   });
 
-  test('multi-terminal — add and split', async ({ page }) => {
+  test.skip('multi-terminal — add and split (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(3000);
 
@@ -63,7 +63,7 @@ test.describe('Workspace Full Feature Test', () => {
     expect(await xtermDivs.count()).toBeGreaterThanOrEqual(2);
   });
 
-  test('commit modal opens', async ({ page }) => {
+  test.skip('commit modal opens (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(2000);
 
@@ -84,7 +84,7 @@ test.describe('Workspace Full Feature Test', () => {
     await cancelBtn.click();
   });
 
-  test('new file creation UI', async ({ page }) => {
+  test.skip('new file creation UI (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(2000);
 
@@ -101,7 +101,7 @@ test.describe('Workspace Full Feature Test', () => {
     await page.keyboard.press('Escape');
   });
 
-  test('page is fixed (no body scroll)', async ({ page }) => {
+  test.skip('page is fixed (no body scroll) (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(2000);
 
@@ -112,7 +112,7 @@ test.describe('Workspace Full Feature Test', () => {
     expect(scrollHeight).toBeLessThanOrEqual(clientHeight + 5);
   });
 
-  test('full screenshot with all features', async ({ page }) => {
+  test.skip('full screenshot with all features (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(4000);
 

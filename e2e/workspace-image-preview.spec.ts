@@ -88,7 +88,7 @@ test.describe('Workspace Image Preview Support', () => {
 
     test('UI detects image files correctly', async ({ page }) => {
       // Test the frontend image detection logic
-      // From WorkspaceDetailPage.tsx: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'svg'].includes(ext)
+      // Image preview file-type detection shared by the legacy workspace file preview.
 
       await page.goto('/workspaces');
 
@@ -130,7 +130,7 @@ test.describe('Workspace Image Preview Support', () => {
       await page.goto('/workspaces');
 
       await page.evaluate(() => {
-        // Simulate the conditional rendering logic from WorkspaceDetailPage.tsx
+        // Simulate the legacy workspace image-preview conditional rendering logic.
         const isImageFile = true;
         const fileContent = 'base64imagedata';
         const imageMimeType = 'image/png';

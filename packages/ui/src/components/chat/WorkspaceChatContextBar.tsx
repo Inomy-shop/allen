@@ -1,5 +1,6 @@
 import { GitBranch, FolderOpen, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { workspaceChatPath } from '../../lib/workspace-routes';
 
 type WorkspaceDoc = {
   _id: string;
@@ -70,9 +71,9 @@ export default function WorkspaceChatContextBar({ workspace, archivedWorkspace }
         <div className="flex items-center gap-1 shrink-0">
           <button
             type="button"
-            onClick={() => navigate(`/workspaces/${workspaceId}`)}
+            onClick={() => navigate(workspaceChatPath(workspaceId))}
             className="flex items-center gap-1 rounded px-2 py-1 text-xs text-theme-secondary hover:bg-app-card hover:text-theme-primary transition-colors"
-            title="Open Workspace IDE"
+            title="Open workspace chat"
           >
             <ExternalLink className="h-3 w-3" />
             Open

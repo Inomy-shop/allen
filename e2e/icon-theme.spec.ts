@@ -1,7 +1,7 @@
 import { test } from '@playwright/test';
 import { API, UI } from './helpers';
 
-test('material icon close-up', async ({ page }) => {
+test.skip('material icon close-up (legacy workspace detail page)', async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
   await page.waitForTimeout(4000);

@@ -4,8 +4,11 @@ import {
   Plus, FolderGit2, Search,
   PanelLeftClose, PanelLeftOpen, ChevronRight, ChevronDown,
 } from 'lucide-react';
+import { repos as repoApi } from '../../services/api';
 import { workspaces as wsApi } from '../../services/workspaceService';
 import { WorkspaceCreateDialog, type WorkspaceCreateRepo } from './WorkspaceCreateDialog';
+import { workspaceChatPath } from '../../lib/workspace-routes';
+import { workspaceCreateBaseBranch } from '../../lib/workspace-create';
 
 const COLLAPSED_REPOS_KEY = 'allen-ws-sidebar-collapsed-repos';
 
@@ -21,6 +24,30 @@ function saveCollapsedRepos(set: Set<string>) {
   try { localStorage.setItem(COLLAPSED_REPOS_KEY, JSON.stringify(Array.from(set))); } catch { /* ignore */ }
 }
 
+function workspaceCreateRepoDebug(repo?: WorkspaceCreateRepo | null) {
+  if (!repo) return null;
+  return {
+    id: repo._id,
+    name: repo.name,
+    path: repo.path,
+    branch: repo.branch,
+    defaultBranch: repo.defaultBranch,
+    detectedDefaultBranch: repo.detected?.defaultBranch,
+    resolvedBaseBranch: workspaceCreateBaseBranch(repo),
+  };
+}
+
+function repoForWorkspace(repos: WorkspaceCreateRepo[], workspace?: Workspace | null, label?: string): WorkspaceCreateRepo | null {
+  if (!workspace) return null;
+  return repos.find(repo => {
+    if (workspace.repoId && repo._id === workspace.repoId) return true;
+    if (workspace.repoPath && repo.path === workspace.repoPath) return true;
+    if (workspace.repoName && repo.name === workspace.repoName) return true;
+    if (label && repo.name === label) return true;
+    return false;
+  }) ?? null;
+}
+
 interface Workspace {
   _id: string;
   name: string;
@@ -33,6 +60,7 @@ interface Workspace {
   repoId?: string;
   repoName?: string;
   repoPath?: string;
+  repoDefaultBranch?: string;
 }
 
 interface Props {
@@ -54,6 +82,7 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
   const { id: activeId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [list, setList] = useState<Workspace[]>([]);
+  const [repos, setRepos] = useState<WorkspaceCreateRepo[]>([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
   const [collapsedRepos, setCollapsedRepos] = useState<Set<string>>(() => loadCollapsedRepos());
@@ -68,9 +97,31 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
     });
   }
 
-  function createWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
+  async function createWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
     if (!repo) return;
-    setWorkspaceCreateRepo(repo);
+    console.info('[workspace-create-debug] workspaces-sidebar plus clicked', {
+      candidateRepo: workspaceCreateRepoDebug(repo),
+    });
+    const savedRepo = await repoApi.get(repo._id).catch((error) => {
+      console.warn('[workspace-create-debug] workspaces-sidebar repo fetch failed', {
+        repoId: repo._id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    });
+    const modalRepo = {
+      ...repo,
+      name: savedRepo?.name ?? repo.name,
+      path: savedRepo?.path ?? repo.path,
+      branch: savedRepo?.branch ?? repo.branch,
+      defaultBranch: savedRepo?.defaultBranch ?? repo.defaultBranch,
+      detected: savedRepo?.detected ?? repo.detected,
+    };
+    console.info('[workspace-create-debug] workspaces-sidebar modal repo prepared', {
+      fetchedRepo: workspaceCreateRepoDebug(savedRepo),
+      modalRepo: workspaceCreateRepoDebug(modalRepo),
+    });
+    setWorkspaceCreateRepo(modalRepo);
   }
 
   function prependWorkspace(workspace: Workspace) {
@@ -79,9 +130,22 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
 
   useEffect(() => {
     setLoading(true);
-    wsApi.list()
-      .then((data: Workspace[]) => setList(data ?? []))
-      .catch(() => setList([]))
+    Promise.all([
+      wsApi.list().catch(() => []),
+      repoApi.list().catch(() => []),
+    ])
+      .then(([data, repoList]: [Workspace[], WorkspaceCreateRepo[]]) => {
+        setList(data ?? []);
+        setRepos(repoList ?? []);
+        console.info('[workspace-create-debug] workspaces-sidebar data loaded', {
+          workspaceCount: (data ?? []).length,
+          repos: (repoList ?? []).map(workspaceCreateRepoDebug),
+        });
+      })
+      .catch(() => {
+        setList([]);
+        setRepos([]);
+      })
       .finally(() => setLoading(false));
   }, [activeId]);
 
@@ -110,15 +174,20 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
   }
 
   const filter = q.trim().toLowerCase();
-  const visible = filter
+  const visibleWorkspaces = filter
     ? list.filter((w) => w.name.toLowerCase().includes(filter) || (w.repoName ?? '').toLowerCase().includes(filter))
     : list;
 
-  // Group by repo
-  const grouped = new Map<string, { repoName: string; items: Workspace[] }>();
-  for (const w of visible) {
-    const key = w.repoId ?? 'unknown';
-    if (!grouped.has(key)) grouped.set(key, { repoName: w.repoName || 'Unknown repo', items: [] });
+  const grouped = new Map<string, { repoName: string; repo?: WorkspaceCreateRepo; items: Workspace[] }>();
+  for (const repo of repos) {
+    if (filter && !repo.name.toLowerCase().includes(filter) && !(repo.path ?? '').toLowerCase().includes(filter)) continue;
+    grouped.set(repo._id, { repoName: repo.name, repo, items: [] });
+  }
+  for (const w of visibleWorkspaces) {
+    const repo = repoForWorkspace(repos, w);
+    const repoName = repo?.name ?? w.repoName ?? 'Unknown repo';
+    const key = repo?._id ?? w.repoId ?? `repo:${repoName.toLowerCase()}`;
+    if (!grouped.has(key)) grouped.set(key, { repoName, repo: repo ?? undefined, items: [] });
     grouped.get(key)!.items.push(w);
   }
 
@@ -161,9 +230,9 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
         {loading && (
           <div className="px-3 py-4 text-center text-[12px] text-theme-subtle animate-pulse">Loading workspaces…</div>
         )}
-        {!loading && visible.length === 0 && (
+        {!loading && grouped.size === 0 && (
           <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">
-            {filter ? 'No matches.' : 'No workspaces yet.'}
+            {filter ? 'No matches.' : 'No repos yet.'}
           </div>
         )}
         {Array.from(grouped.entries()).map(([repoKey, group]) => {
@@ -173,10 +242,45 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
           // toggle the active row would be hidden after a sidebar reload.
           const hasActive = group.items.some((w) => w._id === activeId);
           const showItems = !isRepoCollapsed || hasActive;
-          const repoWorkspace = group.items.find((w) => w.repoId) ?? group.items[0];
-          const repo = repoWorkspace?.repoId
-            ? { _id: repoWorkspace.repoId, name: group.repoName, path: repoWorkspace.repoPath }
+          const repoWorkspace = group.items.find((w) => w.repoId) ?? group.items[0] ?? null;
+          const savedRepo = group.repo ?? repoForWorkspace(repos, repoWorkspace, group.repoName);
+          const repo = savedRepo
+            ? {
+                _id: savedRepo._id,
+                name: savedRepo.name,
+                path: savedRepo.path ?? repoWorkspace?.repoPath,
+                branch: savedRepo.branch,
+                defaultBranch: savedRepo.defaultBranch,
+                detected: savedRepo.detected,
+              }
+            : repoWorkspace?.repoId
+            ? {
+                _id: repoWorkspace.repoId,
+                name: group.repoName,
+                path: repoWorkspace.repoPath,
+                detected: { defaultBranch: repoWorkspace.repoDefaultBranch ?? repoWorkspace.baseBranch },
+              }
             : null;
+          const handleCreateClick = () => {
+            console.info('[workspace-create-debug] workspaces-sidebar group plus source', {
+              repoKey,
+              groupRepoName: group.repoName,
+              repoWorkspace: repoWorkspace
+                ? {
+                    id: repoWorkspace._id,
+                    repoId: repoWorkspace.repoId,
+                    repoName: repoWorkspace.repoName,
+                    repoPath: repoWorkspace.repoPath,
+                    repoDefaultBranch: repoWorkspace.repoDefaultBranch,
+                    baseBranch: repoWorkspace.baseBranch,
+                    branch: repoWorkspace.branch,
+                  }
+                : null,
+              savedRepo: workspaceCreateRepoDebug(savedRepo),
+              clickRepo: workspaceCreateRepoDebug(repo),
+            });
+            void createWorkspaceForRepo(repo);
+          };
           return (
           <div key={repoKey}>
             <div className="mb-1 flex items-center gap-1">
@@ -194,7 +298,7 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
               </button>
               <button
                 type="button"
-                onClick={() => createWorkspaceForRepo(repo)}
+                onClick={handleCreateClick}
                 disabled={!repo}
                 className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
                 title={`New workspace in ${group.repoName}`}
@@ -210,11 +314,11 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
                   key={w._id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => navigate(`/chat?workspaceId=${w._id}`)}
+                  onClick={() => navigate(workspaceChatPath(w._id))}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      navigate(`/chat?workspaceId=${w._id}`);
+                      navigate(workspaceChatPath(w._id));
                     }
                   }}
                   className={`group flex items-center gap-2 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors ${
@@ -246,7 +350,7 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
           onCreated={(workspace) => {
             prependWorkspace(workspace as Workspace);
             setWorkspaceCreateRepo(null);
-            navigate(`/chat?workspaceId=${workspace._id}`);
+            navigate(workspaceChatPath(workspace._id));
           }}
         />
       )}

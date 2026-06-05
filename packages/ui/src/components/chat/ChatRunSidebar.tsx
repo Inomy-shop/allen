@@ -31,6 +31,7 @@ import {
 import type { SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { artifacts as artifactsApi, repos as reposApi, type ArtifactDoc, type RunStatus } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
+import { workspaceChatPath } from '../../lib/workspace-routes';
 import ArtifactViewer from '../artifacts/ArtifactViewer';
 import { WorkflowInterventionAction, type WorkflowInterventionLike } from '../execution/WorkflowInterventionAction';
 import { XTerminal } from '../workspace/XTerminal';
@@ -683,7 +684,7 @@ function ReferenceLinks({ run, context }: { run: SpawnedAgent; context: RunStatu
         </a>
       )}
       {context?.workspace && (
-        <Link to={context.workspace.id ? `/workspaces/${context.workspace.id}` : `/executions/${run.executionId}`} className="cr-ref">
+        <Link to={context.workspace.id ? workspaceChatPath(context.workspace.id) : `/executions/${run.executionId}`} className="cr-ref">
           <span className="cr-ref-ic repo">⎇</span>
           <span className="cr-ref-body">
             <span className="cr-ref-id">{context.workspace.branch ?? context.workspace.name ?? 'Workspace'}</span>
@@ -776,7 +777,7 @@ function WorkContextSection({ runs }: { runs: SpawnedAgent[] }) {
             </>
           );
           return workspace.id ? (
-            <Link key={workspace.id} to={`/workspaces/${workspace.id}`} className="cr-context-card">
+            <Link key={workspace.id} to={workspaceChatPath(workspace.id)} className="cr-context-card">
               {content}
             </Link>
           ) : (
@@ -2328,7 +2329,7 @@ function FileChangesPanel({
   const deletions = files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
   const activeWorkspace = workspaceRefs[0] ?? null;
   const terminalSource = activeWorkspace?.id
-    ? { type: 'workspace' as const, id: activeWorkspace.id, name: activeWorkspace.name ?? 'Workspace terminal', href: `/workspaces/${activeWorkspace.id}` }
+    ? { type: 'workspace' as const, id: activeWorkspace.id, name: activeWorkspace.name ?? 'Workspace terminal', href: workspaceChatPath(activeWorkspace.id) }
     : repoBrowseSource?.id
       ? { type: 'repo' as const, id: repoBrowseSource.id, name: repoBrowseSource.name ?? repoBrowseSource.path ?? 'Repository terminal', href: null }
       : null;
