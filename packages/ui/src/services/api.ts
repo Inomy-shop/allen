@@ -474,7 +474,7 @@ export const executions = {
   start: (
     workflowId: string,
     input: Record<string, unknown>,
-    options?: { agentProvider?: 'claude-cli' | 'codex' },
+    options?: { agentProvider?: 'claude-cli' | 'codex' | 'deepseek' | 'xiaomi-mimo' },
   ) =>
     request<any>('/executions', {
       method: 'POST',
@@ -806,7 +806,7 @@ export interface ChatSession {
   llmSessionId?: string;
   activeAgent?: string | null;
   agentOverrides?: {
-    provider?: 'claude-cli' | 'codex' | null;
+    provider?: 'claude-cli' | 'codex' | 'deepseek' | 'xiaomi-mimo' | null;
     model?: string | null;
     reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
     planMode?: boolean | null;
@@ -1243,13 +1243,13 @@ export const system = {
       { method: 'PATCH', body: JSON.stringify({ values }) },
     ),
   saveDesktopOnboardingModelDefaults: (body: {
-    chatProvider: 'codex' | 'claude-cli' | 'deepseek';
-    agentProvider: '' | 'codex' | 'claude-cli' | 'deepseek';
+    chatProvider: 'codex' | 'claude-cli' | 'deepseek' | 'xiaomi-mimo';
+    agentProvider: '' | 'codex' | 'claude-cli' | 'deepseek' | 'xiaomi-mimo';
     agentModel?: string;
   }) =>
     request<{
-      chatProvider: 'codex' | 'claude-cli' | 'deepseek';
-      agentProvider: '' | 'codex' | 'claude-cli' | 'deepseek';
+      chatProvider: 'codex' | 'claude-cli' | 'deepseek' | 'xiaomi-mimo';
+      agentProvider: '' | 'codex' | 'claude-cli' | 'deepseek' | 'xiaomi-mimo';
       agentModel: string;
       settings: DesktopRuntimeSettingsResponse;
     }>('/system/desktop-runtime/onboarding/model-defaults', {

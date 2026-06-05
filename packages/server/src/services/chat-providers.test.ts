@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { PROVIDERS, buildDeepSeekEnvOverlay, normalizeDeepSeekAnthropicBaseUrl } from './chat-providers.js';
+import {
+  PROVIDERS,
+  buildClaudeCompatibleEnvOverlay,
+  buildDeepSeekEnvOverlay,
+  getEnabledProvidersInDefaultOrder,
+  normalizeDeepSeekAnthropicBaseUrl,
+} from './chat-providers.js';
 import { EnvConfigProvider, resetRuntimeProvidersForTests, setRuntimeConfigProvider, setRuntimeSecretsProvider } from '../runtime/config.js';
 
 /**
@@ -310,17 +316,70 @@ describe('DeepSeek provider registry', () => {
   });
 });
 
+describe('Xiaomi MiMo provider registry', () => {
+  it('xiaomi-mimo is in PROVIDERS with correct shape', () => {
+    const mimo = PROVIDERS.find(p => p.provider === 'xiaomi-mimo');
+    expect(mimo).toBeDefined();
+    expect(mimo?.label).toBe('Xiaomi MiMo');
+    expect(mimo?.open).toBe(true);
+    expect(mimo?.modelSuggestions).toContain('mimo-v2.5-pro');
+    expect(mimo?.requiresKey).toBe('ALLEN_XIAOMI_MIMO_API_KEY');
+  });
+});
+
+describe('enabled provider registry', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    for (const key of ['ALLEN_DEEPSEEK_API_KEY', 'ALLEN_XIAOMI_MIMO_API_KEY']) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+  });
+
+  it('hides Claude-compatible API providers without configured API keys', async () => {
+    delete process.env.ALLEN_DEEPSEEK_API_KEY;
+    delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
+
+    const providers = await getEnabledProvidersInDefaultOrder();
+    expect(providers.map((provider) => provider.provider)).toEqual(expect.arrayContaining(['codex', 'claude-cli']));
+    expect(providers.some((provider) => provider.provider === 'deepseek')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'xiaomi-mimo')).toBe(false);
+  });
+
+  it('shows a Claude-compatible API provider when its key is configured', async () => {
+    process.env.ALLEN_DEEPSEEK_API_KEY = 'deepseek-key';
+    delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
+
+    const providers = await getEnabledProvidersInDefaultOrder();
+    expect(providers.some((provider) => provider.provider === 'deepseek')).toBe(true);
+    expect(providers.some((provider) => provider.provider === 'xiaomi-mimo')).toBe(false);
+  });
+});
+
 describe('buildDeepSeekEnvOverlay', () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
     resetRuntimeProvidersForTests();
     // Restore env
-    for (const key of ['ALLEN_DEEPSEEK_API_KEY', 'ALLEN_DEEPSEEK_BASE_URL', 'ALLEN_DEEPSEEK_MODEL', 'ALLEN_DEEPSEEK_FLASH_MODEL',
-      'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL']) {
+    for (const key of [
+      'ALLEN_DEEPSEEK_API_KEY',
+      'ALLEN_DEEPSEEK_BASE_URL',
+      'ALLEN_DEEPSEEK_MODEL',
+      'ALLEN_DEEPSEEK_FLASH_MODEL',
+      'ALLEN_XIAOMI_MIMO_API_KEY',
+      'ALLEN_XIAOMI_MIMO_BASE_URL',
+      'ALLEN_XIAOMI_MIMO_MODEL',
+      'ALLEN_XIAOMI_MIMO_FLASH_MODEL',
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_MODEL',
+    ]) {
       if (originalEnv[key] === undefined) delete process.env[key];
       else process.env[key] = originalEnv[key];
     }
+    resetRuntimeProvidersForTests();
   });
 
   it('throws when API key is missing', async () => {
@@ -377,6 +436,15 @@ describe('buildDeepSeekEnvOverlay', () => {
     process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key-123';
     const overlay = await buildDeepSeekEnvOverlay('deepseek-v4-flash');
     expect(overlay.ANTHROPIC_MODEL).toBe('deepseek-v4-flash');
+  });
+
+  it('builds Xiaomi MiMo overlay from generic Claude-compatible provider config', async () => {
+    process.env.ALLEN_XIAOMI_MIMO_API_KEY = 'mimo-key-123';
+    const overlay = await buildClaudeCompatibleEnvOverlay('xiaomi-mimo');
+    expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('mimo-key-123');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://api.xiaomimimo.com/anthropic');
+    expect(overlay.ANTHROPIC_MODEL).toBe('mimo-v2.5-pro');
+    expect(overlay.CLAUDE_CODE_SUBAGENT_MODEL).toBe('mimo-v2.5-pro');
   });
 });
 

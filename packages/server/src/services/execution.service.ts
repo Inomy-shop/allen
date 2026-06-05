@@ -439,7 +439,7 @@ function applyWorkflowAgentProvider(workflow: WorkflowDef, provider?: WorkflowAg
 
 export type RunOrigin = 'chat' | 'linear' | 'workflow' | 'direct_agent';
 export type RunType = 'workflow' | 'agent';
-export type WorkflowAgentProvider = 'claude-cli' | 'codex';
+export type WorkflowAgentProvider = 'claude-cli' | 'codex' | 'deepseek' | 'xiaomi-mimo';
 export type RunPhase =
   | 'queued'
   | 'planning'

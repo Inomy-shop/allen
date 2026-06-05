@@ -48,7 +48,7 @@ export type OutputsSpec = Record<string, string>;
  * equivalent to omitting the field.
  */
 export interface AgentOverrides {
-  provider?: 'claude-cli' | 'codex' | 'deepseek' | null;
+  provider?: 'claude-cli' | 'codex' | 'deepseek' | 'xiaomi-mimo' | null;
   model?: string | null;
   reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
   planMode?: boolean | null;
@@ -365,7 +365,7 @@ export interface WorkflowDef {
 
 // ── Agent ───────────────────────────────────────────────────────────────────
 
-export type AgentProvider = 'claude' | 'codex' | 'deepseek';
+export type AgentProvider = 'claude' | 'codex' | 'deepseek' | 'xiaomi-mimo';
 
 export interface AgentDef {
   system: string;

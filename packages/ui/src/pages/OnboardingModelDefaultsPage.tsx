@@ -13,8 +13,9 @@ import { OnboardingShell } from '../components/onboarding/OnboardingShell';
 import { useOnboardingGate } from '../hooks/useOnboardingGate';
 import { system } from '../services/api';
 
-type Provider = 'codex' | 'claude-cli' | 'deepseek';
+type Provider = 'codex' | 'claude-cli' | 'deepseek' | 'xiaomi-mimo';
 type AgentProvider = '' | Provider;
+type ApiProvider = Extract<Provider, 'deepseek' | 'xiaomi-mimo'>;
 
 interface HealthCheck {
   id: string;
@@ -41,10 +42,41 @@ const CODEX_MODELS = [
   { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini', sublabel: 'Lower-latency Codex agent model' },
 ];
 
-const DEEPSEEK_MODEL_SUGGESTIONS = [
-  { label: 'deepseek-v4-pro[1m]', value: 'deepseek-v4-pro[1m]', sublabel: 'High-capability DeepSeek model' },
-  { label: 'deepseek-v4-flash', value: 'deepseek-v4-flash', sublabel: 'Fast DeepSeek model' },
+const API_PROVIDER_OPTIONS: Array<{
+  label: string;
+  value: ApiProvider;
+  apiKey: string;
+  defaultModel: string;
+  suggestions: Array<{ label: string; value: string; sublabel: string }>;
+}> = [
+  {
+    label: 'DeepSeek',
+    value: 'deepseek',
+    apiKey: 'ALLEN_DEEPSEEK_API_KEY',
+    defaultModel: 'deepseek-v4-pro[1m]',
+    suggestions: [
+      { label: 'deepseek-v4-pro[1m]', value: 'deepseek-v4-pro[1m]', sublabel: 'High-capability DeepSeek model' },
+      { label: 'deepseek-v4-flash', value: 'deepseek-v4-flash', sublabel: 'Fast DeepSeek model' },
+    ],
+  },
+  {
+    label: 'Xiaomi MiMo',
+    value: 'xiaomi-mimo',
+    apiKey: 'ALLEN_XIAOMI_MIMO_API_KEY',
+    defaultModel: 'mimo-v2.5-pro',
+    suggestions: [
+      { label: 'mimo-v2.5-pro', value: 'mimo-v2.5-pro', sublabel: 'Default Xiaomi MiMo model' },
+    ],
+  },
 ];
+
+function apiProviderOption(provider: string): (typeof API_PROVIDER_OPTIONS)[number] | undefined {
+  return API_PROVIDER_OPTIONS.find(option => option.value === provider);
+}
+
+function isApiProvider(provider: string): provider is ApiProvider {
+  return Boolean(apiProviderOption(provider));
+}
 
 function checkPassed(summary: HealthSummary | null, id: string): boolean {
   return Boolean(summary?.checks.some(check => check.id === id && check.status === 'pass'));
@@ -53,7 +85,8 @@ function checkPassed(summary: HealthSummary | null, id: string): boolean {
 function defaultAgentModel(provider: AgentProvider): string {
   if (provider === 'claude-cli') return 'opus';
   if (provider === 'codex') return 'gpt-5.5';
-  if (provider === 'deepseek') return 'deepseek-v4-pro[1m]';
+  const apiProvider = apiProviderOption(provider);
+  if (apiProvider) return apiProvider.defaultModel;
   return '';
 }
 
@@ -72,9 +105,7 @@ export default function OnboardingModelDefaultsPage() {
   const providerState = useMemo(() => {
     const claudeReady = checkPassed(health, 'claude_cli') && checkPassed(health, 'claude_auth');
     const codexReady = checkPassed(health, 'codex_cli') && checkPassed(health, 'codex_auth');
-    // DeepSeek uses an API key (not a CLI), so it is always selectable; the key is verified at runtime.
-    const deepseekReady = false as boolean;
-    return { claudeReady, codexReady, deepseekReady };
+    return { claudeReady, codexReady };
   }, [health]);
 
   useEffect(() => {
@@ -128,12 +159,12 @@ export default function OnboardingModelDefaultsPage() {
         : 'Disabled until Claude CLI and auth pass health',
       disabled: !providerState.claudeReady,
     },
-    {
-      label: 'DeepSeek',
-      value: 'deepseek',
-      sublabel: 'Requires ALLEN_DEEPSEEK_API_KEY to be configured in Settings > Secrets',
+    ...API_PROVIDER_OPTIONS.map(option => ({
+      label: option.label,
+      value: option.value,
+      sublabel: `Requires ${option.apiKey} to be configured in Settings > Secrets`,
       disabled: false,
-    },
+    })),
   ];
   const agentProviderOptions = [
     {
@@ -150,16 +181,23 @@ export default function OnboardingModelDefaultsPage() {
         : `Use ${option.label} for all inbuilt agents and workflows`,
     })),
   ];
-  const modelOptions = agentProvider === 'claude-cli' ? CLAUDE_MODELS : agentProvider === 'deepseek' ? [] : CODEX_MODELS;
+  const apiAgentProviderOption = isApiProvider(agentProvider) ? apiProviderOption(agentProvider) : undefined;
+  const modelOptions = agentProvider === 'claude-cli' ? CLAUDE_MODELS : isApiProvider(agentProvider) ? [] : CODEX_MODELS;
+  const apiModelOptions = [
+    ...(apiAgentProviderOption?.suggestions ?? []),
+    ...(apiAgentProviderOption && agentModel && !(apiAgentProviderOption.suggestions ?? []).some(option => option.value === agentModel)
+      ? [{ label: agentModel, value: agentModel, sublabel: 'Custom model ID' }]
+      : []),
+  ];
   const canSave = !loading
     && !saving
-    && (chatProvider === 'deepseek' ? true : chatProvider === 'codex' ? providerState.codexReady : providerState.claudeReady)
+    && (isApiProvider(chatProvider) ? true : chatProvider === 'codex' ? providerState.codexReady : providerState.claudeReady)
     && (
       agentProvider === ''
         ? providerState.claudeReady && providerState.codexReady
         : agentProvider === 'codex'
           ? providerState.codexReady
-          : agentProvider === 'deepseek'
+          : isApiProvider(agentProvider)
             ? true
             : providerState.claudeReady
     );
@@ -283,15 +321,17 @@ export default function OnboardingModelDefaultsPage() {
                   {providerState.claudeReady ? 'cli + auth ready' : 'run claude login, then recheck health'}
                 </div>
               </div>
-              <div className="rounded-md border border-accent-blue/25 bg-accent-blue/10 px-3 py-2">
-                <div className="flex items-center gap-2 text-[12px] font-semibold text-theme-primary">
-                  <Circle className="h-3.5 w-3.5 text-accent-blue" />
-                  DeepSeek
+              {API_PROVIDER_OPTIONS.map((option) => (
+                <div key={option.value} className="rounded-md border border-accent-blue/25 bg-accent-blue/10 px-3 py-2">
+                  <div className="flex items-center gap-2 text-[12px] font-semibold text-theme-primary">
+                    <Circle className="h-3.5 w-3.5 text-accent-blue" />
+                    {option.label}
+                  </div>
+                  <div className="mt-1 font-mono text-[10.5px] text-theme-muted">
+                    configure {option.apiKey} in Settings
+                  </div>
                 </div>
-                <div className="mt-1 font-mono text-[10.5px] text-theme-muted">
-                  configure ALLEN_DEEPSEEK_API_KEY in Settings
-                </div>
-              </div>
+              ))}
             </div>
 
             <div className="space-y-1.5">
@@ -327,20 +367,15 @@ export default function OnboardingModelDefaultsPage() {
             {agentProvider && (
               <div className="space-y-1.5">
                 <label className="block font-mono text-[11px] font-medium lowercase text-theme-muted">model for inbuilt agents and workflows</label>
-                {agentProvider === 'deepseek' ? (
-                  <>
-                    <input
-                      type="text"
-                      list="deepseek-model-suggestions-onboarding"
-                      value={agentModel}
-                      onChange={e => setAgentModel(e.target.value)}
-                      placeholder="e.g. deepseek-v4-pro[1m]"
-                      className="w-full rounded border border-app bg-surface px-3 py-1.5 text-[12px] text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:ring-1 focus:ring-accent"
-                    />
-                    <datalist id="deepseek-model-suggestions-onboarding">
-                      {DEEPSEEK_MODEL_SUGGESTIONS.map(s => <option key={s.value} value={s.value} />)}
-                    </datalist>
-                  </>
+                {isApiProvider(agentProvider) ? (
+                  <Select
+                    value={agentModel}
+                    onChange={setAgentModel}
+                    searchPlaceholder="Search or enter model ID..."
+                    placeholder={`e.g. ${apiAgentProviderOption?.defaultModel ?? 'provider-model'}`}
+                    options={apiModelOptions}
+                    allowCustomValue
+                  />
                 ) : (
                   <Select
                     value={agentModel}

@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import type { TokenUsageInfo } from '@allen/engine';
 import type { Response } from 'express';
 import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
-import { getDefaultChatProvider, getProvidersInDefaultOrder, getTitleGenProviderModel } from './chat-providers.js';
+import { getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getTitleGenProviderModel, isClaudeCompatibleProvider } from './chat-providers.js';
 import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
 import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
@@ -931,7 +931,7 @@ export class ChatService {
   private get messages() { return this.db.collection('chat_messages'); }
   private get messageQueue() { return this.db.collection('chat_message_queue'); }
 
-  getProviders() { return getProvidersInDefaultOrder(); }
+  getProviders() { return getEnabledProvidersInDefaultOrder(); }
 
   async createSession(
     provider: ChatProvider = getDefaultChatProvider(),
@@ -1650,7 +1650,7 @@ User: ${userMessage.slice(0, 500)}`;
 
       // Build message history
       let llmMessages: ChatLLMMessage[];
-      const hasSessionResume = (provider === 'claude-cli' || provider === 'codex') && resumeSessionId;
+      const hasSessionResume = (provider === 'claude-cli' || provider === 'codex' || isClaudeCompatibleProvider(provider)) && resumeSessionId;
       if (hasSessionResume) {
         // CLI providers use session resume — only send new message
         llmMessages = [{ role: 'user', content: enrichedContent }];

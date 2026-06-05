@@ -17,7 +17,7 @@ import { ShieldCheck, Sparkles } from 'lucide-react';
 import Select from '../common/Select';
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
-export type Provider = 'claude-cli' | 'codex' | 'deepseek';
+export type Provider = 'claude-cli' | 'codex' | 'deepseek' | 'xiaomi-mimo';
 
 export interface AgentSettingsValue {
   provider?: Provider | null;
@@ -39,7 +39,10 @@ interface Props {
   onChange: (next: AgentSettingsValue) => void;
 }
 
-const DEEPSEEK_MODEL_SUGGESTIONS = ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'];
+const OPEN_PROVIDER_MODEL_SUGGESTIONS: Partial<Record<Provider, string[]>> = {
+  deepseek: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
+  'xiaomi-mimo': ['mimo-v2.5-pro'],
+};
 
 const EFFORT_OPTIONS: Array<{ value: ReasoningEffort; label: string; description: string }> = [
   { value: 'off', label: 'Off', description: 'No extended thinking' },
@@ -59,7 +62,8 @@ export default function AgentSettingsForm({
 }: Props) {
   const isOverrideMode = mode !== 'agent-default';
   const isClaudeProvider = provider === 'claude-cli';
-  const isDeepSeekProvider = provider === 'deepseek';
+  const openModelSuggestions = OPEN_PROVIDER_MODEL_SUGGESTIONS[provider];
+  const isOpenModelProvider = Boolean(openModelSuggestions);
 
   // Model display: show selected, or "(inherit)" + ghost text in override mode
   const modelValue = value.model ?? '';
@@ -87,6 +91,15 @@ export default function AgentSettingsForm({
   // Disable 'max' unless the effective model looks like Opus.
   const effectiveModel = modelValue || modelInherited || '';
   const opusLike = /opus/i.test(effectiveModel);
+  const openModelOptions = [
+    ...(isOverrideMode
+      ? [{ value: '', label: 'Inherit', sublabel: modelInherited }]
+      : []),
+    ...(openModelSuggestions ?? []).map((model) => ({ value: model, label: model })),
+    ...(isOpenModelProvider && modelValue && !(openModelSuggestions ?? []).includes(modelValue)
+      ? [{ value: modelValue, label: modelValue, sublabel: 'Custom model ID' }]
+      : []),
+  ];
 
   return (
     <div className="space-y-4">
@@ -95,20 +108,15 @@ export default function AgentSettingsForm({
         <label className="block overline mb-1.5">
           Model
         </label>
-        {isDeepSeekProvider ? (
-          <div>
-            <input
-              type="text"
-              list="deepseek-model-suggestions"
-              value={modelValue}
-              onChange={(e) => setField('model', e.target.value || null)}
-              placeholder="e.g. deepseek-v4-pro[1m]"
-              className="w-full rounded border border-app bg-surface px-3 py-1.5 text-[12px] text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-            <datalist id="deepseek-model-suggestions">
-              {DEEPSEEK_MODEL_SUGGESTIONS.map(m => <option key={m} value={m} />)}
-            </datalist>
-          </div>
+        {isOpenModelProvider ? (
+          <Select
+            value={modelValue}
+            onChange={(next) => setField('model', next || null)}
+            searchPlaceholder="Search or enter model ID..."
+            placeholder={`e.g. ${openModelSuggestions?.[0] ?? 'provider-model'}`}
+            options={openModelOptions}
+            allowCustomValue
+          />
         ) : (
           <Select
             value={modelValue}

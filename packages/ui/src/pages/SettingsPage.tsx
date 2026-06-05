@@ -3,8 +3,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   Brain,
   CalendarClock,
+  ChevronDown,
   FolderOpen,
   HardDrive,
+  KeyRound,
   LogOut,
   Monitor,
   Moon,
@@ -304,13 +306,22 @@ const CODEX_RUNTIME_MODEL_OPTIONS: RuntimeSettingOption[] = [
   { label: 'gpt-5.2', value: 'gpt-5.2' },
   { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini' },
 ];
+const OPEN_PROVIDER_RUNTIME_MODEL_OPTIONS: Record<string, RuntimeSettingOption[]> = {
+  deepseek: [
+    { label: 'deepseek-v4-pro[1m]', value: 'deepseek-v4-pro[1m]' },
+    { label: 'deepseek-v4-flash', value: 'deepseek-v4-flash' },
+  ],
+  'xiaomi-mimo': [
+    { label: 'mimo-v2.5-pro', value: 'mimo-v2.5-pro' },
+  ],
+};
 
 function llmOptionsForProvider(provider: string, includeProviderDefault = false): RuntimeSettingOption[] {
   const models = provider === 'claude-cli'
     ? CLAUDE_RUNTIME_MODEL_OPTIONS
     : provider === 'codex'
       ? CODEX_RUNTIME_MODEL_OPTIONS
-      : [...CLAUDE_RUNTIME_MODEL_OPTIONS, ...CODEX_RUNTIME_MODEL_OPTIONS];
+      : OPEN_PROVIDER_RUNTIME_MODEL_OPTIONS[provider] ?? [...CLAUDE_RUNTIME_MODEL_OPTIONS, ...CODEX_RUNTIME_MODEL_OPTIONS];
   return includeProviderDefault ? [PROVIDER_DEFAULT_MODEL_OPTION, ...models] : models;
 }
 
@@ -424,7 +435,20 @@ function RuntimeSettingControl({
   );
 }
 
-function DeepSeekPanel({
+type ClaudeCompatibleProviderPanelConfig = {
+  title: string;
+  description: string;
+  disabledLabel: string;
+  apiKey: string;
+  apiKeyMissingDescription: string;
+  apiKeyPlaceholder: string;
+  groupId: string;
+  settingKeys: string[];
+  saveLabel: string;
+};
+
+function LlmProvidersPanel({
+  configs,
   editable,
   runtime,
   runtimeSettings,
@@ -433,6 +457,7 @@ function DeepSeekPanel({
   onRuntimeSettingsRefresh,
   onUpdateRuntimeValue,
 }: {
+  configs: ClaudeCompatibleProviderPanelConfig[];
   editable: boolean;
   runtime: Awaited<ReturnType<typeof systemApi.desktopRuntime>> | null;
   runtimeSettings: RuntimeSettings | null;
@@ -441,33 +466,46 @@ function DeepSeekPanel({
   onRuntimeSettingsRefresh: (updated: RuntimeSettings) => void;
   onUpdateRuntimeValue: (key: string, value: string) => void;
 }) {
-  const apiKeySecret = runtime?.secrets.find((s) => s.key === 'ALLEN_DEEPSEEK_API_KEY');
-  const apiKeyConfigured = Boolean(apiKeySecret?.configured);
-
-  const [enabled, setEnabled] = useState(apiKeyConfigured);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [enabledById, setEnabledById] = useState<Record<string, boolean>>({});
+  const [expandedById, setExpandedById] = useState<Record<string, boolean>>({});
+  const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
+  const [savingProviderId, setSavingProviderId] = useState<string | null>(null);
+  const [saveErrorById, setSaveErrorById] = useState<Record<string, string | null>>({});
+  const [saveSuccessById, setSaveSuccessById] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    setEnabled(apiKeyConfigured);
-  }, [apiKeyConfigured]);
+    setEnabledById((current) => {
+      const next = { ...current };
+      for (const config of configs) {
+        const configured = Boolean(runtime?.secrets.find((s) => s.key === config.apiKey)?.configured);
+        if (configured) next[config.groupId] = true;
+        else if (next[config.groupId] === undefined) next[config.groupId] = false;
+      }
+      return next;
+    });
+  }, [configs, runtime]);
 
-  const deepseekGroup = runtimeSettings?.groups.find((g) => g.id === 'deepseek');
+  function apiKeyConfigured(config: ClaudeCompatibleProviderPanelConfig): boolean {
+    return Boolean(runtime?.secrets.find((s) => s.key === config.apiKey)?.configured);
+  }
 
-  async function saveDeepSeekSettings() {
-    setSaving(true);
-    setSaveError(null);
-    setSaveSuccess(false);
+  function providerGroup(config: ClaudeCompatibleProviderPanelConfig) {
+    return runtimeSettings?.groups.find((g) => g.id === config.groupId);
+  }
+
+  async function saveProviderSettings(config: ClaudeCompatibleProviderPanelConfig) {
+    setSavingProviderId(config.groupId);
+    setSaveErrorById((current) => ({ ...current, [config.groupId]: null }));
+    setSaveSuccessById((current) => ({ ...current, [config.groupId]: false }));
     try {
+      const apiKeyInput = apiKeyInputs[config.groupId] ?? '';
       if (apiKeyInput.trim()) {
-        await systemApi.setDesktopSecret('ALLEN_DEEPSEEK_API_KEY', apiKeyInput.trim());
-        setApiKeyInput('');
+        await systemApi.setDesktopSecret(config.apiKey, apiKeyInput.trim());
+        setApiKeyInputs((current) => ({ ...current, [config.groupId]: '' }));
         onRuntimeRefresh();
       }
       const nonSecretValues: Record<string, string> = {};
-      for (const key of ['ALLEN_DEEPSEEK_BASE_URL', 'ALLEN_DEEPSEEK_MODEL', 'ALLEN_DEEPSEEK_FLASH_MODEL']) {
+      for (const key of config.settingKeys) {
         if (runtimeValues[key] !== undefined) {
           nonSecretValues[key] = runtimeValues[key];
         }
@@ -476,123 +514,174 @@ function DeepSeekPanel({
         const updated = await systemApi.updateDesktopRuntimeSettings(nonSecretValues);
         onRuntimeSettingsRefresh(updated);
       }
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
+      setSaveSuccessById((current) => ({ ...current, [config.groupId]: true }));
+      setTimeout(() => {
+        setSaveSuccessById((current) => ({ ...current, [config.groupId]: false }));
+      }, 3000);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err));
+      setSaveErrorById((current) => ({ ...current, [config.groupId]: err instanceof Error ? err.message : String(err) }));
     } finally {
-      setSaving(false);
+      setSavingProviderId(null);
     }
   }
 
-  async function deleteApiKey() {
-    setSaving(true);
-    setSaveError(null);
+  async function deleteApiKey(config: ClaudeCompatibleProviderPanelConfig) {
+    setSavingProviderId(config.groupId);
+    setSaveErrorById((current) => ({ ...current, [config.groupId]: null }));
     try {
-      await systemApi.deleteDesktopSecret('ALLEN_DEEPSEEK_API_KEY');
-      setEnabled(false);
+      await systemApi.deleteDesktopSecret(config.apiKey);
+      setEnabledById((current) => ({ ...current, [config.groupId]: false }));
+      setExpandedById((current) => ({ ...current, [config.groupId]: false }));
       onRuntimeRefresh();
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err));
+      setSaveErrorById((current) => ({ ...current, [config.groupId]: err instanceof Error ? err.message : String(err) }));
     } finally {
-      setSaving(false);
+      setSavingProviderId(null);
     }
   }
 
   return (
     <SettingsPanel
-      title="DeepSeek"
-      description="DeepSeek API provider. Allen uses the Claude Code binary with your DeepSeek credentials. Enable to configure API access."
-      action={
-        <SettingsSwitch
-          checked={enabled}
-          disabled={!editable}
-          onClick={() => {
-            if (enabled && apiKeyConfigured) {
-              void deleteApiKey();
-            } else {
-              setEnabled((v) => !v);
-            }
-          }}
-        />
-      }
+      title="LLM Providers"
+      description="Configure Anthropic-compatible API providers used by chat and workflow agents. Enable a provider to enter credentials and endpoint settings."
     >
-      {!enabled && (
-        <SettingsRow label="Status">
-          <SettingsBadge tone="neutral">Disabled — toggle on to configure</SettingsBadge>
-        </SettingsRow>
-      )}
+      <div className="settings-provider-list">
+        {configs.map((config) => {
+          const enabled = enabledById[config.groupId] ?? apiKeyConfigured(config);
+          const expanded = Boolean(expandedById[config.groupId]);
+          const configured = apiKeyConfigured(config);
+          const group = providerGroup(config);
+          const saving = savingProviderId === config.groupId;
+          const saveError = saveErrorById[config.groupId];
+          const saveSuccess = saveSuccessById[config.groupId];
 
-      {enabled && (
-        <>
-          <SettingsRow
-            label="API key"
-            description={apiKeyConfigured ? 'Key is configured. Enter a new value to replace it.' : 'Required to use DeepSeek. Stored securely — never displayed.'}
-          >
-            <div className="settings-field-control">
-              <input
-                type="password"
-                className="settings-edit-input"
-                placeholder={apiKeyConfigured ? '••••••••  (configured — enter to replace)' : 'sk-...'}
-                value={apiKeyInput}
-                disabled={!editable}
-                onChange={(e) => setApiKeyInput(e.target.value)}
-                autoComplete="off"
-              />
-              <div className="settings-field-meta">
-                <span>{apiKeyConfigured ? '✓ Key configured' : 'Not configured'}</span>
-                <span>Stored via secrets API</span>
-              </div>
-            </div>
-          </SettingsRow>
-
-          {deepseekGroup?.fields.map((field) => (
-            <SettingsRow
-              key={field.key}
-              label={field.label}
-              description={field.description ?? field.key}
-            >
-              <div className="settings-field-control">
-                <input
-                  type="text"
-                  className="settings-edit-input"
-                  placeholder={field.placeholder ?? field.defaultValue}
-                  value={runtimeValues[field.key] ?? ''}
-                  disabled={!editable || field.readOnly}
-                  onChange={(e) => onUpdateRuntimeValue(field.key, e.target.value)}
-                />
-                <div className="settings-field-meta">
-                  <span>Default: {field.defaultValue || 'empty'}</span>
-                  <span>Source: {field.source === 'desktop_config' ? 'Desktop setting' : field.source === 'env' ? 'Runtime env' : 'Default'}</span>
-                </div>
-              </div>
-            </SettingsRow>
-          ))}
-
-          {editable && (
-            <SettingsRow label="Save">
-              <div className="settings-field-control">
-                <div className="settings-inline-action">
+          return (
+            <div key={config.groupId} className={`settings-provider-item ${enabled ? 'enabled' : ''}`}>
+              <div className="settings-provider-summary">
+                <button
+                  type="button"
+                  className="settings-provider-main"
+                  onClick={() => {
+                    if (!enabled) {
+                      setEnabledById((current) => ({ ...current, [config.groupId]: true }));
+                      setExpandedById((current) => ({ ...current, [config.groupId]: true }));
+                      return;
+                    }
+                    setExpandedById((current) => ({ ...current, [config.groupId]: !current[config.groupId] }));
+                  }}
+                  aria-expanded={expanded}
+                >
+                  <span className="settings-provider-mark">
+                    <KeyRound className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="settings-provider-copy">
+                    <strong>{config.title}</strong>
+                    <span>{configured ? 'API key configured' : enabled ? 'Enter API key and endpoint settings' : config.disabledLabel}</span>
+                  </span>
+                </button>
+                <span className="settings-provider-state">
+                  <SettingsBadge tone={configured ? 'ok' : enabled ? 'warn' : 'neutral'}>
+                    {configured ? 'configured' : enabled ? 'needs key' : 'off'}
+                  </SettingsBadge>
+                  <SettingsSwitch
+                    checked={enabled}
+                    disabled={!editable || saving}
+                    onClick={() => {
+                      if (enabled && configured) {
+                        void deleteApiKey(config);
+                        return;
+                      }
+                      setEnabledById((current) => ({ ...current, [config.groupId]: !enabled }));
+                      setExpandedById((current) => ({ ...current, [config.groupId]: !enabled }));
+                    }}
+                  />
                   <button
                     type="button"
-                    className="settings-secondary-button"
-                    disabled={saving}
-                    onClick={() => void saveDeepSeekSettings()}
+                    className="settings-provider-chevron-button"
+                    aria-label={`${expanded ? 'Collapse' : 'Expand'} ${config.title} provider settings`}
+                    aria-expanded={expanded}
+                    disabled={!enabled}
+                    onClick={() => setExpandedById((current) => ({ ...current, [config.groupId]: !current[config.groupId] }))}
                   >
-                    {saving ? 'Saving...' : 'Save DeepSeek settings'}
+                    <ChevronDown className={`settings-provider-chevron ${expanded ? 'open' : ''}`} />
                   </button>
-                  {saveSuccess && <SettingsBadge tone="ok">Saved</SettingsBadge>}
-                </div>
-                {saveError && (
-                  <div className="settings-field-meta">
-                    <span className="text-accent-red">{saveError}</span>
-                  </div>
-                )}
+                </span>
               </div>
-            </SettingsRow>
-          )}
-        </>
-      )}
+
+              {enabled && expanded && (
+                <div className="settings-provider-details">
+                  <SettingsRow
+                    label="API key"
+                    description={configured ? 'Key is configured. Enter a new value to replace it.' : config.apiKeyMissingDescription}
+                  >
+                    <div className="settings-field-control">
+                      <input
+                        type="password"
+                        className="settings-edit-input"
+                        placeholder={configured ? '••••••••  (configured — enter to replace)' : config.apiKeyPlaceholder}
+                        value={apiKeyInputs[config.groupId] ?? ''}
+                        disabled={!editable}
+                        onChange={(event) => setApiKeyInputs((current) => ({ ...current, [config.groupId]: event.target.value }))}
+                        autoComplete="off"
+                      />
+                      <div className="settings-field-meta">
+                        <span>{configured ? 'Key configured' : 'Not configured'}</span>
+                        <span>Stored via secrets API</span>
+                      </div>
+                    </div>
+                  </SettingsRow>
+
+                  {group?.fields.map((field) => (
+                    <SettingsRow
+                      key={field.key}
+                      label={field.label}
+                      description={field.description ?? field.key}
+                    >
+                      <div className="settings-field-control">
+                        <input
+                          type="text"
+                          className="settings-edit-input"
+                          placeholder={field.placeholder ?? field.defaultValue}
+                          value={runtimeValues[field.key] ?? ''}
+                          disabled={!editable || field.readOnly}
+                          onChange={(event) => onUpdateRuntimeValue(field.key, event.target.value)}
+                        />
+                        <div className="settings-field-meta">
+                          <span>Default: {field.defaultValue || 'empty'}</span>
+                          <span>Source: {runtimeSourceLabel(field.source)}</span>
+                        </div>
+                      </div>
+                    </SettingsRow>
+                  ))}
+
+                  {editable && (
+                    <SettingsRow label="Save">
+                      <div className="settings-field-control">
+                        <div className="settings-inline-action">
+                          <button
+                            type="button"
+                            className="settings-secondary-button"
+                            disabled={saving}
+                            onClick={() => void saveProviderSettings(config)}
+                          >
+                            {saving ? 'Saving...' : config.saveLabel}
+                          </button>
+                          {saveSuccess && <SettingsBadge tone="ok">Saved</SettingsBadge>}
+                        </div>
+                        {saveError && (
+                          <div className="settings-field-meta">
+                            <span className="text-accent-red">{saveError}</span>
+                          </div>
+                        )}
+                      </div>
+                    </SettingsRow>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </SettingsPanel>
   );
 }
@@ -683,6 +772,24 @@ function RuntimeTab() {
     !cogneeSetup.configuredPython || !cogneeSetup.cogneeImportOk
   ));
   const showCogneeSetupPanel = Boolean(runtimeSettings?.editable && cogneeProviderSelected && cogneeSetup);
+  const apiProviderPanelConfigs: ClaudeCompatibleProviderPanelConfig[] = (runtimeSettings?.groups ?? [])
+    .map((group) => {
+      const secret = runtime?.secrets.find((item) => item.group === group.title && item.key.endsWith('_API_KEY'));
+      if (!secret || group.fields.length === 0) return null;
+      return {
+        title: group.title,
+        description: `${group.title} API provider. Allen uses the Claude Code binary with your ${group.title} credentials. Enable to configure API access.`,
+        disabledLabel: 'Disabled — toggle on to configure',
+        apiKey: secret.key,
+        apiKeyMissingDescription: `Required to use ${group.title}. Stored securely — never displayed.`,
+        apiKeyPlaceholder: 'api-key',
+        groupId: group.id,
+        settingKeys: group.fields.map((field) => field.key),
+        saveLabel: `Save ${group.title} settings`,
+      };
+    })
+    .filter((config): config is ClaudeCompatibleProviderPanelConfig => config !== null);
+  const apiProviderGroupIds = new Set(apiProviderPanelConfigs.map((config) => config.groupId));
 
   return (
     <SettingsPageShell activeTab="runtime" wide>
@@ -734,7 +841,7 @@ function RuntimeTab() {
               && field.key !== 'ALLEN_AGENT_EXECUTION_MODE'
               && !(isCogneeContextGroup && field.key === 'ALLEN_CONTEXT_PROVIDER')
             ));
-            if (group.id === 'deepseek') return null; // rendered separately below
+            if (apiProviderGroupIds.has(group.id)) return null; // rendered separately below
             if (fields.length === 0 && !isCogneeContextGroup) return null;
             return (
               <SettingsPanel
@@ -834,18 +941,21 @@ function RuntimeTab() {
             );
           })}
 
-          <DeepSeekPanel
-            editable={runtimeSettings.editable}
-            runtime={runtime}
-            runtimeSettings={runtimeSettings}
-            runtimeValues={runtimeValues}
-            onRuntimeRefresh={() => void refreshRuntime()}
-            onRuntimeSettingsRefresh={(updated) => {
-              setRuntimeSettings(updated);
-              setRuntimeValues(settingsValueMap(updated));
-            }}
-            onUpdateRuntimeValue={updateRuntimeValue}
-          />
+          {apiProviderPanelConfigs.length > 0 && (
+            <LlmProvidersPanel
+              configs={apiProviderPanelConfigs}
+              editable={runtimeSettings.editable}
+              runtime={runtime}
+              runtimeSettings={runtimeSettings}
+              runtimeValues={runtimeValues}
+              onRuntimeRefresh={() => void refreshRuntime()}
+              onRuntimeSettingsRefresh={(updated) => {
+                setRuntimeSettings(updated);
+                setRuntimeValues(settingsValueMap(updated));
+              }}
+              onUpdateRuntimeValue={updateRuntimeValue}
+            />
+          )}
 
           <div className="settings-floating-actions">
             <button

@@ -26,6 +26,7 @@ vi.mock('../chat-providers.js', () => ({
   getChatProvider: vi.fn(),
   getDefaultChatProvider: vi.fn().mockReturnValue('claude'),
   getProvidersInDefaultOrder: vi.fn().mockReturnValue([]),
+  getEnabledProvidersInDefaultOrder: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../chat-llm.js', () => ({

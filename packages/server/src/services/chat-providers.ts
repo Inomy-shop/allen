@@ -39,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 
 // ── Shared Types ──
 
-export type ChatProvider = 'codex' | 'claude-cli' | 'deepseek';
+export type ChatProvider = 'codex' | 'claude-cli' | 'deepseek' | 'xiaomi-mimo';
 
 export interface ProviderMessage {
   role: 'user' | 'assistant' | 'system';
@@ -81,6 +81,64 @@ export interface ProviderConfig {
   modelSuggestions?: string[];
 }
 
+export interface ClaudeCompatibleProviderConfig {
+  provider: Extract<ChatProvider, 'deepseek' | 'xiaomi-mimo'>;
+  label: string;
+  apiKeyEnv: string;
+  baseUrlEnv: string;
+  modelEnv: string;
+  flashModelEnv: string;
+  defaultBaseUrl: string;
+  defaultModel: string;
+  defaultFlashModel: string;
+  modelSuggestions: string[];
+  apiKeyPlaceholder: string;
+  baseUrlDescription: string;
+}
+
+export const CLAUDE_COMPATIBLE_PROVIDER_CONFIGS: ClaudeCompatibleProviderConfig[] = [
+  {
+    provider: 'deepseek',
+    label: 'DeepSeek',
+    apiKeyEnv: 'ALLEN_DEEPSEEK_API_KEY',
+    baseUrlEnv: 'ALLEN_DEEPSEEK_BASE_URL',
+    modelEnv: 'ALLEN_DEEPSEEK_MODEL',
+    flashModelEnv: 'ALLEN_DEEPSEEK_FLASH_MODEL',
+    defaultBaseUrl: 'https://api.deepseek.com/anthropic',
+    defaultModel: 'deepseek-v4-pro[1m]',
+    defaultFlashModel: 'deepseek-v4-flash',
+    modelSuggestions: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
+    apiKeyPlaceholder: 'sk-...',
+    baseUrlDescription: 'Leave blank to use the default DeepSeek Claude Code endpoint (https://api.deepseek.com/anthropic).',
+  },
+  {
+    provider: 'xiaomi-mimo',
+    label: 'Xiaomi MiMo',
+    apiKeyEnv: 'ALLEN_XIAOMI_MIMO_API_KEY',
+    baseUrlEnv: 'ALLEN_XIAOMI_MIMO_BASE_URL',
+    modelEnv: 'ALLEN_XIAOMI_MIMO_MODEL',
+    flashModelEnv: 'ALLEN_XIAOMI_MIMO_FLASH_MODEL',
+    defaultBaseUrl: 'https://api.xiaomimimo.com/anthropic',
+    defaultModel: 'mimo-v2.5-pro',
+    defaultFlashModel: 'mimo-v2.5-pro',
+    modelSuggestions: ['mimo-v2.5-pro'],
+    apiKeyPlaceholder: 'xm-...',
+    baseUrlDescription: 'Leave blank to use the default MiMo Anthropic-compatible endpoint (https://api.xiaomimimo.com/anthropic). Token Plan users can enter their subscription base URL.',
+  },
+];
+
+const CLAUDE_COMPATIBLE_PROVIDER_BY_ID = new Map(
+  CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config) => [config.provider, config] as const),
+);
+
+export function isClaudeCompatibleProvider(provider: unknown): provider is ClaudeCompatibleProviderConfig['provider'] {
+  return CLAUDE_COMPATIBLE_PROVIDER_BY_ID.has(provider as ClaudeCompatibleProviderConfig['provider']);
+}
+
+export function getClaudeCompatibleProviderConfig(provider: unknown): ClaudeCompatibleProviderConfig | undefined {
+  return CLAUDE_COMPATIBLE_PROVIDER_BY_ID.get(provider as ClaudeCompatibleProviderConfig['provider']);
+}
+
 // ── Provider Registry ──
 
 export const PROVIDERS: ProviderConfig[] = [
@@ -104,18 +162,18 @@ export const PROVIDERS: ProviderConfig[] = [
     supportsStreaming: true,
     supportsSessionResume: true,
   },
-  {
-    provider: 'deepseek',
-    label: 'DeepSeek',
+  ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config): ProviderConfig => ({
+    provider: config.provider,
+    label: config.label,
     models: [],
-    modelSuggestions: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
+    modelSuggestions: config.modelSuggestions,
     open: true,
-    defaultModel: 'deepseek-v4-pro[1m]',
-    requiresKey: 'ALLEN_DEEPSEEK_API_KEY',
+    defaultModel: config.defaultModel,
+    requiresKey: config.apiKeyEnv,
     supportsMcp: true,
     supportsStreaming: true,
     supportsSessionResume: true,
-  },
+  })),
 ];
 
 /**
@@ -142,6 +200,28 @@ export function getProvidersInDefaultOrder(): ProviderConfig[] {
     if (b.provider === def && a.provider !== def) return 1;
     return 0;
   });
+}
+
+async function isProviderEnabled(provider: ProviderConfig): Promise<boolean> {
+  if (!provider.requiresKey) return true;
+  const configValue = getRuntimeConfigProvider().get(provider.requiresKey);
+  if (configValue) return true;
+  const secretValue = await getRuntimeSecretsProvider().getSecret(provider.requiresKey).catch(() => undefined);
+  return Boolean(secretValue);
+}
+
+/**
+ * Return only providers that are enabled in runtime settings. CLI-backed
+ * providers are always available; API providers are enabled by having their
+ * configured secret/config key present.
+ */
+export async function getEnabledProvidersInDefaultOrder(): Promise<ProviderConfig[]> {
+  const ordered = getProvidersInDefaultOrder();
+  const enabled = await Promise.all(ordered.map(async (provider) => ({
+    provider,
+    enabled: await isProviderEnabled(provider),
+  })));
+  return enabled.filter((item) => item.enabled).map((item) => item.provider);
 }
 
 /**
@@ -598,7 +678,7 @@ export async function runCodexCLI(
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// PROVIDER: DeepSeek (via Claude Code SDK with env overlay)
+// Claude-compatible API providers (via Claude Code env overlay)
 // ════════════════════════════════════════════════════════════════════════════
 
 const DEEPSEEK_ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic';
@@ -614,19 +694,27 @@ export function normalizeDeepSeekAnthropicBaseUrl(value?: string): string {
 }
 
 /**
- * Build a process-env overlay that redirects the Claude Code SDK / CLI to use
- * the DeepSeek API instead of Anthropic's. The overlay is applied temporarily
- * per-call and restored after so parallel chat sessions don't bleed into each other.
+ * Build a process-env overlay that redirects Claude Code SDK / CLI requests to
+ * a registered Anthropic-compatible API provider. Adding a new provider should
+ * only require a CLAUDE_COMPATIBLE_PROVIDER_CONFIGS entry and UI copy.
  */
-export async function buildDeepSeekEnvOverlay(model?: string): Promise<Record<string, string>> {
-  const config = getRuntimeConfigProvider();
-  const secrets = getRuntimeSecretsProvider();
-  const apiKey = await secrets.getSecret('ALLEN_DEEPSEEK_API_KEY') ?? config.get('ALLEN_DEEPSEEK_API_KEY') ?? '';
-  const baseUrl = normalizeDeepSeekAnthropicBaseUrl(config.get('ALLEN_DEEPSEEK_BASE_URL'));
-  const defaultModel = config.get('ALLEN_DEEPSEEK_MODEL') ?? 'deepseek-v4-pro[1m]';
-  const flashModel = config.get('ALLEN_DEEPSEEK_FLASH_MODEL') ?? 'deepseek-v4-flash';
+export async function buildClaudeCompatibleEnvOverlay(provider: ChatProvider, model?: string): Promise<Record<string, string>> {
+  const config = getClaudeCompatibleProviderConfig(provider);
+  if (!config) throw new Error(`Provider ${provider} is not a Claude-compatible API provider.`);
+  const runtimeConfig = getRuntimeConfigProvider();
+  const runtimeSecrets = getRuntimeSecretsProvider();
+  const apiKey = await runtimeSecrets.getSecret(config.apiKeyEnv)
+    ?? runtimeConfig.get(config.apiKeyEnv)
+    ?? process.env[config.apiKeyEnv]
+    ?? '';
+  const configuredBaseUrl = runtimeConfig.get(config.baseUrlEnv) ?? process.env[config.baseUrlEnv] ?? config.defaultBaseUrl;
+  const baseUrl = provider === 'deepseek'
+    ? normalizeDeepSeekAnthropicBaseUrl(configuredBaseUrl)
+    : configuredBaseUrl;
+  const defaultModel = runtimeConfig.get(config.modelEnv) ?? process.env[config.modelEnv] ?? config.defaultModel;
+  const flashModel = runtimeConfig.get(config.flashModelEnv) ?? process.env[config.flashModelEnv] ?? config.defaultFlashModel;
   const effectiveModel = model && model !== 'default' ? model : defaultModel;
-  if (!apiKey) throw new Error('ALLEN_DEEPSEEK_API_KEY is not set. Configure this secret in Allen Settings > Secrets.');
+  if (!apiKey) throw new Error(`${config.apiKeyEnv} is not set. Configure this secret in Allen Settings > Secrets.`);
   return {
     ANTHROPIC_BASE_URL: baseUrl,
     ANTHROPIC_AUTH_TOKEN: apiKey,
@@ -637,4 +725,12 @@ export async function buildDeepSeekEnvOverlay(model?: string): Promise<Record<st
     CLAUDE_CODE_SUBAGENT_MODEL: flashModel,
     CLAUDE_CODE_EFFORT_LEVEL: 'max',
   };
+}
+
+export function buildDeepSeekEnvOverlay(model?: string): Promise<Record<string, string>> {
+  return buildClaudeCompatibleEnvOverlay('deepseek', model);
+}
+
+export function buildXiaomiMimoEnvOverlay(model?: string): Promise<Record<string, string>> {
+  return buildClaudeCompatibleEnvOverlay('xiaomi-mimo', model);
 }

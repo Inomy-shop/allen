@@ -2228,6 +2228,8 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             : forwardedDiffRunsByMessage.get(msg._id) ?? []
           : [];
         const messageHasActiveRuns = messageRuns.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
+        const hasAssistantMetrics = msg.role !== 'user'
+          && ((msg.costUsd != null && msg.costUsd > 0) || Boolean(msg.tokenUsage));
         return (<React.Fragment key={item.key}>
         <div className={`ch-msg ${msg.role === 'user' ? 'you' : 'allen'} group/msg al-msg-enter`}>
           <div className="ch-avatar">{msg.role === 'user' ? senderInitial(senderLabel) : 'a'}</div>
@@ -2239,10 +2241,16 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               <span className="ch-msg-ts" title={formatTimestampTitle(msg.createdAt)}>
                 {formatTime(msg.createdAt)}
               </span>
-              {msg.role !== 'user' && msg.costUsd != null && msg.costUsd > 0 && <span className="ch-msg-ts">${msg.costUsd.toFixed(4)}</span>}
-              {msg.role !== 'user' && msg.durationMs != null && msg.durationMs > 0 && <span className="ch-msg-ts">{(msg.durationMs / 1000).toFixed(1)}s</span>}
-              {msg.role !== 'user' && msg.tokenUsage && <TokenUsageDisplay tokenUsage={msg.tokenUsage} />}
+              {msg.role !== 'user' && msg.durationMs != null && msg.durationMs > 0 && (
+                <span className="ch-msg-ts">{formatDuration(msg.durationMs)}</span>
+              )}
             </div>
+            {hasAssistantMetrics && (
+              <div className="ch-msg-meta-line">
+                {msg.costUsd != null && msg.costUsd > 0 && <span className="ch-msg-ts">${msg.costUsd.toFixed(4)}</span>}
+                {msg.tokenUsage && <TokenUsageDisplay tokenUsage={msg.tokenUsage} />}
+              </div>
+            )}
 
             <div className={`ch-msg-text ${msg.status === 'failed' || msg.status === 'cancelled' ? 'failed' : ''}`}>
               {showThinking && (

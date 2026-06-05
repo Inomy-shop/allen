@@ -38,6 +38,57 @@ function normalizeDeepSeekAnthropicBaseUrl(value?: string): string {
   return trimmed;
 }
 
+const CLAUDE_COMPATIBLE_AGENT_PROVIDER_ENV = {
+  deepseek: {
+    apiKeyEnv: 'ALLEN_DEEPSEEK_API_KEY',
+    baseUrlEnv: 'ALLEN_DEEPSEEK_BASE_URL',
+    modelEnv: 'ALLEN_DEEPSEEK_MODEL',
+    flashModelEnv: 'ALLEN_DEEPSEEK_FLASH_MODEL',
+    defaultBaseUrl: 'https://api.deepseek.com/anthropic',
+    defaultFlashModel: 'deepseek-v4-flash',
+  },
+  'xiaomi-mimo': {
+    apiKeyEnv: 'ALLEN_XIAOMI_MIMO_API_KEY',
+    baseUrlEnv: 'ALLEN_XIAOMI_MIMO_BASE_URL',
+    modelEnv: 'ALLEN_XIAOMI_MIMO_MODEL',
+    flashModelEnv: 'ALLEN_XIAOMI_MIMO_FLASH_MODEL',
+    defaultBaseUrl: 'https://api.xiaomimimo.com/anthropic',
+    defaultFlashModel: 'mimo-v2.5-pro',
+  },
+} as const;
+
+type ClaudeCompatibleAgentProvider = keyof typeof CLAUDE_COMPATIBLE_AGENT_PROVIDER_ENV;
+
+function isClaudeCompatibleAgentProvider(provider: unknown): provider is ClaudeCompatibleAgentProvider {
+  return typeof provider === 'string' && provider in CLAUDE_COMPATIBLE_AGENT_PROVIDER_ENV;
+}
+
+function isAgentProviderOverride(provider: unknown): provider is 'codex' | 'claude-cli' | ClaudeCompatibleAgentProvider {
+  return provider === 'codex' || provider === 'claude-cli' || isClaudeCompatibleAgentProvider(provider);
+}
+
+function buildClaudeCompatibleAgentEnv(provider: ClaudeCompatibleAgentProvider, resolvedModel: string): Record<string, string> {
+  const config = CLAUDE_COMPATIBLE_AGENT_PROVIDER_ENV[provider];
+  const apiKey = process.env[config.apiKeyEnv] ?? '';
+  const configuredBaseUrl = process.env[config.baseUrlEnv] ?? config.defaultBaseUrl;
+  const baseUrl = provider === 'deepseek'
+    ? normalizeDeepSeekAnthropicBaseUrl(configuredBaseUrl)
+    : configuredBaseUrl;
+  const providerModel = process.env[config.modelEnv] ?? resolvedModel;
+  const flashModel = process.env[config.flashModelEnv] ?? config.defaultFlashModel;
+  if (!apiKey) throw new Error(`${config.apiKeyEnv} is not set`);
+  return {
+    ANTHROPIC_BASE_URL: baseUrl,
+    ANTHROPIC_AUTH_TOKEN: apiKey,
+    ANTHROPIC_MODEL: providerModel,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: providerModel,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: providerModel,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: flashModel,
+    CLAUDE_CODE_SUBAGENT_MODEL: flashModel,
+    CLAUDE_CODE_EFFORT_LEVEL: 'max',
+  };
+}
+
 /**
  * Resolve the session key for a node.
  *
@@ -301,12 +352,12 @@ export async function executeNode(
       // (or vice versa) without mutating the agent document.
       const overrideProvider = nodeDef.agentOverrides?.provider;
       const effectiveProvider =
-        overrideProvider === 'codex' || overrideProvider === 'claude-cli' || overrideProvider === 'deepseek'
+        isAgentProviderOverride(overrideProvider)
           ? overrideProvider
           : role?.provider === 'codex'
             ? 'codex'
-            : role?.provider === 'deepseek'
-              ? 'deepseek'
+            : isClaudeCompatibleAgentProvider(role?.provider)
+              ? role.provider
               : 'claude';
       if (effectiveProvider === 'codex') {
         const existingSession = sessions[resolveSessionKey(nodeName, nodeDef, state)];
@@ -352,11 +403,14 @@ async function executeAgentNode(
     throw new Error(`Role not found: ${nodeDef.agent}`);
   }
 
-  // Detect DeepSeek provider so the queryViaCli spawn can receive an env overlay
-  // that redirects the Claude Code CLI to the DeepSeek API instead of Anthropic's.
+  // Detect Claude-compatible API providers so queryViaCli can receive an env
+  // overlay that redirects the Claude Code CLI away from Anthropic.
   const overrideProviderForAgent = nodeDef.agentOverrides?.provider;
-  const isDeepSeekProvider =
-    overrideProviderForAgent === 'deepseek' || role?.provider === 'deepseek';
+  const claudeCompatibleProvider = isClaudeCompatibleAgentProvider(overrideProviderForAgent)
+    ? overrideProviderForAgent
+    : isClaudeCompatibleAgentProvider(role?.provider)
+      ? role.provider
+      : undefined;
 
   // Resolve cwd in priority order:
   //   1. worktree_path — set by create-workspace once an isolated git worktree exists.
@@ -820,33 +874,13 @@ ${context}
           console.warn(`[node:${nodeName}] MCP tool discovery failed:`, (err as Error).message);
         }
       }
-      // For DeepSeek agents, overlay the DeepSeek credentials so the claude binary
-      // redirects requests to the DeepSeek API instead of Anthropic's.
-      const resolvedEnv: NodeJS.ProcessEnv = await (async () => {
-        if (!isDeepSeekProvider) return { ...process.env, ...spawnContextEnv };
-        if (deps.buildDeepSeekEnvOverlay) {
-          return {
-            ...process.env,
-            ...spawnContextEnv,
-            ...(await deps.buildDeepSeekEnvOverlay(resolvedModel)),
-          };
-        }
-        const apiKey = process.env.ALLEN_DEEPSEEK_API_KEY ?? '';
-        const baseUrl = normalizeDeepSeekAnthropicBaseUrl(process.env.ALLEN_DEEPSEEK_BASE_URL);
-        const dsModel = process.env.ALLEN_DEEPSEEK_MODEL ?? resolvedModel;
-        const flashModel = process.env.ALLEN_DEEPSEEK_FLASH_MODEL ?? 'deepseek-v4-flash';
-        if (!apiKey) throw new Error('ALLEN_DEEPSEEK_API_KEY is not set');
+      // For Claude-compatible API providers, overlay credentials so the claude
+      // binary redirects requests to the configured provider instead of Anthropic.
+      const resolvedEnv: NodeJS.ProcessEnv = (() => {
         return {
           ...process.env,
           ...spawnContextEnv,
-          ANTHROPIC_BASE_URL: baseUrl,
-          ANTHROPIC_AUTH_TOKEN: apiKey,
-          ANTHROPIC_MODEL: dsModel,
-          ANTHROPIC_DEFAULT_OPUS_MODEL: dsModel,
-          ANTHROPIC_DEFAULT_SONNET_MODEL: dsModel,
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: flashModel,
-          CLAUDE_CODE_SUBAGENT_MODEL: flashModel,
-          CLAUDE_CODE_EFFORT_LEVEL: 'max',
+          ...(claudeCompatibleProvider ? buildClaudeCompatibleAgentEnv(claudeCompatibleProvider, resolvedModel) : {}),
         };
       })();
       conv = queryViaCli({

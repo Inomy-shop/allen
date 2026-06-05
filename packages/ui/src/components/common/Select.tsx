@@ -16,6 +16,9 @@ interface Props {
   placeholder?: string;
   searchPlaceholder?: string;
   searchable?: boolean;
+  allowCustomValue?: boolean;
+  customValueLabel?: (query: string) => string;
+  createCustomValue?: (query: string) => string;
   disabled?: boolean;
   className?: string;
 }
@@ -32,6 +35,9 @@ export default function Select({
   placeholder = 'Select...',
   searchPlaceholder = 'Search...',
   searchable = true,
+  allowCustomValue = false,
+  customValueLabel,
+  createCustomValue,
   disabled = false,
   className = '',
 }: Props) {
@@ -88,13 +94,20 @@ export default function Select({
     }
   }, [open, searchable]);
 
-  const selected = options.find(o => o.value === value);
+  const selected = options.find(o => o.value === value)
+    ?? (allowCustomValue && value ? { value, label: value } : undefined);
   const filteredOptions = options.filter(option => {
     if (!searchable) return true;
     const q = query.trim().toLowerCase();
     if (!q) return true;
     return `${option.label} ${option.sublabel ?? ''}`.toLowerCase().includes(q);
   });
+  const customQuery = query.trim();
+  const customValue = customQuery ? (createCustomValue ? createCustomValue(customQuery) : customQuery) : '';
+  const showCustomOption = allowCustomValue
+    && searchable
+    && Boolean(customQuery)
+    && !options.some(option => option.value === customValue || option.label.toLowerCase() === customQuery.toLowerCase());
 
   const handleOpen = () => {
     if (disabled) return;
@@ -184,7 +197,22 @@ export default function Select({
                 {opt.value === value && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
               </button>
             ))}
-            {filteredOptions.length === 0 && (
+            {showCustomOption && (
+              <button
+                type="button"
+                onClick={() => {
+                  onChange(customValue);
+                  setOpen(false);
+                }}
+                className="flex min-h-10 w-full items-center gap-2 rounded-md px-3 py-2 text-left text-[13px] text-theme-secondary transition-colors hover:bg-app-muted hover:text-theme-primary"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{customValueLabel ? customValueLabel(customQuery) : `Use "${customQuery}"`}</span>
+                  <span className="block truncate font-mono text-[10.5px] text-theme-muted">Custom model ID</span>
+                </span>
+              </button>
+            )}
+            {filteredOptions.length === 0 && !showCustomOption && (
               <div className="px-3 py-6 text-center font-mono text-[11px] text-theme-muted">
                 {query ? `No matches for "${query}".` : 'No options'}
               </div>

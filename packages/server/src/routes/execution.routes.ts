@@ -7,6 +7,7 @@ import { param } from '../types.js';
 import type { Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
+import { PROVIDERS, type ChatProvider } from '../services/chat-providers.js';
 
 export function executionRoutes(db: Db): Router {
   const router = Router();
@@ -20,8 +21,8 @@ export function executionRoutes(db: Db): Router {
     try {
       const { workflowId, input, agentProvider } = req.body;
       if (!workflowId) return res.status(400).json({ error: 'workflowId is required' });
-      const provider = agentProvider === 'claude-cli' || agentProvider === 'codex'
-        ? agentProvider
+      const provider = typeof agentProvider === 'string' && PROVIDERS.some((item) => item.provider === agentProvider)
+        ? agentProvider as ChatProvider
         : undefined;
       const execution = await service.start(workflowId, input ?? {}, { agentProvider: provider });
       const chatSessionId = req.header('x-allen-chat-session-id');

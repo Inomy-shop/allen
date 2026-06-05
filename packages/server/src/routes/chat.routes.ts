@@ -249,13 +249,18 @@ export function chatRoutes(db: Db): Router {
   });
 
   // GET /api/chat/providers — List available LLM providers
-  router.get('/providers', (_req: Request, res: Response) => {
-    res.json(chatService.getProviders());
+  router.get('/providers', async (_req: Request, res: Response) => {
+    try {
+      res.json(await chatService.getProviders());
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   router.get('/slash-commands', async (req: Request, res: Response) => {
     try {
-      const provider = String(req.query.provider ?? 'codex') === 'claude-cli' ? 'claude-cli' : 'codex';
+      const rawProvider = String(req.query.provider ?? 'codex');
+      const provider = rawProvider === 'codex' ? 'codex' : 'claude-cli';
       const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
       let cwd = typeof req.query.cwd === 'string' ? req.query.cwd : undefined;
       if (!cwd && sessionId) {

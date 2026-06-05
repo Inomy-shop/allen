@@ -69,7 +69,7 @@ export interface ChatSession {
   activeAgent?: string | null;
   /** Session-level overrides for the agent's model / reasoning effort / plan mode. */
   agentOverrides?: {
-    provider?: 'claude-cli' | 'codex' | null;
+    provider?: 'claude-cli' | 'codex' | 'deepseek' | 'xiaomi-mimo' | null;
     model?: string | null;
     reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
     planMode?: boolean | null;

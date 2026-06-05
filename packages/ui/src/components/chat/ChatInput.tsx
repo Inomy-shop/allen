@@ -753,7 +753,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                       <ProviderIcon provider={p.provider} className={`h-3.5 w-3.5 shrink-0 ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`} />
                       <span>{p.label}</span>
                     </div>
-                    {modelOptionsForProvider(p, selectedProvider === p.provider ? selectedModel : null).map((m) => {
+                    {modelOptionsForProvider(p, selectedProvider === p.provider ? selectedModel : undefined).map((m) => {
                       const active = selectedProvider === p.provider && selectedModel === m;
                       return (
                       <button

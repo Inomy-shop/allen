@@ -12,7 +12,8 @@
  *   3. Translates the result to CLI flags
  */
 
-export type ChatProvider = 'claude-cli' | 'codex' | 'deepseek';
+import { PROVIDERS, type ChatProvider } from './chat-providers.js';
+
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
 
 /** Fields every agent owns as its default identity. */
@@ -62,7 +63,8 @@ function looksLikeOpus(model: string | undefined): boolean {
 
 function normalizeProvider(p: string | undefined): ChatProvider {
   if (isClaudeProvider(p)) return 'claude-cli';
-  if (p === 'deepseek') return 'deepseek';
+  const registered = PROVIDERS.find((provider) => provider.provider === p);
+  if (registered) return registered.provider;
   return 'codex';
 }
 

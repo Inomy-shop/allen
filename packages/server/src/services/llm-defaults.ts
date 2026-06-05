@@ -31,7 +31,7 @@
  *   and which option the user picked at the prompt.
  */
 
-import { PROVIDERS, type ChatProvider } from './chat-providers.js';
+import { isClaudeCompatibleProvider, PROVIDERS, type ChatProvider } from './chat-providers.js';
 
 const FALLBACK_PROVIDER: ChatProvider = 'claude-cli';
 const FALLBACK_MODEL = 'sonnet';
@@ -48,7 +48,7 @@ function readEnvModel(provider: ChatProvider): string | undefined {
   const cfg = PROVIDERS.find((p) => p.provider === provider);
   const raw = process.env.ALLEN_DEFAULT_AGENT_MODEL?.trim();
   if (!raw) return undefined;
-  // Open providers (e.g. DeepSeek) accept any non-empty model string.
+  // Open providers (e.g. DeepSeek, Xiaomi MiMo) accept any non-empty model string.
   if (cfg?.open) return raw;
   if (cfg?.models.includes(raw)) return raw;
   return undefined;
@@ -97,8 +97,11 @@ export function getRequiredProviders(): { claude: boolean; codex: boolean } {
     ? chatRaw
     : 'codex';
 
+  const chatProvider = chat as ChatProvider;
+  const agentProvider = agentRaw as ChatProvider;
+
   return {
-    claude: chat === 'claude-cli' || agentRaw === 'claude-cli' || chat === 'deepseek' || agentRaw === 'deepseek',
+    claude: chatProvider === 'claude-cli' || agentProvider === 'claude-cli' || isClaudeCompatibleProvider(chatProvider) || isClaudeCompatibleProvider(agentProvider),
     codex: chat === 'codex' || agentRaw === 'codex',
   };
 }

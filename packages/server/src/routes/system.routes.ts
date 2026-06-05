@@ -16,7 +16,11 @@ import { mcpCredentialEnvKey } from '../runtime/mcp-credentials.js';
 import { MCP_PRESETS } from '../services/mcp.service.js';
 import { OrgSeedService } from '../services/org-seed.js';
 import { seedDefaultWorkflows } from '../seed.js';
-import { normalizeDeepSeekAnthropicBaseUrl } from '../services/chat-providers.js';
+import {
+  CLAUDE_COMPATIBLE_PROVIDER_CONFIGS,
+  getEnabledProvidersInDefaultOrder,
+  normalizeDeepSeekAnthropicBaseUrl,
+} from '../services/chat-providers.js';
 
 const exec = promisify(execFile);
 const ONBOARDING_STEPS = new Set(['health', 'model_defaults', 'repository', 'first_workflow', 'complete']);
@@ -69,8 +73,10 @@ type DesktopCogneeSetupStatus = {
 const PROVIDER_OPTIONS = [
   { label: 'Codex', value: 'codex' },
   { label: 'Claude CLI', value: 'claude-cli' },
-  { label: 'DeepSeek', value: 'deepseek' },
+  ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config) => ({ label: config.label, value: config.provider })),
 ] as const;
+
+type ProviderOptionValue = (typeof PROVIDER_OPTIONS)[number]['value'];
 
 const AGENT_MODEL_OPTIONS = [
   { label: 'Provider default', value: '' },
@@ -84,6 +90,7 @@ const AGENT_MODEL_OPTIONS = [
   { label: 'gpt-5.1-codex-max', value: 'gpt-5.1-codex-max' },
   { label: 'gpt-5.2', value: 'gpt-5.2' },
   { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini' },
+  ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.flatMap((config) => config.modelSuggestions.map((model) => ({ label: model, value: model }))),
 ] as const;
 
 const CLAUDE_AGENT_MODEL_OPTIONS = new Set(['', 'sonnet', 'opus', 'haiku']);
@@ -201,37 +208,42 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
       { key: 'ALLEN_DESKTOP_MONGOD_BINARY', label: 'Custom MongoDB binary', kind: 'path', defaultValue: 'bundled MongoDB', restartRequired: true, advanced: true },
     ],
   },
-  {
-    id: 'deepseek',
-    title: 'DeepSeek',
-    description: 'DeepSeek API provider configuration. Allen uses the Claude Code binary with your DeepSeek credentials. Set the API key in the DeepSeek section to enable this provider.',
-    fields: [
-      {
-        key: 'ALLEN_DEEPSEEK_BASE_URL',
-        label: 'API base URL',
-        description: 'Leave blank to use the default DeepSeek Claude Code endpoint (https://api.deepseek.com/anthropic).',
-        kind: 'string' as const,
-        defaultValue: 'https://api.deepseek.com/anthropic',
-        placeholder: 'https://api.deepseek.com/anthropic',
-      },
-      {
-        key: 'ALLEN_DEEPSEEK_MODEL',
-        label: 'Default model',
-        description: 'Primary DeepSeek model for chat and agents. Open text — enter any DeepSeek model ID.',
-        kind: 'string' as const,
-        defaultValue: 'deepseek-v4-pro[1m]',
-        placeholder: 'deepseek-v4-pro[1m]',
-      },
-      {
-        key: 'ALLEN_DEEPSEEK_FLASH_MODEL',
-        label: 'Flash model',
-        description: 'Fast/lightweight model for quick operations (haiku-equivalent role).',
-        kind: 'string' as const,
-        defaultValue: 'deepseek-v4-flash',
-        placeholder: 'deepseek-v4-flash',
-      },
-    ],
-  },
+  ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config): RuntimeSettingGroupDef => {
+    const defaultBaseUrl = config.provider === 'deepseek'
+      ? normalizeDeepSeekAnthropicBaseUrl(config.defaultBaseUrl)
+      : config.defaultBaseUrl;
+    return {
+      id: config.provider,
+      title: config.label,
+      description: `${config.label} API provider configuration. Allen uses the Claude Code binary with your ${config.label} credentials. Set the API key in the ${config.label} section to enable this provider.`,
+      fields: [
+        {
+          key: config.baseUrlEnv,
+          label: 'API base URL',
+          description: config.baseUrlDescription,
+          kind: 'string',
+          defaultValue: defaultBaseUrl,
+          placeholder: defaultBaseUrl,
+        },
+        {
+          key: config.modelEnv,
+          label: 'Default model',
+          description: `Primary ${config.label} model for chat and agents. Open text — enter any ${config.label} model ID.`,
+          kind: 'string',
+          defaultValue: config.defaultModel,
+          placeholder: config.defaultModel,
+        },
+        {
+          key: config.flashModelEnv,
+          label: 'Fast model',
+          description: 'Fast/lightweight model for quick operations (haiku-equivalent role).',
+          kind: 'string',
+          defaultValue: config.defaultFlashModel,
+          placeholder: config.defaultFlashModel,
+        },
+      ],
+    };
+  }),
 ];
 
 const DESKTOP_RUNTIME_SETTING_DEFS = new Map(
@@ -244,7 +256,7 @@ const COGNEE_CONTEXT_VENV_PYTHON = resolve(COGNEE_CONTEXT_VENV_DIR, 'bin/python'
 const COGNEE_CONTEXT_DATA_DIR = resolve(homedir(), '.allen/cognee');
 
 const BASE_SECRET_DEFS = [
-  { key: 'ALLEN_DEEPSEEK_API_KEY', label: 'DeepSeek API key', group: 'DeepSeek' },
+  ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config) => ({ key: config.apiKeyEnv, label: `${config.label} API key`, group: config.label })),
   { key: 'ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN', label: 'GitHub personal access token', group: 'GitHub' },
   { key: 'ALLEN_LINEAR_ACCESS_TOKEN', label: 'Linear access token', group: 'Linear' },
   { key: 'ALLEN_SLACK_BOT_TOKEN', label: 'Slack bot token', group: 'Slack' },
@@ -505,6 +517,39 @@ async function desktopRuntimeSettingsPayload() {
   const configPath = config.get('ALLEN_DESKTOP_CONFIG_PATH');
   const persisted = readDesktopRuntimeConfigFile(configPath);
   const defaults = await detectedRuntimeDefaults(configPath);
+  const enabledProviderOptions = (await getEnabledProvidersInDefaultOrder()).map((provider) => ({
+    label: provider.label,
+    value: provider.provider,
+  }));
+  const enabledProviderValues = new Set<string>(enabledProviderOptions.map((option) => option.value));
+
+  function normalizeProviderField(field: RuntimeSettingDef, value: ReturnType<typeof runtimeSettingValue>) {
+    if (field.key === 'ALLEN_DEFAULT_CHAT_PROVIDER') {
+      return {
+        ...field,
+        options: enabledProviderOptions,
+        ...value,
+        currentValue: enabledProviderValues.has(value.currentValue) ? value.currentValue : enabledProviderOptions[0]?.value ?? 'codex',
+      };
+    }
+    if (field.key === 'ALLEN_DEFAULT_AGENT_PROVIDER') {
+      return {
+        ...field,
+        options: [{ label: 'Preserve seeded mix', value: '' }, ...enabledProviderOptions],
+        ...value,
+        currentValue: value.currentValue === '' || enabledProviderValues.has(value.currentValue) ? value.currentValue : '',
+      };
+    }
+    if (field.key === 'ALLEN_CONTEXT_LLM_PROVIDER') {
+      return {
+        ...field,
+        options: enabledProviderOptions,
+        ...value,
+        currentValue: enabledProviderValues.has(value.currentValue) ? value.currentValue : enabledProviderOptions[0]?.value ?? 'codex',
+      };
+    }
+    return { ...field, ...value };
+  }
 
   return {
     desktop,
@@ -523,13 +568,15 @@ async function desktopRuntimeSettingsPayload() {
       },
     groups: DESKTOP_RUNTIME_SETTING_GROUPS.map((group) => ({
       ...group,
-      fields: group.fields.map((field) => ({
-        ...field,
-        restartRequired: Boolean(field.restartRequired),
-        readOnly: Boolean(field.readOnly),
-        advanced: Boolean(field.advanced),
-        ...runtimeSettingValue(field, persisted, defaults),
-      })),
+      fields: group.fields.map((field) => {
+        const value = runtimeSettingValue(field, persisted, defaults);
+        return {
+          ...normalizeProviderField(field, value),
+          restartRequired: Boolean(field.restartRequired),
+          readOnly: Boolean(field.readOnly),
+          advanced: Boolean(field.advanced),
+        };
+      }),
     })),
   };
 }
@@ -549,17 +596,17 @@ function updateRuntimeProviderValue(key: string, value: string | undefined): voi
   else process.env[key] = value;
 }
 
-function isProviderValue(value: string): value is 'codex' | 'claude-cli' | 'deepseek' {
-  return value === 'codex' || value === 'claude-cli' || value === 'deepseek';
+function isProviderValue(value: string): value is ProviderOptionValue {
+  return PROVIDER_OPTIONS.some((option) => option.value === value);
 }
 
-function validateAgentModelForProvider(provider: 'codex' | 'claude-cli' | 'deepseek' | '', model: string): void {
+function validateAgentModelForProvider(provider: ProviderOptionValue | '', model: string): void {
   if (!provider) {
     if (model) throw new Error('agent_model_requires_agent_provider');
     return;
   }
-  if (provider === 'deepseek') {
-    // DeepSeek uses open model field — any string is valid
+  if (CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.some((config) => config.provider === provider)) {
+    // Claude-compatible API providers use open model fields — any string is valid.
     return;
   }
   const allowed = provider === 'codex' ? CODEX_AGENT_MODEL_OPTIONS : CLAUDE_AGENT_MODEL_OPTIONS;
@@ -886,7 +933,7 @@ export function systemRoutes(db: Db): Router {
       if (agentProviderRaw && !isProviderValue(agentProviderRaw)) {
         return res.status(400).json({ error: 'invalid_agent_provider' });
       }
-      validateAgentModelForProvider(agentProviderRaw as 'codex' | 'claude-cli' | 'deepseek' | '', agentModel);
+      validateAgentModelForProvider(agentProviderRaw as ProviderOptionValue | '', agentModel);
 
       const persisted = readDesktopRuntimeConfigFile(configPath);
       persisted.ALLEN_DEFAULT_CHAT_PROVIDER = chatProviderRaw;

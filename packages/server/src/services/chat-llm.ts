@@ -13,7 +13,8 @@ import {
   PROVIDERS,
   runCodexCLI,
   AGENT_FALLBACK_CWD,
-  buildDeepSeekEnvOverlay,
+  buildClaudeCompatibleEnvOverlay,
+  isClaudeCompatibleProvider,
 } from './chat-providers.js';
 import { loadExternalMcpServers } from './chat-mcp.js';
 import {
@@ -256,15 +257,8 @@ async function runClaudeCLI(
   return { text: fullText, costUsd, sessionId: llmSessionId, trace, tokenUsage };
 }
 
-// ── DeepSeek Provider ──
-
-/**
- * Run a chat turn using DeepSeek by temporarily overlaying the process env
- * with DeepSeek credentials so the Claude Code SDK redirects to the DeepSeek
- * API. Env vars are saved before the call and restored in a finally block so
- * concurrent calls to other providers are not affected.
- */
-async function runDeepSeekChatCLI(
+async function runClaudeCompatibleChatCLI(
+  provider: ChatProvider,
   db: Db,
   systemPrompt: string,
   messages: ChatLLMMessage[],
@@ -276,7 +270,7 @@ async function runDeepSeekChatCLI(
   resolved?: ResolvedSettings,
   chatSessionId?: string,
 ): Promise<{ text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[]; tokenUsage?: TokenUsageInfo | null }> {
-  const overlay = await buildDeepSeekEnvOverlay(model);
+  const overlay = await buildClaudeCompatibleEnvOverlay(provider, model);
   const saved: Record<string, string | undefined> = {};
   for (const key of Object.keys(overlay)) {
     saved[key] = process.env[key];
@@ -353,11 +347,10 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
       case 'claude-cli':
         result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
         break;
-      case 'deepseek':
-        result = await runDeepSeekChatCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
-        break;
       default:
-        throw new Error(`Unknown provider: ${provider}`);
+        if (!isClaudeCompatibleProvider(provider)) throw new Error(`Unknown provider: ${provider}`);
+        result = await runClaudeCompatibleChatCLI(provider, db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
+        break;
     }
   }
 

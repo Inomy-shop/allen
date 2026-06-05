@@ -1,15 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { X, Sparkles, FileText, Eye, Columns, Pencil, AlertCircle, Check, ChevronRight } from 'lucide-react';
 import Select from './Select';
 import RoleIcon from './RoleIcon';
 import { renderMarkdown } from '../chat/ChatMessageList';
 import { mcp as mcpApi, type McpToolGroup } from '../../services/api';
 import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
+import { useEnabledProvidersStatus, type EnabledProvider } from '../../hooks/useEnabledProviders';
 
 const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
 const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'];
-const DEEPSEEK_MODEL_SUGGESTIONS = ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'];
-const PROVIDERS = ['claude', 'codex', 'deepseek'];
 const TOOLS = ['filesystem', 'terminal', 'git', 'web-search', 'web-fetch', 'database'];
 const EFFORT_LEVELS = [
   { value: '', label: '(CLI default)' },
@@ -39,24 +38,24 @@ const TOOL_LABELS: Record<string, string> = {
   database: 'Database',
 };
 
-function getModelsForProvider(provider: string): string[] {
+function getModelsForProvider(provider: string, enabledProviders: EnabledProvider[]): string[] {
   if (provider === 'codex') return CODEX_MODELS;
-  if (provider === 'deepseek') return [];
+  if (enabledProviders.some((item) => item.provider === provider && item.open)) return [];
   return CLAUDE_MODELS;
 }
 
-// Backend stores `provider` as 'claude-cli' (for Claude agents), 'codex', or 'deepseek'.
-// The dropdown offers 'claude' | 'codex' | 'deepseek'. Normalize on load so the Select matches.
+// Backend stores `provider` as 'claude-cli' (for Claude agents), 'codex', or API provider IDs.
+// The dropdown offers 'claude' | 'codex' | API provider IDs. Normalize on load so the Select matches.
 function normalizeProviderForUi(p: unknown): string {
   if (p === 'codex') return 'codex';
-  if (p === 'deepseek') return 'deepseek';
+  if (typeof p === 'string' && p !== 'claude-cli' && p !== 'claude') return p;
   return 'claude';
 }
 
 // Map the UI provider value back to the backend-expected value.
 function providerToBackendValue(uiProvider: string): string {
   if (uiProvider === 'claude') return 'claude-cli';
-  return uiProvider; // 'codex' and 'deepseek' pass through as-is
+  return uiProvider; // 'codex' and API provider IDs pass through as-is
 }
 
 function withConfiguredMcpGroups(
@@ -104,6 +103,17 @@ export default function RoleDialog({
   initialTeamName = '',
 }: RoleDialogProps) {
   const isEdit = !!role;
+  const { providers: enabledProviders, loaded: enabledProvidersLoaded } = useEnabledProvidersStatus();
+  const availableUiProviders = useMemo(() => new Set([
+    ...enabledProviders.map((item) => item.provider === 'claude-cli' ? 'claude' : item.provider),
+  ]), [enabledProviders]);
+  const openProviderModelSuggestions = useMemo(() => Object.fromEntries(
+    enabledProviders
+      .filter((item) => item.open)
+      .map((item) => [item.provider, item.modelSuggestions && item.modelSuggestions.length > 0
+        ? item.modelSuggestions
+        : [item.defaultModel]]),
+  ) as Record<string, string[]>, [enabledProviders]);
 
   const [name, setName] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -180,6 +190,13 @@ export default function RoleDialog({
   }, [open, role, initialTeamName]);
 
   useEffect(() => {
+    if (!open || !enabledProvidersLoaded || availableUiProviders.has(provider)) return;
+    setProvider('claude');
+    setModel('sonnet');
+    setPlanMode('');
+  }, [availableUiProviders, enabledProvidersLoaded, open, provider]);
+
+  useEffect(() => {
     if (!open) return;
     let cancelled = false;
     const loadGroups = (refresh?: boolean) => mcpApi.tools({ refresh })
@@ -211,10 +228,11 @@ export default function RoleDialog({
 
   function handleProviderChange(val: string) {
     setProvider(val);
-    if (val === 'deepseek') {
-      setModel('');
+    const openSuggestions = openProviderModelSuggestions[val];
+    if (openSuggestions) {
+      setModel(openSuggestions[0] ?? '');
     } else {
-      const models = getModelsForProvider(val);
+      const models = getModelsForProvider(val, enabledProviders);
       setModel(models[0] ?? '');
     }
   }
@@ -305,10 +323,21 @@ export default function RoleDialog({
 
   if (!open) return null;
 
-  const modelOptions = getModelsForProvider(provider).map(m => ({ value: m, label: m }));
-  const providerOptions = PROVIDERS.map(p => ({
+  const modelOptions = getModelsForProvider(provider, enabledProviders).map(m => ({ value: m, label: m }));
+  const openModelSuggestions = openProviderModelSuggestions[provider];
+  const openModelOptions = [
+    ...(openModelSuggestions ?? []).map((model) => ({ value: model, label: model })),
+    ...(openModelSuggestions && model && !openModelSuggestions.includes(model)
+      ? [{ value: model, label: model, sublabel: 'Custom model ID' }]
+      : []),
+  ];
+  const providerOptions = [
+    ...(availableUiProviders.has('claude') ? ['claude'] : []),
+    ...(availableUiProviders.has('codex') ? ['codex'] : []),
+    ...enabledProviders.filter((item) => item.open).map((item) => item.provider),
+  ].filter((p, index, all) => all.indexOf(p) === index).map(p => ({
     value: p,
-    label: p === 'deepseek' ? 'DeepSeek' : p,
+    label: p === 'deepseek' ? 'DeepSeek' : p === 'xiaomi-mimo' ? 'Xiaomi MiMo' : p,
   }));
   const iconOptions = ICONS.map(i => ({ value: i, label: i }));
   const typeOptions = AGENT_TYPES.map(t => ({ value: t.value, label: t.label }));
@@ -430,20 +459,15 @@ export default function RoleDialog({
                   </div>
                   <div>
                     <label className="mb-1.5 block overline">Model</label>
-                    {provider === 'deepseek' ? (
-                      <>
-                        <input
-                          type="text"
-                          list="deepseek-models"
-                          value={model}
-                          onChange={e => setModel(e.target.value)}
-                          placeholder="e.g. deepseek-v4-pro[1m]"
-                          className="input w-full"
-                        />
-                        <datalist id="deepseek-models">
-                          {DEEPSEEK_MODEL_SUGGESTIONS.map(m => <option key={m} value={m} />)}
-                        </datalist>
-                      </>
+                    {openModelSuggestions ? (
+                      <Select
+                        value={model}
+                        onChange={setModel}
+                        searchPlaceholder="Search or enter model ID..."
+                        placeholder={`e.g. ${openModelSuggestions[0] ?? 'provider-model'}`}
+                        options={openModelOptions}
+                        allowCustomValue
+                      />
                     ) : (
                       <Select value={model} onChange={setModel} options={modelOptions} />
                     )}
