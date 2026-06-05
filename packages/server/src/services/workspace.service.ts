@@ -132,6 +132,40 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
+export function findLocalBranchNamespaceConflict(branch: string, localBranches: string[]): string | null {
+  for (const existing of localBranches) {
+    if (branch.startsWith(`${existing}/`) || existing.startsWith(`${branch}/`)) return existing;
+  }
+  return null;
+}
+
+function sanitizeWorkspaceBranchPart(value: string): string {
+  const sanitized = value
+    .replace(/\/+/g, '-')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[.-]+|[.-]+$/g, '');
+  if (!sanitized || sanitized.startsWith('-')) return 'workspace';
+  if (sanitized.endsWith('.lock')) return sanitized.slice(0, -5) || 'workspace';
+  return sanitized;
+}
+
+export function chooseAvailableWorkspaceBranchName(requestedBranch: string, workspaceId: string, localBranches: string[]): string {
+  if (!localBranches.includes(requestedBranch) && !findLocalBranchNamespaceConflict(requestedBranch, localBranches)) {
+    return requestedBranch;
+  }
+
+  const base = sanitizeWorkspaceBranchPart(requestedBranch);
+  const shortId = sanitizeWorkspaceBranchPart(workspaceId.slice(0, 8));
+  for (const candidate of [`${base}-${shortId}`, `${base}-workspace-${shortId}`]) {
+    if (!localBranches.includes(candidate) && !findLocalBranchNamespaceConflict(candidate, localBranches)) {
+      return candidate;
+    }
+  }
+
+  return `workspace-${shortId}`;
+}
+
 // ── Service ──
 
 // Process and log state must be shared across every WorkspaceManager
@@ -227,6 +261,11 @@ export class WorkspaceManager {
       if (allFree) return port;
     }
     throw new Error('No free port range available');
+  }
+
+  private async listLocalBranchNames(repoPath: string): Promise<string[]> {
+    const result = await exec('git', ['for-each-ref', '--format=%(refname:strip=2)', 'refs/heads'], { cwd: repoPath });
+    return result.stdout.split('\n').map(line => line.trim()).filter(Boolean);
   }
 
   // ── Workspace CRUD ──
@@ -448,6 +487,14 @@ export class WorkspaceManager {
         // `fetch --prune origin` guarantees that), so the new branch
         // starts from up-to-date code.
         await exec('git', ['branch', '-D', branch], { cwd: repoPath }).catch(() => {});
+        const localBranches = await this.listLocalBranchNames(repoPath);
+        const worktreeBranch = chooseAvailableWorkspaceBranchName(branch, id, localBranches);
+        if (worktreeBranch !== branch) {
+          const conflict = findLocalBranchNamespaceConflict(branch, localBranches) ?? branch;
+          console.warn(`[workspace] branch "${branch}" conflicts with local ref namespace "${conflict}" in ${repoPath}; using "${worktreeBranch}"`);
+          branch = worktreeBranch;
+          await this.col.updateOne({ _id: oid }, { $set: { branch, updatedAt: new Date() } }).catch(() => {});
+        }
         await exec('git', ['worktree', 'add', '-b', branch, worktreePath, baseRef], { cwd: repoPath });
       }
 

@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { workspaces } from '../../services/workspaceService';
 import { Plus, Trash2, Save, Settings, Terminal, Play, FileText, Info, Copy, Check } from 'lucide-react';
-import Editor from '@monaco-editor/react';
-import { setupMonaco, getMonacoTheme } from '../../lib/monaco-theme';
+import DirectMonacoEditor from '../common/DirectMonacoEditor';
 
 interface EnvFile { path: string; content: string; }
 interface ServiceConfig { name: string; command: string; portOffset: number; healthCheck?: string; }
@@ -135,13 +134,11 @@ export function WorkspaceConfigEditor({ repoId, onClose }: { repoId: string; onC
                     className="bg-transparent text-[11px] font-mono text-theme-secondary outline-none flex-1 placeholder:text-theme-subtle" />
                   <CopyButton text={config.envFiles[activeEnvIdx].content} />
                 </div>
-                <Editor
+                <DirectMonacoEditor
                   height="220px"
                   language="ini"
                   value={config.envFiles[activeEnvIdx].content}
-                  onChange={v => updateEnvFile(activeEnvIdx, 'content', v ?? '')}
-                  theme={getMonacoTheme()}
-                  beforeMount={setupMonaco}
+                  onChange={v => updateEnvFile(activeEnvIdx, 'content', v)}
                   options={{
                     fontSize: 12,
                     fontFamily: "'JetBrains Mono', monospace",

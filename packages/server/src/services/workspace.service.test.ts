@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { ObjectId } from 'mongodb';
-import { WorkspaceManager } from './workspace.service';
+import {
+  chooseAvailableWorkspaceBranchName,
+  findLocalBranchNamespaceConflict,
+  WorkspaceManager,
+} from './workspace.service';
 
 function collectionFind(rows: any[]) {
   return {
@@ -58,5 +62,23 @@ describe('WorkspaceManager.list', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].baseBranch).toBe('main');
     expect(rows[0].repoDefaultBranch).toBe('development');
+  });
+});
+
+describe('workspace branch name resolution', () => {
+  it('detects parent local branch namespace conflicts', () => {
+    expect(findLocalBranchNamespaceConflict('testing/something', ['main', 'testing'])).toBe('testing');
+  });
+
+  it('detects child local branch namespace conflicts', () => {
+    expect(findLocalBranchNamespaceConflict('testing', ['main', 'testing/something'])).toBe('testing/something');
+  });
+
+  it('keeps the requested branch when the local namespace is available', () => {
+    expect(chooseAvailableWorkspaceBranchName('feature/something', '6a22bdabfb8ec31fdea3d0d8', ['main', 'testing'])).toBe('feature/something');
+  });
+
+  it('uses a workspace-specific fallback when a parent branch blocks the requested namespace', () => {
+    expect(chooseAvailableWorkspaceBranchName('testing/something', '6a22bdabfb8ec31fdea3d0d8', ['main', 'testing'])).toBe('testing-something-6a22bdab');
   });
 });
