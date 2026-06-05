@@ -7,6 +7,7 @@
 
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
+import type { TokenUsageInfo } from '@allen/engine';
 import type { Response } from 'express';
 import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
 import { getDefaultChatProvider, getProvidersInDefaultOrder, getTitleGenProviderModel } from './chat-providers.js';
@@ -91,6 +92,7 @@ export interface ChatMessage {
   senderSource?: 'ui' | 'slack' | 'system';
   costUsd?: number;
   durationMs?: number;
+  tokenUsage?: TokenUsageInfo | null;
   numTurns?: number;
   error?: string;
   toolCalls?: ToolCallRecord[];
@@ -1823,12 +1825,13 @@ User: ${userMessage.slice(0, 500)}`;
       clearInterval(saveInterval);
       const durationMs = Date.now() - startMs;
       const costUsd = result.costUsd;
+      const tokenUsage = result.tokenUsage ?? null;
       const visibleResponseText = sanitizeChatAssistantResponse(result.text);
       entry.currentText = visibleResponseText;
 
       await this.messages.updateOne(
         { _id: new ObjectId(assistantMsgId) },
-        { $set: { content: visibleResponseText, status: 'completed', costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+        { $set: { content: visibleResponseText, status: 'completed', costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
       );
 
       // Save execution trace to chat_logs (fire-and-forget)
@@ -1840,6 +1843,7 @@ User: ${userMessage.slice(0, 500)}`;
         assistantResponse: visibleResponseText.slice(0, 2000),
         model: result.model,
         costUsd,
+        tokenUsage,
         durationMs,
         toolCalls: entry.toolCalls,
         trace: result.trace,
@@ -1869,7 +1873,7 @@ User: ${userMessage.slice(0, 500)}`;
       );
 
       broadcastToListeners(entry, 'message_complete', {
-        messageId: assistantMsgId, text: visibleResponseText, costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking,
+        messageId: assistantMsgId, text: visibleResponseText, costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking,
       });
 
       // Auto-title strategy: fire exactly once on turn 1, using only the
@@ -2024,16 +2028,17 @@ User: ${userMessage.slice(0, 500)}`;
 
           // Save successful retry result
           const durationMs = Date.now() - startMs;
+          const tokenUsage = retryResult.tokenUsage ?? null;
           const visibleRetryText = sanitizeChatAssistantResponse(retryResult.text);
           entry.currentText = visibleRetryText;
           await this.messages.updateOne(
             { _id: new ObjectId(assistantMsgId) },
-            { $set: { content: visibleRetryText, status: 'completed', costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+            { $set: { content: visibleRetryText, status: 'completed', costUsd: retryResult.costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
           );
           if (retryResult.sessionId) {
             await this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set: { llmSessionId: retryResult.sessionId } });
           }
-          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: visibleRetryText, costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
+          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: visibleRetryText, costUsd: retryResult.costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
           return; // success — skip error handling below
         } catch (retryErr) {
           console.error('Auto-retry also failed:', retryErr instanceof Error ? retryErr.message : retryErr);

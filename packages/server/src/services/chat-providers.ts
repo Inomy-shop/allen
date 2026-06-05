@@ -9,11 +9,13 @@ import type { Db } from 'mongodb';
 import type { ChatTraceEvent } from './chat-llm.js';
 import { resolve, dirname } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
-import type { BuildMcpConfigOptions } from '@allen/engine';
+import { aggregateTokenUsage, normalizeCodexUsage, type BuildMcpConfigOptions, type TokenUsageInfo } from '@allen/engine';
 import {
   getRuntimeApiBaseUrl,
+  getRuntimeConfigProvider,
   getRuntimeJwtAccessSecret,
   getRuntimePublicBaseUrl,
+  getRuntimeSecretsProvider,
 } from '../runtime/config.js';
 import { buildMcpSourceEnvForServer } from '../runtime/mcp-credentials.js';
 
@@ -61,6 +63,7 @@ export interface ProviderResult {
   costUsd: number;
   sessionId?: string;
   trace: ChatTraceEvent[];
+  tokenUsage?: TokenUsageInfo | null;
 }
 
 export interface ProviderConfig {
@@ -436,6 +439,7 @@ export async function runCodexCLI(
     let rawResponse = '';
     let threadId: string | undefined = resumeSessionId;
     let lineBuffer = '';
+    let tokenUsage: TokenUsageInfo | null = null;
 
     // Codex emits `item.started` and `item.completed` separately for
     // MCP tools and shell commands. Pair them by item.id so duration
@@ -558,6 +562,10 @@ export async function runCodexCLI(
             callbacks.onToolResult('Bash', result, id, durationMs);
             pendingStarts.delete(id);
           }
+
+          if (event.type === 'turn.completed' && event.usage) {
+            tokenUsage = aggregateTokenUsage(tokenUsage, normalizeCodexUsage(event.usage));
+          }
         } catch { /* skip non-JSON */ }
       }
     });
@@ -584,7 +592,7 @@ export async function runCodexCLI(
         reject(new Error(errMsg));
         return;
       }
-      resolve({ text: rawResponse, costUsd: 0, sessionId: threadId, trace });
+      resolve({ text: rawResponse, costUsd: 0, sessionId: threadId, trace, tokenUsage });
     });
   });
 }
@@ -593,16 +601,30 @@ export async function runCodexCLI(
 // PROVIDER: DeepSeek (via Claude Code SDK with env overlay)
 // ════════════════════════════════════════════════════════════════════════════
 
+const DEEPSEEK_ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic';
+
+export function normalizeDeepSeekAnthropicBaseUrl(value?: string): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return DEEPSEEK_ANTHROPIC_BASE_URL;
+  const normalized = trimmed.replace(/\/+$/, '');
+  if (normalized === 'https://api.deepseek.com' || normalized === 'https://api.deepseek.com/v1') {
+    return DEEPSEEK_ANTHROPIC_BASE_URL;
+  }
+  return trimmed;
+}
+
 /**
  * Build a process-env overlay that redirects the Claude Code SDK / CLI to use
  * the DeepSeek API instead of Anthropic's. The overlay is applied temporarily
  * per-call and restored after so parallel chat sessions don't bleed into each other.
  */
-export function buildDeepSeekEnvOverlay(model?: string): Record<string, string> {
-  const apiKey = process.env.ALLEN_DEEPSEEK_API_KEY ?? '';
-  const baseUrl = process.env.ALLEN_DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1';
-  const defaultModel = process.env.ALLEN_DEEPSEEK_MODEL ?? 'deepseek-v4-pro[1m]';
-  const flashModel = process.env.ALLEN_DEEPSEEK_FLASH_MODEL ?? 'deepseek-v4-flash';
+export async function buildDeepSeekEnvOverlay(model?: string): Promise<Record<string, string>> {
+  const config = getRuntimeConfigProvider();
+  const secrets = getRuntimeSecretsProvider();
+  const apiKey = await secrets.getSecret('ALLEN_DEEPSEEK_API_KEY') ?? config.get('ALLEN_DEEPSEEK_API_KEY') ?? '';
+  const baseUrl = normalizeDeepSeekAnthropicBaseUrl(config.get('ALLEN_DEEPSEEK_BASE_URL'));
+  const defaultModel = config.get('ALLEN_DEEPSEEK_MODEL') ?? 'deepseek-v4-pro[1m]';
+  const flashModel = config.get('ALLEN_DEEPSEEK_FLASH_MODEL') ?? 'deepseek-v4-flash';
   const effectiveModel = model && model !== 'default' ? model : defaultModel;
   if (!apiKey) throw new Error('ALLEN_DEEPSEEK_API_KEY is not set. Configure this secret in Allen Settings > Secrets.');
   return {
@@ -612,6 +634,7 @@ export function buildDeepSeekEnvOverlay(model?: string): Record<string, string> 
     ANTHROPIC_DEFAULT_OPUS_MODEL: effectiveModel,
     ANTHROPIC_DEFAULT_SONNET_MODEL: effectiveModel,
     ANTHROPIC_DEFAULT_HAIKU_MODEL: flashModel,
-    CLAUDE_CODE_SUBAGENT_MODEL: effectiveModel,
+    CLAUDE_CODE_SUBAGENT_MODEL: flashModel,
+    CLAUDE_CODE_EFFORT_LEVEL: 'max',
   };
 }

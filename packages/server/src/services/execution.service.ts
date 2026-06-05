@@ -31,6 +31,7 @@ import { ContextEvaluationService } from './context/evaluation/context-evaluatio
 import { ContextWorkflowEvaluationService } from './context/evaluation/context-workflow-evaluation.service.js';
 import { hydrateTraceContextEvaluations } from './context/evaluation/context-evaluation-trace-hydrator.js';
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
+import { buildDeepSeekEnvOverlay } from './chat-providers.js';
 
 /**
  * Build the in-process service hook bundle the engine passes to built-ins.
@@ -645,6 +646,7 @@ export class ExecutionService {
           return [];
         }
       },
+      buildDeepSeekEnvOverlay,
     };
 
     const engine = new AllenEngine(config);
@@ -1500,6 +1502,7 @@ export class ExecutionService {
           return [];
         }
       },
+      buildDeepSeekEnvOverlay,
     };
 
     const engine = new AllenEngine(config);
@@ -1570,6 +1573,7 @@ export class ExecutionService {
           return [];
         }
       },
+      buildDeepSeekEnvOverlay,
     };
 
     const engine = new AllenEngine(config);
@@ -1629,6 +1633,7 @@ export class ExecutionService {
           return [];
         }
       },
+      buildDeepSeekEnvOverlay,
     };
 
     const engine = new AllenEngine(config);

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { chat as api, executions as executionsApi, interventions as interventionsApi, authHeaders, type RunStatus } from '../services/api';
+import { chat as api, executions as executionsApi, interventions as interventionsApi, authHeaders, type RunStatus, type TokenUsageInfo } from '../services/api';
 import { useAuthStore, type AuthUser } from '../stores/authStore';
 
 /** Maximum number of automatic reconnect attempts on a transient stream error. */
@@ -122,6 +122,7 @@ export interface ChatMessage {
   senderSource?: 'ui' | 'slack' | 'system';
   costUsd?: number;
   durationMs?: number;
+  tokenUsage?: TokenUsageInfo | null;
   error?: string;
   toolCalls?: ToolCallRecord[];
   thinkingText?: string;
@@ -621,6 +622,7 @@ export function useChat() {
             status: 'completed',
             costUsd: data.costUsd,
             durationMs: data.durationMs,
+            tokenUsage: (data.tokenUsage ?? null) as TokenUsageInfo | null,
             toolCalls: data.toolCalls,
             thinkingText: data.thinkingText ?? thinkingText,
             createdAt: new Date().toISOString(),
@@ -910,6 +912,7 @@ export function useChat() {
                       status: 'completed',
                       costUsd: data.costUsd,
                       durationMs: data.durationMs,
+                      tokenUsage: (data.tokenUsage ?? null) as TokenUsageInfo | null,
                       toolCalls: data.toolCalls || collectedToolCalls,
                       thinkingText: data.thinkingText ?? assistantThinking,
                       createdAt: new Date().toISOString(),

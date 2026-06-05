@@ -1969,7 +1969,7 @@ async function runSpawnInBackground(
       if (provider === 'deepseek') {
         try {
           const { buildDeepSeekEnvOverlay } = await import('./chat-providers.js');
-          deepseekEnvOverlay = buildDeepSeekEnvOverlay(model as string);
+          deepseekEnvOverlay = await buildDeepSeekEnvOverlay(model as string);
         } catch (err) {
           // Fail loudly so the agent errors with a useful message rather than
           // silently calling Anthropic with no API key.

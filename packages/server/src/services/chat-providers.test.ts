@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { PROVIDERS, buildDeepSeekEnvOverlay } from './chat-providers.js';
+import { PROVIDERS, buildDeepSeekEnvOverlay, normalizeDeepSeekAnthropicBaseUrl } from './chat-providers.js';
+import { EnvConfigProvider, resetRuntimeProvidersForTests, setRuntimeConfigProvider, setRuntimeSecretsProvider } from '../runtime/config.js';
 
 /**
  * Test for ENG-1437: Fix Codex resume failure when resumed chat prompt starts with a dash
@@ -313,38 +314,68 @@ describe('buildDeepSeekEnvOverlay', () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
+    resetRuntimeProvidersForTests();
     // Restore env
-    for (const key of ['ALLEN_DEEPSEEK_API_KEY', 'ALLEN_DEEPSEEK_BASE_URL', 'ALLEN_DEEPSEEK_MODEL',
+    for (const key of ['ALLEN_DEEPSEEK_API_KEY', 'ALLEN_DEEPSEEK_BASE_URL', 'ALLEN_DEEPSEEK_MODEL', 'ALLEN_DEEPSEEK_FLASH_MODEL',
       'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL']) {
       if (originalEnv[key] === undefined) delete process.env[key];
       else process.env[key] = originalEnv[key];
     }
   });
 
-  it('throws when API key is missing', () => {
+  it('throws when API key is missing', async () => {
     delete process.env.ALLEN_DEEPSEEK_API_KEY;
-    expect(() => buildDeepSeekEnvOverlay()).toThrow('ALLEN_DEEPSEEK_API_KEY');
+    await expect(buildDeepSeekEnvOverlay()).rejects.toThrow('ALLEN_DEEPSEEK_API_KEY');
   });
 
-  it('returns correct overlay keys when API key is set', () => {
+  it('returns correct overlay keys when API key is set', async () => {
     process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key-123';
-    const overlay = buildDeepSeekEnvOverlay();
+    const overlay = await buildDeepSeekEnvOverlay();
     expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('test-key-123');
-    expect(overlay.ANTHROPIC_BASE_URL).toBeDefined();
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://api.deepseek.com/anthropic');
     expect(overlay.ANTHROPIC_MODEL).toBeDefined();
-    expect(overlay.CLAUDE_CODE_SUBAGENT_MODEL).toBeDefined();
+    expect(overlay.CLAUDE_CODE_SUBAGENT_MODEL).toBe('deepseek-v4-flash');
+    expect(overlay.CLAUDE_CODE_EFFORT_LEVEL).toBe('max');
   });
 
-  it('does not mutate process.env', () => {
+  it('normalizes the old DeepSeek /v1 default to the Claude Code Anthropic endpoint', () => {
+    expect(normalizeDeepSeekAnthropicBaseUrl('https://api.deepseek.com/v1')).toBe('https://api.deepseek.com/anthropic');
+    expect(normalizeDeepSeekAnthropicBaseUrl('https://api.deepseek.com/v1/')).toBe('https://api.deepseek.com/anthropic');
+  });
+
+  it('resolves desktop runtime secrets and config when process.env is empty', async () => {
+    delete process.env.ALLEN_DEEPSEEK_API_KEY;
+    delete process.env.ALLEN_DEEPSEEK_BASE_URL;
+    delete process.env.ALLEN_DEEPSEEK_MODEL;
+    delete process.env.ALLEN_DEEPSEEK_FLASH_MODEL;
+    setRuntimeConfigProvider(new EnvConfigProvider({
+      ALLEN_DEEPSEEK_BASE_URL: 'https://runtime.deepseek.test/v1',
+      ALLEN_DEEPSEEK_MODEL: 'deepseek-runtime-model',
+      ALLEN_DEEPSEEK_FLASH_MODEL: 'deepseek-runtime-flash',
+    } as NodeJS.ProcessEnv));
+    setRuntimeSecretsProvider({
+      async getSecret(key: string) {
+        return key === 'ALLEN_DEEPSEEK_API_KEY' ? 'runtime-secret-key' : undefined;
+      },
+    });
+
+    const overlay = await buildDeepSeekEnvOverlay();
+    expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('runtime-secret-key');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://runtime.deepseek.test/v1');
+    expect(overlay.ANTHROPIC_MODEL).toBe('deepseek-runtime-model');
+    expect(overlay.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('deepseek-runtime-flash');
+  });
+
+  it('does not mutate process.env', async () => {
     process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key-123';
     const beforeAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
-    buildDeepSeekEnvOverlay();
+    await buildDeepSeekEnvOverlay();
     expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe(beforeAuthToken); // unchanged
   });
 
-  it('uses model override when provided', () => {
+  it('uses model override when provided', async () => {
     process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key-123';
-    const overlay = buildDeepSeekEnvOverlay('deepseek-v4-flash');
+    const overlay = await buildDeepSeekEnvOverlay('deepseek-v4-flash');
     expect(overlay.ANTHROPIC_MODEL).toBe('deepseek-v4-flash');
   });
 });

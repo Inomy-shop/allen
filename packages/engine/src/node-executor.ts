@@ -26,6 +26,17 @@ import { statSync, mkdirSync } from 'node:fs';
  * import from the server package. Never fall back to process.cwd() because
  * that's the server's source tree. */
 const AGENT_FALLBACK_CWD = '/tmp/allen';
+const DEEPSEEK_ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic';
+
+function normalizeDeepSeekAnthropicBaseUrl(value?: string): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return DEEPSEEK_ANTHROPIC_BASE_URL;
+  const normalized = trimmed.replace(/\/+$/, '');
+  if (normalized === 'https://api.deepseek.com' || normalized === 'https://api.deepseek.com/v1') {
+    return DEEPSEEK_ANTHROPIC_BASE_URL;
+  }
+  return trimmed;
+}
 
 /**
  * Resolve the session key for a node.
@@ -115,6 +126,12 @@ export interface NodeExecutorDeps {
    * MCP-tool injection (existing behaviour).
    */
   discoverMcpToolNames?: () => Promise<string[]>;
+  /**
+   * Optional provider-specific env builder for DeepSeek. Server callers use
+   * this to resolve desktop/runtime secrets without the engine package
+   * importing server runtime config.
+   */
+  buildDeepSeekEnvOverlay?: (model?: string) => Promise<Record<string, string>>;
 }
 
 function resolveExternalMcpServers(
@@ -805,10 +822,17 @@ ${context}
       }
       // For DeepSeek agents, overlay the DeepSeek credentials so the claude binary
       // redirects requests to the DeepSeek API instead of Anthropic's.
-      const resolvedEnv: NodeJS.ProcessEnv = (() => {
+      const resolvedEnv: NodeJS.ProcessEnv = await (async () => {
         if (!isDeepSeekProvider) return { ...process.env, ...spawnContextEnv };
+        if (deps.buildDeepSeekEnvOverlay) {
+          return {
+            ...process.env,
+            ...spawnContextEnv,
+            ...(await deps.buildDeepSeekEnvOverlay(resolvedModel)),
+          };
+        }
         const apiKey = process.env.ALLEN_DEEPSEEK_API_KEY ?? '';
-        const baseUrl = process.env.ALLEN_DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1';
+        const baseUrl = normalizeDeepSeekAnthropicBaseUrl(process.env.ALLEN_DEEPSEEK_BASE_URL);
         const dsModel = process.env.ALLEN_DEEPSEEK_MODEL ?? resolvedModel;
         const flashModel = process.env.ALLEN_DEEPSEEK_FLASH_MODEL ?? 'deepseek-v4-flash';
         if (!apiKey) throw new Error('ALLEN_DEEPSEEK_API_KEY is not set');
@@ -821,7 +845,8 @@ ${context}
           ANTHROPIC_DEFAULT_OPUS_MODEL: dsModel,
           ANTHROPIC_DEFAULT_SONNET_MODEL: dsModel,
           ANTHROPIC_DEFAULT_HAIKU_MODEL: flashModel,
-          CLAUDE_CODE_SUBAGENT_MODEL: dsModel,
+          CLAUDE_CODE_SUBAGENT_MODEL: flashModel,
+          CLAUDE_CODE_EFFORT_LEVEL: 'max',
         };
       })();
       conv = queryViaCli({

@@ -33,7 +33,9 @@ interface ProviderInfo {
   provider: string;
   label: string;
   models: string[];
+  modelSuggestions?: string[];
   defaultModel: string;
+  open?: boolean;
 }
 
 interface ChatInputProps {
@@ -124,6 +126,15 @@ const effortPickerRowClass = 'flex min-h-9 w-full items-center gap-2 rounded-md 
 
 const TEXTAREA_MIN_HEIGHT = 76;
 const TEXTAREA_MAX_HEIGHT = 200;
+
+export function modelOptionsForProvider(provider: ProviderInfo, currentModel?: string | null): string[] {
+  const fixedModels = Array.isArray(provider.models) ? provider.models : [];
+  const suggestions = Array.isArray(provider.modelSuggestions) ? provider.modelSuggestions : [];
+  const candidates = provider.open
+    ? [currentModel, provider.defaultModel, ...suggestions]
+    : fixedModels;
+  return [...new Set(candidates.filter((model): model is string => Boolean(model?.trim())))];
+}
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -742,7 +753,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                       <ProviderIcon provider={p.provider} className={`h-3.5 w-3.5 shrink-0 ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`} />
                       <span>{p.label}</span>
                     </div>
-                    {p.models.map((m) => {
+                    {modelOptionsForProvider(p, selectedProvider === p.provider ? selectedModel : null).map((m) => {
                       const active = selectedProvider === p.provider && selectedModel === m;
                       return (
                       <button

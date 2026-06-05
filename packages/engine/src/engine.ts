@@ -59,6 +59,8 @@ export interface EngineConfig {
    * callers wire this to their `loadMcpTools(db)` helper.
    */
   discoverMcpToolNames?: () => Promise<string[]>;
+  /** Optional provider-specific env builder for DeepSeek workflow agents. */
+  buildDeepSeekEnvOverlay?: (model?: string) => Promise<Record<string, string>>;
 }
 
 export interface RunOptions {
@@ -1379,6 +1381,7 @@ ${lines.join('\n')}
       services: this.config.services,
       abortSignal: ac.signal,
       discoverMcpToolNames: this.config.discoverMcpToolNames,
+      buildDeepSeekEnvOverlay: this.config.buildDeepSeekEnvOverlay,
       repoKnowledgeContext: repoKnowledgePacket?.traceSummary ? {
         packetId: repoKnowledgePacket.traceSummary.packetId,
         repoId: repoKnowledgePacket.traceSummary.repoId,
@@ -1995,6 +1998,7 @@ ${lines.join('\n')}
           services: this.config.services,
           abortSignal: retryAc.signal,
           discoverMcpToolNames: this.config.discoverMcpToolNames,
+          buildDeepSeekEnvOverlay: this.config.buildDeepSeekEnvOverlay,
         };
 
         // Each branch reads from the snapshot, not the live state

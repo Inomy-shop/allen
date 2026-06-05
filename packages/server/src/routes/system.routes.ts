@@ -16,6 +16,7 @@ import { mcpCredentialEnvKey } from '../runtime/mcp-credentials.js';
 import { MCP_PRESETS } from '../services/mcp.service.js';
 import { OrgSeedService } from '../services/org-seed.js';
 import { seedDefaultWorkflows } from '../seed.js';
+import { normalizeDeepSeekAnthropicBaseUrl } from '../services/chat-providers.js';
 
 const exec = promisify(execFile);
 const ONBOARDING_STEPS = new Set(['health', 'model_defaults', 'repository', 'first_workflow', 'complete']);
@@ -208,10 +209,10 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
       {
         key: 'ALLEN_DEEPSEEK_BASE_URL',
         label: 'API base URL',
-        description: 'Leave blank to use the default DeepSeek endpoint (https://api.deepseek.com/v1).',
+        description: 'Leave blank to use the default DeepSeek Claude Code endpoint (https://api.deepseek.com/anthropic).',
         kind: 'string' as const,
-        defaultValue: 'https://api.deepseek.com/v1',
-        placeholder: 'https://api.deepseek.com/v1',
+        defaultValue: 'https://api.deepseek.com/anthropic',
+        placeholder: 'https://api.deepseek.com/anthropic',
       },
       {
         key: 'ALLEN_DEEPSEEK_MODEL',
@@ -380,6 +381,9 @@ function normalizeRuntimeSettingValue(field: RuntimeSettingDef, raw: unknown): s
       throw new Error(`invalid_value:${field.key}`);
     }
   }
+  if (field.key === 'ALLEN_DEEPSEEK_BASE_URL') {
+    return normalizeDeepSeekAnthropicBaseUrl(value);
+  }
   return value;
 }
 
@@ -395,9 +399,12 @@ function runtimeSettingValue(
 } {
   const defaultValue = detectedDefaults[field.key] ?? field.defaultValue;
   if (persisted[field.key] !== undefined) {
+    const persistedValue = field.key === 'ALLEN_DEEPSEEK_BASE_URL'
+      ? normalizeDeepSeekAnthropicBaseUrl(persisted[field.key])
+      : persisted[field.key];
     return {
-      currentValue: persisted[field.key],
-      configuredValue: persisted[field.key],
+      currentValue: persistedValue,
+      configuredValue: persistedValue,
       source: 'desktop_config',
       defaultValue,
     };
@@ -405,8 +412,11 @@ function runtimeSettingValue(
 
   const configValue = getRuntimeConfigProvider().get(field.key);
   if (configValue !== undefined) {
+    const runtimeConfigValue = field.key === 'ALLEN_DEEPSEEK_BASE_URL'
+      ? normalizeDeepSeekAnthropicBaseUrl(configValue)
+      : configValue;
     return {
-      currentValue: configValue,
+      currentValue: runtimeConfigValue,
       configuredValue: null,
       source: 'env',
       defaultValue,
