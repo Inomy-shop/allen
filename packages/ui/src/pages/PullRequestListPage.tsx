@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import { pullRequests } from '../services/workspaceService';
 import {
   AlertCircle, ArrowRight, Bot, Clock, ExternalLink, FileDiff, FolderGit2,
@@ -41,6 +42,7 @@ function integrationErrorMessage(err: unknown, fallback: string): string {
 
 export default function PullRequestListPage() {
   const navigate = useNavigate();
+  const [showGithubModal, setShowGithubModal] = useState(false);
   const [prs, setPrs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [githubConfigured, setGithubConfigured] = useState<boolean | null>(null);
@@ -163,7 +165,7 @@ export default function PullRequestListPage() {
             </div>
             <div className="mt-6 flex items-center justify-center gap-2">
               <button
-                onClick={() => navigate('/settings/mcp')}
+                onClick={() => setShowGithubModal(true)}
                 className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
                 type="button"
               >
@@ -178,6 +180,17 @@ export default function PullRequestListPage() {
               </button>
             </div>
           </div>
+          {showGithubModal && (
+            <McpPresetConnectModal
+              presetName="github"
+              onClose={() => setShowGithubModal(false)}
+              onConnected={() => {
+                setShowGithubModal(false);
+                void loadGitHubStatus();
+                void load();
+              }}
+            />
+          )}
         </div>
       </div>
     );

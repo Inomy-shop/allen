@@ -17,6 +17,7 @@ import {
   UserRound,
 } from 'lucide-react';
 import { agents as agentsApi, chat as chatApi, executions, interventions, linear as linearApi, repos as reposApi, system as systemApi } from '../services/api';
+import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import { chatCodeDiffs, pullRequests } from '../services/workspaceService';
 import { useAuthStore } from '../stores/authStore';
 import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
@@ -706,6 +707,7 @@ export default function DashboardPage() {
   const [selectedRepo, setSelectedRepo] = useState<RepoOption | null>(null);
   const [githubConnected, setGithubConnected] = useState(false);
   const [linearConnected, setLinearConnected] = useState(false);
+  const [connectPreset, setConnectPreset] = useState<'github' | 'linear' | null>(null);
   const [agentOverrides, setAgentOverrides] = useState<{
     reasoningEffort?: ReasoningEffortValue | null;
     planMode?: boolean | null;
@@ -969,7 +971,8 @@ export default function DashboardPage() {
       icon: Github,
       done: githubConnected,
       action: githubConnected ? (reviewPrs.length ? 'Review' : 'Open') : 'Connect',
-      href: githubConnected ? '/pull-requests' : '/settings/mcp',
+      href: githubConnected ? '/pull-requests' : null,
+      onAction: githubConnected ? undefined : () => setConnectPreset('github'),
     },
     {
       title: 'Linear',
@@ -979,7 +982,8 @@ export default function DashboardPage() {
       icon: TicketCheck,
       done: linearConnected,
       action: linearConnected ? 'Open' : 'Connect',
-      href: linearConnected ? '/tickets' : '/settings/mcp',
+      href: linearConnected ? '/tickets' : null,
+      onAction: linearConnected ? undefined : () => setConnectPreset('linear'),
     },
     {
       title: 'Add repository',
@@ -1065,7 +1069,10 @@ export default function DashboardPage() {
                   key={item.title}
                   to={item.href ?? '#'}
                   onClick={(event) => {
-                    if (!item.href) {
+                    if (item.onAction) {
+                      event.preventDefault();
+                      item.onAction();
+                    } else if (!item.href) {
                       event.preventDefault();
                       chatInputRef.current?.focus();
                     }
@@ -1249,6 +1256,17 @@ export default function DashboardPage() {
           </>
         )}
       </div>
+      {connectPreset && (
+        <McpPresetConnectModal
+          presetName={connectPreset}
+          onClose={() => setConnectPreset(null)}
+          onConnected={() => {
+            if (connectPreset === 'github') setGithubConnected(true);
+            else if (connectPreset === 'linear') setLinearConnected(true);
+            setConnectPreset(null);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import {
   linear as linearApi,
   teams as teamsApi,
@@ -228,6 +229,7 @@ export default function TicketsPage() {
   const { agents } = useAgents();
   const [teams, setTeams] = useState<any[]>([]);
 
+  const [showLinearModal, setShowLinearModal] = useState(false);
   const [status, setStatus] = useState<LinearStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [projects, setProjects] = useState<LinearProject[]>([]);
@@ -542,7 +544,7 @@ export default function TicketsPage() {
           <div className="mt-6 flex items-center justify-center gap-2">
             {!statusCheckFailed && (
               <button
-                onClick={() => navigate('/settings/mcp')}
+                onClick={() => setShowLinearModal(true)}
                 className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
                 type="button"
               >
@@ -559,6 +561,16 @@ export default function TicketsPage() {
           </div>
         </div>
         </div>
+        {showLinearModal && (
+          <McpPresetConnectModal
+            presetName="linear"
+            onClose={() => setShowLinearModal(false)}
+            onConnected={() => {
+              setShowLinearModal(false);
+              void loadStatus();
+            }}
+          />
+        )}
       </div>
     );
   }
