@@ -283,15 +283,15 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
           };
           return (
           <div key={repoKey}>
-            <div className="mb-1 flex items-center gap-1">
+            <div className="group mb-1 flex items-center gap-1 rounded-md transition-colors hover:bg-app-muted">
               <button
                 onClick={() => toggleRepo(repoKey)}
-                className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-2 py-1 text-left hover:bg-app-muted"
+                className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-2 py-1 text-left text-theme-secondary transition-colors group-hover:text-theme-primary"
                 title={isRepoCollapsed ? 'Expand' : 'Collapse'}
                 type="button"
               >
                 <FolderGit2 className="w-3 h-3 text-theme-muted shrink-0" />
-                <span className="text-[11px] font-medium text-theme-secondary truncate flex-1">{group.repoName}</span>
+                <span className="text-[11px] font-medium truncate flex-1">{group.repoName}</span>
                 {isRepoCollapsed
                   ? <ChevronRight className="w-3 h-3 text-theme-subtle shrink-0" />
                   : <ChevronDown className="w-3 h-3 text-theme-subtle shrink-0" />}
@@ -300,44 +300,48 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
                 type="button"
                 onClick={handleCreateClick}
                 disabled={!repo}
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:text-accent group-hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
                 title={`New workspace in ${group.repoName}`}
                 aria-label={`New workspace in ${group.repoName}`}
               >
                 <Plus className="h-3.5 w-3.5" />
               </button>
             </div>
-            {showItems && group.items.map((w) => {
-              const isActive = w._id === activeId;
-              return (
-                <div
-                  key={w._id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => navigate(workspaceChatPath(w._id))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      navigate(workspaceChatPath(w._id));
-                    }
-                  }}
-                  className={`group flex items-center gap-2 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors ${
-                    isActive
-                      ? 'border border-accent/30 bg-accent-soft shadow-sm'
-                      : 'hover:bg-app-muted border border-transparent'
-                  }`}
-                  title={w.name}
-                >
-                  <span
-                    className={`min-w-0 flex-1 truncate text-[12.5px] font-mono leading-5 ${
-                      isActive ? 'text-accent font-medium' : 'text-theme-secondary group-hover:text-theme-primary'
-                    }`}
-                  >
-                    {w.name}
-                  </span>
-                </div>
-              );
-            })}
+            {showItems && (
+              <div className="mt-1 space-y-1 pl-4">
+                {group.items.map((w) => {
+                  const isActive = w._id === activeId;
+                  return (
+                    <div
+                      key={w._id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => navigate(workspaceChatPath(w._id))}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          navigate(workspaceChatPath(w._id));
+                        }
+                      }}
+                      className={`group flex items-center gap-2 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors ${
+                        isActive
+                          ? 'border border-transparent bg-transparent'
+                          : 'hover:bg-app-muted border border-transparent'
+                      }`}
+                      title={w.name}
+                    >
+                      <span
+                        className={`min-w-0 flex-1 truncate text-[12.5px] font-mono leading-5 ${
+                          isActive ? 'text-accent font-medium' : 'text-theme-muted group-hover:text-theme-secondary'
+                        }`}
+                      >
+                        {w.name}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
           );
         })}

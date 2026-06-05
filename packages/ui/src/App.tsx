@@ -1087,11 +1087,11 @@ export default function App() {
                       };
                       return (
                         <div key={group.key}>
-                          <div className="mb-1 flex items-center gap-1">
+                          <div className="group mb-1 flex items-center gap-1 rounded-md transition-colors hover:bg-app-muted">
                             <button
                               type="button"
                               onClick={() => toggleWorkspaceRepo(group.key)}
-                              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-theme-secondary transition-colors hover:bg-app-muted hover:text-theme-primary"
+                              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-theme-secondary transition-colors group-hover:text-theme-primary"
                             >
                               <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-theme-muted" />
                               <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{group.label}</span>
@@ -1101,7 +1101,7 @@ export default function App() {
                               type="button"
                               onClick={handleCreateClick}
                               disabled={!repo}
-                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:text-accent group-hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
                               title={`New workspace in ${group.label}`}
                               aria-label={`New workspace in ${group.label}`}
                             >
@@ -1109,7 +1109,7 @@ export default function App() {
                             </button>
                           </div>
                           {showItems && (
-                            <div className="mt-1 space-y-1">
+                            <div className="mt-1 space-y-1 pl-4">
                               {group.items.map((workspace) => {
                                 const active = workspace._id === activeWorkspaceId;
                                 const deleting = deletingWorkspaceId === workspace._id;
@@ -1118,8 +1118,8 @@ export default function App() {
                                     key={workspace._id}
                                     className={`group flex w-full items-center rounded-md border py-1.5 pl-2.5 pr-1 transition-colors ${
                                       active
-                                        ? 'border-accent/30 bg-accent-soft text-accent'
-                                        : 'border-transparent text-theme-secondary hover:bg-app-muted hover:text-theme-primary'
+                                        ? 'border-transparent bg-transparent text-accent'
+                                        : 'border-transparent text-theme-muted hover:bg-app-muted hover:text-theme-secondary'
                                     }`}
                                   >
                                     <button
