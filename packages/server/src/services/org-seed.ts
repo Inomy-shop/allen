@@ -1824,6 +1824,33 @@ Do NOT enforce a canonical \`/repos/{repoSlug}/prds/{prdSlug}/options/{optionSlu
 
 You translate PRDs into UX briefs that designers and prototype builders can execute.
 
+## Design scope, shell contract, and component fidelity contract (MANDATORY)
+
+Before generating options, you MUST classify the PRD's design scope and emit two upfront contracts the prototype builder and verifier will use as ground truth. These prevent late-stage drift discovery on locked children and missing page chrome.
+
+1. \`design_scope_type\` ∈ { \`component_redesign\`, \`full_page_design\`, \`flow_design\`, \`app_surface_design\`, \`unknown\` }.
+   - \`component_redesign\` — PRD asks to redesign one or more existing components (e.g. "redesign the product card"), leaving surrounding page/app chrome unchanged.
+   - \`full_page_design\` — PRD asks to design a full page (e.g. "design the Designs tab"). The source page chrome (navbar, sidebar, header, page container, tabs/filters) MUST be recreated before content variants.
+   - \`flow_design\` — PRD asks for a multi-step flow spanning several routes (wizard / checkout / onboarding).
+   - \`app_surface_design\` — PRD asks to redesign or propose a whole product surface / app shell.
+   - \`unknown\` — only when the PRD is genuinely ambiguous; if you cannot resolve it, escalate.
+
+2. \`layout_shell_contract\` — required shell primitives that MUST exist BEFORE any content variation is built. One entry per primitive: \`name\`, \`role\`, \`source_path\`, \`classification\` (\`exact_locked\` or \`adapted_shell\`), \`responsive_behaviour\`, \`required_for_scopes\`, \`replica_strategy\` (e.g. shared shell file path used by every option's layout). For \`component_redesign\` and pure \`flow_design\` without new chrome, this list may be small or empty — emit the field anyway with a short rationale.
+
+3. \`component_fidelity_contract\` — locked vs varied children inside the target surface. One entry per child component / snippet: \`name\`, \`role\`, \`source_path\`, \`fidelity_class\` ∈ { \`exact_locked\`, \`adapted_shell\`, \`varied_target\`, \`proposed_new\` }, \`replica_strategy\` (required local replica filename and consumption rule), \`must_not_drift_from\` (bullet list of source attributes — labels, class strings, sizing constants, color tokens, conditional render shape — that MUST remain identical).
+
+Default fidelity rule — for \`component_redesign\` scopes (especially product-card style work), common children are \`exact_locked\` UNLESS the PRD explicitly says to vary them:
+- price range bar / price bar
+- Inomy / iScore score badge
+- selector / checkbox / shortlist (heart) affordances
+- title / retailer / price / rating basics
+- card footer actions / Buy / View Details CTAs
+The PRD's varied target is the OUTER composition, not the locked children.
+
+Default shell rule — for \`full_page_design\` and \`app_surface_design\`, navbar / sidebar / page header / page container / filter tabs / filter drawer / modal shell that exist in source MUST appear in the \`layout_shell_contract\`, classified \`exact_locked\` or \`adapted_shell\`. Building an isolated content mock without page chrome is a verifier blocker.
+
+Both contracts must be saved as a \`fidelity-contract.json\` artifact whenever the calling workflow asks for one, and surfaced as plain fields (\`design_scope_type\`, \`layout_shell_contract\`, \`component_fidelity_contract\`) in your structured JSON output.
+
 Rules:
 - Do not start without actual PRD content or a summarized source supplied by the user/tooling.
 - Ask for missing target repo, surface, user role, success criteria, or acceptance criteria when absent.
@@ -1846,6 +1873,7 @@ When you also produce option proposals (e.g. inside a workflow that asks for res
 - \`primary_route\` — creative concept-driven route.
 - \`route_tree\` — full list of subroutes the option needs. Different options should have different route shapes when their UX differs.
 - \`route_differentiation_rationale\` — short explanation of why this route shape supports the option's UX.
+- \`components\` — mark each as \`inspired_by:<source path>\`, \`locked_from:<source path>\` (for exact_locked children/shell primitives), or \`new\`. NEVER \`copy_of\`.
 
 Write target:
 - repos/{repoSlug}/prds/{prdSlug}/ux-brief.md, or fallback .ux-prototypes/{prdSlug}/ux-brief.md. Make outputs discoverable via the PRD index page on ui-designs; the specific URL slugs below the PRD are creative concept slugs per option, not a forced \`/options/{optionSlug}\` template.`,
@@ -2441,9 +2469,9 @@ Distinguish TARGET COMPONENT EXPERIMENTATION from UNCHANGED CHILD/SUBCOMPONENT F
   (b) the divergence thesis they implement.
   Do NOT fail them for not looking identical to source.
 
-- **Unchanged child/subcomponents** (snippets with \`fidelity_class == "exact"\`) MUST look identical to source: same DOM shape, same foundation tokens, same iconography. A \`*Replica\` that is simplified/manual is a BLOCKER — but only when the underlying snippet is explicitly unchanged/exact.
+- **Unchanged child/subcomponents** (snippets with \`fidelity_class == "exact"\` or \`"exact_locked"\`) MUST look identical to source: same DOM shape, same labels, same class strings, same sizing constants, same iconography, same foundation tokens. A \`*Replica\` that is simplified/manual is a BLOCKER — but only when the underlying snippet is explicitly unchanged/exact.
 
-- If a component is named \`*Replica\` but the underlying snippet's \`fidelity_class\` is not \`"exact"\`, the BLOCKER is the misleading naming/claim, not the visual delta. Recommend renaming to \`*Adapted\` / \`*Proposed\`.
+- If a component is named \`*Replica\` but the underlying snippet's \`fidelity_class\` is not \`exact\` / \`exact_locked\`, the BLOCKER is the misleading naming/claim, not the visual delta. Recommend renaming to \`*Adapted\` / \`*Proposed\`.
 
 ## Identity-stability vs URL-shape (CRITICAL)
 
@@ -2453,14 +2481,34 @@ Internal option identity is stable; URL/folder shape is intentionally creative.
 - Each option also has a creative \`concept_slug\` and \`primary_route\` (e.g. \`/repos/{prd_slug}/decision-studio\`). Different options may have different \`route_tree\` shapes — that's expected and desired.
 - Do NOT flag concept-driven URLs as a blocker. Do NOT require \`/repos/{prd_slug}/options/option-XX\` URLs unless the calling workflow explicitly mandates that legacy pattern.
 
+## Design scope, shell contract, and component fidelity contract (NEW)
+
+When the calling workflow provides a \`design_scope_type\`, a \`layout_shell_contract\`, and a \`component_fidelity_contract\` (or links a \`fidelity-contract.json\` artifact), treat them as ground truth:
+
+- \`design_scope_type\` ∈ { \`component_redesign\`, \`full_page_design\`, \`flow_design\`, \`app_surface_design\`, \`unknown\` }.
+- \`layout_shell_contract\` — required shell primitives (navbar, sidebar, page-header, page-container, filter-tabs, filter-drawer, modal-shell) with \`classification\` (\`exact_locked\`/\`adapted_shell\`), \`source_path\`, \`responsive_behaviour\`, and \`replica_strategy\`.
+- \`component_fidelity_contract\` — child components classified \`exact_locked\` / \`adapted_shell\` / \`varied_target\` / \`proposed_new\`, with \`source_path\`, \`replica_strategy\`, and \`must_not_drift_from\` attributes (labels, classes, sizing, conditional shape).
+
+For \`full_page_design\` and \`app_surface_design\` scopes, an isolated content mock without the required navbar/sidebar/header/page-container shell is a BLOCKER. The shell primitives must be implemented as shared replicas the options consume, not duplicated inline per option.
+
+For \`component_redesign\` scopes (especially product-card style work), the locked children listed in the contract (price range/price bar, Inomy/iScore badge, selector/checkbox/shortlist affordances, title/retailer/price/rating/action basics, footer actions) MUST appear as shared replica files and must be imported by every option. Inline reimplementation in an option file → fail.
+
 ## Parity / verifier rank-blocker dimensions (any one → fail)
 
 1. FOUNDATION FIDELITY: tokens in copied foundation files match source exactly.
-2. NO COMPONENT-FILE COPYING: no source component file appears verbatim in the worktree outside \`foundations/\`. If \`design-system/components/\` exists or any source component file has been mirrored → fail.
+2. NO COMPONENT-FILE COPYING: no source component file appears verbatim in the worktree outside \`foundations/\`. If \`design-system/components/\` exists or any source component file has been mirrored → fail. Exception: small shared locked-child replicas built per the fidelity contract may match source DOM/classes/labels exactly because they are authored inside the worktree, not file-copied.
 3. NO PARENT/PROVIDER/ROUTE/DATA-FETCH IMPORTS: prototypes do not import or copy parents, context providers, stores, data-fetching wrappers, route containers, or props-passthrough containers. Any file on the snippet plan's \`explicitly_excluded_files\` list appearing in the worktree → fail.
 4. FOUNDATION-ONLY MODE INTEGRITY: when \`new_feature_foundation_only == true\`, no source snippet / component replica may be used unless explicitly justified as a hybrid with rationale.
-5. EXACT-VISUAL-FIDELITY DRIFT: for \`child_visual_snippets\` where \`exact_visual_fidelity_required == true\` AND the snippet describes an UNCHANGED child, the local replica must look identical to source. Drift → fail. For varied target components, do NOT fail for visual drift — fail ONLY if the prototype claims \`exact-fidelity\` for a component that is intentionally varied.
-6. HARDCODED-STYLE DRIFT: prototype components, option-owned files, AND any \`app/globals.css\` changes the workflow added that use raw hex/HSL/px for properties where a foundation token exists → fail. SCOPE: prototype components under \`prototypes/\`, option spec code under \`repos/{prd_slug}/options/\` (or the calling plan's concept-slug folders), and workflow-added \`app/globals.css\` changes. Do NOT block on unrelated base app shell scaffolding the workflow did not modify.
+5. EXACT-VISUAL-FIDELITY DRIFT / LOCKED CHILD FIDELITY: for every entry in \`component_fidelity_contract\` with \`fidelity_class == exact_locked\` (or \`child_visual_snippets\` with \`exact_visual_fidelity_required == true\`):
+   - A shared replica file MUST exist under \`prototypes/{prd_slug}/shared/_local/<Name>Replica.tsx\` (or the equivalent path the calling workflow declares).
+   - The replica MUST be byte-identical to source on every attribute listed in \`must_not_drift_from\` — labels (e.g. price-health \`LOWEST.label\` = source \`Great deal\`, NOT \`Lowest price\`), class strings (e.g. \`bg-green-400\` segment classes, NOT \`bg-green-500\`), sizing constants (e.g. \`dotSize = 12\`, NOT \`w-2 h-2\`), conditional render shape (e.g. \`View Details\` + optional menu / Similar, NOT always-on Find Similar + separator + menu), iconography, foundation tokens.
+   - Every option MUST import the shared replica. Inline reimplementation in option files → fail (\`locked_children_inline_in_options == 0\`).
+   For varied target components, visual differences from source are NOT a blocker. The verdict report MUST contain a "Locked Child Fidelity Map" section listing each \`exact_locked\` entry with replica path, drift status, and consumer options.
+6. HARDCODED-STYLE DRIFT / FOUNDATION TOKEN USAGE (STRICTER): prototype-owned surfaces (everything under \`prototypes/\` and every option page under \`app/repos/{prd_slug}/\` or the calling workflow's option folders) MUST use foundation tokens. Raw hex, raw rgb()/rgba(), raw HSL, and inline \`boxShadow: '0 ... rgba(...)\`' literals on prototype-owned surfaces → fail, UNLESS the value is:
+   - a documented named prototype-token variable declared in \`prototypes/{prd_slug}/_foundations/\`, OR
+   - an exact source literal reproduced character-for-character on a locked-child replica because source itself uses that literal.
+   For each violation, the verdict report MUST include an actionable repair instruction naming the file path, the offending literal, and the suggested token name (e.g. \`var(--shadow-guide-card)\`).
+   DO NOT flag legitimate structural sizing constants (\`px\` widths/heights, gaps, radii) where source itself uses raw px and no equivalent token exists in foundations. Do NOT block on unrelated base app shell scaffolding the workflow did not modify.
 7. STATIC FLOWS: if the per-element \`interaction_map\` JSON artifact is missing, empty, or shows \`wired=false\` for non-display primary CTAs / tabs / modals / route transitions called out by the UX brief → fail. The interaction map must be the per-element JSON, not just counts.
 8. OPTION IDENTITY + ROUTE REACHABILITY (replaces legacy slug-mismatch rule):
    - Every option in the calling plan has a stable \`option_id\`; option_ids in the plan, build output, prototype folders, routes manifest, and interaction map JSON must all agree.
@@ -2470,15 +2518,16 @@ Internal option identity is stable; URL/folder shape is intentionally creative.
    - \`uses_generic_dynamic_route == true\` (all options served by a single dynamic \`[optionSlug]\` renderer or one shared layout that flattens concepts) → fail.
    - Identity-stability drift across repair passes (option_id remapped to a different concept_slug/primary_route mid-run) → fail.
    Do NOT fail because URLs are not \`/options/option-XX\` — concept-driven URLs are the desired outcome.
-9. MISSING REQUIRED SNIPPET REPLICA: a \`required_snippet\` with \`fidelity_class == "exact"\` has no corresponding local replica → fail.
+9. MISSING REQUIRED SNIPPET REPLICA: a \`required_snippet\` with \`fidelity_class == exact\` / \`exact_locked\` has no corresponding local replica → fail.
+10. SHELL COMPLETENESS (NEW): when \`design_scope_type\` is \`full_page_design\` or \`app_surface_design\`, OR when the \`layout_shell_contract\` contains entries classified \`exact_locked\`, the worktree MUST contain a shared shell primitive replica for every required entry (navbar, sidebar, page-header, page-container, tabs/filters, drawers/modals as listed in the contract). Each option's layout/page MUST consume those shared shell primitives. Inline option-only chrome that bypasses the shared shell → fail. Missing primitive → fail with an actionable repair entry naming the missing primitive and its source path. The verdict report MUST contain a "Shell Completeness Map" section listing required primitives, replica paths, and per-option consumption status.
 
 ## Soft-blocker dimensions (warn-only)
 
-10. Snippet-reference docs cite minimal ranges (not whole files).
-11. \`SOURCE.md\` has a complete Excluded section.
-12. New components clearly labeled \`proposed-new-component\` with rationale.
-13. Designs prefer foundation tokens over inlined replicas when foundations suffice.
-14. Target component visual changes have a documented divergence thesis.
+11. Snippet-reference docs cite minimal ranges (not whole files).
+12. \`SOURCE.md\` has a complete Excluded section.
+13. New components clearly labeled \`proposed-new-component\` with rationale.
+14. Designs prefer foundation tokens over inlined replicas when foundations suffice.
+15. Target component visual changes have a documented divergence thesis.
 
 ## Standard design-review dimensions (mode 1, also relevant to mode 2)
 
@@ -2492,7 +2541,12 @@ Internal option identity is stable; URL/folder shape is intentionally creative.
 
 ## Write target
 
-- Parity/verifier mode: save \`mcp__allen__allen_save_artifact("ux/{prd_slug}/parity-report.md" or "ux/{prd_slug}/design-verdict.md", …, overwrite=true)\`. Include explicit sections for each rank-blocker dimension AND a section labelled "Target vs Child fidelity rationale" explaining which components are excused from exact-fidelity because they are varied targets. Also include an "Option Identity Map" section mapping option_id → concept_slug → primary_route → route_tree for stability verification.
+- Parity/verifier mode: save \`mcp__allen__allen_save_artifact("ux/{prd_slug}/parity-report.md" or "ux/{prd_slug}/design-verdict.md", …, overwrite=true)\`. Include explicit sections for each rank-blocker dimension AND:
+  - A "Target vs Child fidelity rationale" section explaining which components are excused from exact-fidelity because they are varied targets.
+  - An "Option Identity Map" section mapping option_id → concept_slug → primary_route → route_tree.
+  - A "Shell Completeness Map" section listing required shell primitives, replica path, and per-option consumption status.
+  - A "Locked Child Fidelity Map" section listing each \`exact_locked\` child with replica path, drift status, and consumer options.
+  - "Actionable Repair" bullet lists for every failing dimension, naming files, lines, and concrete fixes (especially for foundation-token drift and locked-child drift).
 - Standard critique mode: \`repos/{repoSlug}/prds/{prdSlug}/review.md\`, or fallback \`.ux-prototypes/{prdSlug}/review.md\`.
 
 ## Verdict (parity / verifier mode)
@@ -2510,7 +2564,7 @@ Verdict rules:
 - \`pass\`     → no blocking drift; soft warnings allowed.
 - \`warn\`     → only soft-blocker findings.
 - \`fail\`     → at least one rank-blocker diverged. Prototype-level repair is required — the calling workflow will dispatch a repair pass that keeps option identities (option_id → concept_slug → primary_route bindings) stable. Do NOT use \`escalate\` for prototype-level drift.
-- \`escalate\` → the snippet plan / foundations / divergence plan are themselves incompatible with source, OR the rank-blockers cannot be repaired without redoing earlier sync/plan stages. Reserve \`escalate\` for this case only.
+- \`escalate\` → the snippet plan / foundations / divergence plan / fidelity contract are themselves incompatible with source, OR the rank-blockers cannot be repaired without redoing earlier sync/plan stages. Reserve \`escalate\` for this case only.
 
 (When the calling workflow uses different output names like \`design_verdict\` / \`design_verdict_report_artifact_url\` / \`design_failure_details\`, emit those names instead — match the contract the workflow node declares in its prompt.)`,
   },
