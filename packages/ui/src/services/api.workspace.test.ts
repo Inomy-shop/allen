@@ -33,7 +33,7 @@ vi.mock('../stores/authStore', () => ({
 }));
 
 // Import after mocks
-import { chat as chatApi } from './api.js';
+import { agents as agentsApi, chat as chatApi } from './api.js';
 
 // ---------------------------------------------------------------------------
 // Helper: build a mock fetch that returns a successful response.
@@ -182,5 +182,56 @@ describe('chatApi.createSession — request mechanics', () => {
     const result = await chatApi.createSession('claude', undefined, undefined, undefined, 'ws-ret');
 
     expect(result).toMatchObject({ _id: 'returned-sess' });
+  });
+});
+
+describe('agentsApi.bulkUpdateModel', () => {
+  it('posts selected agent model updates to /api/agents/bulk-model', async () => {
+    const mockFetch = mockOkFetch({
+      updated: ['agent-a'],
+      skipped: [{ name: 'agent-b', reason: 'not-found' }],
+    });
+    globalThis.fetch = mockFetch;
+
+    const result = await agentsApi.bulkUpdateModel({
+      agentNames: ['agent-a', 'agent-b'],
+      provider: 'claude-cli',
+      model: 'sonnet',
+      clearIncompatibleSettings: true,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/agents/bulk-model');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      agentNames: ['agent-a', 'agent-b'],
+      provider: 'claude-cli',
+      model: 'sonnet',
+      clearIncompatibleSettings: true,
+    });
+    expect(result).toEqual({
+      updated: ['agent-a'],
+      skipped: [{ name: 'agent-b', reason: 'not-found' }],
+    });
+  });
+
+  it('throws the API error body for failed bulk model updates', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: () => Promise.resolve({ error: 'model must be a non-empty string', code: 'invalid_model' }),
+    });
+
+    await expect(agentsApi.bulkUpdateModel({
+      agentNames: ['agent-a'],
+      provider: 'codex',
+      model: '',
+      clearIncompatibleSettings: false,
+    })).rejects.toMatchObject({
+      message: 'model must be a non-empty string',
+      status: 400,
+      body: { error: 'model must be a non-empty string', code: 'invalid_model' },
+    });
   });
 });

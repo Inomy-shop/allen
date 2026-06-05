@@ -593,6 +593,25 @@ export interface ActivityEvent {
 }
 
 // ── Agents ─────────────────────────────────────────────────────────────────
+export type BulkModelSkipped = {
+  name: string;
+  reason: 'not-found' | 'incompatible-settings';
+  code?: string;
+  message?: string;
+};
+
+export type BulkUpdateModelRequest = {
+  agentNames: string[];
+  provider: string;
+  model: string;
+  clearIncompatibleSettings?: boolean;
+};
+
+export type BulkUpdateModelResponse = {
+  updated: string[];
+  skipped: BulkModelSkipped[];
+};
+
 export const agents = {
   list: () => request<any[]>('/agents'),
   create: (agent: any) =>
@@ -625,6 +644,14 @@ export const agents = {
       {
         method: 'POST',
         body: JSON.stringify({ agentNames, teamName, autoWireSpawnTargets }),
+      },
+    ),
+  bulkUpdateModel: (body: BulkUpdateModelRequest) =>
+    request<BulkUpdateModelResponse>(
+      '/agents/bulk-model',
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
       },
     ),
   run: (name: string, body: { prompt: string; repo_path?: string; session_id?: string }) =>

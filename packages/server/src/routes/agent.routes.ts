@@ -9,8 +9,29 @@ import {
 } from '../services/claude-agents-importer.js';
 import { executeChatTool } from '../services/chat-tools.js';
 import { getAgentDefaults } from '../services/llm-defaults.js';
+import { PROVIDERS, type ChatProvider } from '../services/chat-providers.js';
 
 const ALLOWED_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max']);
+const PROVIDER_IDS = new Set(PROVIDERS.map((provider) => provider.provider));
+const BULK_MODEL_CLEARABLE_CODES = new Set([
+  'plan_mode_claude_only',
+  'effort_max_claude_only',
+  'effort_max_requires_opus',
+]);
+
+type BulkModelSkipped = {
+  name: string;
+  reason: 'not-found' | 'incompatible-settings';
+  code?: string;
+  message?: string;
+};
+
+type BulkModelRequest = {
+  agentNames: string[];
+  provider: ChatProvider;
+  model: string;
+  clearIncompatibleSettings: boolean;
+};
 
 function titleFromAgentSlug(slug: string): string {
   return slug
@@ -41,6 +62,95 @@ function validateAgentSettingsFields(body: Record<string, unknown>): void {
     planMode: body.planMode as boolean | undefined,
   };
   resolveAgentSettings(probe);
+}
+
+function validateBulkModelRequest(body: unknown): BulkModelRequest {
+  const input = (body ?? {}) as Record<string, unknown>;
+  if (!Array.isArray(input.agentNames) || input.agentNames.length === 0) {
+    throw Object.assign(
+      new Error('agentNames must be a non-empty array of unique non-empty strings'),
+      { code: 'invalid_agent_names' },
+    );
+  }
+
+  const agentNames: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of input.agentNames) {
+    if (typeof raw !== 'string' || !raw.trim()) {
+      throw Object.assign(
+        new Error('agentNames must be a non-empty array of unique non-empty strings'),
+        { code: 'invalid_agent_names' },
+      );
+    }
+    const name = raw.trim();
+    if (seen.has(name)) {
+      throw Object.assign(new Error('agentNames must be unique'), { code: 'duplicate_agent_names' });
+    }
+    seen.add(name);
+    agentNames.push(name);
+  }
+
+  if (typeof input.provider !== 'string' || !PROVIDER_IDS.has(input.provider as ChatProvider)) {
+    throw Object.assign(
+      new Error(`provider must be one of: ${[...PROVIDER_IDS].join(', ')}`),
+      { code: 'invalid_provider' },
+    );
+  }
+
+  if (typeof input.model !== 'string' || !input.model.trim()) {
+    throw Object.assign(new Error('model must be a non-empty string'), { code: 'invalid_model' });
+  }
+
+  if (input.clearIncompatibleSettings !== undefined && typeof input.clearIncompatibleSettings !== 'boolean') {
+    throw Object.assign(
+      new Error('clearIncompatibleSettings must be a boolean'),
+      { code: 'invalid_clear_incompatible_settings' },
+    );
+  }
+
+  return {
+    agentNames,
+    provider: input.provider as ChatProvider,
+    model: input.model.trim(),
+    clearIncompatibleSettings: input.clearIncompatibleSettings === true,
+  };
+}
+
+function validateBulkModelCandidate(
+  existing: Record<string, unknown>,
+  provider: ChatProvider,
+  model: string,
+  unsetFields: Set<'planMode' | 'reasoningEffort'>,
+): void {
+  const candidate: Record<string, unknown> = { ...existing, provider, model };
+  for (const field of unsetFields) {
+    delete candidate[field];
+  }
+  validateAgentSettingsFields(candidate);
+}
+
+function markClearableBulkModelField(
+  err: AgentSettingsValidationError,
+  existing: Record<string, unknown>,
+  unsetFields: Set<'planMode' | 'reasoningEffort'>,
+): boolean {
+  if (!BULK_MODEL_CLEARABLE_CODES.has(err.code)) return false;
+
+  if (err.code === 'plan_mode_claude_only' && !unsetFields.has('planMode')) {
+    unsetFields.add('planMode');
+    return true;
+  }
+
+  if (
+    (err.code === 'effort_max_claude_only' || err.code === 'effort_max_requires_opus') &&
+    existing.reasoningEffort === 'max' &&
+    !unsetFields.has('reasoningEffort')
+  ) {
+    unsetFields.add('reasoningEffort');
+    return true;
+  }
+
+  return false;
 }
 
 export function agentRoutes(db: Db): Router {
@@ -393,6 +503,83 @@ export function agentRoutes(db: Db): Router {
 
       res.json({ moved, skipped, autoWireSpawnTargets: autoWire });
     } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/agents/bulk-model  { agentNames, provider, model, clearIncompatibleSettings? }
+  // Update provider/model for selected agents. Missing or semantically incompatible
+  // agents are skipped so compatible selected agents can still be updated.
+  router.post('/bulk-model', async (req: Request, res: Response) => {
+    try {
+      const { agentNames, provider, model, clearIncompatibleSettings } = validateBulkModelRequest(req.body);
+      const updated: string[] = [];
+      const skipped: BulkModelSkipped[] = [];
+
+      for (const name of agentNames) {
+        const existing = await col.findOne({ name });
+        if (!existing) {
+          skipped.push({ name, reason: 'not-found' });
+          continue;
+        }
+
+        const unsetFields = new Set<'planMode' | 'reasoningEffort'>();
+        let validationError: AgentSettingsValidationError | null = null;
+
+        for (let attempt = 0; attempt <= 2; attempt += 1) {
+          try {
+            validateBulkModelCandidate(existing, provider, model, unsetFields);
+            validationError = null;
+            break;
+          } catch (err) {
+            if (!(err instanceof AgentSettingsValidationError)) throw err;
+            validationError = err;
+            if (!clearIncompatibleSettings || !markClearableBulkModelField(err, existing, unsetFields)) {
+              break;
+            }
+          }
+        }
+
+        if (validationError) {
+          skipped.push({
+            name,
+            reason: 'incompatible-settings',
+            code: validationError.code,
+            message: validationError.message,
+          });
+          continue;
+        }
+
+        const update: {
+          $set: { provider: ChatProvider; model: string; updatedAt: Date };
+          $unset?: Partial<Record<'planMode' | 'reasoningEffort', ''>>;
+        } = {
+          $set: { provider, model, updatedAt: new Date() },
+        };
+        if (unsetFields.size > 0) {
+          update.$unset = {};
+          for (const field of unsetFields) {
+            update.$unset[field] = '';
+          }
+        }
+
+        const result = await col.updateOne({ name }, update);
+        if (result.matchedCount === 0) {
+          skipped.push({ name, reason: 'not-found' });
+          continue;
+        }
+        updated.push(name);
+      }
+
+      res.json({ updated, skipped });
+    } catch (err: unknown) {
+      if (err instanceof AgentSettingsValidationError) {
+        return res.status(400).json({ error: err.message, code: err.code });
+      }
+      const codedError = err as Error & { code?: string };
+      if (codedError.code) {
+        return res.status(400).json({ error: codedError.message, code: codedError.code });
+      }
       res.status(500).json({ error: (err as Error).message });
     }
   });
