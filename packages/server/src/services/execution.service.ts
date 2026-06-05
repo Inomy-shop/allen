@@ -31,7 +31,8 @@ import { ContextEvaluationService } from './context/evaluation/context-evaluatio
 import { ContextWorkflowEvaluationService } from './context/evaluation/context-workflow-evaluation.service.js';
 import { hydrateTraceContextEvaluations } from './context/evaluation/context-evaluation-trace-hydrator.js';
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
-import { buildDeepSeekEnvOverlay } from './chat-providers.js';
+import { buildClaudeCompatibleEnvOverlay } from './chat-providers.js';
+import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
 
 /**
  * Build the in-process service hook bundle the engine passes to built-ins.
@@ -439,7 +440,7 @@ function applyWorkflowAgentProvider(workflow: WorkflowDef, provider?: WorkflowAg
 
 export type RunOrigin = 'chat' | 'linear' | 'workflow' | 'direct_agent';
 export type RunType = 'workflow' | 'agent';
-export type WorkflowAgentProvider = 'claude-cli' | 'codex' | 'deepseek' | 'xiaomi-mimo';
+export type WorkflowAgentProvider = 'claude-cli' | 'codex' | (string & {});
 export type RunPhase =
   | 'queued'
   | 'planning'
@@ -646,7 +647,8 @@ export class ExecutionService {
           return [];
         }
       },
-      buildDeepSeekEnvOverlay,
+      claudeCodeExecutable: resolveClaudeCodeExecutable(),
+      buildClaudeCompatibleEnvOverlay,
     };
 
     const engine = new AllenEngine(config);
@@ -1502,7 +1504,8 @@ export class ExecutionService {
           return [];
         }
       },
-      buildDeepSeekEnvOverlay,
+      claudeCodeExecutable: resolveClaudeCodeExecutable(),
+      buildClaudeCompatibleEnvOverlay,
     };
 
     const engine = new AllenEngine(config);
@@ -1573,7 +1576,8 @@ export class ExecutionService {
           return [];
         }
       },
-      buildDeepSeekEnvOverlay,
+      claudeCodeExecutable: resolveClaudeCodeExecutable(),
+      buildClaudeCompatibleEnvOverlay,
     };
 
     const engine = new AllenEngine(config);
@@ -1633,7 +1637,8 @@ export class ExecutionService {
           return [];
         }
       },
-      buildDeepSeekEnvOverlay,
+      claudeCodeExecutable: resolveClaudeCodeExecutable(),
+      buildClaudeCompatibleEnvOverlay,
     };
 
     const engine = new AllenEngine(config);

@@ -6,6 +6,7 @@ import { AGENT_FALLBACK_CWD, type ChatProvider } from './chat-providers.js';
 import { toClaudeSdkOptions } from './agent-settings.js';
 import { buildControlledMcpConfig, writeClaudeMcpConfigFile } from './chat-controlled-mcp.js';
 import { logRuntimeEvent } from './chat-runtime-logs.js';
+import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
 import type { ChatTraceEvent } from './chat-llm.js';
 import type { PersistentChatRuntime, RuntimeCreateInput, RuntimeTurnInput, RuntimeTurnResult } from './chat-runtime-types.js';
 
@@ -434,6 +435,11 @@ function resolveClaudeBin(): string {
   const override = process.env.CLAUDE_BIN?.trim();
   if (override) {
     claudeBinCache = override;
+    return claudeBinCache;
+  }
+  const resolved = resolveClaudeCodeExecutable();
+  if (resolved) {
+    claudeBinCache = resolved;
     return claudeBinCache;
   }
   const r = spawnSync('which', ['-a', 'claude'], { encoding: 'utf8' });

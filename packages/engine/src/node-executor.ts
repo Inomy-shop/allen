@@ -26,67 +26,17 @@ import { statSync, mkdirSync } from 'node:fs';
  * import from the server package. Never fall back to process.cwd() because
  * that's the server's source tree. */
 const AGENT_FALLBACK_CWD = '/tmp/allen';
-const DEEPSEEK_ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic';
-
-function normalizeDeepSeekAnthropicBaseUrl(value?: string): string {
-  const trimmed = value?.trim();
-  if (!trimmed) return DEEPSEEK_ANTHROPIC_BASE_URL;
-  const normalized = trimmed.replace(/\/+$/, '');
-  if (normalized === 'https://api.deepseek.com' || normalized === 'https://api.deepseek.com/v1') {
-    return DEEPSEEK_ANTHROPIC_BASE_URL;
-  }
-  return trimmed;
-}
-
-const CLAUDE_COMPATIBLE_AGENT_PROVIDER_ENV = {
-  deepseek: {
-    apiKeyEnv: 'ALLEN_DEEPSEEK_API_KEY',
-    baseUrlEnv: 'ALLEN_DEEPSEEK_BASE_URL',
-    modelEnv: 'ALLEN_DEEPSEEK_MODEL',
-    flashModelEnv: 'ALLEN_DEEPSEEK_FLASH_MODEL',
-    defaultBaseUrl: 'https://api.deepseek.com/anthropic',
-    defaultFlashModel: 'deepseek-v4-flash',
-  },
-  'xiaomi-mimo': {
-    apiKeyEnv: 'ALLEN_XIAOMI_MIMO_API_KEY',
-    baseUrlEnv: 'ALLEN_XIAOMI_MIMO_BASE_URL',
-    modelEnv: 'ALLEN_XIAOMI_MIMO_MODEL',
-    flashModelEnv: 'ALLEN_XIAOMI_MIMO_FLASH_MODEL',
-    defaultBaseUrl: 'https://api.xiaomimimo.com/anthropic',
-    defaultFlashModel: 'mimo-v2.5-pro',
-  },
-} as const;
-
-type ClaudeCompatibleAgentProvider = keyof typeof CLAUDE_COMPATIBLE_AGENT_PROVIDER_ENV;
+type ClaudeCompatibleAgentProvider = string;
 
 function isClaudeCompatibleAgentProvider(provider: unknown): provider is ClaudeCompatibleAgentProvider {
-  return typeof provider === 'string' && provider in CLAUDE_COMPATIBLE_AGENT_PROVIDER_ENV;
+  return typeof provider === 'string'
+    && provider !== 'claude'
+    && provider !== 'claude-cli'
+    && provider !== 'codex';
 }
 
 function isAgentProviderOverride(provider: unknown): provider is 'codex' | 'claude-cli' | ClaudeCompatibleAgentProvider {
   return provider === 'codex' || provider === 'claude-cli' || isClaudeCompatibleAgentProvider(provider);
-}
-
-function buildClaudeCompatibleAgentEnv(provider: ClaudeCompatibleAgentProvider, resolvedModel: string): Record<string, string> {
-  const config = CLAUDE_COMPATIBLE_AGENT_PROVIDER_ENV[provider];
-  const apiKey = process.env[config.apiKeyEnv] ?? '';
-  const configuredBaseUrl = process.env[config.baseUrlEnv] ?? config.defaultBaseUrl;
-  const baseUrl = provider === 'deepseek'
-    ? normalizeDeepSeekAnthropicBaseUrl(configuredBaseUrl)
-    : configuredBaseUrl;
-  const providerModel = process.env[config.modelEnv] ?? resolvedModel;
-  const flashModel = process.env[config.flashModelEnv] ?? config.defaultFlashModel;
-  if (!apiKey) throw new Error(`${config.apiKeyEnv} is not set`);
-  return {
-    ANTHROPIC_BASE_URL: baseUrl,
-    ANTHROPIC_AUTH_TOKEN: apiKey,
-    ANTHROPIC_MODEL: providerModel,
-    ANTHROPIC_DEFAULT_OPUS_MODEL: providerModel,
-    ANTHROPIC_DEFAULT_SONNET_MODEL: providerModel,
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: flashModel,
-    CLAUDE_CODE_SUBAGENT_MODEL: flashModel,
-    CLAUDE_CODE_EFFORT_LEVEL: 'max',
-  };
 }
 
 /**
@@ -177,12 +127,14 @@ export interface NodeExecutorDeps {
    * MCP-tool injection (existing behaviour).
    */
   discoverMcpToolNames?: () => Promise<string[]>;
+  /** Resolved Claude Code executable path for CLI-mode workflow agents. */
+  claudeCodeExecutable?: string;
   /**
-   * Optional provider-specific env builder for DeepSeek. Server callers use
-   * this to resolve desktop/runtime secrets without the engine package
-   * importing server runtime config.
+   * Optional provider-specific env builder for Claude-compatible providers.
+   * Server callers use this to resolve desktop/runtime secrets without the
+   * engine package importing server runtime config.
    */
-  buildDeepSeekEnvOverlay?: (model?: string) => Promise<Record<string, string>>;
+  buildClaudeCompatibleEnvOverlay?: (provider: ClaudeCompatibleAgentProvider, model?: string) => Promise<Record<string, string>>;
 }
 
 function resolveExternalMcpServers(
@@ -876,11 +828,19 @@ ${context}
       }
       // For Claude-compatible API providers, overlay credentials so the claude
       // binary redirects requests to the configured provider instead of Anthropic.
+      let claudeCompatibleEnvOverlay: Record<string, string> = {};
+      if (claudeCompatibleProvider) {
+        if (!deps.buildClaudeCompatibleEnvOverlay) {
+          throw new Error(`Claude-compatible provider ${claudeCompatibleProvider} requires buildClaudeCompatibleEnvOverlay`);
+        }
+        claudeCompatibleEnvOverlay = await deps.buildClaudeCompatibleEnvOverlay(claudeCompatibleProvider, resolvedModel);
+      }
       const resolvedEnv: NodeJS.ProcessEnv = (() => {
         return {
           ...process.env,
           ...spawnContextEnv,
-          ...(claudeCompatibleProvider ? buildClaudeCompatibleAgentEnv(claudeCompatibleProvider, resolvedModel) : {}),
+          ...(deps.claudeCodeExecutable ? { CLAUDE_BIN: deps.claudeCodeExecutable } : {}),
+          ...claudeCompatibleEnvOverlay,
         };
       })();
       conv = queryViaCli({

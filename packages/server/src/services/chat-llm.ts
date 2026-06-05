@@ -21,6 +21,7 @@ import {
   toClaudeSdkOptions,
   type ResolvedSettings,
 } from './agent-settings.js';
+import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
 import { persistentChatRuntimeEnabled, runPersistentChatTurn } from './chat-runtime-manager.js';
 
 // ── Types ──
@@ -162,6 +163,10 @@ async function runClaudeCLI(
     permissionMode: 'bypassPermissions',
     cwd: resolvedCwd,
   };
+  const claudeCodeExecutable = resolveClaudeCodeExecutable();
+  if (claudeCodeExecutable) {
+    sdkOptions.pathToClaudeCodeExecutable = claudeCodeExecutable;
+  }
 
   // Apply resolved agent settings (effort / planMode / model) if present.
   // - model / planMode map to native SDK options.

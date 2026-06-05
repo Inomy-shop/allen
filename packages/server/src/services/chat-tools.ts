@@ -19,6 +19,7 @@ import { RepoContextPacketService } from './context/core/repo-context-packet.ser
 import { ContextEvaluationService } from './context/evaluation/context-evaluation.service.js';
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
+import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
 import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload, type MaterializedAgentFileMetadata, normalizeClaudeUsage, normalizeCodexUsage, aggregateTokenUsage, type TokenUsageInfo } from '@allen/engine';
 import {
   getRuntimeApiBaseUrl,
@@ -1990,6 +1991,10 @@ async function runSpawnInBackground(
         ...(disallowedMcpToolNames.length > 0 ? { disallowedTools: disallowedMcpToolNames } : {}),
         ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
       };
+      const claudeCodeExecutable = resolveClaudeCodeExecutable();
+      if (claudeCodeExecutable) {
+        sdkOptions.pathToClaudeCodeExecutable = claudeCodeExecutable;
+      }
       if (currentResumeSession) sdkOptions.resume = currentResumeSession;
       else {
         // ALLEN_SYSTEM_PROMPT_MODE: 'append' (default) preserves Claude

@@ -17,7 +17,7 @@ import { ShieldCheck, Sparkles } from 'lucide-react';
 import Select from '../common/Select';
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
-export type Provider = 'claude-cli' | 'codex' | 'deepseek' | 'xiaomi-mimo';
+export type Provider = 'claude-cli' | 'codex' | (string & {});
 
 export interface AgentSettingsValue {
   provider?: Provider | null;

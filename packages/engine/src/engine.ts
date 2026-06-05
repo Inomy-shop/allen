@@ -59,8 +59,10 @@ export interface EngineConfig {
    * callers wire this to their `loadMcpTools(db)` helper.
    */
   discoverMcpToolNames?: () => Promise<string[]>;
-  /** Optional provider-specific env builder for DeepSeek workflow agents. */
-  buildDeepSeekEnvOverlay?: (model?: string) => Promise<Record<string, string>>;
+  /** Resolved Claude Code executable path for CLI-mode workflow agents. */
+  claudeCodeExecutable?: string;
+  /** Optional provider-specific env builder for Claude-compatible workflow agents. */
+  buildClaudeCompatibleEnvOverlay?: (provider: string, model?: string) => Promise<Record<string, string>>;
 }
 
 export interface RunOptions {
@@ -1381,7 +1383,8 @@ ${lines.join('\n')}
       services: this.config.services,
       abortSignal: ac.signal,
       discoverMcpToolNames: this.config.discoverMcpToolNames,
-      buildDeepSeekEnvOverlay: this.config.buildDeepSeekEnvOverlay,
+      claudeCodeExecutable: this.config.claudeCodeExecutable,
+      buildClaudeCompatibleEnvOverlay: this.config.buildClaudeCompatibleEnvOverlay,
       repoKnowledgeContext: repoKnowledgePacket?.traceSummary ? {
         packetId: repoKnowledgePacket.traceSummary.packetId,
         repoId: repoKnowledgePacket.traceSummary.repoId,
@@ -1998,7 +2001,8 @@ ${lines.join('\n')}
           services: this.config.services,
           abortSignal: retryAc.signal,
           discoverMcpToolNames: this.config.discoverMcpToolNames,
-          buildDeepSeekEnvOverlay: this.config.buildDeepSeekEnvOverlay,
+          claudeCodeExecutable: this.config.claudeCodeExecutable,
+          buildClaudeCompatibleEnvOverlay: this.config.buildClaudeCompatibleEnvOverlay,
         };
 
         // Each branch reads from the snapshot, not the live state

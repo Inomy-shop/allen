@@ -39,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 
 // ── Shared Types ──
 
-export type ChatProvider = 'codex' | 'claude-cli' | 'deepseek' | 'xiaomi-mimo';
+export type ChatProvider = 'codex' | 'claude-cli' | (string & {});
 
 export interface ProviderMessage {
   role: 'user' | 'assistant' | 'system';
@@ -82,7 +82,7 @@ export interface ProviderConfig {
 }
 
 export interface ClaudeCompatibleProviderConfig {
-  provider: Extract<ChatProvider, 'deepseek' | 'xiaomi-mimo'>;
+  provider: string;
   label: string;
   apiKeyEnv: string;
   baseUrlEnv: string;
@@ -131,7 +131,7 @@ const CLAUDE_COMPATIBLE_PROVIDER_BY_ID = new Map(
   CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config) => [config.provider, config] as const),
 );
 
-export function isClaudeCompatibleProvider(provider: unknown): provider is ClaudeCompatibleProviderConfig['provider'] {
+export function isClaudeCompatibleProvider(provider: unknown): provider is string {
   return CLAUDE_COMPATIBLE_PROVIDER_BY_ID.has(provider as ClaudeCompatibleProviderConfig['provider']);
 }
 
@@ -698,7 +698,7 @@ export function normalizeDeepSeekAnthropicBaseUrl(value?: string): string {
  * a registered Anthropic-compatible API provider. Adding a new provider should
  * only require a CLAUDE_COMPATIBLE_PROVIDER_CONFIGS entry and UI copy.
  */
-export async function buildClaudeCompatibleEnvOverlay(provider: ChatProvider, model?: string): Promise<Record<string, string>> {
+export async function buildClaudeCompatibleEnvOverlay(provider: string, model?: string): Promise<Record<string, string>> {
   const config = getClaudeCompatibleProviderConfig(provider);
   if (!config) throw new Error(`Provider ${provider} is not a Claude-compatible API provider.`);
   const runtimeConfig = getRuntimeConfigProvider();

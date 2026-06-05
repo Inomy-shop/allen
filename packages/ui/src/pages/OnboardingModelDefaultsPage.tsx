@@ -13,9 +13,9 @@ import { OnboardingShell } from '../components/onboarding/OnboardingShell';
 import { useOnboardingGate } from '../hooks/useOnboardingGate';
 import { system } from '../services/api';
 
-type Provider = 'codex' | 'claude-cli' | 'deepseek' | 'xiaomi-mimo';
+type Provider = 'codex' | 'claude-cli' | (string & {});
 type AgentProvider = '' | Provider;
-type ApiProvider = Extract<Provider, 'deepseek' | 'xiaomi-mimo'>;
+type ApiProvider = string;
 
 interface HealthCheck {
   id: string;
