@@ -117,8 +117,13 @@ export function yamlToReactFlow(workflow: any): { nodes: Node[]; edges: Edge[] }
       id,
       type,
       position: { x: point.x - size.width / 2, y: point.y - size.height / 2 },
+      // Width is fixed by the card (w-[280px] etc.), so pin it. Height is NOT
+      // pinned: the estimated height is usually taller than the rendered card,
+      // and React Flow positions handles at the node *wrapper* edge — so a
+      // pinned-too-tall height leaves the bottom/side handle dots floating
+      // below the card. Letting React Flow measure the real height keeps the
+      // wrapper flush with the card so handles stick to it.
       width: size.width,
-      height: size.height,
       data,
       deletable,
     });

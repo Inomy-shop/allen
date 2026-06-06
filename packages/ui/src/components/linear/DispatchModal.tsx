@@ -318,7 +318,7 @@ export default function DispatchModal({
       for (const [k, schema] of Object.entries(schemaByKey)) {
         const raw = workflowInput[k];
         const v = typeof raw === 'string' ? raw.trim() : raw;
-        const isRequired = schema?.required !== false;
+        const isRequired = schema?.required === true;
         const type = schema?.type ?? 'string';
         if (v === '' || v == null) {
           if (isRequired) {
@@ -834,7 +834,7 @@ function WorkflowInputs({
         const s = schema[key];
         const w = widgetFor(key, s);
         const repoPicker = isRepoPickerField(s);
-        const required = s?.required !== false;
+        const required = s?.required === true;
         const label = s?.label ?? key.replace(/_/g, ' ');
         const description = s?.description as string | undefined;
         const placeholder = s?.placeholder ?? `Enter ${key.replace(/_/g, ' ')}…`;

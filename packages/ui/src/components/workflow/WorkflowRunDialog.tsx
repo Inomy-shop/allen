@@ -16,8 +16,18 @@ type InputWidget = 'text' | 'textarea' | 'checkbox' | 'select' | 'repo_picker' |
  *   4. `type: number` → number input.
  *   5. Heuristic fallback by field name (legacy workflows without `widget:`).
  */
-function resolveWidget(key: string, schema: any): InputWidget {
-  if (schema?.widget) return schema.widget as InputWidget;
+export function enumOptions(schema: any): string[] {
+  return Array.isArray(schema?.enum) ? schema.enum.map((value: unknown) => String(value)) : [];
+}
+
+export function isRequiredWorkflowInput(schema: any): boolean {
+  return schema?.required === true;
+}
+
+export function resolveWorkflowInputWidget(key: string, schema: any): InputWidget {
+  const explicitWidget = schema?.widget as InputWidget | undefined;
+  if (explicitWidget && explicitWidget !== 'select') return explicitWidget;
+  if (explicitWidget === 'select' && enumOptions(schema).length > 0) return 'select';
   if (Array.isArray(schema?.enum) && schema.enum.length > 0) return 'select';
   if (schema?.type === 'boolean') return 'checkbox';
   if (schema?.type === 'number') return 'number';
@@ -30,6 +40,42 @@ function resolveWidget(key: string, schema: any): InputWidget {
   ]);
   if (longFields.has(key)) return 'textarea';
   return 'text';
+}
+
+export function defaultWorkflowRunInput(inputSchema: Record<string, any> | undefined): Record<string, string> {
+  const defaults: Record<string, string> = {};
+  for (const [key, schema] of Object.entries(inputSchema ?? {})) {
+    if (schema?.default != null) defaults[key] = String(schema.default);
+    else if (schema?.type === 'boolean') defaults[key] = 'false';
+    else defaults[key] = '';
+  }
+  return defaults;
+}
+
+export function castWorkflowRunInput(
+  inputSchema: Record<string, any>,
+  runInput: Record<string, string>,
+): { input: Record<string, unknown>; error?: string } {
+  const input: Record<string, unknown> = {};
+  for (const [k, schema] of Object.entries(inputSchema)) {
+    const raw = runInput[k];
+    const type = schema?.type ?? 'string';
+    const trimmed = typeof raw === 'string' ? raw.trim() : raw;
+    if (trimmed === '' || trimmed == null) {
+      if (isRequiredWorkflowInput(schema)) return { input, error: `${schema?.label ?? k} is required` };
+      continue;
+    }
+    if (type === 'boolean') {
+      input[k] = trimmed === 'true';
+    } else if (type === 'number') {
+      const n = Number(trimmed);
+      if (Number.isNaN(n)) return { input, error: `${schema?.label ?? k} must be a number` };
+      input[k] = n;
+    } else {
+      input[k] = trimmed;
+    }
+  }
+  return { input };
 }
 
 export interface WorkflowRunDialogProps {
@@ -68,13 +114,7 @@ export default function WorkflowRunDialog({ workflow, onClose, onStarted }: Work
         if (cancelled) return;
         setFullWf(wf);
 
-        const defaults: Record<string, string> = {};
-        if (wf.parsed?.input) {
-          for (const [key, schema] of Object.entries(wf.parsed.input) as [string, any][]) {
-            defaults[key] = schema?.default != null ? String(schema.default) : '';
-          }
-        }
-        setRunInput(defaults);
+        setRunInput(defaultWorkflowRunInput(wf.parsed?.input));
       } catch (e) {
         if (!cancelled) toast.error(`Failed to load workflow: ${(e as Error).message}`);
       } finally {
@@ -104,24 +144,12 @@ export default function WorkflowRunDialog({ workflow, onClose, onStarted }: Work
     if (!fullWf) return;
     setSubmitting(true);
     try {
-      // Cast string form values to the right types per the schema. Mirrors
-      // the logic from the old inline version in WorkflowListPage.
       const schemaByKey = (fullWf.parsed?.input ?? {}) as Record<string, any>;
-      const input: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(runInput)) {
-        const schema = schemaByKey[k];
-        const type = schema?.type ?? 'string';
-        const trimmed = typeof v === 'string' ? v.trim() : v;
-        if (type === 'boolean') {
-          input[k] = trimmed === 'true';
-        } else if (type === 'number') {
-          if (trimmed === '' || trimmed == null) continue;
-          const n = Number(trimmed);
-          if (!Number.isNaN(n)) input[k] = n;
-        } else {
-          if (trimmed === '' || trimmed == null) continue;
-          input[k] = trimmed;
-        }
+      const { input, error } = castWorkflowRunInput(schemaByKey, runInput);
+      if (error) {
+        toast.error(error);
+        setSubmitting(false);
+        return;
       }
       const exec = await execApi.start(fullWf._id, input);
       toast.success(`Workflow "${fullWf.name ?? 'run'}" started`);
@@ -179,8 +207,8 @@ export default function WorkflowRunDialog({ workflow, onClose, onStarted }: Work
           <div className="px-6 py-5 space-y-4 max-h-[50vh] overflow-auto">
             {Object.entries(runInput).map(([key, value]) => {
               const schema = fullWf?.parsed?.input?.[key] as any;
-              const isRequired = schema?.required !== false;
-              const widget = resolveWidget(key, schema);
+              const isRequired = isRequiredWorkflowInput(schema);
+              const widget = resolveWorkflowInputWidget(key, schema);
               const requires = fullWf?.parsed?.context?.requires;
               if (widget === 'repo_picker' && requires && Array.isArray(requires) && !requires.includes('repo')) {
                 return null;
@@ -265,7 +293,7 @@ export default function WorkflowRunDialog({ workflow, onClose, onStarted }: Work
                       placeholder="Select value"
                       options={[
                         ...(!isRequired ? [{ value: '', label: 'None' }] : []),
-                        ...(schema?.enum ?? []).map((opt: string) => ({ value: opt, label: opt })),
+                        ...enumOptions(schema).map((opt) => ({ value: opt, label: opt })),
                       ]}
                     />
                   )}

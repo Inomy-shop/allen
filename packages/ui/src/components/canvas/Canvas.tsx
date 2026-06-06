@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useResizable } from '../../hooks/useResizable';
 import {
   ReactFlow,
@@ -30,7 +30,9 @@ import RetryEdge from './RetryEdge';
 import AutoEdge from './AutoEdge';
 import NodePalette from './NodePalette';
 import NodeProperties from './NodeProperties';
+import EdgeProperties from './EdgeProperties';
 import { applyPositionHandles } from '../../lib/edge-handles';
+import { decorateEdge, type EdgeSemantics } from '../../lib/edge-semantics';
 
 const nodeTypes = {
   'al-agent': AgentNode,
@@ -108,11 +110,20 @@ interface Props {
   onNodesChange: NodesChangeHandler;
   onEdgesChange: EdgesChangeHandler;
   workflowInput?: Record<string, any> | null;
+  workflowContext?: Record<string, any> | null;
+  onWorkflowMetaPatch?: (patch: { input?: any; context?: any }) => void;
 }
 
-export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, workflowInput }: Props) {
+export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, workflowInput, workflowContext, onWorkflowMetaPatch }: Props) {
   const selectedNode = nodes.find(n => n.selected) ?? null;
-  const { size: propsWidth, handleMouseDown: propsResizeStart } = useResizable({ direction: 'horizontal', initialSize: 288, minSize: 220, maxSize: 500 });
+  const selectedEdge = edges.find(e => e.selected) ?? null;
+  // Close hides the panel; selecting a node/edge brings it back.
+  const [closed, setClosed] = useState(false);
+  const selectionKey = selectedNode?.id ?? selectedEdge?.id ?? null;
+  useEffect(() => {
+    if (selectionKey) setClosed(false);
+  }, [selectionKey]);
+  const { size: propsWidth, handleMouseDown: propsResizeStart } = useResizable({ direction: 'horizontal', initialSize: 432, minSize: 260, maxSize: 640 });
   const { pushSnapshot, undo, redo } = useUndoRedo(nodes, edges, onNodesChange, onEdgesChange);
 
   // Keyboard shortcut for undo/redo
@@ -194,6 +205,36 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
     onNodesChange(nodes.filter(n => n.id !== id), true);
     onEdgesChange(edges.filter(e => e.source !== id && e.target !== id), true);
   }, [nodes, edges, onNodesChange, onEdgesChange, pushSnapshot]);
+
+  // Edge control-flow editing. `data` carries the semantics (condition,
+  // parallel, join, merge, max_retries, retry_context); decorateEdge derives
+  // the matching edge type / style / handles so the canvas re-renders the
+  // edge the same way a YAML-loaded edge would look. When an edge is toggled
+  // parallel we propagate the flag to every sibling leaving the same source,
+  // since the converter groups parallel branches by source.
+  const handleUpdateEdge = useCallback((id: string, data: EdgeSemantics) => {
+    pushSnapshot();
+    const target = edges.find(e => e.id === id);
+    const source = target?.source;
+    const updated = edges.map((e) => {
+      if (e.id === id) return decorateEdge({ ...e, data: data as Record<string, unknown> });
+      if (data.parallel && source && e.source === source) {
+        const nextData = { ...(e.data as EdgeSemantics), parallel: true };
+        return decorateEdge({ ...e, data: nextData as Record<string, unknown> });
+      }
+      if (!data.parallel && source && e.source === source && (e.data as EdgeSemantics)?.parallel) {
+        const { parallel: _drop, join: _join, merge: _merge, ...rest } = (e.data as EdgeSemantics) ?? {};
+        return decorateEdge({ ...e, data: rest as Record<string, unknown> });
+      }
+      return e;
+    });
+    onEdgesChange(updated, true);
+  }, [edges, onEdgesChange, pushSnapshot]);
+
+  const handleDeleteEdge = useCallback((id: string) => {
+    pushSnapshot();
+    onEdgesChange(edges.filter(e => e.id !== id), true);
+  }, [edges, onEdgesChange, pushSnapshot]);
 
   // Route each edge through the handle side that best matches the
   // current relative positions of its endpoints, then overlay a
@@ -287,16 +328,31 @@ export default function Canvas({ nodes, edges, onNodesChange, onEdgesChange, wor
         </ReactFlowProvider>
       </div>
 
-      {/* Right: Node properties — resizable */}
-      <div className="bg-surface shrink-0 overflow-auto border-l-2 border-app hover:border-accent-blue/50 transition-colors relative" style={{ width: propsWidth }}>
-        <div className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10" onMouseDown={propsResizeStart} />
-        <NodeProperties
-          node={selectedNode}
-          onUpdate={handleUpdateNode}
-          onDelete={handleDeleteNode}
-          workflowInput={workflowInput ?? null}
-        />
-      </div>
+      {/* Right: Node properties — resizable, closable */}
+      {!closed && (
+        <div className="bg-surface shrink-0 overflow-auto border-l-2 border-app hover:border-accent-blue/50 transition-colors relative" style={{ width: propsWidth }}>
+          <div className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10" onMouseDown={propsResizeStart} />
+          {selectedEdge && !selectedNode ? (
+            <EdgeProperties
+              edge={selectedEdge}
+              onUpdate={handleUpdateEdge}
+              onDelete={handleDeleteEdge}
+              onClose={() => setClosed(true)}
+            />
+          ) : (
+            <NodeProperties
+              node={selectedNode}
+              onUpdate={handleUpdateNode}
+              onDelete={handleDeleteNode}
+              workflowInput={workflowInput ?? null}
+              workflowContext={workflowContext ?? null}
+              onWorkflowMetaPatch={onWorkflowMetaPatch}
+              nodeIds={nodes.map(n => n.id)}
+              onClose={() => setClosed(true)}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

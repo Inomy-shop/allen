@@ -1,8 +1,9 @@
-import { useRef, useCallback, useEffect } from 'react';
-import Editor, { type OnMount } from '@monaco-editor/react';
+import { useRef, useCallback, useEffect, useState } from 'react';
+import type * as Monaco from 'monaco-editor';
+import { Loader2 } from 'lucide-react';
 import { registerYamlCompletions } from './yaml-schema';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { getCssVarHex, resolveColorMode } from '../../lib/theme';
+import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
 
 interface Props {
   value: string;
@@ -11,6 +12,10 @@ interface Props {
   warnings?: string[];
   readOnly?: boolean;
 }
+
+// The YAML completion provider is global to the monaco singleton, so register
+// it once across all editor instances to avoid duplicate suggestions.
+let completionsRegistered = false;
 
 /**
  * Try to find the line number for an error/warning message by searching
@@ -55,85 +60,132 @@ function findLineForMessage(message: string, source: string): number {
   return 1;
 }
 
+/**
+ * YAML editor backed by a directly-bundled monaco-editor instance (same path
+ * as DirectMonacoEditor). The previous `@monaco-editor/react` wrapper relied
+ * on a CDN loader that never resolves in the packaged desktop app, leaving the
+ * pane stuck on "Loading…". Importing monaco directly avoids the network
+ * dependency entirely.
+ */
 export default function YamlEditor({ value, onChange, errors, warnings, readOnly }: Props) {
-  const editorRef = useRef<any>(null);
-  const monacoRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<typeof Monaco | null>(null);
+  const changeDisposableRef = useRef<Monaco.IDisposable | null>(null);
+  const onChangeRef = useRef(onChange);
   const colorMode = useSettingsStore((state) => state.colorMode);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
 
-  const applyEditorTheme = useCallback(() => {
-    if (!monacoRef.current) return;
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
 
-    const resolvedMode = resolveColorMode(colorMode);
-    monacoRef.current.editor.defineTheme('allen-active', {
-      base: resolvedMode === 'dark' ? 'vs-dark' : 'vs',
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': getCssVarHex('--color-editor-background', resolvedMode === 'dark' ? '#141620' : '#ffffff'),
-        'editor.foreground': getCssVarHex('--color-text-primary', resolvedMode === 'dark' ? '#f8fafc' : '#0f172a'),
-        'editor.lineHighlightBackground': getCssVarHex('--color-editor-line-highlight', resolvedMode === 'dark' ? '#1a1d2b' : '#f8fafc'),
-        'editorGutter.background': getCssVarHex('--color-editor-gutter', resolvedMode === 'dark' ? '#0f1117' : '#f1f5f9'),
-        'editorLineNumber.foreground': getCssVarHex('--color-text-subtle', resolvedMode === 'dark' ? '#64748b' : '#64748b'),
-        'editorLineNumber.activeForeground': getCssVarHex('--color-text-secondary', resolvedMode === 'dark' ? '#cbd5e1' : '#334155'),
-        'editor.selectionBackground': resolvedMode === 'dark' ? '#2a2e4280' : '#bfdbfe66',
-        'editorCursor.foreground': getCssVarHex('--color-accent', '#00d4ff'),
-      },
-    });
-    monacoRef.current.editor.setTheme('allen-active');
-  }, [colorMode]);
-
-  const handleMount: OnMount = useCallback((editor, monaco) => {
-    editorRef.current = editor;
-    monacoRef.current = monaco;
-
-    registerYamlCompletions(monaco);
-    applyEditorTheme();
-  }, [applyEditorTheme]);
-
-  const handleChange = useCallback((val: string | undefined) => {
-    onChange(val ?? '');
-  }, [onChange]);
-
-  // Apply validation markers with line-aware positioning
-  useEffect(() => {
-    if (!editorRef.current || !monacoRef.current) return;
-    const model = editorRef.current.getModel();
+  const applyMarkers = useCallback(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+    const model = editor.getModel();
     if (!model) return;
 
-    const markers: any[] = [];
-
-    for (const err of errors ?? []) {
-      const line = findLineForMessage(err, value);
+    const source = model.getValue();
+    const markers: Monaco.editor.IMarkerData[] = [];
+    const push = (message: string, severity: Monaco.MarkerSeverity) => {
+      const line = findLineForMessage(message, source);
       const lineContent = model.getLineContent(line) ?? '';
       markers.push({
-        severity: monacoRef.current.MarkerSeverity.Error,
-        message: err,
+        severity,
+        message,
         startLineNumber: line,
         startColumn: 1,
         endLineNumber: line,
         endColumn: lineContent.length + 1,
       });
-    }
+    };
+    for (const err of errors ?? []) push(err, monaco.MarkerSeverity.Error);
+    for (const warn of warnings ?? []) push(warn, monaco.MarkerSeverity.Warning);
+    monaco.editor.setModelMarkers(model, 'allen', markers);
+  }, [errors, warnings]);
 
-    for (const warn of warnings ?? []) {
-      const line = findLineForMessage(warn, value);
-      const lineContent = model.getLineContent(line) ?? '';
-      markers.push({
-        severity: monacoRef.current.MarkerSeverity.Warning,
-        message: warn,
-        startLineNumber: line,
-        startColumn: 1,
-        endLineNumber: line,
-        endColumn: lineContent.length + 1,
-      });
-    }
-
-    monacoRef.current.editor.setModelMarkers(model, 'allen', markers);
-  }, [errors, warnings, value]);
-
+  // Mount the editor once.
   useEffect(() => {
-    applyEditorTheme();
-  }, [applyEditorTheme, colorMode]);
+    let cancelled = false;
+    let resizeObserver: ResizeObserver | null = null;
+
+    (async () => {
+      try {
+        const monaco = await import('monaco-editor');
+        if (cancelled || !containerRef.current) return;
+
+        monacoRef.current = monaco;
+        setupMonaco(monaco);
+        if (!completionsRegistered) {
+          registerYamlCompletions(monaco);
+          completionsRegistered = true;
+        }
+
+        const editor = monaco.editor.create(containerRef.current, {
+          value,
+          language: 'yaml',
+          readOnly,
+          minimap: { enabled: false },
+          fontSize: 13,
+          fontFamily: "'JetBrains Mono', 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+          lineNumbers: 'on',
+          scrollBeyondLastLine: false,
+          wordWrap: 'on',
+          tabSize: 2,
+          automaticLayout: true,
+          folding: true,
+          renderLineHighlight: 'line',
+          smoothScrolling: true,
+          theme: getMonacoTheme(),
+          padding: { top: 8 },
+        });
+
+        changeDisposableRef.current = editor.onDidChangeModelContent(() => {
+          onChangeRef.current(editor.getValue());
+        });
+        editorRef.current = editor;
+        resizeObserver = new ResizeObserver(() => editor.layout());
+        resizeObserver.observe(containerRef.current);
+        requestAnimationFrame(() => editor.layout());
+        setReady(true);
+      } catch (error) {
+        console.warn('[yaml-editor] mount failed', error);
+        if (!cancelled) setFailed(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      resizeObserver?.disconnect();
+      changeDisposableRef.current?.dispose();
+      changeDisposableRef.current = null;
+      editorRef.current?.dispose();
+      editorRef.current = null;
+      monacoRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Sync external value changes (e.g. switching from the visual editor) without
+  // clobbering the cursor while the user types — only write when it differs.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const model = editor.getModel();
+    if (model && model.getValue() !== value) model.setValue(value);
+    editor.updateOptions({ readOnly });
+  }, [value, readOnly]);
+
+  // Re-theme on color-mode change.
+  useEffect(() => {
+    if (monacoRef.current) monacoRef.current.editor.setTheme(getMonacoTheme());
+  }, [colorMode]);
+
+  // Apply validation markers with line-aware positioning.
+  useEffect(() => {
+    if (ready) applyMarkers();
+  }, [ready, applyMarkers, value]);
 
   return (
     <div className="h-full flex flex-col">
@@ -148,26 +200,26 @@ export default function YamlEditor({ value, onChange, errors, warnings, readOnly
         </div>
       )}
 
-      <div className="flex-1">
-        <Editor
-          language="yaml"
-          value={value}
-          onChange={handleChange}
-          onMount={handleMount}
-          options={{
-            readOnly,
-            minimap: { enabled: false },
-            fontSize: 13,
-            lineNumbers: 'on',
-            scrollBeyondLastLine: false,
-            wordWrap: 'on',
-            tabSize: 2,
-            automaticLayout: true,
-            folding: true,
-            renderLineHighlight: 'line',
-            padding: { top: 8 },
-          }}
-        />
+      <div className="relative flex-1 overflow-hidden bg-[rgb(var(--color-editor-background))]">
+        {failed ? (
+          <textarea
+            value={value}
+            onChange={event => onChange(event.target.value)}
+            readOnly={readOnly}
+            className="h-full w-full resize-none bg-[rgb(var(--color-editor-background))] p-3 text-[12px] font-mono leading-relaxed text-theme-primary outline-none"
+            spellCheck={false}
+          />
+        ) : (
+          <>
+            <div ref={containerRef} className="h-full w-full" />
+            {!ready && (
+              <div className="absolute inset-0 flex items-center justify-center gap-2 bg-app-card text-[11px] font-mono text-theme-muted">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Loading editor...</span>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

@@ -353,7 +353,7 @@ export default function WorkflowListPage() {
                           <div className="flex flex-wrap gap-1.5">
                             {inputKeys.map((key: string) => {
                               const schema = input[key];
-                              const required = schema?.required !== false;
+                              const required = schema?.required === true;
                               return (
                                 <span key={key} className="badge" style={{ background: 'rgb(var(--color-accent-soft))', color: 'rgb(var(--color-accent))' }}>
                                   <FileText className="h-2.5 w-2.5" />
