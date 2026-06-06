@@ -125,8 +125,6 @@ async function registerCronActions(db: Db, cronService: CronService): Promise<vo
   cronService.registerSystemAction(createPrSyncAllAction(db));
   cronService.registerSystemAction(createMcpBundleCleanupAction(db));
   cronService.registerSystemAction(createSelfHealingMonitorScanAction(db));
-  const { createCodeRabbitSweepAction } = await import('./services/coderabbit-sweep.service.js');
-  cronService.registerSystemAction(createCodeRabbitSweepAction(db));
 }
 
 async function runBootTasks(db: Db, cronService: CronService): Promise<void> {

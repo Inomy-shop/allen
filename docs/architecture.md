@@ -66,7 +66,7 @@ Important files:
 - `src/model-alias.ts` - resolves `ALLEN_MODEL_HAIKU/SONNET/OPUS` overrides.
 - `src/validator.ts` and `src/types.ts` - workflow YAML schema and types.
 - `src/token-usage.ts` - normalized token usage type (`TokenUsageInfo`), provider normalization helpers (`normalizeCodexUsage`, `normalizeClaudeUsage`), null-aware aggregation (`aggregateTokenUsage`), and child-execution rollup marker helpers (`attachChildTokenUsageMarkers`, `tokenUsageFromChildMarkers`). Central module imported by the executors, engine, and server. Values are independently nullable per sub-field — `null` means "provider did not report", never `0`.
-- `workflows/*.yml` - eight runnable workflows: `feature-plan-and-implement`, `bug-fix-by-severity`, `tdd-design-by-severity`, `milestone-implementation-from-prd-tdd`, `resolve-pr-reviews`, `self-healing-incident-triage`, `allen-self-healing-monitor-hourly`, `multi-repo-change-orchestration`.
+- `workflows/*.yml` - eight runnable workflows: `feature-plan-and-implement`, `bug-fix-by-severity`, `tdd-design-by-severity`, `milestone-implementation-from-prd-tdd`, `self-healing-incident-triage`, `allen-self-healing-monitor-hourly`, `multi-repo-change-orchestration`, `source-prd-to-ui-designs-variations`.
 
 ### `packages/server`
 
@@ -302,7 +302,7 @@ No agent-targeted automation jobs ship as built-ins. Users can author their own 
 
 ### Built-in cron jobs
 
-`cron-seed.service.ts` seeds six system jobs:
+`cron-seed.service.ts` seeds five system jobs:
 
 | Name | Schedule | Purpose |
 |---|---|---|
@@ -310,7 +310,6 @@ No agent-targeted automation jobs ship as built-ins. Users can author their own 
 | `repo-pull-30min` | `*/30 * * * *` | `git pull` origin for registered repos. |
 | `pr-sync-30min` | `*/30 * * * *` | Sync PR list via `gh pr list`. |
 | `mcp-bundle-cleanup-hourly` | `0 * * * *` | Delete orphaned uploaded MCP bundles >24h old. |
-| `coderabbit-sweep-15min` | `*/15 * * * *` | Resolve outstanding CodeRabbit PR comments. |
 | `allen-self-healing-monitor-hourly` | `17 * * * *` | Launch the hourly self-healing monitor workflow. |
 
 ## Runtime Ports

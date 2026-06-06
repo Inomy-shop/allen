@@ -281,6 +281,7 @@ export interface EdgeDef {
   merge?: Record<string, MergeStrategy>;
   max_retries?: number;
   retry_context?: string;
+  allow_revisit?: boolean;
 }
 
 // ── Workflow ────────────────────────────────────────────────────────────────
