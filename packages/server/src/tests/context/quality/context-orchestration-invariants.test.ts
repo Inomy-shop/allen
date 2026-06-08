@@ -669,7 +669,7 @@ describe('Invariant 9: Agent prompt builders are all exported and non-empty', as
 
   it('orchestrator prompt uses a rolling trace worker concurrency window', () => {
     const prompt = promptModule.buildContextJudgeOrchestratorPrompt();
-    expect(prompt).toContain('context_quality_create_trace_analysis_assignment_wave');
+    expect(prompt).toContain('context_quality_create_trace_analysis_wave');
     expect(prompt).toContain('rolling trace-analysis concurrency window');
     expect(prompt).toContain('maxActiveTraceWorkers = 4');
     expect(prompt).toContain('openSlots = 4 - activeTraceWorkers.length');

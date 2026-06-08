@@ -181,7 +181,7 @@ describe('ENG-1760 Blocker A: MCP tool registry includes all required trace tool
   const REQUIRED_TOOLS = [
     'context_quality_list_unevaluated_traces',
     'context_quality_create_trace_analysis_assignment',
-    'context_quality_create_trace_analysis_assignment_wave',
+    'context_quality_create_trace_analysis_wave',
     'context_quality_list_trace_analysis_assignments',
     'context_quality_update_trace_analysis_assignment',
     'context_quality_submit_source_evaluation',
@@ -198,6 +198,19 @@ describe('ENG-1760 Blocker A: MCP tool registry includes all required trace tool
     for (const toolName of REQUIRED_TOOLS) {
       // Each tool name must appear as a quoted name property in the TOOLS array definition
       expect(src, `Expected TOOLS array to contain tool: ${toolName}`).toContain(`name: '${toolName}'`);
+    }
+  });
+
+  it('listed context MCP tools stay within the Codex exposed-name limit', () => {
+    const src = fs.readFileSync(MCP_SERVER_SRC, 'utf8');
+    const toolNames = [...src.matchAll(/name:\s*'([^']+)'/g)].map(match => match[1]);
+    const listedContextTools = [...new Set(toolNames)].filter(toolName => toolName.includes('context'));
+    for (const toolName of listedContextTools) {
+      const exposedName = `mcp__allen__${toolName}`;
+      expect(
+        exposedName.length,
+        `${exposedName} must not exceed Codex's 64-character exposed tool-name limit`,
+      ).toBeLessThanOrEqual(64);
     }
   });
 
@@ -219,7 +232,7 @@ describe('ENG-1760 Blocker A: MCP tool registry includes all required trace tool
   });
 });
 
-describe('ENG-1760: context_quality_create_trace_analysis_assignment_wave route', () => {
+describe('ENG-1760: context_quality_create_trace_analysis_wave route', () => {
   function makeTrace(index: number, repoId = 'repo-wave', executionId?: string) {
     const id = `ca-wave-${String(index).padStart(3, '0')}`;
     return {
