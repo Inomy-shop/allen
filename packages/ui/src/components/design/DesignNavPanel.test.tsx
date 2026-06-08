@@ -11,10 +11,10 @@ vi.mock('../../services/api', () => ({
 
 const { chat } = await import('../../services/api');
 
-function renderPanel(activeSessionId: string | null = null, onBack = vi.fn()) {
+function renderPanel(activeSessionId: string | null = null, onBack = vi.fn(), onDelete?: (id: string) => void) {
   return render(
     <MemoryRouter>
-      <DesignNavPanel activeSessionId={activeSessionId} onBack={onBack} />
+      <DesignNavPanel activeSessionId={activeSessionId} onBack={onBack} onDelete={onDelete} />
     </MemoryRouter>
   );
 }
@@ -98,6 +98,96 @@ describe('DesignNavPanel', () => {
     // If onBack does NOT call navigate (the broken behavior), this assertion fails.
     await waitFor(() => {
       expect(screen.getByTestId('home-page')).toBeInTheDocument();
+    });
+  });
+
+  it('name span has truncation classes for overflow fix', async () => {
+    vi.mocked(chat.listSessions).mockResolvedValue([
+      { _id: 'd1', title: 'A very long design session name that should be truncated', activeAgent: 'design-assistant', lastMessageAt: new Date().toISOString() },
+    ] as any);
+
+    renderPanel();
+
+    await waitFor(() => {
+      const nameSpan = screen.getByText('A very long design session name that should be truncated');
+      expect(nameSpan.className).toContain('truncate');
+      // Parent must have min-w-0 and overflow-hidden for truncation to work
+      expect(nameSpan.parentElement?.className).toContain('min-w-0');
+      expect(nameSpan.parentElement?.className).toContain('overflow-hidden');
+    });
+  });
+
+  it('shows delete button when onDelete prop is provided', async () => {
+    vi.mocked(chat.listSessions).mockResolvedValue([
+      { _id: 'd1', title: 'My design', activeAgent: 'design-assistant', lastMessageAt: new Date().toISOString() },
+    ] as any);
+
+    renderPanel(null, vi.fn(), vi.fn());
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /delete design/i })).toBeInTheDocument();
+    });
+  });
+
+  it('does NOT show delete button when onDelete prop is absent', async () => {
+    vi.mocked(chat.listSessions).mockResolvedValue([
+      { _id: 'd1', title: 'My design', activeAgent: 'design-assistant', lastMessageAt: new Date().toISOString() },
+    ] as any);
+
+    renderPanel(); // no onDelete
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /delete design/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it('clicking delete button calls onDelete with the session id', async () => {
+    vi.mocked(chat.listSessions).mockResolvedValue([
+      { _id: 'd1', title: 'My design', activeAgent: 'design-assistant', lastMessageAt: new Date().toISOString() },
+    ] as any);
+
+    const onDelete = vi.fn();
+    renderPanel(null, vi.fn(), onDelete);
+
+    // Wait for the item-level delete button (has aria-label, not the dialog confirm button)
+    await waitFor(() => screen.getByRole('button', { name: /delete design/i }));
+
+    // Open the confirm dialog — only one button matches at this point
+    fireEvent.click(screen.getByRole('button', { name: /delete design/i }));
+
+    // The DeleteConfirmDialog requires typing the session name to confirm
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('My design')).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByPlaceholderText('My design'), { target: { value: 'My design' } });
+
+    // After the dialog opens there are two "Delete design" buttons:
+    //   1. The item's trash icon (aria-label="Delete design")
+    //   2. The dialog confirm button (no aria-label; accessible by text content only)
+    // Pick the dialog confirm button by finding the one WITHOUT an aria-label.
+    const allDeleteBtns = screen.getAllByRole('button', { name: /delete design/i });
+    const dialogConfirmBtn = allDeleteBtns.find(btn => btn.getAttribute('aria-label') !== 'Delete design')!;
+    fireEvent.click(dialogConfirmBtn);
+
+    await waitFor(() => {
+      expect(onDelete).toHaveBeenCalledWith('d1');
+    });
+  });
+
+  it('clicking delete button does NOT trigger session navigation', async () => {
+    vi.mocked(chat.listSessions).mockResolvedValue([
+      { _id: 'd1', title: 'My design', activeAgent: 'design-assistant', lastMessageAt: new Date().toISOString() },
+    ] as any);
+
+    const onDelete = vi.fn();
+    renderPanel(null, vi.fn(), onDelete);
+
+    await waitFor(() => screen.getByRole('button', { name: /delete design/i }));
+    fireEvent.click(screen.getByRole('button', { name: /delete design/i }));
+
+    // Should show confirm dialog (not navigate)
+    await waitFor(() => {
+      expect(screen.getByText(/to confirm/i)).toBeInTheDocument();
     });
   });
 });

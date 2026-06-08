@@ -970,6 +970,15 @@ export default function App() {
                 // history -1 might still be another /design/* entry.
                 navigate('/');
               }}
+              onDelete={async (id) => {
+                try {
+                  await chatApi.deleteSession(id);
+                  // If we deleted the active session, navigate to /design root
+                  if (designActiveSessionId === id) navigate('/design');
+                } catch (err) {
+                  console.error('[design] failed to delete session', err);
+                }
+              }}
             />
           </div>
           <div className="sidebar-foot-wrap">

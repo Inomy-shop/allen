@@ -18,7 +18,7 @@ const DEFAULT_CONFIG: DesignPreviewConfig = {
   startCommand: '',
   portMode: 'auto',
   fixedPort: undefined,
-  healthCheckPath: '/',
+  healthCheckPath: '',
 };
 
 export default function DesignPreviewConfigForm({

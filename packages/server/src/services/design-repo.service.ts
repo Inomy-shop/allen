@@ -7,8 +7,72 @@
  * and handling preview configuration.
  */
 
+import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { Collection, Db } from 'mongodb';
+import { resolveRepositoriesDir } from '@allen/engine';
 import { DesignPreviewService, type DesignPreviewConfig } from './design-preview.service.js';
+
+const exec = promisify(execFile);
+
+/** Known SSH clone URL for the default ui-designs template repo. */
+export const DEFAULT_UI_DESIGNS_CLONE_URL = 'git@github.com:Inomy-shop/ui-designs.git';
+
+/** Known HTTPS clone URL for the default ui-designs template repo. */
+export const DEFAULT_UI_DESIGNS_HTTPS_URL = 'https://github.com/Inomy-shop/ui-designs.git';
+
+/** Default local clone directory for ui-designs (under ~/.allen/repositories/). */
+export const DEFAULT_UI_DESIGNS_LOCAL_PATH = join(resolveRepositoriesDir(), 'ui-designs');
+
+/** Default preview configuration applied automatically to ui-designs repos. */
+const UI_DESIGNS_DEFAULT_PREVIEW_CONFIG = {
+  enabled: true,
+  workingDirectory: '.',
+  installCommand: 'npm i',
+  buildCommand: 'npm run build',
+  startCommand: 'npm run dev',
+  portMode: 'fixed' as const,
+  fixedPort: 3001,
+  healthCheckPath: '',
+  lastValidationStatus: 'unknown' as const,
+};
+
+// ── Background clone helper ────────────────────────────────────────────────
+
+async function backgroundCloneIfAbsent(targetPath: string): Promise<void> {
+  if (existsSync(targetPath)) return; // already there
+
+  // SSH is primary (standard for private/internal repos); HTTPS is fallback
+  let cloneUrl = DEFAULT_UI_DESIGNS_CLONE_URL; // SSH primary
+  const sshEnv = {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new',
+  };
+  try {
+    await exec(
+      'git',
+      ['ls-remote', '--exit-code', DEFAULT_UI_DESIGNS_CLONE_URL, 'HEAD'],
+      { timeout: 12_000, env: sshEnv },
+    );
+  } catch {
+    cloneUrl = DEFAULT_UI_DESIGNS_HTTPS_URL; // HTTPS fallback
+    console.info('[design] SSH not reachable, will use HTTPS for background clone');
+  }
+
+  console.info('[design] starting background clone', { cloneUrl, targetPath });
+  await exec(
+    'git',
+    ['clone', cloneUrl, targetPath],
+    {
+      timeout: 10 * 60 * 1000,
+      env: sshEnv,
+    },
+  );
+  console.info('[design] background clone completed', { targetPath });
+}
 
 // ── Service ────────────────────────────────────────────────────────────────
 
@@ -105,11 +169,25 @@ export class DesignRepoService {
         roles,
         updatedAt: now,
       };
+      // Update path/cloneUrl when provided (repairs placeholder records)
+      if (data.path) {
+        updateFields.path = data.path;
+        // Promote from placeholder status if applicable
+        if (existing.status === 'placeholder') {
+          updateFields.status = 'registered';
+        }
+      }
+      if (data.cloneUrl) {
+        updateFields.cloneUrl = data.cloneUrl;
+      }
       if (data.previewConfig) {
         updateFields.designPreviewConfig = {
           ...data.previewConfig,
           lastValidationStatus: 'unknown',
         };
+      } else if (/ui.?designs/i.test(data.name) && !existing.designPreviewConfig) {
+        // Auto-attach default preview config for ui-designs repos when none exists
+        updateFields.designPreviewConfig = { ...UI_DESIGNS_DEFAULT_PREVIEW_CONFIG };
       }
       await this.col.updateOne({ _id: existing._id }, { $set: updateFields });
       const updated = await this.col.findOne({ _id: existing._id });
@@ -134,6 +212,9 @@ export class DesignRepoService {
     };
     if (data.previewConfig) {
       doc.designPreviewConfig = { ...data.previewConfig, lastValidationStatus: 'unknown' };
+    } else if (/ui.?designs/i.test(data.name)) {
+      // Auto-attach default preview config for ui-designs repos
+      doc.designPreviewConfig = { ...UI_DESIGNS_DEFAULT_PREVIEW_CONFIG };
     }
     const result = await this.col.insertOne(doc);
     const newRepo = { ...doc, _id: result.insertedId };
@@ -145,12 +226,13 @@ export class DesignRepoService {
    * Bootstrap the ui-designs template repo.
    *
    * If a repo named 'ui-designs' (or matching /ui.?designs/i) already exists,
-   * marks it as the default design repo. If not found, creates a placeholder
-   * entry with basic design fields.
-   *
-   * TODO: REQ-039, REQ-040 — full clone/setup logic for new ui-designs repos.
+   * marks it as the default design repo and bakes in the canonical clone URL
+   * and default local path. If not found, creates a placeholder entry with
+   * those fields already populated. In both cases, spawns a background
+   * `git clone` if the target directory is absent.
    */
-  async bootstrapUiDesigns(name?: string): Promise<any> {
+  async bootstrapUiDesigns(name?: string, localPath?: string): Promise<any> {
+    const effectivePath = localPath ?? DEFAULT_UI_DESIGNS_LOCAL_PATH;
     const existing = await this.col.findOne({ name: { $regex: /ui.?designs/i } });
 
     if (existing) {
@@ -158,28 +240,48 @@ export class DesignRepoService {
       if (!roles.includes('design_repo')) {
         roles.push('design_repo');
       }
+      const setFields: Record<string, unknown> = {
+        isDefaultDesignRepo: true,
+        roles,
+        cloneUrl: DEFAULT_UI_DESIGNS_CLONE_URL,
+        updatedAt: new Date(),
+      };
+      // Set path if empty or missing
+      if (existing.path === '' || !existing.path) {
+        setFields.path = effectivePath;
+      }
+      // Attach default preview config only if the repo has none yet
+      if (!existing.designPreviewConfig) {
+        setFields.designPreviewConfig = { ...UI_DESIGNS_DEFAULT_PREVIEW_CONFIG };
+      }
       await this.col.updateOne(
         { _id: existing._id },
-        { $set: { isDefaultDesignRepo: true, roles, updatedAt: new Date() } },
+        { $set: setFields },
       );
+      backgroundCloneIfAbsent(effectivePath).catch((err: unknown) => {
+        console.warn('[design] background clone failed:', (err as Error)?.message ?? String(err));
+      });
       console.info('[design] bootstrapped existing ui-designs repo', { repoId: existing._id.toString() });
       return this.col.findOne({ _id: existing._id });
     }
 
-    // No existing repo — create placeholder
-    // TODO: REQ-039 — trigger actual git clone / workspace setup after placeholder creation.
-    // TODO: REQ-040 — wire up GitHub template clone for new ui-designs repos.
+    // No existing repo — create placeholder with known clone URL and default path
     const now = new Date();
     const doc = {
       name: name ?? 'ui-designs',
-      path: '',
+      path: effectivePath,
+      cloneUrl: DEFAULT_UI_DESIGNS_CLONE_URL,
       roles: ['design_repo'],
       isDefaultDesignRepo: true,
-      status: 'placeholder',
+      status: existsSync(effectivePath) ? 'registered' : 'placeholder',
+      designPreviewConfig: { ...UI_DESIGNS_DEFAULT_PREVIEW_CONFIG },
       createdAt: now,
       updatedAt: now,
     };
     const result = await this.col.insertOne(doc);
+    backgroundCloneIfAbsent(effectivePath).catch((err: unknown) => {
+      console.warn('[design] background clone failed:', (err as Error)?.message ?? String(err));
+    });
     console.info('[design] bootstrapped ui-designs placeholder', { repoId: result.insertedId.toString() });
     return { ...doc, _id: result.insertedId };
   }
@@ -244,9 +346,20 @@ export class DesignRepoService {
       };
     }
 
-    // Resolve worktree path from workspaceId if provided
-    // For now, use an empty worktree path if no workspace is given
-    const worktreePath = workspaceId ? `/tmp/workspace-${workspaceId}` : '';
+    // Resolve worktree path: explicit workspaceId (placeholder), or the repo's configured path
+    let worktreePath: string;
+    if (workspaceId) {
+      worktreePath = `/tmp/workspace-${workspaceId}`;
+    } else {
+      const repo = await this.getRepoById(repoId);
+      if (!repo || !repo.path) {
+        return {
+          status: 'failed',
+          logs: ['Repo path not configured — add a local path for this repo before testing preview'],
+        };
+      }
+      worktreePath = repo.path;
+    }
     const result = await this.previewService.testConfig(config, worktreePath);
 
     // Update validation status in DB

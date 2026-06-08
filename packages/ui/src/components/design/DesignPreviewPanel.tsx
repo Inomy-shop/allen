@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Settings, RefreshCw, ExternalLink, Square } from 'lucide-react';
+import { useEffect, useState, useCallback, type FormEvent } from 'react';
+import { Settings, RefreshCw, ExternalLink, Square, Plus, FolderOpen } from 'lucide-react';
 import { designRepos, type DesignPreviewConfig } from '../../services/designService';
 import DesignPreviewConfigForm from './DesignPreviewConfigForm';
 
@@ -7,6 +7,7 @@ type PanelState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
   | { status: 'no-repo' }
+  | { status: 'needs-path'; repoId: string; repoName: string }
   | { status: 'no-config'; repoId: string }
   | { status: 'configure'; repoId: string; config: DesignPreviewConfig | null }
   | { status: 'needs-validation'; repoId: string; config: DesignPreviewConfig }
@@ -41,13 +42,27 @@ function openPreviewUrl(url: string): void {
   }
 }
 
-export default function DesignPreviewPanel({ chatSessionId, workspaceId }: { chatSessionId?: string | null; workspaceId?: string | null }) {
+interface Props {
+  chatSessionId?: string | null;
+  workspaceId?: string | null;
+  onRepoConfigured?: () => void;
+}
+
+export default function DesignPreviewPanel({ chatSessionId, workspaceId, onRepoConfigured }: Props) {
   const [panelState, setPanelState] = useState<PanelState>({ status: 'loading' });
   // The config form is always visible when there is no existing config (no extra click
   // needed — users see build/run/port fields immediately). For states that already have a
   // saved config the form is revealed only when the user clicks Configure / Settings.
   const [showConfigFormOverride, setShowConfigFormOverride] = useState(false);
   const [previewServer, setPreviewServer] = useState<PreviewServerState>({ phase: 'idle' });
+
+  type ActionState = 'idle' | 'loading' | 'error';
+  const [bootstrapState, setBootstrapState] = useState<ActionState>('idle');
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [onboardPath, setOnboardPath] = useState('');
+  const [onboardName, setOnboardName] = useState('ui-designs');
+  const [onboardState, setOnboardState] = useState<ActionState>('idle');
+  const [onboardError, setOnboardError] = useState<string | null>(null);
 
   // The form is visible if the panel is in a "no config yet" state OR the override is on.
   const showConfigForm =
@@ -61,6 +76,12 @@ export default function DesignPreviewPanel({ chatSessionId, workspaceId }: { cha
       const repo = await designRepos.getDefault();
       if (!repo) {
         setPanelState({ status: 'no-repo' });
+        return;
+      }
+      // Repo exists but has no local path — show path-setup state (not preview-ready)
+      if (repo.path === '') {
+        setPanelState({ status: 'needs-path', repoId: repo._id, repoName: repo.name ?? 'ui-designs' });
+        setOnboardName(repo.name ?? 'ui-designs');
         return;
       }
       let config: DesignPreviewConfig | null = null;
@@ -86,7 +107,11 @@ export default function DesignPreviewPanel({ chatSessionId, workspaceId }: { cha
       } else {
         setPanelState({ status: 'needs-validation', repoId: repo._id, config });
       }
-    } catch {
+    } catch (err: any) {
+      if (err.code === 'DESIGN_REPO_NOT_FOUND' || err.httpStatus === 404) {
+        setPanelState({ status: 'no-repo' });
+        return;
+      }
       setPanelState({ status: 'error', message: 'Could not load design repo' });
     }
   }, []);
@@ -120,16 +145,42 @@ export default function DesignPreviewPanel({ chatSessionId, workspaceId }: { cha
     await load();
   }
 
+  async function handleBootstrap() {
+    setBootstrapState('loading');
+    setBootstrapError(null);
+    try {
+      await designRepos.bootstrapUiDesigns();
+      setBootstrapState('idle');
+      await load();
+      onRepoConfigured?.();
+    } catch (err) {
+      setBootstrapState('error');
+      setBootstrapError((err as Error).message ?? 'Bootstrap failed');
+    }
+  }
+
+  async function handleOnboard(e: FormEvent) {
+    e.preventDefault();
+    if (!onboardName.trim()) return;
+    setOnboardState('loading');
+    setOnboardError(null);
+    try {
+      await designRepos.onboard({ name: onboardName.trim(), path: onboardPath.trim() || undefined, makeDefault: true });
+      setOnboardState('idle');
+      await load();
+      onRepoConfigured?.();
+    } catch (err) {
+      setOnboardState('error');
+      setOnboardError((err as Error).message ?? 'Could not add repo');
+    }
+  }
+
   /**
    * Force-restart the preview server and open it in a new tab once ready.
    * Always triggers a fresh start — the server stops any existing process first.
    */
   async function handleOpenPreview() {
     if (panelState.status !== 'ready') return;
-    if (!chatSessionId && !workspaceId) {
-      setPreviewServer({ phase: 'failed', message: 'No active session or workspace — start or open a design chat to enable preview.' });
-      return;
-    }
     const repoId = panelState.repoId;
 
     setPreviewServer({ phase: 'starting' });
@@ -216,12 +267,153 @@ export default function DesignPreviewPanel({ chatSessionId, workspaceId }: { cha
           </div>
         )}
 
+        {panelState.status === 'needs-path' && (
+          <div className="flex flex-col gap-4">
+            {/* Primary: single-click bootstrap — no path required */}
+            <div className="rounded-md border border-dashed border-app bg-app-card px-4 py-5">
+              <p className="text-[13px] font-medium text-theme-primary mb-1">Finish setting up ui-designs</p>
+              <p className="text-[12px] text-theme-muted mb-3">
+                <strong>{panelState.repoName}</strong> is registered but has no local path yet.
+                Click below to clone it automatically — no path needed.
+              </p>
+              <button
+                type="button"
+                onClick={() => void handleBootstrap()}
+                disabled={bootstrapState === 'loading'}
+                className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:bg-accent/90 transition-colors disabled:opacity-60"
+                aria-label="Use ui-designs (default)"
+              >
+                {bootstrapState === 'loading' ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Plus className="h-3.5 w-3.5" />
+                )}
+                {bootstrapState === 'loading' ? 'Setting up…' : 'Use ui-designs (default)'}
+              </button>
+              {bootstrapState === 'error' && bootstrapError && (
+                <p className="mt-2 text-[11px] text-red-600 dark:text-red-400">{bootstrapError}</p>
+              )}
+            </div>
+
+            {/* Secondary: manual path entry */}
+            <div className="rounded-md border border-app bg-app-card px-4 py-4">
+              <p className="text-[13px] font-medium text-theme-primary mb-3">Or add local path manually</p>
+              <form onSubmit={(e) => void handleOnboard(e)} className="flex flex-col gap-2" aria-label="Add existing design repo">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] text-theme-subtle" htmlFor="needs-path-onboard-path">Local path</label>
+                  <input
+                    id="needs-path-onboard-path"
+                    type="text"
+                    value={onboardPath}
+                    onChange={(e) => setOnboardPath(e.target.value)}
+                    placeholder="/path/to/your/design/repo"
+                    className="rounded border border-app bg-app px-2 py-1.5 text-[12px] text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:ring-1 focus:ring-accent"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] text-theme-subtle" htmlFor="needs-path-onboard-name">Name</label>
+                  <input
+                    id="needs-path-onboard-name"
+                    type="text"
+                    value={onboardName}
+                    onChange={(e) => setOnboardName(e.target.value)}
+                    placeholder="ui-designs"
+                    required
+                    className="rounded border border-app bg-app px-2 py-1.5 text-[12px] text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:ring-1 focus:ring-accent"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={onboardState === 'loading' || !onboardName.trim()}
+                  className="inline-flex items-center gap-1.5 self-start rounded-md border border-app bg-app px-3 py-1.5 text-[12px] text-theme-secondary hover:bg-app-muted transition-colors disabled:opacity-60"
+                  aria-label="Save path"
+                >
+                  {onboardState === 'loading' ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  )}
+                  {onboardState === 'loading' ? 'Saving…' : 'Save path'}
+                </button>
+                {onboardState === 'error' && onboardError && (
+                  <p className="text-[11px] text-red-600 dark:text-red-400">{onboardError}</p>
+                )}
+              </form>
+            </div>
+          </div>
+        )}
+
         {panelState.status === 'no-repo' && (
-          <div className="rounded-md border border-dashed border-app bg-app-card px-4 py-6 text-center">
-            <p className="text-[13px] text-theme-muted mb-3">No design repo configured.</p>
-            <p className="text-[12px] text-theme-subtle">
-              Go to the Design section and set up a design repository to enable preview.
-            </p>
+          <div className="flex flex-col gap-4">
+            {/* Bootstrap ui-designs CTA */}
+            <div className="rounded-md border border-dashed border-app bg-app-card px-4 py-5">
+              <p className="text-[13px] font-medium text-theme-primary mb-1">No design repo configured</p>
+              <p className="text-[12px] text-theme-muted mb-3">
+                Set up the default <strong>ui-designs</strong> repository with a single click — no local path or extra configuration needed.
+              </p>
+              <button
+                type="button"
+                onClick={() => void handleBootstrap()}
+                disabled={bootstrapState === 'loading'}
+                className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:bg-accent/90 transition-colors disabled:opacity-60"
+              >
+                {bootstrapState === 'loading' ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Plus className="h-3.5 w-3.5" />
+                )}
+                {bootstrapState === 'loading' ? 'Setting up…' : 'Use ui-designs (default)'}
+              </button>
+              {bootstrapState === 'error' && bootstrapError && (
+                <p className="mt-2 text-[11px] text-red-600 dark:text-red-400">{bootstrapError}</p>
+              )}
+            </div>
+
+            {/* Add existing design repo */}
+            <div className="rounded-md border border-app bg-app-card px-4 py-4">
+              <p className="text-[13px] font-medium text-theme-primary mb-3">Add existing design repo</p>
+              <form onSubmit={(e) => void handleOnboard(e)} className="flex flex-col gap-2" aria-label="Add existing design repo">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] text-theme-subtle" htmlFor="onboard-path">Path (optional)</label>
+                  <input
+                    id="onboard-path"
+                    type="text"
+                    value={onboardPath}
+                    onChange={(e) => setOnboardPath(e.target.value)}
+                    placeholder="/path/to/your/design/repo"
+                    className="rounded border border-app bg-app px-2 py-1.5 text-[12px] text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:ring-1 focus:ring-accent"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] text-theme-subtle" htmlFor="onboard-name">Name</label>
+                  <input
+                    id="onboard-name"
+                    type="text"
+                    value={onboardName}
+                    onChange={(e) => setOnboardName(e.target.value)}
+                    placeholder="ui-designs"
+                    required
+                    className="rounded border border-app bg-app px-2 py-1.5 text-[12px] text-theme-primary placeholder:text-theme-subtle focus:outline-none focus:ring-1 focus:ring-accent"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={onboardState === 'loading' || !onboardName.trim()}
+                  className="inline-flex items-center gap-1.5 self-start rounded-md border border-app bg-app px-3 py-1.5 text-[12px] text-theme-secondary hover:bg-app-muted transition-colors disabled:opacity-60"
+                  aria-label="Add design repo"
+                >
+                  {onboardState === 'loading' ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  )}
+                  {onboardState === 'loading' ? 'Adding…' : 'Add repo'}
+                </button>
+                {onboardState === 'error' && onboardError && (
+                  <p className="text-[11px] text-red-600 dark:text-red-400">{onboardError}</p>
+                )}
+              </form>
+            </div>
           </div>
         )}
 

@@ -111,7 +111,7 @@ export class DesignPreviewService {
           name: 'preview',
           command: resolvedCommand,
           portOffset: 0,
-          healthCheck: config.healthCheckPath ?? '/',
+          ...(config.healthCheckPath ? { healthCheck: config.healthCheckPath } : {}),
         },
       ],
       autoStart: false,

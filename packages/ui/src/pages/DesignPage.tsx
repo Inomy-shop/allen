@@ -2,18 +2,28 @@ import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import ChatPage from './ChatPage';
 import DesignPreviewPanel from '../components/design/DesignPreviewPanel';
+import { designRepos } from '../services/designService';
 
 export default function DesignPage() {
   const { sessionId } = useParams<{ sessionId?: string }>();
-  // Track the effective session id — starts from URL, updates when ChatPage creates a new session
   const [activeSessionId, setActiveSessionId] = useState<string | null>(sessionId ?? null);
-  // Track the effective workspace id — propagated from ChatPage when a workspace becomes linked
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  // null = loading (don't disable yet), false = no repo, true = repo ready
+  const [designRepoReady, setDesignRepoReady] = useState<boolean | null>(null);
 
-  // Keep in sync when the URL param changes (e.g., user navigates to a different session)
   useEffect(() => {
     setActiveSessionId(sessionId ?? null);
   }, [sessionId]);
+
+  useEffect(() => {
+    designRepos.getDefault().then(repo => {
+      setDesignRepoReady(repo !== null && (repo.path ?? '') !== '');
+    }).catch(() => {
+      setDesignRepoReady(false);
+    });
+  }, []);
+
+  const chatDisabled = designRepoReady === false;
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
@@ -25,9 +35,15 @@ export default function DesignPage() {
           designMode: true,
           onActiveSessionIdChange: setActiveSessionId,
           onActiveWorkspaceIdChange: setActiveWorkspaceId,
+          disabled: chatDisabled,
+          disabledReason: 'Set up your design repo in the Preview panel to start chatting.',
         }}
       />
-      <DesignPreviewPanel chatSessionId={activeSessionId} workspaceId={activeWorkspaceId} />
+      <DesignPreviewPanel
+        chatSessionId={activeSessionId}
+        workspaceId={activeWorkspaceId}
+        onRepoConfigured={() => setDesignRepoReady(true)}
+      />
     </div>
   );
 }

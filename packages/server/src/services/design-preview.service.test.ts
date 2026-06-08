@@ -87,6 +87,41 @@ describe('DesignPreviewService.toWorkspaceConfig', () => {
     const ws = service.toWorkspaceConfig(config);
     expect(ws.services[0].command).toContain('{port:0}');
   });
+
+  it('healthCheck is undefined when healthCheckPath is empty', () => {
+    const config = {
+      enabled: true,
+      workingDirectory: 'app',
+      startCommand: 'npm run dev',
+      portMode: 'auto' as const,
+      healthCheckPath: '',
+    };
+    const ws = service.toWorkspaceConfig(config);
+    expect(ws.services[0].healthCheck).toBeUndefined();
+  });
+
+  it('healthCheck is undefined when healthCheckPath is absent', () => {
+    const config = {
+      enabled: true,
+      workingDirectory: 'app',
+      startCommand: 'npm run dev',
+      portMode: 'auto' as const,
+    };
+    const ws = service.toWorkspaceConfig(config);
+    expect(ws.services[0].healthCheck).toBeUndefined();
+  });
+
+  it('healthCheck is set when healthCheckPath is non-empty', () => {
+    const config = {
+      enabled: true,
+      workingDirectory: 'app',
+      startCommand: 'npm run dev',
+      portMode: 'auto' as const,
+      healthCheckPath: '/health',
+    };
+    const ws = service.toWorkspaceConfig(config);
+    expect(ws.services[0].healthCheck).toBe('/health');
+  });
 });
 
 describe('DesignPreviewService.testConfig — SF-002 safety (REQ-033, REQ-034)', () => {

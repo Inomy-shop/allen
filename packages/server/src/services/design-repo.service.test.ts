@@ -23,7 +23,22 @@ vi.mock('mongodb', () => {
   return { ObjectId };
 });
 
-import { DesignRepoService } from './design-repo.service.js';
+// Mock fs and child_process so background-clone code doesn't fire in tests
+vi.mock('node:fs', () => ({
+  existsSync: vi.fn().mockReturnValue(false), // pretend directory does not exist
+}));
+vi.mock('node:child_process', () => ({
+  execFile: vi.fn((_cmd: unknown, _args: unknown, _optsOrCb: unknown, _cb: unknown) => {
+    const cb = typeof _optsOrCb === 'function' ? _optsOrCb : _cb;
+    if (typeof cb === 'function') cb(null, '', '');
+    return { on: vi.fn(), stdout: { on: vi.fn() }, stderr: { on: vi.fn() } };
+  }),
+}));
+vi.mock('@allen/engine', () => ({
+  resolveRepositoriesDir: vi.fn().mockReturnValue('/mock/allen/repositories'),
+}));
+
+import { DesignRepoService, DEFAULT_UI_DESIGNS_CLONE_URL, DEFAULT_UI_DESIGNS_HTTPS_URL, DEFAULT_UI_DESIGNS_LOCAL_PATH } from './design-repo.service.js';
 
 // ── Mock factory ──────────────────────────────────────────────────────────────
 
@@ -289,5 +304,338 @@ describe('DesignRepoService', () => {
       expect(result.lastValidatedAt).toBeUndefined();
       expect(result.lastValidationError).toBeUndefined();
     });
+  });
+
+  // ── bootstrapUiDesigns — default preview config ──────────────────────────────
+
+  describe('bootstrapUiDesigns — default preview config', () => {
+    it('attaches default preview config when bootstrapping a NEW ui-designs placeholder', async () => {
+      mocks.colFindOne.mockResolvedValue(null); // no existing repo
+      mocks.colInsertOne.mockResolvedValue({ insertedId: 'new-id' });
+
+      const result = await service.bootstrapUiDesigns();
+
+      // insertOne must include designPreviewConfig with ui-designs defaults
+      expect(mocks.colInsertOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          designPreviewConfig: expect.objectContaining({
+            enabled: true,
+            startCommand: 'npm run dev',
+            portMode: 'fixed',
+            fixedPort: 3001,
+          }),
+        }),
+      );
+      expect(result.designPreviewConfig).toMatchObject({
+        enabled: true,
+        startCommand: 'npm run dev',
+      });
+    });
+
+    it('attaches default preview config when bootstrapping an EXISTING repo with no config', async () => {
+      const existingRepo = { _id: 'existing-id', name: 'ui-designs', roles: ['design_repo'], isDefaultDesignRepo: false };
+      mocks.colFindOne.mockResolvedValue(existingRepo);
+
+      await service.bootstrapUiDesigns();
+
+      // updateOne must set designPreviewConfig
+      expect(mocks.colUpdateOne).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            designPreviewConfig: expect.objectContaining({
+              enabled: true,
+              startCommand: 'npm run dev',
+              portMode: 'fixed',
+              fixedPort: 3001,
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('preserves existing designPreviewConfig when bootstrapping an existing repo that already has one', async () => {
+      const existingConfig = { enabled: true, startCommand: 'my-custom-start', portMode: 'auto', workingDirectory: 'app' };
+      const existingRepo = {
+        _id: 'existing-id',
+        name: 'ui-designs',
+        roles: ['design_repo'],
+        isDefaultDesignRepo: false,
+        designPreviewConfig: existingConfig,
+      };
+      mocks.colFindOne.mockResolvedValue(existingRepo);
+
+      await service.bootstrapUiDesigns();
+
+      // updateOne must NOT include designPreviewConfig in $set
+      const updateCall = mocks.colUpdateOne.mock.calls[0];
+      const setFields = updateCall?.[1]?.$set ?? {};
+      expect(setFields).not.toHaveProperty('designPreviewConfig');
+    });
+  });
+
+  // ── bootstrapUiDesigns — known default clone URL and path ────────────────────
+
+  describe('bootstrapUiDesigns — known defaults (DEFAULT_UI_DESIGNS_CLONE_URL, DEFAULT_UI_DESIGNS_LOCAL_PATH)', () => {
+    it('sets DEFAULT_UI_DESIGNS_CLONE_URL as cloneUrl in new placeholder', async () => {
+      mocks.colFindOne.mockResolvedValue(null);
+      mocks.colInsertOne.mockResolvedValue({ insertedId: 'new-id' });
+
+      await service.bootstrapUiDesigns();
+
+      const insertCall = mocks.colInsertOne.mock.calls[0];
+      expect(insertCall[0].cloneUrl).toBe('git@github.com:Inomy-shop/ui-designs.git');
+    });
+
+    it('sets a non-empty path in new placeholder (uses DEFAULT_UI_DESIGNS_LOCAL_PATH)', async () => {
+      mocks.colFindOne.mockResolvedValue(null);
+      mocks.colInsertOne.mockResolvedValue({ insertedId: 'new-id' });
+
+      await service.bootstrapUiDesigns();
+
+      const insertCall = mocks.colInsertOne.mock.calls[0];
+      // path must be non-empty — single-click should not leave path empty
+      expect(insertCall[0].path).toBeTruthy();
+      expect(typeof insertCall[0].path).toBe('string');
+      expect(insertCall[0].path.length).toBeGreaterThan(0);
+    });
+
+    it('bootstrap does NOT require caller to supply clone URL (no user input needed)', async () => {
+      mocks.colFindOne.mockResolvedValue(null);
+      mocks.colInsertOne.mockResolvedValue({ insertedId: 'new-id' });
+
+      // Call with no arguments — must still produce meaningful cloneUrl + path
+      await service.bootstrapUiDesigns(); // no name, no path
+
+      const insertCall = mocks.colInsertOne.mock.calls[0];
+      expect(insertCall[0].cloneUrl).toMatch(/github\.com.*ui-designs/);
+      expect(insertCall[0].path).toBeTruthy();
+    });
+
+    it('accepts optional localPath override and uses it as path', async () => {
+      mocks.colFindOne.mockResolvedValue(null);
+      mocks.colInsertOne.mockResolvedValue({ insertedId: 'new-id' });
+
+      await service.bootstrapUiDesigns('ui-designs', '/custom/path/ui-designs');
+
+      const insertCall = mocks.colInsertOne.mock.calls[0];
+      expect(insertCall[0].path).toBe('/custom/path/ui-designs');
+    });
+
+    it('sets DEFAULT_UI_DESIGNS_CLONE_URL on existing repo that has no cloneUrl', async () => {
+      const existingRepo = { _id: 'existing-id', name: 'ui-designs', roles: ['design_repo'], path: '/some/path', isDefaultDesignRepo: false };
+      mocks.colFindOne.mockResolvedValue(existingRepo);
+
+      await service.bootstrapUiDesigns();
+
+      expect(mocks.colUpdateOne).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            cloneUrl: 'git@github.com:Inomy-shop/ui-designs.git',
+          }),
+        }),
+      );
+    });
+
+    it('sets default path on existing repo that has empty path', async () => {
+      const existingRepo = { _id: 'existing-id', name: 'ui-designs', roles: ['design_repo'], path: '', isDefaultDesignRepo: false };
+      mocks.colFindOne.mockResolvedValue(existingRepo);
+
+      await service.bootstrapUiDesigns();
+
+      const updateCall = mocks.colUpdateOne.mock.calls[0];
+      const setFields = updateCall?.[1]?.$set ?? {};
+      expect(setFields.path).toBeTruthy();
+      expect(setFields.path.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ── onboardRepo — default preview config for ui-designs ─────────────────────
+
+  describe('onboardRepo — default preview config for ui-designs', () => {
+    it('attaches default preview config for NEW repo named "ui-designs" when no previewConfig given', async () => {
+      mocks.colFindOne.mockResolvedValue(null); // no existing
+      mocks.colInsertOne.mockResolvedValue({ insertedId: 'new-id' });
+
+      await service.onboardRepo({ name: 'ui-designs', path: '/my/ui-designs' });
+
+      expect(mocks.colInsertOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          designPreviewConfig: expect.objectContaining({
+            enabled: true,
+            startCommand: 'npm run dev',
+            portMode: 'fixed',
+            fixedPort: 3001,
+          }),
+        }),
+      );
+    });
+
+    it('attaches default preview config for EXISTING repo named "ui-designs" with no config', async () => {
+      const existingRepo = { _id: 'repo-id', name: 'ui-designs', roles: [] };
+      mocks.colFindOne.mockResolvedValue(existingRepo);
+
+      await service.onboardRepo({ name: 'ui-designs', path: '/my/ui-designs' });
+
+      expect(mocks.colUpdateOne).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            designPreviewConfig: expect.objectContaining({ enabled: true, startCommand: 'npm run dev' }),
+          }),
+        }),
+      );
+    });
+
+    it('does NOT attach default preview config for a non-ui-designs repo name', async () => {
+      mocks.colFindOne.mockResolvedValue(null);
+      mocks.colInsertOne.mockResolvedValue({ insertedId: 'new-id' });
+
+      await service.onboardRepo({ name: 'my-custom-repo', path: '/my/custom-repo' });
+
+      const insertCall = mocks.colInsertOne.mock.calls[0];
+      expect(insertCall[0]).not.toHaveProperty('designPreviewConfig');
+    });
+
+    it('uses the explicit previewConfig when provided, not the default', async () => {
+      mocks.colFindOne.mockResolvedValue(null);
+      mocks.colInsertOne.mockResolvedValue({ insertedId: 'new-id' });
+
+      const customConfig = {
+        enabled: true,
+        workingDirectory: 'custom-dir',
+        startCommand: 'yarn dev',
+        portMode: 'auto' as const,
+      };
+      await service.onboardRepo({ name: 'ui-designs', path: '/my/ui-designs', previewConfig: customConfig });
+
+      expect(mocks.colInsertOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          designPreviewConfig: expect.objectContaining({
+            startCommand: 'yarn dev',
+            workingDirectory: 'custom-dir',
+          }),
+        }),
+      );
+    });
+  });
+
+  // ── healthCheckPath default ──────────────────────────────────────────────────
+
+  describe('UI_DESIGNS_DEFAULT_PREVIEW_CONFIG — healthCheckPath', () => {
+    it('bootstrapUiDesigns placeholder has empty healthCheckPath (not "/")', async () => {
+      mocks.colFindOne.mockResolvedValue(null); // no existing repo
+      mocks.colInsertOne.mockResolvedValue({ insertedId: 'new-id' });
+
+      await service.bootstrapUiDesigns();
+
+      const insertCall = mocks.colInsertOne.mock.calls[0];
+      expect(insertCall[0].designPreviewConfig.healthCheckPath).toBe('');
+    });
+
+    it('bootstrapUiDesigns new placeholder has non-empty path (DEFAULT_UI_DESIGNS_LOCAL_PATH)', async () => {
+      mocks.colFindOne.mockResolvedValue(null);
+      mocks.colInsertOne.mockResolvedValue({ insertedId: 'new-id' });
+
+      await service.bootstrapUiDesigns();
+
+      const insertCall = mocks.colInsertOne.mock.calls[0];
+      expect(insertCall[0].path).toBeTruthy();
+    });
+
+    it('onboardRepo new ui-designs has empty healthCheckPath', async () => {
+      mocks.colFindOne.mockResolvedValue(null);
+      mocks.colInsertOne.mockResolvedValue({ insertedId: 'new-id' });
+
+      await service.onboardRepo({ name: 'ui-designs', path: '/my/ui-designs' });
+
+      const insertCall = mocks.colInsertOne.mock.calls[0];
+      expect(insertCall[0].designPreviewConfig.healthCheckPath).toBe('');
+    });
+  });
+
+  // ── onboardRepo — path update for existing placeholder ──────────────────────
+
+  describe('onboardRepo — path update for existing placeholder', () => {
+    it('updates path and promotes placeholder to registered when path provided', async () => {
+      const existingRepo = { _id: 'placeholder-id', name: 'ui-designs', roles: ['design_repo'], status: 'placeholder', path: '' };
+      mocks.colFindOne.mockResolvedValue(existingRepo);
+
+      await service.onboardRepo({ name: 'ui-designs', path: '/my/real/ui-designs' });
+
+      expect(mocks.colUpdateOne).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            path: '/my/real/ui-designs',
+            status: 'registered',
+          }),
+        }),
+      );
+    });
+
+    it('does not change status when existing repo is not a placeholder', async () => {
+      const existingRepo = { _id: 'repo-id', name: 'ui-designs', roles: ['design_repo'], status: 'registered', path: '/old/path' };
+      mocks.colFindOne.mockResolvedValue(existingRepo);
+
+      await service.onboardRepo({ name: 'ui-designs', path: '/new/path' });
+
+      const updateCall = mocks.colUpdateOne.mock.calls[0];
+      const setFields = updateCall?.[1]?.$set ?? {};
+      expect(setFields.path).toBe('/new/path');
+      expect(setFields.status).toBeUndefined();
+    });
+  });
+
+  // ── testPreviewConfig — missing repo path ────────────────────────────────────
+
+  describe('testPreviewConfig — missing repo path', () => {
+    it('returns failed when repo has no path and no workspaceId provided', async () => {
+      // getPreviewConfig returns a valid config
+      const validConfig = {
+        enabled: true,
+        workingDirectory: '.',
+        startCommand: 'npm run dev',
+        portMode: 'auto' as const,
+        lastValidationStatus: 'unknown' as const,
+      };
+      // First findOne call: getPreviewConfig → repo with config
+      // Second findOne call: getRepoById → repo with no path
+      mocks.colFindOne
+        .mockResolvedValueOnce({ designPreviewConfig: validConfig, _id: 'repo-id' }) // getPreviewConfig → findOne via getRepoById in getPreviewConfig
+        .mockResolvedValueOnce({ _id: 'repo-id', path: '', name: 'ui-designs' }); // getRepoById
+
+      const result = await service.testPreviewConfig('aabbccddeeff001122334455');
+
+      expect(result.status).toBe('failed');
+      expect(result.logs.some((l) => l.toLowerCase().includes('path not configured'))).toBe(true);
+    });
+  });
+});
+
+// ── backgroundCloneIfAbsent — SSH-first clone logic ──────────────────────────
+
+describe('backgroundCloneIfAbsent — SSH-first clone logic', () => {
+  it('DEFAULT_UI_DESIGNS_HTTPS_URL constant is the HTTPS form of the ui-designs repo', () => {
+    expect(DEFAULT_UI_DESIGNS_HTTPS_URL).toBe('https://github.com/Inomy-shop/ui-designs.git');
+  });
+
+  it('DEFAULT_UI_DESIGNS_LOCAL_PATH uses resolveRepositoriesDir() from @allen/engine', () => {
+    // The path must include the mocked resolveRepositoriesDir path
+    expect(DEFAULT_UI_DESIGNS_LOCAL_PATH).toContain('/mock/allen/repositories');
+    expect(DEFAULT_UI_DESIGNS_LOCAL_PATH).toContain('ui-designs');
+  });
+
+  it('DEFAULT_UI_DESIGNS_CLONE_URL is the SSH form — SSH is the primary clone URL', () => {
+    expect(DEFAULT_UI_DESIGNS_CLONE_URL).toBe('git@github.com:Inomy-shop/ui-designs.git');
+  });
+
+  it('DEFAULT_UI_DESIGNS_LOCAL_PATH is non-empty and auto-computed — no user path input required', () => {
+    // Path is computed automatically from resolveRepositoriesDir(); never empty
+    expect(DEFAULT_UI_DESIGNS_LOCAL_PATH).toBeTruthy();
+    expect(DEFAULT_UI_DESIGNS_LOCAL_PATH.length).toBeGreaterThan(0);
+    expect(DEFAULT_UI_DESIGNS_LOCAL_PATH).not.toBe('');
+    expect(DEFAULT_UI_DESIGNS_LOCAL_PATH).toContain('ui-designs');
   });
 });

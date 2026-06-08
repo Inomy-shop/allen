@@ -28,6 +28,10 @@ export interface ChatPageConfig {
   onActiveSessionIdChange?: (sessionId: string | null) => void;
   /** Called when the effective linked workspace id changes (e.g., for DesignPage's preview panel). */
   onActiveWorkspaceIdChange?: (workspaceId: string | null) => void;
+  /** When true, disables the chat input (e.g. design repo not set up). */
+  disabled?: boolean;
+  /** Reason shown in the ChatInput disabled banner. */
+  disabledReason?: string;
 }
 
 type PendingSendOptions = {
@@ -1225,7 +1229,38 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           loadingMessages && messages.length === 0 && !streaming ? (
             <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
           ) : messages.length === 0 && !activeSessionId && !streaming ? (
-            <div className="chat-empty-stream" aria-label="New conversation" />
+            isDesignMode ? (
+              <div className="flex flex-col items-center justify-center flex-1 px-8 py-12 text-center gap-4" aria-label="Design empty state">
+                <div className="flex flex-col items-center gap-2 mb-2">
+                  <h2 className="text-[18px] font-semibold text-theme-primary">Design with Allen</h2>
+                  <p className="text-[13px] text-theme-muted max-w-sm">
+                    Describe what you'd like to design or build. Allen will generate specs, prototypes, and iterate with you.
+                  </p>
+                </div>
+                <div className="flex flex-wrap justify-center gap-2">
+                  {[
+                    'Design a dashboard for analytics',
+                    'Build a login/signup flow',
+                    'Create a responsive landing page',
+                    'Design a mobile settings screen',
+                  ].map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() => handleSuggestionClick(prompt)}
+                      className="rounded-full border border-app bg-app-card px-3 py-1.5 text-[12px] text-theme-secondary hover:bg-app-muted transition-colors"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-theme-subtle mt-2">
+                  Use the <strong>Preview</strong> panel on the right to set up your design repo and live preview.
+                </p>
+              </div>
+            ) : (
+              <div className="chat-empty-stream" aria-label="New conversation" />
+            )
           ) : (
             <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentReports={agentReports} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} />
           )
@@ -1385,8 +1420,14 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         )}
         <ChatInput
           ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming}
-          disabled={activeSession?.source === 'slack'}
-          disabledReason={activeSession?.source === 'slack' ? 'This conversation is managed via Slack. Reply in the Slack thread to continue.' : undefined}
+          disabled={activeSession?.source === 'slack' || Boolean(config?.disabled)}
+          disabledReason={
+            config?.disabled && config?.disabledReason
+              ? config.disabledReason
+              : activeSession?.source === 'slack'
+              ? 'This conversation is managed via Slack. Reply in the Slack thread to continue.'
+              : undefined
+          }
           providers={providers}
           selectedProvider={activeSession?.provider ?? selectedProvider}
           selectedModel={activeSession?.model ?? selectedModel}

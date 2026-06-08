@@ -113,7 +113,14 @@ export const designSessions = {
 
 export const designRepos = {
   list: (includeAll?: boolean) => request<any[]>(`/design/repos${includeAll ? '?includeAll=true' : ''}`),
-  getDefault: () => request<any | null>('/design/repos/default'),
+  getDefault: async () => {
+    try {
+      return await request<any | null>('/design/repos/default');
+    } catch (err: any) {
+      if (err.code === 'DESIGN_REPO_NOT_FOUND' || err.httpStatus === 404) return null;
+      throw err;
+    }
+  },
   setDefault: (repoId: string) => request<any>('/design/repos/default', { method: 'PUT', body: JSON.stringify({ repoId }) }),
   onboard: (body: { path?: string; cloneUrl?: string; name: string; makeDefault?: boolean; previewConfig?: DesignPreviewConfig }) =>
     request<any>('/design/repos/onboard', { method: 'POST', body: JSON.stringify(body) }),

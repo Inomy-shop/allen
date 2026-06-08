@@ -172,8 +172,8 @@ export function designReposRoutes(db: Db): Router {
   // Bootstrap the ui-designs template repo
   router.post('/repos/bootstrap-ui-designs', async (req: Request, res: Response) => {
     try {
-      const { name } = req.body ?? {};
-      const repo = await repoService.bootstrapUiDesigns(name);
+      const { name, path } = req.body ?? {};
+      const repo = await repoService.bootstrapUiDesigns(name, path);
       res.status(201).json(repo);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message, code: 'INTERNAL_ERROR' });

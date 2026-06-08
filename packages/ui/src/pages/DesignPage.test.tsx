@@ -164,4 +164,71 @@ describe('DesignPage — new chat-primitive UX', () => {
       expect(screen.queryByText(/start or open a design chat to run preview/i)).not.toBeInTheDocument();
     });
   });
+
+  it('shows design-specific empty state (title + helper text) when no messages and no session', async () => {
+    renderDesignPage('/design');
+    await waitFor(() => {
+      expect(screen.getByText(/design with allen/i)).toBeInTheDocument();
+      expect(screen.getByText(/describe what you'd like to design/i)).toBeInTheDocument();
+    });
+  });
+
+  it('shows example prompt chips in the design empty state', async () => {
+    renderDesignPage('/design');
+    await waitFor(() => {
+      // At least one chip button should be visible
+      const chips = screen.getAllByRole('button').filter(b =>
+        /dashboard|login|landing|mobile/i.test(b.textContent ?? '')
+      );
+      expect(chips.length).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe('DesignPage — chat disabled/enabled based on design repo state', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('chat textarea is disabled when getDefault returns null (no design repo)', async () => {
+    // getDefault already mocked to return null in beforeEach-reset
+    const { designRepos: dr } = await import('../services/designService');
+    vi.mocked(dr.getDefault).mockResolvedValue(null);
+
+    renderDesignPage();
+
+    await waitFor(() => {
+      const textareas = document.querySelectorAll('textarea');
+      // At least one textarea should exist and be disabled
+      const disabledTextarea = Array.from(textareas).find(ta => ta.disabled);
+      expect(disabledTextarea).toBeTruthy();
+    });
+  });
+
+  it('chat textarea is NOT disabled when getDefault returns a repo with a path', async () => {
+    const { designRepos: dr } = await import('../services/designService');
+    vi.mocked(dr.getDefault).mockResolvedValue({ _id: 'repo-1', path: '/some/path' } as any);
+
+    renderDesignPage();
+
+    await waitFor(() => {
+      const textareas = document.querySelectorAll('textarea');
+      // All textareas should be enabled
+      const allEnabled = Array.from(textareas).every(ta => !ta.disabled);
+      expect(allEnabled).toBe(true);
+    });
+  });
+
+  it('shows disabled reason text when no design repo', async () => {
+    const { designRepos: dr } = await import('../services/designService');
+    vi.mocked(dr.getDefault).mockResolvedValue(null);
+
+    renderDesignPage();
+
+    await waitFor(() => {
+      // The disabled reason text should be visible
+      const reasonText = screen.queryByText(/set up your design repo/i);
+      expect(reasonText).toBeInTheDocument();
+    });
+  });
 });
