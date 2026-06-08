@@ -219,8 +219,14 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Drop the legacy unique index defensively so boot does not fail on DBs that
   // already have multiple scoped chat_learning cursor rows.
   await db.collection('context_judge_scheduler_state').dropIndex('sourceType_1').catch((err: unknown) => {
-    const codeName = typeof err === 'object' && err !== null ? (err as Record<string, unknown>)['codeName'] : undefined;
-    if (codeName !== 'IndexNotFound' && codeName !== 'NamespaceNotFound') throw err;
+    // Tolerate "index/namespace doesn't exist" on a fresh DB. On real MongoDB the
+    // server sets `codeName` (IndexNotFound / NamespaceNotFound); Amazon DocumentDB
+    // returns the same conditions with numeric `code: 26` ("ns not found") but does
+    // NOT populate `codeName`, so we must also accept the raw code or boot crash-loops.
+    const e = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : undefined;
+    const codeName = e?.['codeName'];
+    const code = e?.['code'];
+    if (codeName !== 'IndexNotFound' && codeName !== 'NamespaceNotFound' && code !== 26) throw err;
   });
   await db.collection('context_judge_scheduler_state').createIndex(
     { sourceType: 1, scopeType: 1, scopeKey: 1 },
