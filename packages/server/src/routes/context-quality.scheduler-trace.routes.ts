@@ -179,7 +179,7 @@ export function registerContextQualitySchedulerTraceRoutes(router: Router, deps:
       }
     });
   
-    // MCP tool: context_quality_create_trace_analysis_assignment_wave
+    // MCP tool: context_quality_create_trace_analysis_wave
     // Creates up to 4 non-overlapping trace-analysis assignments for one parallel wave.
     router.post('/trace-analysis-assignments/wave', async (req: Request, res: Response) => {
       try {

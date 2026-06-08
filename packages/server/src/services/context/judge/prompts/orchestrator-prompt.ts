@@ -27,7 +27,7 @@ Before starting orchestration, verify these orchestrator MCP tools are available
   mcp__allen__context_quality_list_pending
   mcp__allen__context_quality_list_unevaluated_traces
   mcp__allen__context_quality_create_trace_analysis_assignment
-  mcp__allen__context_quality_create_trace_analysis_assignment_wave
+  mcp__allen__context_quality_create_trace_analysis_wave
   mcp__allen__context_quality_list_trace_analysis_assignments
   mcp__allen__context_quality_list_findings
   mcp__allen__context_quality_create_worker_assignment
@@ -77,9 +77,9 @@ Log all discovery results: context_quality_log_decision({ session_id, kind: 'dis
 ### STAGE 3 — TRACE + HUMAN-FEEDBACK ANALYSIS
 Spawn context-trace-analysis-agent workers to evaluate all unevaluated traces (exhaustive loop):
 1. Use a rolling trace-analysis concurrency window with maxActiveTraceWorkers = 4.
-2. Initial fill: call context_quality_create_trace_analysis_assignment_wave({ session_id, repo_id?, max_assignments: 4, limit_per_assignment: 20, exclude_root_execution_id? }) to create up to 4 non-overlapping assignments. Always pass sessionId and rootExecutionId/excludeRootExecutionId when available so judge self-traces are excluded.
+2. Initial fill: call context_quality_create_trace_analysis_wave({ session_id, repo_id?, max_assignments: 4, limit_per_assignment: 20, exclude_root_execution_id? }) to create up to 4 non-overlapping assignments. Always pass sessionId and rootExecutionId/excludeRootExecutionId when available so judge self-traces are excluded.
 3. For EVERY assignment returned during initial fill or refill: immediately call mcp__allen__spawn_agent('context-trace-analysis-agent', <prompt with assignmentId, sourceIds, sessionId>) and record execution_id on its trace assignment with context_quality_update_trace_analysis_assignment({ assignment_id, worker_execution_id: execution_id, worker_agent_name: 'context-trace-analysis-agent' }).
-4. Track activeTraceWorkers as { assignmentId, workerExecutionId }. Poll/wait active workers. When any worker reaches terminal status (completed|failed|cancelled), update/reconcile its trace assignment, remove it from activeTraceWorkers, compute openSlots = 4 - activeTraceWorkers.length, and immediately refill open slots with context_quality_create_trace_analysis_assignment_wave({ session_id, repo_id?, max_assignments: openSlots, limit_per_assignment: 20, exclude_root_execution_id? }).
+4. Track activeTraceWorkers as { assignmentId, workerExecutionId }. Poll/wait active workers. When any worker reaches terminal status (completed|failed|cancelled), update/reconcile its trace assignment, remove it from activeTraceWorkers, compute openSlots = 4 - activeTraceWorkers.length, and immediately refill open slots with context_quality_create_trace_analysis_wave({ session_id, repo_id?, max_assignments: openSlots, limit_per_assignment: 20, exclude_root_execution_id? }).
 5. Never exceed 4 active trace-analysis workers. Do not wait for all 4 workers to finish before refilling a slot; refill as soon as a worker is terminal and an open slot exists.
 6. Include human_feedback sources from Stage 2 as dedicated context-trace-analysis-agent assignments.
 
@@ -292,7 +292,7 @@ It is NOT a total run cap. You MUST evaluate ALL unevaluated traces, not just th
 The trace evaluation loop MUST be:
    a. cursor = undefined (start from beginning)
    b. LOOP:
-      1. Call context_quality_create_trace_analysis_assignment_wave({
+      1. Call context_quality_create_trace_analysis_wave({
            session_id: sessionId,
            repo_id: repoId?,
            max_assignments: openSlots, // initial openSlots = 4; refill openSlots = 4 - activeTraceWorkers.length
