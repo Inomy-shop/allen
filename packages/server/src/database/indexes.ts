@@ -219,14 +219,24 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Drop the legacy unique index defensively so boot does not fail on DBs that
   // already have multiple scoped chat_learning cursor rows.
   await db.collection('context_judge_scheduler_state').dropIndex('sourceType_1').catch((err: unknown) => {
-    // Tolerate "index/namespace doesn't exist" on a fresh DB. On real MongoDB the
-    // server sets `codeName` (IndexNotFound / NamespaceNotFound); Amazon DocumentDB
-    // returns the same conditions with numeric `code: 26` ("ns not found") but does
-    // NOT populate `codeName`, so we must also accept the raw code or boot crash-loops.
+    // Best-effort cleanup of a legacy index — tolerate "index doesn't exist" and
+    // "collection doesn't exist" on any DB. On real MongoDB the server sets
+    // `codeName` (IndexNotFound / NamespaceNotFound); Amazon DocumentDB returns the
+    // same conditions WITHOUT a `codeName` — "ns not found" (code 26) when the
+    // collection is missing, and "Cannot drop index: index not found." when only the
+    // named index is missing. So we accept the codeName, the known numeric codes, or
+    // the message text, and only re-throw on a genuinely unexpected error.
     const e = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : undefined;
     const codeName = e?.['codeName'];
     const code = e?.['code'];
-    if (codeName !== 'IndexNotFound' && codeName !== 'NamespaceNotFound' && code !== 26) throw err;
+    const message = typeof e?.['message'] === 'string' ? (e['message'] as string) : '';
+    const isMissing =
+      codeName === 'IndexNotFound' ||
+      codeName === 'NamespaceNotFound' ||
+      code === 26 || // NamespaceNotFound
+      code === 27 || // IndexNotFound
+      /index not found|ns not found/i.test(message);
+    if (!isMissing) throw err;
   });
   await db.collection('context_judge_scheduler_state').createIndex(
     { sourceType: 1, scopeType: 1, scopeKey: 1 },
