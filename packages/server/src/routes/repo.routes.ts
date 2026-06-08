@@ -24,7 +24,7 @@ function contextProviderDisabledPayload(error = 'Context provider is disabled. S
 }
 
 function activeCurationEntries(entries: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-  return entries.filter((entry) => entry.inclusion === 'include');
+  return entries.filter((entry) => entry.active !== false && entry.inclusion === 'include');
 }
 
 function curationEntryStats(entries: Array<Record<string, unknown>>): Record<string, number> {
@@ -138,7 +138,7 @@ async function loadLatestCurationEntryForPlayground(
   if (path) clauses.push({ path });
   if (!clauses.length) return undefined;
   const rows = await db.collection('repo_context_curation_entries')
-    .find({ repoId, $or: clauses })
+    .find({ repoId, active: { $ne: false }, $or: clauses })
     .sort({ updatedAt: -1, createdAt: -1 })
     .limit(20)
     .toArray()
@@ -653,7 +653,7 @@ export function repoRoutes(db: Db): Router {
       const repoId = param(req, 'id');
       const [profile, allEntries, mandatoryMappings, agents, cogneeStatus] = await Promise.all([
         contextCuration.getLatest(repoId).catch(() => null),
-        db.collection('repo_context_curation_entries').find({ repoId }, { sort: { path: 1, updatedAt: -1 } }).toArray(),
+        db.collection('repo_context_curation_entries').find({ repoId, active: { $ne: false } }, { sort: { path: 1, updatedAt: -1 } }).toArray(),
         mandatoryContext.list(repoId),
         mandatoryContext.listAgents(),
         cogneeMemory.getStatus(repoId).catch(() => null),
@@ -669,7 +669,10 @@ export function repoRoutes(db: Db): Router {
     try {
       if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Context provider is disabled.'));
       const repoId = param(req, 'id');
-      const entries = await db.collection('repo_context_curation_entries').find({ repoId }, { sort: { path: 1, updatedAt: -1 } }).toArray();
+      const includeInactive = String(req.query['includeInactive'] ?? '') === 'true';
+      const entries = await db.collection('repo_context_curation_entries')
+        .find({ repoId, ...(includeInactive ? {} : { active: { $ne: false } }) }, { sort: { path: 1, updatedAt: -1 } })
+        .toArray();
       res.json(entries);
     } catch (err: unknown) {
       res.status(400).json({ error: (err as Error).message });
@@ -806,12 +809,14 @@ export function repoRoutes(db: Db): Router {
       if (!hasGeneratedCurationContent(patch)) return res.status(400).json({ error: 'curatedContext, retrievalText, or at least one chunk is required' });
       const now = new Date();
       const result = await db.collection('repo_context_curation_entries').findOneAndUpdate(
-        { repoId, entryId },
+        { repoId, entryId, active: { $ne: false } },
         {
           $set: {
             ...patch,
             manualOverride: true,
             cogneeSyncStatus: 'stale',
+            active: true,
+            validTo: null,
             updatedAt: now,
           },
         },
@@ -866,10 +871,16 @@ export function repoRoutes(db: Db): Router {
         manualOverride: true,
         source: 'user_added',
         cogneeSyncStatus: 'stale',
+        active: true,
+        version: 1,
+        editVersion: 1,
+        entryVersionId: randomUUID(),
+        validFrom: now,
+        validTo: null,
         createdAt: now,
         updatedAt: now,
       };
-      const existing = await db.collection('repo_context_curation_entries').findOne({ repoId, entryId });
+      const existing = await db.collection('repo_context_curation_entries').findOne({ repoId, entryId, active: { $ne: false } });
       if (existing) return res.status(409).json({ error: 'Curated context entry already exists' });
       await db.collection('repo_context_curation_entries').insertOne(entry);
       await markContextDatasetStale(db, repoId, entryId);

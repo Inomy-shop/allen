@@ -171,7 +171,7 @@ async function findCurationEntry(db: Db, repoId: string, filter: { entryId?: str
   if (filter.path) clauses.push({ path: filter.path });
   if (!clauses.length) return undefined;
   const rows = await db.collection('repo_context_curation_entries')
-    .find({ repoId, $or: clauses })
+    .find({ repoId, active: { $ne: false }, $or: clauses })
     .sort({ updatedAt: -1, createdAt: -1 })
     .limit(10)
     .toArray()
@@ -273,6 +273,8 @@ function withCuratedContext(ref: KnowledgeCandidateRef, resolution: CurationReso
     providerMetadata: {
       ...ref.providerMetadata,
       curationEntryId: entryId ?? entry.entryId,
+      curationEntryVersionId: firstString(entry.entryVersionId),
+      curationEntryVersion: typeof entry.version === 'number' ? entry.version : entry.editVersion,
       curationSourceHash: entry.sourceHash,
       curationCategory: entry.category,
       curationResolutionMethod: resolution.method,

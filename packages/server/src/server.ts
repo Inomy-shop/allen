@@ -43,6 +43,7 @@ import { createPrSyncAllAction } from './services/pull-request.service.js';
 import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
 import { createSelfHealingMonitorScanAction } from './services/self-healing-monitor.service.js';
 import { runTrustBootstrap } from './services/trust-bootstrap.service.js';
+import { seedContextQuality } from './services/context/judge/context-quality-seed.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
 import { designDocRoutes } from './routes/design-doc.routes.js';
 import { interventionRoutes } from './routes/intervention.routes.js';
@@ -50,6 +51,7 @@ import { linearRoutes } from './routes/linear.routes.js';
 import { monitoringRoutes } from './routes/monitoring.routes.js';
 import { internalContextEvaluationRoutes } from './routes/context-evaluation.routes.js';
 import { contextRoutes } from './routes/context.routes.js';
+import { contextQualityRoutes } from './routes/context-quality.routes.js';
 import { authRoutes } from './routes/auth.routes.js';
 import { systemRoutes } from './routes/system.routes.js';
 import { userRoutes } from './routes/users.routes.js';
@@ -139,6 +141,15 @@ async function runBootTasks(db: Db, cronService: CronService): Promise<void> {
     logger.error('[mcp] Initial Codex sync failed', { component: 'mcp', error: (err as Error).message });
   }
 
+  try {
+    await seedContextQuality(db);
+  } catch (err) {
+    logger.error('[context-quality-seed] Startup seed failed — continuing boot', {
+      component: 'context-quality-seed',
+      error: (err as Error).message,
+    });
+  }
+
   await new OrgSeedService(db).seed();
   await seedDefaultWorkflows(db);
   await seedDefaultSkills(db);
@@ -219,6 +230,7 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
   app.use('/api/skills', skillRoutes(db));
   app.use('/api/executions', executionRoutes(db));
   app.use('/api/context', contextRoutes(db));
+  app.use('/api/context/quality', contextQualityRoutes(db));
   app.use('/api/agents', agentRoutes(db));
   app.use('/api/teams', teamRoutes(db));
   app.use('/api/dashboard', dashboardRoutes(db));

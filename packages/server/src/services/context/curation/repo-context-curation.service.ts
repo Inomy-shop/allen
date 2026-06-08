@@ -369,6 +369,7 @@ export class RepoContextCurationService {
     const priorEntries = await this.entries.find({
       repoId,
       curationVersion: CURATION_VERSION,
+      active: { $ne: false },
     }, { sort: { updatedAt: -1, createdAt: -1 } }).toArray();
     const priorInScope = priorEntries.filter((entry) => pathMatchesScope(entry.path, scope));
     const priorByPathHash = new Map<string, CurationEntry>();
@@ -422,17 +423,41 @@ export class RepoContextCurationService {
   }): Promise<void> {
     const now = new Date();
     for (const entry of input.newEntries) {
-      const { createdAt: _createdAt, ...entryForSet } = entry;
-      await this.entries.updateOne(
-        {
-          repoId: entry.repoId,
-          path: entry.path,
-          sourceHash: entry.sourceHash,
-          curationVersion: CURATION_VERSION,
-        },
-        { $set: { ...entryForSet, updatedAt: now }, $setOnInsert: { createdAt: entry.createdAt ?? now } },
-        { upsert: true },
+      const priorActive = await this.entries.findOne(
+        { repoId: entry.repoId, entryId: entry.entryId, active: { $ne: false } },
+        { sort: { version: -1, editVersion: -1, updatedAt: -1 } },
       );
+      const priorActiveRecord = priorActive as Record<string, unknown> | null;
+      const priorVersion = typeof priorActiveRecord?.['version'] === 'number'
+        ? priorActiveRecord['version'] as number
+        : typeof priorActiveRecord?.['editVersion'] === 'number'
+          ? priorActiveRecord['editVersion'] as number
+          : 0;
+      const nextVersion = priorVersion + 1;
+      if (priorActive?._id) {
+        await this.entries.updateOne(
+          { _id: priorActive._id },
+          {
+            $set: {
+              active: false,
+              validTo: now,
+              supersededAt: now,
+              updatedAt: now,
+            },
+          },
+        );
+      }
+      await this.entries.insertOne({
+        ...entry,
+        entryVersionId: randomUUID(),
+        version: nextVersion,
+        editVersion: nextVersion,
+        active: true,
+        validFrom: now,
+        validTo: null,
+        createdAt: entry.createdAt ?? now,
+        updatedAt: now,
+      } as never);
     }
 
     const staleEntries = input.input.deletedOrStaleFiles.map((item) => staleEntry(input.input.repoId, input.input.configHash, item));

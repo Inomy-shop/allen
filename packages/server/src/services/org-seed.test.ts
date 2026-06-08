@@ -227,4 +227,85 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
       ).not.toContain('# Coding Guidelines');
     }
   });
+
+  it('seeds a structurally complete org chart', async () => {
+    const db = makeDb();
+
+    await new OrgSeedService(db).seed();
+
+    const agentNames = db.store.agents.map((agent: any) => agent.name);
+    const teamNames = db.store.teams.map((team: any) => team.name);
+    const agentNameSet = new Set(agentNames);
+    const teamNameSet = new Set(teamNames);
+
+    expect(agentNames).toHaveLength(agentNameSet.size);
+    expect(teamNames).toHaveLength(teamNameSet.size);
+
+    for (const team of db.store.teams) {
+      expect(
+        agentNameSet.has(team.leadAgentName),
+        `team '${team.name}' references missing lead '${team.leadAgentName}'`,
+      ).toBe(true);
+    }
+
+    for (const agent of db.store.agents) {
+      expect(
+        teamNameSet.has(agent.teamName),
+        `agent '${agent.name}' references missing team '${agent.teamName}'`,
+      ).toBe(true);
+
+      for (const target of agent.spawnTargets ?? []) {
+        expect(
+          agentNameSet.has(target),
+          `agent '${agent.name}' references missing spawn target '${target}'`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('preserves the Design team while keeping its existing lead orchestration contract', async () => {
+    const db = makeDb();
+
+    await new OrgSeedService(db).seed();
+
+    const designTeam = db.store.teams.find((team: any) => team.name === 'd');
+    const designLead = db.store.agents.find((agent: any) => agent.name === 'd-lead');
+    const designSpecialists = [
+      'prd-ux-translator',
+      'design-system-archaeologist',
+      'design-system-syncer',
+      'design-divergence-planner',
+      'design-variation-generator',
+      'prototype-route-builder',
+      'design-critic',
+      'frontend-feasibility-reviewer',
+      'options-synthesizer',
+      'design-iteration-refiner',
+      'ui-design-orchestrator',
+    ];
+
+    expect(designTeam).toBeDefined();
+    expect(designTeam.leadAgentName).toBe('d-lead');
+    expect(designLead).toBeDefined();
+    expect(designLead.teamName).toBe('d');
+    expect(designLead.teamRole).toBe('lead');
+    expect(designLead.spawnTargets).toEqual(expect.arrayContaining(designSpecialists));
+
+    for (const agentName of designSpecialists) {
+      const agent = db.store.agents.find((candidate: any) => candidate.name === agentName);
+      expect(agent, `${agentName} must be seeded`).toBeDefined();
+      expect(agent.teamName, `${agentName} must remain on the Design team`).toBe('d');
+    }
+
+    if (designLead.system.includes('wait_for_execution')) {
+      expect(designLead.system).toContain('spawn_agent');
+      expect(designLead.system).toContain('wait_for_execution');
+      expect(designLead.system).not.toContain('delegate_to_agent');
+      expect(designLead.system).not.toContain('wait_for_delegation');
+      expect(designLead.system).not.toContain('answer_delegator');
+    } else {
+      expect(designLead.system).toContain('delegate_to_agent');
+      expect(designLead.system).toContain('wait_for_delegation');
+    }
+  });
 });

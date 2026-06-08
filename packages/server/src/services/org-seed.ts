@@ -27,6 +27,18 @@ import {
   buildRepoContextCuratorWorkerSystemPrompt,
 } from './context/curation/repo-context-curator-prompts.js';
 import { buildRepoMandatoryContextMapperSystemPrompt } from './context/mandatory/repo-mandatory-context-mapper-prompts.js';
+import {
+  buildContextJudgeOrchestratorPrompt,
+  buildContextReviewTriageAgentPrompt,
+  buildContextRemediationPlannerAgentPrompt,
+  buildContextLearningCuratorAgentPrompt,
+  buildContextCurationFixAgentPrompt,
+  buildContextIngestionRepairAgentPrompt,
+  buildContextCodeFixAgentPrompt,
+  buildContextQaEvalAgentPrompt,
+  buildContextTraceAnalysisWorkerPrompt,
+} from './context/judge/context-judge-agent-prompts.js';
+import { resolveContextJudgeAgentRuntimeConfig } from './context/config/context-llm-config.js';
 import { isSeedOverrideEnabled } from './seed-policy.js';
 import { resolveAgentProviderModel } from './llm-defaults.js';
 import { CODING_GUIDELINES_BODY } from '../seed.js';
@@ -62,10 +74,18 @@ interface AgentSeed {
   reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max';
   /** Default plan-mode flag. Claude-only — pure planners/researchers should set this true. */
   planMode?: boolean;
+  /**
+   * When true, provider/model are resolved from the context engine LLM config
+   * (ALLEN_CONTEXT_LLM_PROVIDER / ALLEN_CONTEXT_LLM_MODEL, default codex/gpt-5.5)
+   * instead of the general agent default resolver. Used for Context Judge /
+   * Context Quality agents that must run on the same LLM as the rest of the
+   * context engine pipeline.
+   */
+  useContextEngineLlm?: boolean;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// TEAMS (5)
+// TEAMS
 // ══════════════════════════════════════════════════════════════════════════════
 
 const TEAMS: TeamSeed[] = [
@@ -168,11 +188,27 @@ YOU MUST call spawn_agent BEFORE making any claims about code. Every technical c
 
 Your suggested spawn targets and the full org structure are injected into this prompt at runtime — read them before deciding who to call.`;
 
+const SPAWN_TEAM_LEAD_PREAMBLE = `You do NOT have direct filesystem access. You coordinate specialist agents who do the hands-on work.
+
+YOU MUST call spawn_agent BEFORE making any claims about code. Every technical claim must come from an agent's actual response.
+
+Your suggested spawn targets and the full org structure are injected into this prompt at runtime — read them before deciding who to call.`;
+
 const FORCE_UPDATE_AGENT_NAMES = new Set([
   'repo-context-curator',
   'repo-context-curation-worker',
   'repo-mandatory-context-mapper',
   'pr-creator',
+  // Context Judge agents — prompts/descriptions are source-controlled and must refresh
+  'context-judge-orchestrator',
+  'context-review-triage-agent',
+  'context-remediation-planner-agent',
+  'context-learning-curator-agent',
+  'context-curation-fix-agent',
+  'context-ingestion-repair-agent',
+  'context-code-fix-agent',
+  'context-qa-eval-agent',
+  'context-trace-analysis-agent',
 ]);
 
 // ── Design Team — Allen Library skill helpers ──────────────────────────────
@@ -3598,6 +3634,189 @@ Your job is simple: the user will ask you a question. Answer it clearly and conc
 If the question is ambiguous, pick the most likely interpretation and answer that — you're not the requirements-analyst, don't ask clarifying questions. This is a test agent; keep it simple.`,
   },
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // CONTEXT JUDGE AGENTS (8) — orchestrator + 7 worker roles
+  // Source-controlled prompts in context-judge-agent-prompts.ts.
+  // Added to FORCE_UPDATE_AGENT_NAMES so prompts refresh on every startup.
+  //
+  // Provider/model: resolved via resolveContextJudgeAgentRuntimeConfig()
+  // (useContextEngineLlm: true). Reads ALLEN_CONTEXT_LLM_PROVIDER /
+  // ALLEN_CONTEXT_LLM_MODEL; defaults to codex / gpt-5.5.
+  // This bypasses ALLEN_DEFAULT_AGENT_PROVIDER so that context engine agents
+  // are always on the configured context LLM, not the general agent default.
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    name: 'context-judge-orchestrator',
+    displayName: 'Context Judge Orchestrator',
+    description: 'LLM orchestrator that owns source discovery, classification, routing, and worker assignment for the Allen context quality judge pipeline.',
+    teamName: 'meta',
+    teamRole: 'member',
+    type: 'technical',
+    icon: 'bot',
+    color: '#3b82f6',
+    provider: 'codex',
+    model: 'gpt-5.5',
+    useContextEngineLlm: true,
+    tools: [],
+    capabilities: ['context_quality_evaluation', 'finding_classification', 'worker_orchestration', 'evidence_inspection'],
+    personality: 'Evidence-driven quality judge. Conservative classifier. Enforces human review gates rigorously.',
+    spawnTargets: [
+      'context-trace-analysis-agent',
+      'context-learning-curator-agent',
+      'context-review-triage-agent',
+      'context-remediation-planner-agent',
+      'context-curation-fix-agent',
+      'context-ingestion-repair-agent',
+      'context-code-fix-agent',
+      'context-qa-eval-agent',
+    ],
+    system: buildContextJudgeOrchestratorPrompt(),
+  },
+  {
+    name: 'context-review-triage-agent',
+    displayName: 'Context Review Triage Agent',
+    description: 'Groups, deduplicates, and prioritises context judge findings for human review queues. Read-only on curated context.',
+    teamName: 'meta',
+    teamRole: 'member',
+    type: 'technical',
+    icon: 'bot',
+    color: '#3b82f6',
+    provider: 'codex',
+    model: 'gpt-5.5',
+    useContextEngineLlm: true,
+    tools: [],
+    capabilities: ['finding_triage', 'duplicate_detection', 'priority_scoring', 'cross_repo_analysis'],
+    personality: 'Methodical triage specialist. Groups by pattern, flags duplicates, scores priority.',
+    spawnTargets: [],
+    system: buildContextReviewTriageAgentPrompt(),
+  },
+  {
+    name: 'context-remediation-planner-agent',
+    displayName: 'Context Remediation Planner Agent',
+    description: 'Converts approved context findings into structured remediation task proposals with fix type, owner, and validation plan. Requires approved review task.',
+    teamName: 'meta',
+    teamRole: 'member',
+    type: 'technical',
+    icon: 'bot',
+    color: '#3b82f6',
+    provider: 'codex',
+    model: 'gpt-5.5',
+    useContextEngineLlm: true,
+    tools: [],
+    capabilities: ['remediation_planning', 'fix_type_selection', 'validation_planning'],
+    personality: 'Structured planner. Maps findings to actionable remediation tasks with clear owner and validation steps.',
+    spawnTargets: [],
+    system: buildContextRemediationPlannerAgentPrompt(),
+  },
+  {
+    name: 'context-learning-curator-agent',
+    displayName: 'Context Learning Curator Agent',
+    description: 'Evaluates chat learnings as curated-context candidates and prepares LearningPromotion proposals. Does NOT write curated context — proposal only.',
+    teamName: 'meta',
+    teamRole: 'member',
+    type: 'technical',
+    icon: 'bot',
+    color: '#3b82f6',
+    provider: 'codex',
+    model: 'gpt-5.5',
+    useContextEngineLlm: true,
+    tools: [],
+    capabilities: ['learning_evaluation', 'context_curation_proposal', 'source_validation', 'conflict_detection'],
+    personality: 'Careful curator. Evaluates learning quality and drafts precise proposed curated text for reviewer approval.',
+    spawnTargets: [],
+    system: buildContextLearningCuratorAgentPrompt(),
+  },
+  {
+    name: 'context-curation-fix-agent',
+    displayName: 'Context Curation Fix Agent',
+    description: 'Applies approved curated context edits via the editor service. Requires LearningPromotion.decision === approved. Never edits without reviewer approval.',
+    teamName: 'meta',
+    teamRole: 'member',
+    type: 'technical',
+    icon: 'bot',
+    color: '#3b82f6',
+    provider: 'codex',
+    model: 'gpt-5.5',
+    useContextEngineLlm: true,
+    tools: [],
+    capabilities: ['curated_context_editing', 'revision_tracking', 'source_grounded_writing'],
+    personality: 'Conservative context editor. Only applies changes with explicit reviewer approval. Always tracks source metadata.',
+    spawnTargets: [],
+    system: buildContextCurationFixAgentPrompt(),
+  },
+  {
+    name: 'context-ingestion-repair-agent',
+    displayName: 'Context Ingestion Repair Agent',
+    description: 'Diagnoses stale index, source mapping, chunking, and ingestion issues. Produces structured repair plan — does NOT trigger ingestion jobs directly.',
+    teamName: 'meta',
+    teamRole: 'member',
+    type: 'technical',
+    icon: 'bot',
+    color: '#3b82f6',
+    provider: 'codex',
+    model: 'gpt-5.5',
+    useContextEngineLlm: true,
+    tools: [],
+    capabilities: ['ingestion_diagnosis', 'stale_index_detection', 'source_mapping_analysis', 'repair_planning'],
+    personality: 'Methodical ingestion diagnostician. Pinpoints failure mode, scope, and validation queries before recommending rebuild.',
+    spawnTargets: [],
+    system: buildContextIngestionRepairAgentPrompt(),
+  },
+  {
+    name: 'context-code-fix-agent',
+    displayName: 'Context Code Fix Agent',
+    description: 'Produces implementation and validation plans for code-level context fixes. NEVER creates PRs directly. Requires human review gate cleared.',
+    teamName: 'meta',
+    teamRole: 'member',
+    type: 'technical',
+    icon: 'bot',
+    color: '#3b82f6',
+    provider: 'codex',
+    model: 'gpt-5.5',
+    useContextEngineLlm: true,
+    tools: [],
+    capabilities: ['code_fix_planning', 'implementation_planning', 'validation_planning', 'regression_analysis'],
+    personality: 'Precise implementer. Plans code fixes with exact file-level scope, validation commands, and regression risk.',
+    spawnTargets: [],
+    system: buildContextCodeFixAgentPrompt(),
+  },
+  {
+    name: 'context-qa-eval-agent',
+    displayName: 'Context QA Eval Agent',
+    description: 'Creates regression and eval cases from applied context fixes, validates calibration, and produces before/after quality summaries. Read-only.',
+    teamName: 'meta',
+    teamRole: 'member',
+    type: 'technical',
+    icon: 'bot',
+    color: '#3b82f6',
+    provider: 'codex',
+    model: 'gpt-5.5',
+    useContextEngineLlm: true,
+    tools: [],
+    capabilities: ['qa_evaluation', 'regression_case_creation', 'calibration_validation', 'quality_reporting'],
+    personality: 'Thorough QA evaluator. Before/after evidence only. Never modifies findings or tasks.',
+    spawnTargets: [],
+    system: buildContextQaEvalAgentPrompt(),
+  },
+  {
+    name: 'context-trace-analysis-agent',
+    displayName: 'Context Trace Analysis Worker',
+    description: 'Evaluates context_usage_trace candidates and workflow human_feedback sources; emits source evaluations and candidate findings only; never creates review tasks or remediation plans.',
+    teamName: 'meta',
+    teamRole: 'member',
+    type: 'technical',
+    icon: 'bot',
+    color: '#3b82f6',
+    provider: 'codex',
+    model: 'gpt-5.5',
+    useContextEngineLlm: true,
+    tools: [],
+    capabilities: ['trace_analysis', 'source_evaluation', 'finding_candidate_generation', 'human_feedback_analysis'],
+    personality: 'Precise trace analyst. Source evaluations and candidate findings only. Never creates review tasks or remediation plans.',
+    spawnTargets: [],
+    system: buildContextTraceAnalysisWorkerPrompt(),
+  },
+
   // ── CodeRabbit review resolution ────────────────────────────────────────
   {
     name: 'pr-workspace-resolver',
@@ -3892,11 +4111,13 @@ export class OrgSeedService {
 
     // 1. Seed all agents first (leads must exist before teams reference them)
     for (const agent of AGENTS) {
-      // Provider/model resolved per-agent: when ALLEN_DEFAULT_AGENT_PROVIDER
-      // is unset (operator picked "Both" at setup), the seed's per-role mix
-      // is preserved verbatim. When set, env wins on provider; model is
-      // preserved if it's valid for the env provider, else env model wins.
-      const { provider, model } = resolveAgentProviderModel(agent.provider, agent.model);
+      // Provider/model resolved per-agent. Context engine agents (useContextEngineLlm=true)
+      // use ALLEN_CONTEXT_LLM_PROVIDER / ALLEN_CONTEXT_LLM_MODEL (default codex/gpt-5.5)
+      // so they are not affected by the general ALLEN_DEFAULT_AGENT_PROVIDER override.
+      // All other agents use the standard resolveAgentProviderModel path.
+      const { provider, model } = agent.useContextEngineLlm
+        ? resolveContextJudgeAgentRuntimeConfig()
+        : resolveAgentProviderModel(agent.provider, agent.model);
       const existing = await agentsCol.findOne({ name: agent.name });
       if (!existing) {
         await agentsCol.insertOne({

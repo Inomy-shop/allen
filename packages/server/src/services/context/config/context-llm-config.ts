@@ -76,6 +76,34 @@ function defaultCwd(purpose: ContextLlmPurpose): string {
   return '/tmp/allen/context-evaluator';
 }
 
+/**
+ * Resolves the provider/model to use when seeding Context Judge / Context Quality agents.
+ *
+ * Resolution order (same env vars as the broader context engine LLM config):
+ *   1. ALLEN_CONTEXT_LLM_PROVIDER / ALLEN_CONTEXT_LLM_MODEL — operator-configured values
+ *   2. 'codex' / 'gpt-5.5' — hard-coded defaults
+ *
+ * Env vars:
+ *   ALLEN_CONTEXT_LLM_PROVIDER — provider slug (e.g. 'codex', 'claude-cli')
+ *   ALLEN_CONTEXT_LLM_MODEL    — model string (e.g. 'gpt-5.5', 'sonnet')
+ *
+ * This is intentionally lightweight (no cwd/secret resolution) since it is
+ * used only for agent seed definitions, not for spawning LLM workers directly.
+ */
+export function resolveContextJudgeAgentRuntimeConfig(): { provider: ChatProvider; model: string } {
+  const rawProvider = process.env.ALLEN_CONTEXT_LLM_PROVIDER?.trim();
+  const rawModel = process.env.ALLEN_CONTEXT_LLM_MODEL?.trim();
+
+  const provider: ChatProvider =
+    rawProvider && PROVIDERS.some((p) => p.provider === rawProvider)
+      ? (rawProvider as ChatProvider)
+      : DEFAULT_CONTEXT_LLM_PROVIDER;
+
+  const model: string = rawModel || DEFAULT_CONTEXT_LLM_MODEL;
+
+  return { provider, model };
+}
+
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === 'string' && value.trim()) return value.trim();
