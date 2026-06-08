@@ -6514,7 +6514,7 @@
 
   .run-progress-row {
     display: grid;
-    grid-template-columns: 48px minmax(0, 1fr);
+    grid-template-columns: minmax(112px, max-content) minmax(0, 1fr);
     gap: 10px;
     padding: 3px 0;
     color: rgb(var(--color-text-secondary));
