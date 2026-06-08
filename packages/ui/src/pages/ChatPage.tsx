@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useChat, type SpawnedAgent } from '../hooks/useChat';
-import ChatInput, { type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
+import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
@@ -173,7 +173,7 @@ export default function ChatPage() {
     reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
     planMode?: boolean | null;
   }>({});
-  const chatInputRef = useRef<{ setValue: (v: string) => void; focus: () => void } | null>(null);
+  const chatInputRef = useRef<ChatInputHandle | null>(null);
   const processedDeepLinkRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<ChatQueueItem[]>([]);
   const editingQueuedIdRef = useRef<string | null>(null);
@@ -197,6 +197,7 @@ export default function ChatPage() {
     spawnedAgents, pendingUserQuestion, answerUserQuestion, answerWorkflowIntervention,
     loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
+    restoredDraft, clearRestoredDraft,
     refresh: refreshSessions,
   } = useChat();
 
@@ -207,6 +208,17 @@ export default function ChatPage() {
 
   useEffect(() => { queuedMessagesRef.current = queuedMessages; }, [queuedMessages]);
   useEffect(() => { editingQueuedIdRef.current = editingQueuedId; }, [editingQueuedId]);
+
+  useEffect(() => {
+    if (!restoredDraft?.trim()) return;
+    if (chatInputRef.current?.getValue().trim()) {
+      clearRestoredDraft();
+      return;
+    }
+    chatInputRef.current?.setValue(restoredDraft);
+    chatInputRef.current?.focus();
+    clearRestoredDraft();
+  }, [restoredDraft, clearRestoredDraft]);
 
   useEffect(() => {
     chatApi.providers().then(p => {

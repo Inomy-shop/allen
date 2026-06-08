@@ -26,6 +26,7 @@ interface SessionOverrides {
 
 export interface ChatInputHandle {
   setValue: (v: string) => void;
+  getValue: () => string;
   focus: () => void;
 }
 
@@ -425,8 +426,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         if (el) { el.focus(); el.selectionStart = v.length; el.selectionEnd = v.length; }
       }, 0);
     },
+    getValue: () => value,
     focus: () => textareaRef.current?.focus(),
-  }));
+  }), [value]);
 
   // ── File upload ──
   const uploadFiles = useCallback(async (files: FileList | File[]) => {

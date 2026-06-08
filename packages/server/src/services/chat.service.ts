@@ -490,6 +490,8 @@ For code tasks: direct specialist spawns need an Allen workspace first; workflow
 interface ActiveQuery {
   sessionId: string;
   messageId: string;
+  userMessage: string;
+  llmSessionId?: string;
   currentText: string;
   currentThinking: string;
   toolCalls: ToolCallRecord[];
@@ -550,6 +552,9 @@ export interface ChatCancelResult {
   sessionId: string;
   messageId?: string;
   content?: string;
+  userMessage?: string;
+  resumableSessionAvailable?: boolean;
+  restoreDraft?: string;
   cancelledExecutions: CancelledExecutionInfo[];
 }
 
@@ -835,12 +840,12 @@ async function interruptedTaskContext(db: Db, sessionId: string): Promise<string
  *
  * This is an INTERRUPT, not just a stop:
  *   1. Kills the claude-cli / codex subprocess (SIGTERM via AbortController)
- *   2. Clears the stale llmSessionId so the next message starts a fresh
- *      thread instead of trying to resume the dead one (which fails with
- *      "no rollout found" on Codex)
+ *   2. Preserves any captured llmSessionId so the next message can resume
+ *      when the provider session was already created
  *   3. Marks the in-flight assistant message as cancelled
  *   4. Removes the session from activeQueries so it's not "busy"
- *   5. Broadcasts a cancel event to any SSE listeners
+ *   5. Broadcasts a cancel event to any SSE listeners, including restoreDraft
+ *      when no resumable provider session was captured
  *
  * After cancel, the user can immediately send a new message.
  */
@@ -848,6 +853,19 @@ export async function cancelChatSession(sessionId: string, db?: Db): Promise<Cha
   const entry = activeQueries.get(sessionId);
   let cancelledExecutions: CancelledExecutionInfo[] = [];
   let cancelledContent: string | undefined;
+
+  const userMessage = entry?.userMessage;
+  // Do not use chat_sessions.llmSessionId here: that can belong to a prior
+  // turn. Draft restore depends on whether this interrupted turn reached the
+  // provider, so only current-turn signals count.
+  const resumableSessionAvailable = Boolean(
+    entry?.llmSessionId
+    || entry?.currentText
+    || entry?.currentThinking
+    || (entry?.pendingToolCalls.size ?? 0) > 0
+    || (entry?.toolCalls.length ?? 0) > 0,
+  );
+  const restoreDraft = !resumableSessionAvailable ? userMessage : undefined;
 
   // 1. Kill the subprocess for THIS turn only
   if (entry) {
@@ -885,14 +903,29 @@ export async function cancelChatSession(sessionId: string, db?: Db): Promise<Cha
 
   // 5. Broadcast cancel event so UI updates immediately
   if (entry) {
-    broadcastToListeners(entry, 'cancelled', { messageId: entry.messageId, cancelledExecutions });
+    broadcastToListeners(entry, 'cancelled', {
+      messageId: entry.messageId,
+      cancelledExecutions,
+      userMessage,
+      resumableSessionAvailable,
+      restoreDraft,
+    });
     closeStreamListeners(entry);
   }
 
   // 6. Remove from active queries so the user can send the next message
   if (entry) activeQueries.delete(sessionId);
 
-  return { cancelled: Boolean(entry), sessionId, messageId: entry?.messageId, content: cancelledContent, cancelledExecutions };
+  return {
+    cancelled: Boolean(entry),
+    sessionId,
+    messageId: entry?.messageId,
+    content: cancelledContent,
+    userMessage,
+    resumableSessionAvailable,
+    restoreDraft,
+    cancelledExecutions,
+  };
 }
 
 function broadcastToListeners(entry: ActiveQuery, event: string, data: unknown): void {
@@ -1266,7 +1299,7 @@ export class ChatService {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
 
     const entry: ActiveQuery = {
-      sessionId, messageId: assistantMsgId, currentText: '', currentThinking: '', toolCalls: [],
+      sessionId, messageId: assistantMsgId, userMessage: content, currentText: '', currentThinking: '', toolCalls: [],
       pendingToolCalls: new Map(), listeners: new Set([res]), aborted: false, abortController: new AbortController(),
     };
     activeQueries.set(sessionId, entry);
@@ -1312,7 +1345,7 @@ export class ChatService {
 
     // ActiveQuery with no SSE listeners — UI can still subscribe via GET /stream
     const entry: ActiveQuery = {
-      sessionId, messageId: assistantMsgId, currentText: '', currentThinking: '', toolCalls: [],
+      sessionId, messageId: assistantMsgId, userMessage: content, currentText: '', currentThinking: '', toolCalls: [],
       pendingToolCalls: new Map(),
       listeners: new Set(), aborted: false, abortController: new AbortController(),
       ...(onEvent ? { eventHandlers: new Set([onEvent]) } : {}),
@@ -1775,6 +1808,7 @@ User: ${userMessage.slice(0, 500)}`;
           }
         },
         onSessionId: (sid: string) => {
+          entry.llmSessionId = sid;
           // Save session ID to DB immediately so auto-retry can resume even if the process times out
           this.sessions.updateOne(
             { _id: new ObjectId(sessionId) },

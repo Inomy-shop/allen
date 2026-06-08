@@ -186,6 +186,13 @@ export interface AgentReport {
   timestamp: string;
 }
 
+interface ChatCancelResponse {
+  messageId?: string;
+  content?: string;
+  restoreDraft?: string;
+  cancelledExecutions?: Array<{ id?: string; workflowName?: string; status?: string }>;
+}
+
 function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>, 'executionId'> & { executionId: string }): SpawnedAgent[] {
   const existing = prev.find(s => s.executionId === run.executionId);
   if (!existing) {
@@ -380,9 +387,11 @@ export function useChat() {
   /** Pending question from an agent to the user (ask_user) */
   const [pendingUserQuestion, setPendingUserQuestion] = useState<{ question: string; fromAgent: string } | null>(null);
   const [spawnedAgents, setSpawnedAgents] = useState<SpawnedAgent[]>([]);
+  const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const clearRestoredDraft = useCallback(() => setRestoredDraft(null), []);
 
   const spawnedRunSignature = spawnedAgents
     .map(s => `${s.executionId}:${s.status}:${s.runContext?.progress?.phase ?? ''}:${s.runContext?.progress?.percent ?? ''}`)
@@ -708,6 +717,12 @@ export function useChat() {
       case 'stream_inactive':
         setStreaming(false);
         setActiveToolCalls([]);
+        break;
+
+      case 'cancelled':
+        if (typeof data.restoreDraft === 'string' && data.restoreDraft.trim()) {
+          setRestoredDraft(data.restoreDraft);
+        }
         break;
 
       case 'error':
@@ -1145,7 +1160,10 @@ export function useChat() {
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
       })
         .then(res => res.ok ? res.json() : null)
-        .then((result: { messageId?: string; content?: string; cancelledExecutions?: Array<{ id?: string; workflowName?: string; status?: string }> } | null) => {
+        .then((result: ChatCancelResponse | null) => {
+          if (typeof result?.restoreDraft === 'string' && result.restoreDraft.trim()) {
+            setRestoredDraft(result.restoreDraft);
+          }
           if (!result?.messageId) return;
           const fallbackContent = result.cancelledExecutions?.length
             ? `Interrupted by user. Cancelled linked tasks: ${result.cancelledExecutions.map(exec => exec.id).filter(Boolean).join(', ')}. If you want to rerun, choose fresh start or resume.`
@@ -1274,6 +1292,8 @@ export function useChat() {
     generateSessionTitle,
     switchSession,
     cancelStream,
+    restoredDraft,
+    clearRestoredDraft,
     refresh: loadSessions,
   };
 }
