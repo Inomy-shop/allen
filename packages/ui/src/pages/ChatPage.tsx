@@ -15,6 +15,21 @@ import { BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, Pane
 import { XTerminal } from '../components/workspace/XTerminal';
 import WorkspaceServersTab from '../components/workspace/WorkspaceServersTab';
 
+export interface ChatPageConfig {
+  /** Override base path for session navigation. Default: 'chat'. */
+  routeBase?: string;
+  /** Force this agent for all new messages. Hides agent picker. */
+  forcedAgent?: string | null;
+  /** Custom placeholder for ChatInput. */
+  placeholder?: string;
+  /** When true, hides the diff summary pill, resource rail, and run sidebar. */
+  designMode?: boolean;
+  /** Called when activeSessionId changes (e.g., after creating a new session). */
+  onActiveSessionIdChange?: (sessionId: string | null) => void;
+  /** Called when the effective linked workspace id changes (e.g., for DesignPage's preview panel). */
+  onActiveWorkspaceIdChange?: (workspaceId: string | null) => void;
+}
+
 type PendingSendOptions = {
   provider?: string | null;
   model?: string | null;
@@ -139,7 +154,9 @@ function workspaceChatToTab(chat: any): WorkspaceChatTab {
   };
 }
 
-export default function ChatPage() {
+export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
+  const routeBase = config?.routeBase ?? 'chat';
+  const isDesignMode = Boolean(config?.designMode);
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -155,7 +172,7 @@ export default function ChatPage() {
   const [providers, setProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('codex');
   const [selectedModel, setSelectedModel] = useState('');
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(config?.forcedAgent ?? null);
   const [selectedAgentCwd, setSelectedAgentCwd] = useState<string | null>(null);
   const [allAgents, setAllAgents] = useState<any[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
@@ -292,8 +309,11 @@ export default function ChatPage() {
     if (activeSession?.activeAgent) {
       setSelectedAgent(activeSession.activeAgent);
     } else if (activeSessionId && activeSession) {
-      setSelectedAgent(null);
-      setSelectedAgentCwd(null);
+      // Only reset to null when no forced agent is configured
+      if (!config?.forcedAgent) {
+        setSelectedAgent(null);
+        setSelectedAgentCwd(null);
+      }
     }
   }, [activeSessionId, activeSession?.activeAgent]);
 
@@ -329,8 +349,14 @@ export default function ChatPage() {
   useEffect(() => {
     if (activeSessionId && activeSessionId !== urlSessionId) {
       // Active session changed (e.g., after creating a new session) — update URL
-      navigate(`/chat/${activeSessionId}`, { replace: true });
+      navigate(`/${routeBase}/${activeSessionId}`, { replace: true });
     }
+  }, [activeSessionId]);
+
+  // Notify parent when activeSessionId changes (e.g., for DesignPage's preview panel)
+  useEffect(() => {
+    config?.onActiveSessionIdChange?.(activeSessionId ?? null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
 
   // ── Workspace mode: primary bootstrap (triggered by ?workspaceId in URL) ──
@@ -671,7 +697,7 @@ export default function ChatPage() {
         (options?.repoId ?? selectedRepo?._id) || undefined,
         wsIdToLink || undefined, // NEW: workspace linkage
       );
-      navigate(`/chat/${session._id}`, { replace: true });
+      navigate(`/${routeBase}/${session._id}`, { replace: true });
 
       // If we were in a temp tab, replace it with the real session tab
       if (isActiveTempTab && activeTab) {
@@ -818,7 +844,7 @@ export default function ChatPage() {
   function handleSlashCommand(command: SlashCommandOption, raw: string): boolean {
     if (command.name === '/clear') {
       switchSession('');
-      navigate('/chat', { replace: true });
+      navigate(`/${routeBase}`, { replace: true });
       return true;
     }
     if (command.name === '/help') {
@@ -1015,6 +1041,18 @@ export default function ChatPage() {
   }
 
   const linkedWorkspaceId = activeWorkspaceId ?? activeSession?.workspaceId ?? null;
+  // Also check spawned agents for a workspace id (covers the case where the workspace is
+  // visible in runContext but not yet DB-linked to the chatSession).
+  const spawnedWorkspaceId =
+    spawnedAgents.find((a) => a.runContext?.workspace?.id)?.runContext?.workspace?.id ?? null;
+  const effectiveLinkedWorkspaceId = linkedWorkspaceId ?? spawnedWorkspaceId;
+
+  // Notify parent (e.g., DesignPage) when the effective linked workspace id changes
+  useEffect(() => {
+    config?.onActiveWorkspaceIdChange?.(effectiveLinkedWorkspaceId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveLinkedWorkspaceId]);
+
   const linkedWorkspaceBrowseSource = linkedWorkspaceId
     ? {
       id: linkedWorkspaceId,
@@ -1216,7 +1254,7 @@ export default function ChatPage() {
             )}
           </div>
         )}
-        {chatDiffSummary && hiddenDiffSignature !== diffSourceSignature && (
+        {!isDesignMode && chatDiffSummary && hiddenDiffSignature !== diffSourceSignature && (
           <div className="chat-code-summary-wrap">
             <button
               type="button"
@@ -1374,7 +1412,8 @@ export default function ChatPage() {
           inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
           onAgentOverridesChanged={handleOverridesChange}
           maxVisibleLines={4}
-          extraControls={(() => {
+          placeholder={config?.placeholder}
+          extraControls={config?.forcedAgent ? null : (() => {
             const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
             return (
               <AgentChatDropdown
@@ -1418,7 +1457,7 @@ export default function ChatPage() {
         </div>
       )}
       </div>
-      {showResourceRail && !sidePanelOpen && (
+      {!isDesignMode && showResourceRail && !sidePanelOpen && (
         <nav className="chat-resource-rail" aria-label="Chat resources">
           <button
             type="button"
@@ -1453,19 +1492,21 @@ export default function ChatPage() {
           </button>
         </nav>
       )}
-      <ChatRunSidebar
-        runs={spawnedAgents}
-        rootType="chat"
-        rootId={activeSessionId}
-        workspaceBrowseSource={linkedWorkspaceBrowseSource}
-        repoBrowseSource={repoBrowseSource}
-        open={sidePanelOpen}
-        activeTab={sidePanelTab}
-        onTabChange={handleSidePanelTabChange}
-        filesViewRequest={filesViewRequest}
-        onAnswerWorkflowIntervention={answerWorkflowIntervention}
-        onClose={() => setSidePanelOpen(false)}
-      />
+      {!isDesignMode && (
+        <ChatRunSidebar
+          runs={spawnedAgents}
+          rootType="chat"
+          rootId={activeSessionId}
+          workspaceBrowseSource={linkedWorkspaceBrowseSource}
+          repoBrowseSource={repoBrowseSource}
+          open={sidePanelOpen}
+          activeTab={sidePanelTab}
+          onTabChange={handleSidePanelTabChange}
+          filesViewRequest={filesViewRequest}
+          onAnswerWorkflowIntervention={answerWorkflowIntervention}
+          onClose={() => setSidePanelOpen(false)}
+        />
+      )}
     </div>
   );
 }

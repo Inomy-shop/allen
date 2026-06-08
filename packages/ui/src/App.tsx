@@ -6,7 +6,7 @@ import ShortcutKey from './components/common/ShortcutKey';
 import {
   CirclePlay, GitBranch, GitPullRequest, History, LayoutDashboard, Settings,
   FolderGit2, TicketCheck, Workflow,
-  ChevronRight, Plus,
+  ChevronRight, Plus, Palette,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
   SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain, Cpu,
   Trash2, AlertTriangle,
@@ -26,6 +26,7 @@ import { usePanelLayout } from './hooks/usePanelLayout';
 import { WorkspaceCreateDialog, type WorkspaceCreateRepo } from './components/workspace/WorkspaceCreateDialog';
 import { workspaceChatPath } from './lib/workspace-routes';
 import { workspaceCreateBaseBranch } from './lib/workspace-create';
+import DesignNavPanel from './components/design/DesignNavPanel';
 
 interface NavItem {
   to: string;
@@ -117,6 +118,9 @@ const NAV_GROUPS: NavGroup[] = [
     { to: '/agents?section=repos', icon: GitBranch, label: 'Repositories' },
     { to: '/workspaces', icon: FolderGit2, label: 'Workspaces' },
   ]},
+  { id: 'design', dividerBefore: true, items: [
+    { to: '/design', icon: Palette, label: 'Design', activePrefixes: ['/design'] },
+  ]},
   { id: 'studio', dividerBefore: true, items: [
     { to: '/agents?section=teams-agents', icon: UsersRound, label: 'Teams & Agents' },
     { to: '/workflows', icon: Workflow, label: 'Workflows', activePrefixes: ['/workflows'] },
@@ -141,6 +145,7 @@ const SETTINGS_NAV_GROUPS: NavGroup[] = [
 ];
 
 const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
+  { prefix: '/design', label: 'Design' },
   { prefix: '/chats', label: 'History' },
   { prefix: '/threads', label: 'History' },
   { prefix: '/chat', label: 'Chat' },
@@ -162,6 +167,7 @@ const COMMANDS: CommandItem[] = [
   { id: 'dashboard', label: 'Open dashboard', group: 'Navigate', to: '/', icon: LayoutDashboard },
   { id: 'executions', label: 'Open executions', group: 'Navigate', to: '/executions', icon: CirclePlay },
   { id: 'chats', label: 'Open history', group: 'Navigate', to: '/chats', icon: History },
+  { id: 'design', label: 'Open design', group: 'Navigate', to: '/design', icon: Palette },
   { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: History },
   { id: 'activity', label: 'View execution log', group: 'Executions', to: '/executions', icon: CirclePlay },
   { id: 'running', label: 'View running executions', group: 'Executions', to: '/executions?status=running', icon: CirclePlay },
@@ -801,6 +807,10 @@ export default function App() {
   });
 
   const isSettingsRoute = location.pathname.startsWith('/settings');
+  const isDesignRoute = location.pathname.startsWith('/design');
+  const designActiveSessionId = isDesignRoute
+    ? location.pathname.match(/^\/design\/([^/]+)/)?.[1] ?? null
+    : null;
   const shellNavState = navPanel.collapsed && !isSettingsRoute ? 'nav-collapsed' : 'nav-expanded';
   const sidebarPanelIndex = Math.max(0, SIDEBAR_PANEL_ORDER.indexOf(sidebarPanel));
 
@@ -938,6 +948,43 @@ export default function App() {
                 </div>
               </div>
             ))}
+          </div>
+        </nav>
+      ) : isDesignRoute && !navPanel.collapsed ? (
+        /* Design route: custom design history sidebar */
+        <nav className="sidebar !w-[290px] !min-w-[290px] [animation:none]">
+          <div className="brand">
+            <NavLink to="/" className="brand-link">
+              <div className="brand-mark">[a]</div>
+              <span className="brand-name">{BRAND_NAME}</span>
+            </NavLink>
+            <span className="brand-sub">v{appVersion}</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <DesignNavPanel
+              activeSessionId={designActiveSessionId}
+              onBack={() => {
+                setSidebarPanel('navigation');
+                // Navigate away from Design mode. Using navigate('/') rather than
+                // navigate(-1) so the user reliably lands on a non-design route —
+                // history -1 might still be another /design/* entry.
+                navigate('/');
+              }}
+            />
+          </div>
+          <div className="sidebar-foot-wrap">
+            {currentUser && (
+              <div className="sidebar-foot">
+                <div className="avatar">{userInitial}</div>
+                <div className="user-meta">
+                  <div className="nm">{currentUser.name}</div>
+                  <div className="em">{currentUser.email}</div>
+                </div>
+                <NavLink to="/settings/general" className="foot-btn" title="Settings">
+                  <Settings className="w-3.5 h-3.5" />
+                </NavLink>
+              </div>
+            )}
           </div>
         </nav>
       ) : navPanel.collapsed ? (

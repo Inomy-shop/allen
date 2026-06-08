@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url';
 import type { AllenServerHandle } from '@allen/server/server';
 import { defaultUiDistDir, setupDesktopRuntime } from './runtime-config.js';
 import { startManagedMongo, type ManagedMongoRuntime } from './managed-mongo.js';
+import { isAllowedExternalUrl } from './url-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { autoUpdater } = electronUpdater;
@@ -210,12 +211,6 @@ function isTrustedAppUrl(raw: string): boolean {
   const url = parseUrl(raw);
   const origin = appOrigin();
   return Boolean(url && origin && url.origin === origin && /^https?:$/.test(url.protocol));
-}
-
-function isAllowedExternalUrl(raw: string): boolean {
-  const url = parseUrl(raw);
-  if (!url) return false;
-  return url.protocol === 'http:' || url.protocol === 'https:';
 }
 
 async function openExternalUrl(raw: string): Promise<boolean> {

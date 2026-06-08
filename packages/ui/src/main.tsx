@@ -28,6 +28,7 @@ import OnboardingRepositoryPage from './pages/OnboardingRepositoryPage';
 import OnboardingFirstWorkflowPage from './pages/OnboardingFirstWorkflowPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
+import DesignPage from './pages/DesignPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import { ToastProvider } from './components/common/Toast';
 import { useSettingsStore } from './stores/settingsStore';
@@ -81,6 +82,8 @@ const router = createBrowserRouter([
           { path: 'threads', element: <Navigate to="/chats" replace /> },
           { path: 'chat', element: <ChatPage /> },
           { path: 'chat/:sessionId', element: <ChatPage /> },
+          { path: 'design', element: <DesignPage /> },
+          { path: 'design/:sessionId', element: <DesignPage /> },
           { path: 'workspaces', element: <WorkspaceListPage /> },
           { path: 'workspaces/:id', element: <WorkspaceChatRedirect /> },
           { path: 'pull-requests', element: <PullRequestListPage /> },

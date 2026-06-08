@@ -309,3 +309,41 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
     }
   });
 });
+
+describe('design-assistant agent seed', () => {
+  it('seeds design-assistant agent in the d team', async () => {
+    const db = makeDb();
+    await new OrgSeedService(db).seed();
+    const agent = db.store.agents.find((a: any) => a.name === 'design-assistant');
+    expect(agent, 'design-assistant must be seeded').toBeDefined();
+    expect(agent.teamName).toBe('d');
+    expect(agent.teamRole).toBe('member');
+    expect(agent.displayName).toBe('Design Assistant');
+  });
+
+  it('design-assistant system prompt contains workflow invocation rules', async () => {
+    const db = makeDb();
+    await new OrgSeedService(db).seed();
+    const agent = db.store.agents.find((a: any) => a.name === 'design-assistant');
+    expect(agent.system).toContain('source-prd-to-ui-designs-variations');
+    expect(agent.system).toContain('frontend-developer');
+  });
+
+  it('design-assistant system prompt does not contain hardcoded clarification strings from old routing service', async () => {
+    const db = makeDb();
+    await new OrgSeedService(db).seed();
+    const agent = db.store.agents.find((a: any) => a.name === 'design-assistant');
+    // Old DesignRoutingService hardcoded: "I'd love to generate design variations for you!"
+    expect(agent.system).not.toContain("I'd love to generate design variations for you");
+    // Old DesignRoutingService hardcoded: "source repo selector in the Design context controls"
+    expect(agent.system).not.toContain('source repo selector in the Design context controls');
+  });
+
+  it('design-assistant has design-focused capabilities', async () => {
+    const db = makeDb();
+    await new OrgSeedService(db).seed();
+    const agent = db.store.agents.find((a: any) => a.name === 'design-assistant');
+    expect(agent.capabilities).toContain('design');
+    expect(agent.spawnTargets).toContain('frontend-developer');
+  });
+});

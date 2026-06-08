@@ -110,6 +110,22 @@ input:
     required: false
     widget: text
     description: User ID who started the run (for Slack DM routing of interventions).
+  output_mode:
+    type: string
+    required: false
+    default: spec_only
+    label: Output mode
+    description: "spec_only produces UX options/specs only (no prototype routes required). prototype produces full prototype routes. Default: spec_only."
+  design_session_id:
+    type: string
+    required: false
+    label: Design Session ID
+    description: Originating design session ID from the Design tab (auto-populated from design tab runs).
+  design_repo_path:
+    type: string
+    required: false
+    label: Design repo path
+    description: Absolute path of the design/prototyping repo (alternative to repo_path for design-tab dispatch).
 nodes:
   research_and_options:
     type: agent
@@ -441,6 +457,7 @@ nodes:
       warnings: Soft warnings (e.g. missing tailwind theme).
       failure_details: Reason when verdict=escalate.
   build_prototypes_and_routes:
+    if: "{{ output_mode != 'spec_only' or output_mode is not defined }}"
     type: agent
     agent: frontend-developer
     agentOverrides:
@@ -644,6 +661,7 @@ nodes:
       copied_component_file_count: Must remain 0.
       uses_generic_dynamic_route: Must remain false. True means options were collapsed into a single dynamic renderer.
   final_design_verifier:
+    if: "{{ output_mode != 'spec_only' or output_mode is not defined }}"
     type: agent
     agent: design-critic
     agentOverrides:
@@ -815,6 +833,7 @@ nodes:
       design_failure_details: Short summary when warn/fail/escalate.
       blocker_summary: Per-dimension boolean map of verifier outcomes.
   verifier_recovery_review:
+    if: "{{ output_mode != 'spec_only' or output_mode is not defined }}"
     type: human
     human:
       kind: recover

@@ -490,5 +490,26 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { name: 'idx_srceval_key_status' },
   );
 
+  // Design Repos — partial indexes for design-specific queries (REQ-016)
+  await db.collection('repos').createIndex(
+    { isDefaultDesignRepo: 1 },
+    { partialFilterExpression: { isDefaultDesignRepo: true } },
+  );
+  await db.collection('repos').createIndex(
+    { roles: 1 },
+    { partialFilterExpression: { roles: { $exists: true } } },
+  );
+
+  // Design Sessions (REQ-019, REQ-012)
+  await db.collection('design_sessions').createIndex({ status: 1, lastMessageAt: -1 });
+  await db.collection('design_sessions').createIndex({ designRepoId: 1, lastMessageAt: -1 });
+  await db.collection('design_sessions').createIndex({ workspaceId: 1 }, { sparse: true });
+  await db.collection('design_sessions').createIndex({ ownerUserId: 1, lastMessageAt: -1 }, { sparse: true });
+
+  // Design Messages (REQ-019)
+  await db.collection('design_messages').createIndex({ designSessionId: 1, createdAt: 1 });
+  await db.collection('design_messages').createIndex({ executionId: 1 }, { sparse: true });
+  await db.collection('design_messages').createIndex({ agentRunId: 1 }, { sparse: true });
+
   console.log('Database indexes ensured');
 }

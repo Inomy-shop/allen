@@ -68,6 +68,7 @@ interface ChatInputProps {
   extraControls?: ReactNode;
   maxVisibleLines?: number;
   fixedVisibleLines?: boolean;
+  placeholder?: string;
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -271,6 +272,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     extraControls,
     maxVisibleLines,
     fixedVisibleLines,
+    placeholder,
   },
   ref,
 ) {
@@ -743,7 +745,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={CHAT_PLACEHOLDER}
+          placeholder={placeholder ?? CHAT_PLACEHOLDER}
           disabled={disabled}
           rows={1}
           className="w-full resize-none bg-transparent px-2 py-1.5 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"

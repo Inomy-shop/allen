@@ -7,7 +7,7 @@ Start here when setting up, operating, or contributing to Allen.
 - [Context engine installation](context-engine-installation.md) - manual Python, model, Postgres/pgvector, and Neo4j setup details.
 - [Context engine](context-engine.md) - runtime context retrieval, mandatory injection, Cognee selection policy, and usage tracking.
 - [Curated and mandatory context](context-engine-curated-and-mandatory-context.md) - field-level guidance for creating and editing context entries.
-- [Architecture](architecture.md) - how the engine, server, UI, workspaces, agents, and integrations fit together.
+- [Architecture](architecture.md) - how the engine, server, UI, workspaces, agents, and integrations fit together. Includes the Design tab routes, data model, and UI components.
 - [Desktop Phase 0 audit](desktop-phase-0-audit.md) - initial audit for the macOS desktop app worktree and the embeddable-server refactor.
 - [Desktop phase status](desktop-phase-status.md) - completed desktop phases and remaining release-operations notes.
 - [Desktop packaging](desktop-packaging.md) - macOS packaging commands, packaged smoke, MongoDB binary pre-seeding, logs, and signing notes.

@@ -18,6 +18,7 @@ import Select from '../components/common/Select';
 import IconTooltipButton from '../components/common/IconTooltipButton';
 
 type TypeFilter = '' | 'agent' | 'workflow';
+type SourceFilter = '' | 'chat' | 'workflow' | 'design';
 type ActivityTab = 'running' | 'recent';
 
 const PAGE_SIZE = 50;
@@ -281,6 +282,7 @@ export default function ExecutionListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const filter = searchParams.get('status') ?? '';
   const typeFilter = (searchParams.get('type') ?? '') as TypeFilter;
+  const sourceFilter = (searchParams.get('source') ?? '') as SourceFilter;
   const search = searchParams.get('q') ?? '';
   const requestedView = searchParams.get('view');
   const page = Math.max(0, Number(searchParams.get('page') ?? '0') || 0);
@@ -296,6 +298,7 @@ export default function ExecutionListPage() {
 
   const setFilter = (s: string) => updateParams({ status: s || null, page: null });
   const setTypeFilter = (t: string) => updateParams({ type: t || null, page: null });
+  const setSourceFilter = (s: string) => updateParams({ source: s || null, page: null });
   const setActiveTab = (view: ActivityTab) => updateParams({ view, page: null });
 
   // Local search input state — debounced into the URL so list refreshes
@@ -329,6 +332,19 @@ export default function ExecutionListPage() {
     setLoading(false);
   }, [filter, typeFilter, search, page]);
 
+  // Client-side source filter helper
+  // TODO: If the API supports sourceSurface query param in the future, pass it
+  //       to api.listPaged and remove the client-side filter below.
+  function matchesSourceFilter(exec: any): boolean {
+    if (!sourceFilter) return true;
+    const surface = exec?.meta?.sourceSurface ?? '';
+    const chatSessionId = exec?.meta?.chatSessionId;
+    if (sourceFilter === 'design') return surface === 'design_tab';
+    if (sourceFilter === 'chat') return surface === 'chat' || Boolean(chatSessionId);
+    if (sourceFilter === 'workflow') return (exec?.type === 'workflow' || surface === 'workflow') && !chatSessionId;
+    return true;
+  }
+
   useEffect(() => { refresh(); }, [refresh]);
 
   // Auto-refresh every 5s when there are running executions
@@ -347,14 +363,15 @@ export default function ExecutionListPage() {
   }, [data]);
 
   const sorted = useMemo(() => {
-    const copy = [...data];
+    const copy = [...data].filter(matchesSourceFilter);
     copy.sort((a, b) => {
       const aVal = new Date(a.startedAt ?? 0).getTime();
       const bVal = new Date(b.startedAt ?? 0).getTime();
       return bVal - aVal;
     });
     return copy;
-  }, [data]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, sourceFilter]);
 
   const statusOptions = [
     { value: '', label: 'All statuses' },
@@ -468,6 +485,28 @@ export default function ExecutionListPage() {
               <ListFilter className="h-3.5 w-3.5" />
               <span>{visibleExecs.length} shown</span>
             </div>
+          </div>
+          {/* Source filter chips */}
+          <div className="mt-2.5 flex items-center gap-1.5 border-t border-app/50 pt-2.5">
+            <span className="mr-1 font-mono text-[10.5px] uppercase tracking-wide text-theme-subtle">Source</span>
+            {(['', 'chat', 'workflow', 'design'] as SourceFilter[]).map((s) => {
+              const label = s === '' ? 'All' : s === 'chat' ? 'Chat' : s === 'workflow' ? 'Workflow' : 'Design';
+              const active = sourceFilter === s;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setSourceFilter(s)}
+                  className={`inline-flex h-6 items-center rounded-full px-2.5 text-[11px] font-medium transition-colors ${
+                    active
+                      ? 'bg-accent-soft text-accent'
+                      : 'bg-app-muted text-theme-muted hover:bg-app-muted hover:text-theme-secondary'
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </div>
 
