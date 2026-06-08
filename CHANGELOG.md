@@ -19,6 +19,24 @@ Allen is currently pre-release, so behavior can change between commits. Versione
   - Sidebar `activeWorkspaceId` now matches `/chat?workspaceId=…` and `/chat/:sessionId` (when the session is workspace-linked) in addition to the existing `/workspaces/:id` path.
   - Tab titles update live when the server generates or renames the chat title (`titleSource` transitions from `default` → `auto`/`user`). Tab state is persisted best-effort in `localStorage` keyed by workspace ID.
 
+## [0.1.6] - 2026-06-08
+
+Highlights since `v0.1.3`.
+
+### Added
+
+- **Context quality judge, review & remediation pipeline**: a full context-engine subsystem behind the `context-engine` flag — a context judge with reliability calibration, a finding/review service with human-review gates, and a remediation service that can dispatch `code_change_pr` work. Ships 12 REST routes under `/api/context/quality` and a new Context Review UI.
+- **New providers — DeepSeek, Xiaomi MiMo, and Kimi**: three new first-class chat/agent providers alongside `codex` and `claude-cli`. They reuse the Claude Code binary via a per-spawn env overlay that never mutates `process.env`, with free-text model input and provider status cards in onboarding/settings.
+- **Visual workflow builder — full authoring**: the visual editor can now author edge control-flow (conditions, parallel fan-out + join/merge, retry loops) and condition-node branches entirely in-app instead of requiring YAML, with a new in-app guide.
+- **Bulk agent model migration**: migrate many agents to a new model in one action.
+- **Workspace server runner**: a server-runner tab in the workspace view.
+
+### Changed
+
+- **In-place integration connect**: Linear/GitHub MCP connect modals now open directly from the Tickets, Pull Requests, and Dashboard pages and refresh on success, instead of routing to `/settings/mcp`.
+- **PR Creator git identity**: the PR Creator now derives its git identity dynamically from `gh api user` instead of the hardcoded `allen@local` / `Allen Agent`.
+- **Settings & workspace UI refinements**: refined repository/model settings, workspace sidebar states, and chat metrics layout.
+
 ## [0.1.0] - 2026-05-21
 
 First public alpha release.
