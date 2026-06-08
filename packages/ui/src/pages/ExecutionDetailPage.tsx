@@ -29,6 +29,7 @@ import CheckpointsPanel from '../components/execution/CheckpointsPanel';
 import { WorkflowInterventionDialog, type WorkflowInterventionSubmit } from '../components/execution/WorkflowInterventionAction';
 import { ToolCallRow, type ToolCall } from '../components/common/ToolCallLog';
 import { buildTracesForTimeline } from '../utils/executionState';
+import { workspaceChatPath } from '../lib/workspace-routes';
 
 type ExecutionRightPanelView = 'node' | 'rerun' | 'artifacts';
 
@@ -1359,7 +1360,7 @@ function RunContextPanel({
               icon={<FolderGit2 className="w-3.5 h-3.5" />}
               label="Workspace"
               value={`${runContext.workspace.repoName ?? runContext.workspace.name ?? 'workspace'} · ${runContext.workspace.branch ?? 'branch'}`}
-              href={runContext.workspace.id ? `/workspaces/${runContext.workspace.id}` : undefined}
+              href={runContext.workspace.id ? workspaceChatPath(runContext.workspace.id) : undefined}
             />
           )}
           {runContext?.pullRequest && (
@@ -2343,7 +2344,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
                   icon={<FolderGit2 className="h-3.5 w-3.5" />}
                   title={runContext.workspace.name ?? runContext.workspace.branch ?? 'workspace'}
                   subtitle={runContext.workspace.repoName ?? undefined}
-                  href={runContext.workspace.id ? `/workspaces/${runContext.workspace.id}` : undefined}
+                  href={runContext.workspace.id ? workspaceChatPath(runContext.workspace.id) : undefined}
                 />
               )}
               {matchedRepo ? (

@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import {
+  PROVIDERS,
+  buildClaudeCompatibleEnvOverlay,
+  buildDeepSeekEnvOverlay,
+  buildKimiEnvOverlay,
+  getEnabledProvidersInDefaultOrder,
+  normalizeDeepSeekAnthropicBaseUrl,
+} from './chat-providers.js';
+import { EnvConfigProvider, resetRuntimeProvidersForTests, setRuntimeConfigProvider, setRuntimeSecretsProvider } from '../runtime/config.js';
 
 /**
  * Test for ENG-1437: Fix Codex resume failure when resumed chat prompt starts with a dash
@@ -293,6 +302,194 @@ describe('ALLEN_PUBLIC_URL propagation in Allen MCP env', () => {
     const addArgs: string[] = addCall![1] as string[];
     const argsStr = addArgs.join(' ');
     expect(argsStr).toContain('ALLEN_PUBLIC_URL=https://test.example.com');
+  });
+});
+
+describe('DeepSeek provider registry', () => {
+  it('deepseek is in PROVIDERS with correct shape', () => {
+    const ds = PROVIDERS.find(p => p.provider === 'deepseek');
+    expect(ds).toBeDefined();
+    expect(ds?.label).toBe('DeepSeek');
+    expect(ds?.open).toBe(true);
+    expect(ds?.modelSuggestions).toContain('deepseek-v4-pro[1m]');
+    expect(ds?.modelSuggestions).toContain('deepseek-v4-flash');
+    expect(ds?.requiresKey).toBe('ALLEN_DEEPSEEK_API_KEY');
+  });
+});
+
+describe('Xiaomi MiMo provider registry', () => {
+  it('xiaomi-mimo is in PROVIDERS with correct shape', () => {
+    const mimo = PROVIDERS.find(p => p.provider === 'xiaomi-mimo');
+    expect(mimo).toBeDefined();
+    expect(mimo?.label).toBe('Xiaomi MiMo');
+    expect(mimo?.open).toBe(true);
+    expect(mimo?.modelSuggestions).toContain('mimo-v2.5-pro');
+    expect(mimo?.requiresKey).toBe('ALLEN_XIAOMI_MIMO_API_KEY');
+  });
+});
+
+describe('Kimi provider registry', () => {
+  it('kimi is in PROVIDERS with correct shape', () => {
+    const kimi = PROVIDERS.find(p => p.provider === 'kimi');
+    expect(kimi).toBeDefined();
+    expect(kimi?.label).toBe('Kimi');
+    expect(kimi?.open).toBe(true);
+    expect(kimi?.modelSuggestions).toContain('kimi-k2.6');
+    expect(kimi?.modelSuggestions).toContain('kimi-k2.5');
+    expect(kimi?.requiresKey).toBe('ALLEN_KIMI_API_KEY');
+  });
+});
+
+describe('enabled provider registry', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    for (const key of ['ALLEN_DEEPSEEK_API_KEY', 'ALLEN_XIAOMI_MIMO_API_KEY', 'ALLEN_KIMI_API_KEY']) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+  });
+
+  it('hides Claude-compatible API providers without configured API keys', async () => {
+    delete process.env.ALLEN_DEEPSEEK_API_KEY;
+    delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
+    delete process.env.ALLEN_KIMI_API_KEY;
+
+    const providers = await getEnabledProvidersInDefaultOrder();
+    expect(providers.map((provider) => provider.provider)).toEqual(expect.arrayContaining(['codex', 'claude-cli']));
+    expect(providers.some((provider) => provider.provider === 'deepseek')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'xiaomi-mimo')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'kimi')).toBe(false);
+  });
+
+  it('shows a Claude-compatible API provider when its key is configured', async () => {
+    process.env.ALLEN_DEEPSEEK_API_KEY = 'deepseek-key';
+    delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
+    delete process.env.ALLEN_KIMI_API_KEY;
+
+    const providers = await getEnabledProvidersInDefaultOrder();
+    expect(providers.some((provider) => provider.provider === 'deepseek')).toBe(true);
+    expect(providers.some((provider) => provider.provider === 'xiaomi-mimo')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'kimi')).toBe(false);
+  });
+
+  it('shows Kimi when its key is configured', async () => {
+    delete process.env.ALLEN_DEEPSEEK_API_KEY;
+    delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
+    process.env.ALLEN_KIMI_API_KEY = 'kimi-key';
+
+    const providers = await getEnabledProvidersInDefaultOrder();
+    expect(providers.some((provider) => provider.provider === 'deepseek')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'xiaomi-mimo')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'kimi')).toBe(true);
+  });
+});
+
+describe('buildDeepSeekEnvOverlay', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    resetRuntimeProvidersForTests();
+    // Restore env
+    for (const key of [
+      'ALLEN_DEEPSEEK_API_KEY',
+      'ALLEN_DEEPSEEK_BASE_URL',
+      'ALLEN_DEEPSEEK_MODEL',
+      'ALLEN_DEEPSEEK_FLASH_MODEL',
+      'ALLEN_XIAOMI_MIMO_API_KEY',
+      'ALLEN_XIAOMI_MIMO_BASE_URL',
+      'ALLEN_XIAOMI_MIMO_MODEL',
+      'ALLEN_XIAOMI_MIMO_FLASH_MODEL',
+      'ALLEN_KIMI_API_KEY',
+      'ALLEN_KIMI_BASE_URL',
+      'ALLEN_KIMI_MODEL',
+      'ALLEN_KIMI_OPUS_MODEL',
+      'ALLEN_KIMI_FLASH_MODEL',
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_MODEL',
+    ]) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+    resetRuntimeProvidersForTests();
+  });
+
+  it('throws when API key is missing', async () => {
+    delete process.env.ALLEN_DEEPSEEK_API_KEY;
+    await expect(buildDeepSeekEnvOverlay()).rejects.toThrow('ALLEN_DEEPSEEK_API_KEY');
+  });
+
+  it('returns correct overlay keys when API key is set', async () => {
+    process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key-123';
+    const overlay = await buildDeepSeekEnvOverlay();
+    expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('test-key-123');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://api.deepseek.com/anthropic');
+    expect(overlay.ANTHROPIC_MODEL).toBeDefined();
+    expect(overlay.CLAUDE_CODE_SUBAGENT_MODEL).toBe('deepseek-v4-flash');
+    expect(overlay.CLAUDE_CODE_EFFORT_LEVEL).toBe('max');
+  });
+
+  it('normalizes the old DeepSeek /v1 default to the Claude Code Anthropic endpoint', () => {
+    expect(normalizeDeepSeekAnthropicBaseUrl('https://api.deepseek.com/v1')).toBe('https://api.deepseek.com/anthropic');
+    expect(normalizeDeepSeekAnthropicBaseUrl('https://api.deepseek.com/v1/')).toBe('https://api.deepseek.com/anthropic');
+  });
+
+  it('resolves desktop runtime secrets and config when process.env is empty', async () => {
+    delete process.env.ALLEN_DEEPSEEK_API_KEY;
+    delete process.env.ALLEN_DEEPSEEK_BASE_URL;
+    delete process.env.ALLEN_DEEPSEEK_MODEL;
+    delete process.env.ALLEN_DEEPSEEK_FLASH_MODEL;
+    setRuntimeConfigProvider(new EnvConfigProvider({
+      ALLEN_DEEPSEEK_BASE_URL: 'https://runtime.deepseek.test/v1',
+      ALLEN_DEEPSEEK_MODEL: 'deepseek-runtime-model',
+      ALLEN_DEEPSEEK_FLASH_MODEL: 'deepseek-runtime-flash',
+    } as NodeJS.ProcessEnv));
+    setRuntimeSecretsProvider({
+      async getSecret(key: string) {
+        return key === 'ALLEN_DEEPSEEK_API_KEY' ? 'runtime-secret-key' : undefined;
+      },
+    });
+
+    const overlay = await buildDeepSeekEnvOverlay();
+    expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('runtime-secret-key');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://runtime.deepseek.test/v1');
+    expect(overlay.ANTHROPIC_MODEL).toBe('deepseek-runtime-model');
+    expect(overlay.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('deepseek-runtime-flash');
+  });
+
+  it('does not mutate process.env', async () => {
+    process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key-123';
+    const beforeAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    await buildDeepSeekEnvOverlay();
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe(beforeAuthToken); // unchanged
+  });
+
+  it('uses model override when provided', async () => {
+    process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key-123';
+    const overlay = await buildDeepSeekEnvOverlay('deepseek-v4-flash');
+    expect(overlay.ANTHROPIC_MODEL).toBe('deepseek-v4-flash');
+  });
+
+  it('builds Xiaomi MiMo overlay from generic Claude-compatible provider config', async () => {
+    process.env.ALLEN_XIAOMI_MIMO_API_KEY = 'mimo-key-123';
+    const overlay = await buildClaudeCompatibleEnvOverlay('xiaomi-mimo');
+    expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('mimo-key-123');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://api.xiaomimimo.com/anthropic');
+    expect(overlay.ANTHROPIC_MODEL).toBe('mimo-v2.5-pro');
+    expect(overlay.CLAUDE_CODE_SUBAGENT_MODEL).toBe('mimo-v2.5-pro');
+  });
+
+  it('builds Kimi overlay from generic Claude-compatible provider config', async () => {
+    process.env.ALLEN_KIMI_API_KEY = 'kimi-key-123';
+    const overlay = await buildKimiEnvOverlay();
+    expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('kimi-key-123');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://api.moonshot.ai/anthropic');
+    expect(overlay.ANTHROPIC_MODEL).toBe('kimi-k2.5');
+    expect(overlay.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('kimi-k2.6');
+    expect(overlay.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('kimi-k2.5');
+    expect(overlay.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('kimi-k2.5');
+    expect(overlay.CLAUDE_CODE_SUBAGENT_MODEL).toBe('kimi-k2.5');
   });
 });
 

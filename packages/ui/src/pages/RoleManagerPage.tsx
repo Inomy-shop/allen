@@ -22,6 +22,7 @@ import {
   AssignToTeamDialog,
   CreateTeamFromAgentsDialog,
 } from '../components/agents/ImportAndTeamDialogs';
+import BulkAgentModelDialog from '../components/agents/BulkAgentModelDialog';
 import {
   TeamDialog,
   TeamDeleteConfirm,
@@ -536,6 +537,7 @@ export default function RoleManagerPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [createTeamOpen, setCreateTeamOpen] = useState(false);
+  const [bulkModelOpen, setBulkModelOpen] = useState(false);
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
   // Team CRUD dialog state
   const [teamDialog, setTeamDialog] = useState<TeamDialogMode>({ type: 'closed' });
@@ -822,6 +824,7 @@ export default function RoleManagerPage() {
           <div className="fixed bottom-6 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-md border border-app bg-[rgb(var(--color-text-primary))] px-3 py-2 text-[12px] text-[rgb(var(--color-surface-100))] shadow-lg">
             <span className="font-mono">{selectedAgents.size} selected</span>
             <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={() => setAssignOpen(true)}><ArrowRight className="h-3.5 w-3.5" /> Assign</button>
+            <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={() => setBulkModelOpen(true)}><Settings className="h-3.5 w-3.5" /> Change model</button>
             <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={() => setCreateTeamOpen(true)}><Plus className="h-3.5 w-3.5" /> Create team</button>
             <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={clearSelection}><X className="h-3.5 w-3.5" /> Clear</button>
           </div>
@@ -915,6 +918,15 @@ export default function RoleManagerPage() {
         onClose={() => setCreateTeamOpen(false)}
         memberAgentNames={Array.from(selectedAgents)}
         onCreated={() => { clearSelection(); refresh(); void reloadTeams(); }}
+      />
+      <BulkAgentModelDialog
+        open={bulkModelOpen}
+        onClose={() => setBulkModelOpen(false)}
+        agentNames={Array.from(selectedAgents)}
+        onUpdated={async () => {
+          clearSelection();
+          await refresh();
+        }}
       />
       <TeamDialog
         mode={teamDialog}

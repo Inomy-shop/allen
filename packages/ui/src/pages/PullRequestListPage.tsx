@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import { pullRequests } from '../services/workspaceService';
 import {
   AlertCircle, ArrowRight, Bot, Clock, ExternalLink, FileDiff, FolderGit2,
-  GitPullRequest, KeyRound, ListChecks, Minus, Plus, RefreshCw,
+  GitPullRequest, KeyRound, Minus, Plus, RefreshCw,
 } from 'lucide-react';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
-import { executions as executionsApi, system as systemApi, workflows as workflowsApi } from '../services/api';
+import { system as systemApi } from '../services/api';
 import IconTooltipButton from '../components/common/IconTooltipButton';
+import { workspaceChatPath } from '../lib/workspace-routes';
 
 const STATUS_FILTERS = [
   { id: 'open', label: 'Open' },
@@ -41,6 +43,7 @@ function integrationErrorMessage(err: unknown, fallback: string): string {
 
 export default function PullRequestListPage() {
   const navigate = useNavigate();
+  const [showGithubModal, setShowGithubModal] = useState(false);
   const [prs, setPrs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [githubConfigured, setGithubConfigured] = useState<boolean | null>(null);
@@ -48,7 +51,6 @@ export default function PullRequestListPage() {
   const [syncing, setSyncing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('open');
   const [pendingWsId, setPendingWsId] = useState<string | null>(null);
-  const [resolveBusy, setResolveBusy] = useState(false);
 
   const loadGitHubStatus = useCallback(async () => {
     try {
@@ -107,25 +109,6 @@ export default function PullRequestListPage() {
     }
   }
 
-  async function handleTriggerResolve(prUrl: string, navigateAfter = true) {
-    setResolveBusy(true);
-    try {
-      const list = await workflowsApi.list();
-      const workflow = list.find((w: any) => w.name === 'resolve-pr-reviews');
-      if (!workflow) throw new Error('resolve-pr-reviews workflow not found on the server');
-      const exec = await executionsApi.start(workflow._id, {
-        pr_url: prUrl.trim(),
-        review_bot_logins: 'coderabbitai,coderabbitai[bot]',
-        already_processed_comment_ids: '[]',
-      });
-      if (navigateAfter) navigate(`/executions/${exec.id}`);
-    } catch (err: any) {
-      alert(err?.message ?? 'Failed to trigger resolution');
-    } finally {
-      setResolveBusy(false);
-    }
-  }
-
   const emptyState = statusFilter === 'closed'
     ? {
       title: 'No closed pull requests found',
@@ -163,7 +146,7 @@ export default function PullRequestListPage() {
             </div>
             <div className="mt-6 flex items-center justify-center gap-2">
               <button
-                onClick={() => navigate('/settings/mcp')}
+                onClick={() => setShowGithubModal(true)}
                 className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
                 type="button"
               >
@@ -178,6 +161,17 @@ export default function PullRequestListPage() {
               </button>
             </div>
           </div>
+          {showGithubModal && (
+            <McpPresetConnectModal
+              presetName="github"
+              onClose={() => setShowGithubModal(false)}
+              onConnected={() => {
+                setShowGithubModal(false);
+                void loadGitHubStatus();
+                void load();
+              }}
+            />
+          )}
         </div>
       </div>
     );
@@ -334,16 +328,6 @@ export default function PullRequestListPage() {
                         <FolderGit2 className="h-3.5 w-3.5" /> Workspace
                       </button>
                     )}
-                    {pr.status === 'open' && pr.url && (
-                      <button
-                        onClick={() => handleTriggerResolve(pr.url, true)}
-                        disabled={resolveBusy}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-app bg-app px-2.5 text-[12px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-50"
-                        type="button"
-                      >
-                        <ListChecks className="h-3.5 w-3.5" /> Resolve
-                      </button>
-                    )}
                     {pr.url && (
                       <IconTooltipButton
                         label="Open on GitHub"
@@ -363,7 +347,7 @@ export default function PullRequestListPage() {
         {pendingWsId && (
           <SetupProgressDialog
             workspaceId={pendingWsId}
-            onComplete={(ws) => { setPendingWsId(null); navigate(`/workspaces/${ws._id}`); }}
+            onComplete={(ws) => { setPendingWsId(null); navigate(workspaceChatPath(ws._id)); }}
             onFailed={() => setPendingWsId(null)}
           />
         )}

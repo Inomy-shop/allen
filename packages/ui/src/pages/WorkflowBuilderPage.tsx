@@ -3,17 +3,19 @@ import { useParams, useNavigate, useBlocker } from 'react-router-dom';
 import yaml from 'js-yaml';
 import type { Node, Edge } from '@xyflow/react';
 import {
-  Save, CheckCircle, Play, Eye, Code2, ArrowLeft, AlertTriangle, XCircle, X, ChevronDown, Trash2,
+  Save, CheckCircle, Play, Eye, Code2, ArrowLeft, AlertTriangle, XCircle, X, ChevronDown, Trash2, Info, Pencil,
 } from 'lucide-react';
 import { workflows as wfApi } from '../services/api';
 import Canvas from '../components/canvas/Canvas';
 import YamlEditor from '../components/editor/YamlEditor';
 import MermaidPreview from '../components/editor/MermaidPreview';
 import WorkflowRunDialog from '../components/workflow/WorkflowRunDialog';
+import WorkflowBuilderGuide from '../components/workflow/WorkflowBuilderGuide';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import { useToast } from '../components/common/Toast';
 import { yamlToReactFlow } from '../lib/yaml-to-reactflow';
 import { reactFlowToYaml } from '../lib/reactflow-to-yaml';
+import { useResizable } from '../hooks/useResizable';
 
 type Mode = 'visual' | 'yaml';
 
@@ -22,6 +24,34 @@ type WorkflowBuilderPageProps = {
   onBack?: () => void;
 };
 
+type WorkflowMeta = {
+  name?: string;
+  description?: string;
+  version?: number;
+  context?: any;
+  input?: any;
+};
+
+function metaFromWorkflow(parsed: any): WorkflowMeta {
+  return {
+    name: parsed?.name,
+    description: parsed?.description,
+    version: parsed?.version,
+    context: parsed?.context,
+    input: parsed?.input,
+  };
+}
+
+function applyMetaToYaml(yamlStr: string, meta: WorkflowMeta): string {
+  const parsed = (yaml.load(yamlStr) as any) ?? {};
+  return yaml.dump({
+    ...parsed,
+    name: meta.name ?? parsed.name ?? 'untitled',
+    description: meta.description ?? parsed.description ?? '',
+    version: meta.version ?? parsed.version ?? 1,
+  }, { lineWidth: 120, noRefs: true, sortKeys: false });
+}
+
 export default function WorkflowBuilderPage({ embedded = false, onBack }: WorkflowBuilderPageProps = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -29,14 +59,21 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
   const isNew = !id;
 
   const [mode, setMode] = useState<Mode>('visual');
+  // Mermaid preview panel — same default width + resize behavior as the
+  // node-properties panel in the visual canvas.
+  const { size: previewWidth, handleMouseDown: previewResizeStart } = useResizable({ direction: 'horizontal', initialSize: 432, minSize: 260, maxSize: 640 });
+  // Close hides the preview; it comes back when re-entering YAML mode.
+  const [previewClosed, setPreviewClosed] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [yamlContent, setYamlContent] = useState('');
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const [workflowMeta, setWorkflowMeta] = useState<any>({});
+  const [workflowMeta, setWorkflowMeta] = useState<WorkflowMeta>({});
   const [validation, setValidation] = useState<{ errors: string[]; warnings: string[] }>({ errors: [], warnings: [] });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(!!id);
   const [dirty, setDirty] = useState(false);
+  const [metaEditorOpen, setMetaEditorOpen] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -76,11 +113,10 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
       setYamlContent(loadedYaml);
       savedYamlRef.current = loadedYaml;
       setWorkflowMeta({
+        ...metaFromWorkflow(wf.parsed),
         name: wf.name,
         description: wf.description,
         version: wf.version,
-        context: wf.parsed?.context,
-        input: wf.parsed?.input,
       });
       if (wf.parsed) {
         const { nodes: n, edges: e } = yamlToReactFlow(wf.parsed);
@@ -108,13 +144,7 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
       const { nodes: n, edges: e } = yamlToReactFlow(parsed);
       setNodes(n);
       setEdges(e);
-      setWorkflowMeta({
-        name: parsed.name,
-        description: parsed.description,
-        version: parsed.version,
-        context: parsed.context,
-        input: parsed.input,
-      });
+      setWorkflowMeta(metaFromWorkflow(parsed));
     } catch { /* invalid yaml, ignore */ }
   }, []);
 
@@ -128,6 +158,7 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
   const handleModeSwitch = useCallback((newMode: Mode) => {
     if (newMode === 'yaml' && mode === 'visual') {
       syncVisualToYaml();
+      setPreviewClosed(false); // re-show the preview each time YAML view opens
     } else if (newMode === 'visual' && mode === 'yaml') {
       syncYamlToVisual(yamlContent);
     }
@@ -138,6 +169,25 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
   const handleYamlChange = useCallback((val: string) => {
     setYamlContent(val);
     setDirty(val !== savedYamlRef.current);
+    try {
+      const parsed = yaml.load(val) as any;
+      if (parsed && typeof parsed === 'object') setWorkflowMeta(metaFromWorkflow(parsed));
+    } catch { /* keep current metadata while YAML is invalid */ }
+  }, []);
+
+  const handleMetaChange = useCallback((patch: Pick<WorkflowMeta, 'name' | 'description'>) => {
+    setWorkflowMeta((current) => {
+      const next = { ...current, ...patch };
+      setYamlContent((currentYaml) => {
+        try {
+          return applyMetaToYaml(currentYaml, next);
+        } catch {
+          return currentYaml;
+        }
+      });
+      return next;
+    });
+    setDirty(true);
   }, []);
 
   // Save
@@ -148,6 +198,9 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
       let finalYaml = yamlContent;
       if (mode === 'visual') {
         finalYaml = reactFlowToYaml(nodes, edges, workflowMeta);
+        setYamlContent(finalYaml);
+      } else {
+        finalYaml = applyMetaToYaml(finalYaml, workflowMeta);
         setYamlContent(finalYaml);
       }
 
@@ -226,27 +279,43 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
       {/* Top bar */}
       <header className={`flex items-center justify-between border-b border-app shrink-0 ${embedded ? 'px-4 py-2.5' : 'px-8 pb-3 pt-8'}`}>
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => {
-              if (embedded && onBack) onBack();
-              else navigate('/workflows');
-            }}
-            className="text-theme-muted hover:text-theme-primary transition-colors"
-            title={embedded ? 'Back to workflow' : 'Back to workflows'}
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
+          {/* Standalone builder keeps a back affordance; embedded edit relies on
+              the surrounding app/detail navigation, so no back button here. */}
+          {!embedded && (
+            <button
+              onClick={() => navigate('/workflows')}
+              className="text-theme-muted hover:text-theme-primary transition-colors"
+              title="Back to workflows"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          )}
           <span className="text-[14px] font-semibold text-theme-primary tracking-tight">
             {workflowMeta.name ?? 'New workflow'}
           </span>
           {workflowMeta.version && (
             <span className="text-[12px] text-theme-muted font-mono">v{workflowMeta.version}</span>
           )}
+          <button
+            onClick={() => setMetaEditorOpen((open) => !open)}
+            title="Edit workflow details"
+            className={`btn-ghost p-1 transition-colors ${metaEditorOpen ? 'text-accent-blue' : 'text-theme-muted hover:text-theme-primary'}`}
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setGuideOpen(true)}
+            title="How to build a workflow"
+            className="btn-ghost p-1 text-theme-muted hover:text-accent-blue"
+          >
+            <Info className="w-4 h-4" />
+          </button>
+
           {/* Mode toggle */}
-          <div className="flex items-center bg-app-muted rounded-md p-0.5">
+          <div className="flex items-center bg-app-muted rounded p-0.5">
             <button
               onClick={() => handleModeSwitch('visual')}
               title="Visual editor"
@@ -326,17 +395,17 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
             </div>
           )}
 
-          <button title="Validate workflow" onClick={handleValidate} className="btn btn-secondary btn-sm">
+          <button title="Validate workflow" onClick={handleValidate} className="btn btn-secondary btn-sm rounded-sm">
             <CheckCircle className="w-3.5 h-3.5" /> Validate
           </button>
-          <button title="Save workflow" onClick={handleSave} disabled={saving} className="btn btn-primary btn-sm">
+          <button title="Save workflow" onClick={handleSave} disabled={saving} className="btn btn-primary btn-sm rounded-sm">
             <Save className="w-3.5 h-3.5" /> {saving ? 'Saving…' : 'Save'}
           </button>
           <button
             onClick={handleRun}
             disabled={!id || validation.errors.length > 0}
             title="Run workflow"
-            className="btn-primary text-xs inline-flex items-center gap-1.5 whitespace-nowrap"
+            className="btn btn-primary btn-sm rounded-sm"
           >
             <Play className="w-3.5 h-3.5" /> Run
           </button>
@@ -344,12 +413,35 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
             onClick={() => setConfirmDelete(true)}
             disabled={isNew || deleting}
             title={isNew ? 'Save the workflow before deleting' : 'Delete workflow'}
-            className="btn btn-ghost btn-sm hover:text-accent-red"
+            className="btn btn-secondary btn-sm rounded-sm hover:text-accent-red"
           >
             <Trash2 className="w-3.5 h-3.5" /> Delete
           </button>
         </div>
       </header>
+
+      {metaEditorOpen && (
+        <section className={`grid shrink-0 grid-cols-[minmax(180px,320px)_minmax(260px,1fr)] items-end gap-3 border-b border-app bg-app-muted/20 ${embedded ? 'px-4 py-2.5' : 'px-8 py-3'}`}>
+          <label className="min-w-0">
+            <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.12em] text-theme-muted">Name</span>
+            <input
+              value={workflowMeta.name ?? ''}
+              onChange={(event) => handleMetaChange({ name: event.target.value })}
+              placeholder="workflow-name"
+              className="h-8 w-full rounded border border-app bg-app px-2.5 text-[13px] font-medium text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent-blue"
+            />
+          </label>
+          <label className="min-w-0">
+            <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.12em] text-theme-muted">Description</span>
+            <input
+              value={workflowMeta.description ?? ''}
+              onChange={(event) => handleMetaChange({ description: event.target.value })}
+              placeholder="What this workflow does"
+              className="h-8 w-full rounded border border-app bg-app px-2.5 text-[13px] text-theme-secondary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent-blue"
+            />
+          </label>
+        </section>
+      )}
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
@@ -359,7 +451,9 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
             edges={edges}
             onNodesChange={(n, markDirty = false) => { setNodes(n); if (markDirty) setDirty(true); }}
             onEdgesChange={(e, markDirty = false) => { setEdges(e); if (markDirty) setDirty(true); }}
-            workflowInput={parsedWorkflow?.input ?? null}
+            workflowInput={workflowMeta?.input ?? parsedWorkflow?.input ?? null}
+            workflowContext={workflowMeta?.context ?? parsedWorkflow?.context ?? null}
+            onWorkflowMetaPatch={(patch) => { setWorkflowMeta((m: any) => ({ ...m, ...patch })); setDirty(true); }}
           />
         ) : (
           <div className="flex h-full">
@@ -372,10 +466,16 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
                 warnings={validation.warnings}
               />
             </div>
-            {/* Mermaid preview */}
-            <div className="w-80 shrink-0 bg-surface">
-              <MermaidPreview workflow={parsedWorkflow} />
-            </div>
+            {/* Mermaid preview — resizable + closable, matching the node-properties panel */}
+            {!previewClosed && (
+              <div
+                className="bg-surface shrink-0 overflow-auto border-l-2 border-app hover:border-accent-blue/50 transition-colors relative"
+                style={{ width: previewWidth }}
+              >
+                <div className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10" onMouseDown={previewResizeStart} />
+                <MermaidPreview workflow={parsedWorkflow} onClose={() => setPreviewClosed(true)} />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -397,6 +497,8 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
           }}
         />
       )}
+
+      {guideOpen && <WorkflowBuilderGuide onClose={() => setGuideOpen(false)} />}
 
       <DeleteConfirmDialog
         open={confirmDelete}

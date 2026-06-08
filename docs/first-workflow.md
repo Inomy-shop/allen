@@ -152,7 +152,6 @@ Open the execution detail page and inspect:
 After the first workflow succeeds, try one of:
 
 - `feature-plan-and-implement` for a new feature with PRD/HLD/TDD and implementation.
-- `resolve-pr-reviews` for a GitHub PR review sweep.
 
 Review workflow YAML before running implementation workflows. They can create branches, modify files, run tests, and interact with external tools depending on available credentials.
 

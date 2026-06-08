@@ -212,16 +212,10 @@ function isTrustedAppUrl(raw: string): boolean {
   return Boolean(url && origin && url.origin === origin && /^https?:$/.test(url.protocol));
 }
 
-function isLoopbackHostname(hostname: string): boolean {
-  return hostname === 'localhost'
-    || hostname === '127.0.0.1'
-    || hostname === '::1'
-    || hostname.endsWith('.localhost');
-}
-
 function isAllowedExternalUrl(raw: string): boolean {
   const url = parseUrl(raw);
-  return Boolean(url && url.protocol === 'https:' && !isLoopbackHostname(url.hostname));
+  if (!url) return false;
+  return url.protocol === 'http:' || url.protocol === 'https:';
 }
 
 async function openExternalUrl(raw: string): Promise<boolean> {

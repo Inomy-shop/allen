@@ -13,9 +13,15 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   // Agents
   const legacySpawnTargetsField = 'can' + 'DelegateTo';
+  // Copy the legacy field onto spawnTargets via $rename rather than an
+  // aggregation-pipeline update ([{ $set: ... }]): AWS DocumentDB does not
+  // support pipeline-form updates and rejects them with
+  // "MongoServerError: Wrong type for parameter u", which crash-loops boot.
+  // $rename moves the field, so only docs that had BOTH fields still carry
+  // the legacy key afterwards — the $unset below mops those up.
   await db.collection('agents').updateMany(
     { spawnTargets: { $exists: false }, [legacySpawnTargetsField]: { $exists: true } },
-    [{ $set: { spawnTargets: `$${legacySpawnTargetsField}` } }],
+    { $rename: { [legacySpawnTargetsField]: 'spawnTargets' } },
   );
   await db.collection('agents').updateMany(
     { [legacySpawnTargetsField]: { $exists: true } },
@@ -55,6 +61,14 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { intervention_id: 1 },
     { unique: true },
   );
+  // Context judge human_feedback discovery: answered interventions ordered by answered_at.
+  // Partial filter keeps the index small — only answered records are eligible.
+  await db.collection('workflow_interventions').createIndex(
+    { status: 1, answered_at: 1 },
+    { partialFilterExpression: { status: 'answered' } },
+  );
+  // Batch repo-ID resolution: context_attempts lookup by executionId (= workflow_run_id)
+  // is already covered by the existing context_attempts executionId index above.
 
   // Executions
   await db.collection('executions').createIndex({ id: 1 }, { unique: true });
@@ -115,6 +129,10 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('context_attempts').createIndex({ contextAttemptId: 1 }, { unique: true });
   await db.collection('context_attempts').createIndex({ rootExecutionId: 1, createdAt: 1 });
   await db.collection('context_attempts').createIndex({ parentExecutionId: 1, createdAt: 1 });
+  // Discovery indexes for ContextEvaluationScheduler observability-based discovery
+  await db.collection('context_attempts').createIndex({ repoId: 1, status: 1, createdAt: 1 });
+  await db.collection('context_attempts').createIndex({ executionKind: 1, status: 1, createdAt: 1 });
+  await db.collection('context_attempts').createIndex({ repoId: 1, executionKind: 1, status: 1, createdAt: 1 });
   await db.collection('context_refs').createIndex({ contextAttemptId: 1, refId: 1 }, { unique: true });
   await db.collection('context_refs').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
   await db.collection('context_refs').createIndex({ providerId: 1, cogneeScore: -1 });
@@ -141,6 +159,20 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { unique: true },
   );
   await db.collection('repo_context_metadata').createIndex({ repoId: 1, active: 1, path: 1 });
+
+  // Versioned curated context entries. Runtime paths must use active rows only;
+  // inactive rows are retained for audit/history.
+  await db.collection('repo_context_curation_entries').createIndex({ entryVersionId: 1 }, { unique: true, sparse: true });
+  await db.collection('repo_context_curation_entries').createIndex(
+    { repoId: 1, entryId: 1, version: 1 },
+    { unique: true, partialFilterExpression: { version: { $exists: true } } },
+  );
+  await db.collection('repo_context_curation_entries').createIndex(
+    { repoId: 1, entryId: 1, active: 1 },
+    { unique: true, partialFilterExpression: { active: true } },
+  );
+  await db.collection('repo_context_curation_entries').createIndex({ repoId: 1, active: 1, path: 1 });
+  await db.collection('repo_context_curation_entries').createIndex({ repoId: 1, active: 1, inclusion: 1 });
 
   // Cron Jobs — generic scheduler for agents/workflows/system actions
   await db.collection('cron_jobs').createIndex({ name: 1 }, { unique: true });
@@ -181,6 +213,35 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('learnings').createIndex({ tags: 1 });
   await db.collection('learnings').createIndex({ status: 1, lastUsedAt: 1 });
   await db.collection('learnings').createIndex({ 'source.executionId': 1 });
+  await db.collection('learnings').createIndex({ repoId: 1, contextEligibility: 1, createdAt: -1 });
+
+  // Scheduler cursors are scoped; sourceType alone is not unique anymore.
+  // Drop the legacy unique index defensively so boot does not fail on DBs that
+  // already have multiple scoped chat_learning cursor rows.
+  await db.collection('context_judge_scheduler_state').dropIndex('sourceType_1').catch((err: unknown) => {
+    // Best-effort cleanup of a legacy index — tolerate "index doesn't exist" and
+    // "collection doesn't exist" on any DB. On real MongoDB the server sets
+    // `codeName` (IndexNotFound / NamespaceNotFound); Amazon DocumentDB returns the
+    // same conditions WITHOUT a `codeName` — "ns not found" (code 26) when the
+    // collection is missing, and "Cannot drop index: index not found." when only the
+    // named index is missing. So we accept the codeName, the known numeric codes, or
+    // the message text, and only re-throw on a genuinely unexpected error.
+    const e = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : undefined;
+    const codeName = e?.['codeName'];
+    const code = e?.['code'];
+    const message = typeof e?.['message'] === 'string' ? (e['message'] as string) : '';
+    const isMissing =
+      codeName === 'IndexNotFound' ||
+      codeName === 'NamespaceNotFound' ||
+      code === 26 || // NamespaceNotFound
+      code === 27 || // IndexNotFound
+      /index not found|ns not found/i.test(message);
+    if (!isMissing) throw err;
+  });
+  await db.collection('context_judge_scheduler_state').createIndex(
+    { sourceType: 1, scopeType: 1, scopeKey: 1 },
+    { unique: true, sparse: true },
+  );
 
   // Self-healing monitoring
   await db.collection('monitoring_incidents').createIndex({ fingerprint: 1 }, { unique: true });
@@ -288,6 +349,146 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // the public GET /api/files/:filename route to find the storage location.
   await db.collection('uploaded_files').createIndex({ fileId: 1 }, { unique: true });
   await db.collection('uploaded_files').createIndex({ createdAt: -1 });
+
+  // ── Context Quality / Judge Layer ──────────────────────────────────────────
+  // context_judge_runs
+  await db.collection('context_judge_runs').createIndex({ judgeRunId: 1 }, { unique: true });
+  await db.collection('context_judge_runs').createIndex({ scope: 1 });
+  await db.collection('context_judge_runs').createIndex({ status: 1 });
+  await db.collection('context_judge_runs').createIndex({ validFrom: -1 });
+  await db.collection('context_judge_runs').createIndex({ sourceId: 1, scope: 1, active: 1 });
+
+  // context_findings
+  await db.collection('context_findings').createIndex({ findingId: 1 }, { unique: true });
+  await db.collection('context_findings').createIndex({ judgeRunId: 1 });
+  await db.collection('context_findings').createIndex({ scope: 1 });
+  await db.collection('context_findings').createIndex({ status: 1 });
+  await db.collection('context_findings').createIndex({ reliabilityLabel: 1 });
+  await db.collection('context_findings').createIndex({ scope: 1, status: 1, active: 1 });
+
+  // context_review_tasks
+  await db.collection('context_review_tasks').createIndex({ taskId: 1 }, { unique: true });
+  await db.collection('context_review_tasks').createIndex({ scope: 1 });
+  await db.collection('context_review_tasks').createIndex({ status: 1 });
+  await db.collection('context_review_tasks').createIndex({ risk: 1 });
+  await db.collection('context_review_tasks').createIndex({ scope: 1, status: 1, risk: 1 });
+  await db.collection('context_review_tasks').createIndex(
+    { status: 1, remediationStatus: 1, requiresHumanReview: 1, fixType: 1 },
+    { name: 'idx_review_tasks_remediation_ready' },
+  );
+
+  // context_review_decisions
+  await db.collection('context_review_decisions').createIndex({ decisionId: 1 }, { unique: true });
+  await db.collection('context_review_decisions').createIndex({ taskId: 1, createdAt: 1 });
+
+  // context_remediations
+  await db.collection('context_remediations').createIndex({ remediationId: 1 }, { unique: true });
+  await db.collection('context_remediations').createIndex({ taskId: 1 });
+  await db.collection('context_remediations').createIndex({ findingId: 1 });
+  await db.collection('context_remediations').createIndex({ workerRole: 1, status: 1 });
+  await db.collection('context_remediations').createIndex({ targetRefIds: 1 }, { sparse: true });
+  await db.collection('context_remediations').createIndex({ targetEntryIds: 1 }, { sparse: true });
+  await db.collection('context_remediations').createIndex({ status: 1 });
+
+  // repo_context_curation_entry_revisions
+  await db.collection('repo_context_curation_entry_revisions').createIndex({ revisionId: 1 }, { unique: true });
+  await db.collection('repo_context_curation_entry_revisions').createIndex({ repoId: 1, entryId: 1, createdAt: 1 });
+
+  // context_learning_promotions
+  await db.collection('context_learning_promotions').createIndex({ promotionId: 1 }, { unique: true });
+  await db.collection('context_learning_promotions').createIndex({ learningId: 1 });
+  await db.collection('context_learning_promotions').createIndex({ decision: 1 });
+
+  // context_judge_config (singleton)
+  await db.collection('context_judge_config').createIndex({ configId: 1 }, { unique: true });
+
+  // context_review_worker_assignments
+  await db.collection('context_review_worker_assignments').createIndex({ assignmentId: 1 }, { unique: true });
+  await db.collection('context_review_worker_assignments').createIndex({ status: 1 });
+  await db.collection('context_review_worker_assignments').createIndex({ workerAgentName: 1 });
+  await db.collection('context_review_worker_assignments').createIndex({ workerRole: 1, status: 1 });
+  await db.collection('context_review_worker_assignments').createIndex({ remediationIds: 1 }, { sparse: true });
+  await db.collection('context_review_worker_assignments').createIndex({ learningIds: 1 }, { sparse: true });
+  await db.collection('context_review_worker_assignments').createIndex(
+    { workerRole: 1, status: 1, taskIds: 1 },
+    { name: 'idx_worker_assignments_role_status_tasks' },
+  );
+
+  // context_trace_analysis_assignments
+  await db.collection('context_trace_analysis_assignments').createIndex({ assignmentId: 1 }, { unique: true });
+  await db.collection('context_trace_analysis_assignments').createIndex({ sessionId: 1, status: 1 });
+  await db.collection('context_trace_analysis_assignments').createIndex({ sourceIds: 1 });
+  await db.collection('context_trace_analysis_assignments').createIndex({ retryOfAssignmentId: 1 }, { sparse: true });
+  await db.collection('context_trace_analysis_assignments').createIndex({ terminalReason: 1 }, { sparse: true });
+
+  // context_agent_dispatch_queue — AUDIT/FALLBACK only.
+  // The primary worker-start mechanism is mcp__allen__spawn_agent called by the orchestrator agent.
+  // This collection records dispatch attempts for audit purposes only and is NOT used to trigger
+  // execution. Indexes support status polling and cleanup without blocking the primary spawn path.
+  await db.collection('context_agent_dispatch_queue').createIndex({ recordId: 1 }, { unique: true });
+  await db.collection('context_agent_dispatch_queue').createIndex({ assignmentId: 1 });
+  await db.collection('context_agent_dispatch_queue').createIndex({ status: 1 });
+  await db.collection('context_agent_dispatch_queue').createIndex({ createdAt: -1 });
+
+  // sourceKey deduplication index (sparse — only present when sourceKind+sourceId set)
+  await db.collection('context_judge_runs').createIndex(
+    { sourceKey: 1, status: 1, active: 1 },
+    { sparse: true, name: 'sourceKey_status_active' },
+  );
+  await db.collection('context_judge_runs').createIndex({ sourceKey: 1, active: 1 });
+
+  // clusterKey for review task deduplication
+  await db.collection('context_review_tasks').createIndex(
+    { clusterKey: 1, status: 1 },
+    { sparse: true, name: 'clusterKey_status' },
+  );
+
+  // context_orchestrator_run_records
+  await db.collection('context_orchestrator_run_records').createIndex({ runId: 1 }, { unique: true });
+  await db.collection('context_orchestrator_run_records').createIndex({ status: 1, triggeredAt: -1 });
+  await db.collection('context_orchestrator_run_records').createIndex({ triggeredAt: -1 });
+
+  // context_orchestration_sessions
+  await db.collection('context_orchestration_sessions').createIndex({ sessionId: 1 }, { unique: true });
+  await db.collection('context_orchestration_sessions').createIndex({ rootExecutionId: 1 }, { sparse: true });
+  await db.collection('context_orchestration_sessions').createIndex({ status: 1, lifecycleStatus: 1, updatedAt: -1 });
+
+  // context_source_evaluations — durable per-source evaluation ledger.
+  // The scheduler anti-joins against { sourceKey, status: 'completed' } to skip
+  // already-evaluated sources (GAP 1 + GAP 2 fix).
+  await db.collection('context_source_evaluations').createIndex(
+    { repoId: 1, sourceType: 1, sourceKey: 1, evaluationVersion: 1 },
+    { name: 'idx_srceval_repo_type_key_ver' },
+  );
+  await db.collection('context_source_evaluations').createIndex(
+    { sessionId: 1, sourceType: 1, decision: 1 },
+    { name: 'idx_srceval_session_type_decision' },
+  );
+  await db.collection('context_source_evaluations').createIndex(
+    { sessionId: 1, contextVerdict: 1 },
+    { name: 'idx_srceval_session_verdict' },
+  );
+  await db.collection('context_source_evaluations').createIndex(
+    { repoId: 1, classification: 1, contextVerdict: 1 },
+    { name: 'idx_srceval_repo_class_verdict' },
+  );
+  await db.collection('context_source_evaluations').createIndex(
+    { affectedRefIds: 1 },
+    { sparse: true, name: 'idx_srceval_affected_refs' },
+  );
+  await db.collection('context_source_evaluations').createIndex(
+    { judgeRunId: 1 },
+    { sparse: true, name: 'idx_srceval_judgeRunId' },
+  );
+  await db.collection('context_source_evaluations').createIndex(
+    { sourceKey: 1, evaluatedAt: -1 },
+    { name: 'idx_srceval_key_evaluatedAt' },
+  );
+  // Fast lookup for anti-join: scheduler checks { sourceKey, status: 'completed' }
+  await db.collection('context_source_evaluations').createIndex(
+    { sourceKey: 1, status: 1 },
+    { name: 'idx_srceval_key_status' },
+  );
 
   console.log('Database indexes ensured');
 }

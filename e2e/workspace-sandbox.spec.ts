@@ -94,7 +94,7 @@ test.describe('Workspace Sandbox & Config', () => {
 
   });
 
-  test('workspace info panel opens from detail page', async ({ page }) => {
+  test.skip('workspace info panel opens from detail page (legacy workspace detail page)', async ({ page }) => {
     await page.setViewportSize({ width: 1400, height: 800 });
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(3000);

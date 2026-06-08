@@ -53,17 +53,23 @@ export function reactFlowToYaml(
 
     if (edgeData.condition) yamlEdge.condition = edgeData.condition;
     if (edgeData.parallel) {
-      // Find all targets from this source with parallel
+      // Group every parallel edge leaving this source into a single
+      // fan-out edge with an array `to`. A lone parallel edge still keeps
+      // its `parallel: true` flag.
       const parallelTargets = edges
         .filter(e => e.source === edge.source && (e.data as any)?.parallel)
         .map(e => e.target);
       if (parallelTargets.length > 1) {
         yamlEdge.to = parallelTargets;
-        yamlEdge.parallel = true;
-        if (edgeData.join) yamlEdge.join = edgeData.join;
-        if (edgeData.merge) yamlEdge.merge = edgeData.merge;
         for (const t of parallelTargets) processed.add(`${edge.source}→${t}`);
       }
+      yamlEdge.parallel = true;
+    }
+    // join/merge are independent of the grouping above — emit them whenever
+    // present so a join authored on a single edge isn't silently dropped.
+    if (edgeData.join) yamlEdge.join = edgeData.join;
+    if (edgeData.merge && typeof edgeData.merge === 'object' && Object.keys(edgeData.merge).length > 0) {
+      yamlEdge.merge = edgeData.merge;
     }
     if (edgeData.max_retries != null) yamlEdge.max_retries = edgeData.max_retries;
     if (edgeData.retry_context) yamlEdge.retry_context = edgeData.retry_context;

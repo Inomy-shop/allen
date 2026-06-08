@@ -8,7 +8,8 @@ import {
   FolderGit2, TicketCheck, Workflow,
   ChevronRight, Plus,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
-  SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain,
+  SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain, Cpu,
+  Trash2, AlertTriangle,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
@@ -18,10 +19,13 @@ import {
   chat as chatApi,
   executions as executionsApi,
   interventions as interventionsApi,
+  repos as reposApi,
 } from './services/api';
 import { workspaces as workspacesApi } from './services/workspaceService';
 import { usePanelLayout } from './hooks/usePanelLayout';
 import { WorkspaceCreateDialog, type WorkspaceCreateRepo } from './components/workspace/WorkspaceCreateDialog';
+import { workspaceChatPath } from './lib/workspace-routes';
+import { workspaceCreateBaseBranch } from './lib/workspace-create';
 
 interface NavItem {
   to: string;
@@ -54,12 +58,49 @@ interface SidebarWorkspace {
   repoId?: string;
   repoName?: string;
   repoPath?: string;
+  repoDefaultBranch?: string;
   branch?: string;
+  baseBranch?: string;
   status?: string;
   source?: string;
   prNumber?: number;
   updatedAt?: string;
   createdAt?: string;
+}
+
+interface SidebarRepo {
+  _id: string;
+  name: string;
+  path?: string;
+  branch?: string;
+  defaultBranch?: string;
+  detected?: {
+    defaultBranch?: string;
+  };
+}
+
+function workspaceCreateRepoDebug(repo?: WorkspaceCreateRepo | SidebarRepo | null) {
+  if (!repo) return null;
+  return {
+    id: repo._id,
+    name: repo.name,
+    path: repo.path,
+    branch: repo.branch,
+    defaultBranch: repo.defaultBranch,
+    detectedDefaultBranch: repo.detected?.defaultBranch,
+    resolvedBaseBranch: workspaceCreateBaseBranch(repo),
+  };
+}
+
+function sidebarRepoForWorkspace(repos: SidebarRepo[], workspace?: SidebarWorkspace | null, label?: string): SidebarRepo | null {
+  if (!workspace) return null;
+  return repos.find(repo => {
+    if (workspace.repoId && repo._id === workspace.repoId) return true;
+    if (workspace.repoPath && repo.path === workspace.repoPath) return true;
+    if (workspace.repoName && repo.name === workspace.repoName) return true;
+    if (label && repo.name === label) return true;
+    return false;
+  }) ?? null;
 }
 
 // ── Nav Groups (Allen design system: flat navigation with subtle dividers) ──
@@ -86,6 +127,7 @@ const SETTINGS_NAV_GROUPS: NavGroup[] = [
   { id: 'settings-primary', items: [
     { to: '/settings/general', icon: SlidersHorizontal, label: 'General', activePrefixes: ['/settings/general'], end: true },
     { to: '/settings/runtime', icon: HardDrive, label: 'Runtime', activePrefixes: ['/settings/runtime'] },
+    { to: '/settings/models', icon: Cpu, label: 'Models', activePrefixes: ['/settings/models'] },
     { to: '/settings/mcp', icon: Server, label: 'MCP Servers', activePrefixes: ['/settings/mcp'] },
   ]},
   { id: 'settings-allen', label: 'Allen', items: [
@@ -129,6 +171,7 @@ const COMMANDS: CommandItem[] = [
   { id: 'workspaces', label: 'Open workspaces', group: 'Sources', to: '/workspaces', icon: FolderGit2 },
   { id: 'settings-general', label: 'Open settings', group: 'Settings', to: '/settings/general', icon: SlidersHorizontal },
   { id: 'settings-runtime', label: 'Open runtime settings', group: 'Settings', to: '/settings/runtime', icon: HardDrive },
+  { id: 'settings-models', label: 'Open model settings', group: 'Settings', to: '/settings/models', icon: Cpu },
   { id: 'settings-mcp', label: 'Open MCP servers', group: 'Settings', to: '/settings/mcp', icon: Server },
   { id: 'settings-schedules', label: 'Open schedules', group: 'Settings', to: '/settings/schedules', icon: CalendarClock },
   { id: 'settings-learnings', label: 'Open learnings', group: 'Settings', to: '/settings/learnings', icon: Brain },
@@ -144,6 +187,7 @@ const SIDEBAR_PANEL_LABELS: Record<SidebarPanelId, string> = {
 const WORKSPACE_REPO_COLLAPSE_KEY = 'allen-app-sidebar-collapsed-workspace-repos';
 const SETTINGS_ROUTE_DETAILS: Array<{ prefix: string; label: string }> = [
   { prefix: '/settings/runtime', label: 'Runtime' },
+  { prefix: '/settings/models', label: 'Models' },
   { prefix: '/settings/mcp', label: 'MCP Servers' },
   { prefix: '/settings/schedules', label: 'Schedules' },
   { prefix: '/settings/learnings', label: 'Learnings' },
@@ -470,7 +514,10 @@ export default function App() {
   const [sidebarPanel, setSidebarPanel] = useState<SidebarPanelId>('navigation');
   const [workspaceSearch, setWorkspaceSearch] = useState('');
   const [sidebarWorkspaces, setSidebarWorkspaces] = useState<SidebarWorkspace[]>([]);
+  const [sidebarRepos, setSidebarRepos] = useState<SidebarRepo[]>([]);
   const [sidebarWorkspacesLoading, setSidebarWorkspacesLoading] = useState(false);
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
+  const [confirmDeleteWorkspace, setConfirmDeleteWorkspace] = useState<SidebarWorkspace | null>(null);
   const [workspaceCreateRepo, setWorkspaceCreateRepo] = useState<WorkspaceCreateRepo | null>(null);
   const [collapsedWorkspaceRepos, setCollapsedWorkspaceRepos] = useState<Set<string>>(() => loadCollapsedWorkspaceRepos());
   const [appVersion, setAppVersion] = useState(__ALLEN_APP_VERSION__);
@@ -505,39 +552,82 @@ export default function App() {
   const detail = isWorkspaceChatRoute ? activeWorkspaceName ?? 'Workspace' : routeBaseDetail;
   const workspaceGroups = useMemo(() => {
     const query = workspaceSearch.trim().toLowerCase();
-    const visible = sidebarWorkspaces
-      .filter((workspace) => {
-        if (!query) return true;
-        return workspace.name.toLowerCase().includes(query)
-          || workspaceRepoLabel(workspace).toLowerCase().includes(query)
-          || (workspace.branch ?? '').toLowerCase().includes(query);
-      })
-      .sort((a, b) => sidebarWorkspaceTime(b) - sidebarWorkspaceTime(a));
+    const repoById = new Map(sidebarRepos.map(repo => [repo._id, repo]));
+    const groups = new Map<string, { key: string; label: string; repo?: SidebarRepo; items: SidebarWorkspace[]; latest: number }>();
+    for (const repo of sidebarRepos) {
+      if (query && !repo.name.toLowerCase().includes(query) && !(repo.path ?? '').toLowerCase().includes(query)) continue;
+      groups.set(repo._id, { key: repo._id, label: repo.name, repo, items: [], latest: 0 });
+    }
 
-    const groups = new Map<string, { key: string; label: string; items: SidebarWorkspace[]; latest: number }>();
-    for (const workspace of visible) {
-      const label = workspaceRepoLabel(workspace);
-      const key = workspace.repoId ?? `repo:${label.toLowerCase()}`;
+    for (const workspace of sidebarWorkspaces) {
+      const repo = workspace.repoId ? repoById.get(workspace.repoId) ?? sidebarRepoForWorkspace(sidebarRepos, workspace) : sidebarRepoForWorkspace(sidebarRepos, workspace);
+      const label = repo?.name ?? workspaceRepoLabel(workspace);
+      const key = repo?._id ?? workspace.repoId ?? `repo:${label.toLowerCase()}`;
+      if (query && !workspace.name.toLowerCase().includes(query) && !label.toLowerCase().includes(query) && !(workspace.branch ?? '').toLowerCase().includes(query)) continue;
       const latest = sidebarWorkspaceTime(workspace);
       const existing = groups.get(key);
       if (existing) {
         existing.items.push(workspace);
         existing.latest = Math.max(existing.latest, latest);
       } else {
-        groups.set(key, { key, label, items: [workspace], latest });
+        groups.set(key, { key, label, repo: repo ?? undefined, items: [workspace], latest });
       }
     }
 
     return Array.from(groups.values()).sort((a, b) => b.latest - a.latest);
-  }, [sidebarWorkspaces, workspaceSearch]);
+  }, [sidebarRepos, sidebarWorkspaces, workspaceSearch]);
 
-  function openCreateWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
+  async function openCreateWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
     if (!repo) return;
-    setWorkspaceCreateRepo(repo);
+    console.info('[workspace-create-debug] app-sidebar plus clicked', {
+      candidateRepo: workspaceCreateRepoDebug(repo),
+    });
+    const savedRepo = await reposApi.get(repo._id).catch((error) => {
+      console.warn('[workspace-create-debug] app-sidebar repo fetch failed', {
+        repoId: repo._id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    });
+    const modalRepo = {
+      ...repo,
+      name: savedRepo?.name ?? repo.name,
+      path: savedRepo?.path ?? repo.path,
+      branch: savedRepo?.branch ?? repo.branch,
+      defaultBranch: savedRepo?.defaultBranch ?? repo.defaultBranch,
+      detected: savedRepo?.detected ?? repo.detected,
+    };
+    console.info('[workspace-create-debug] app-sidebar modal repo prepared', {
+      fetchedRepo: workspaceCreateRepoDebug(savedRepo),
+      modalRepo: workspaceCreateRepoDebug(modalRepo),
+    });
+    setWorkspaceCreateRepo(modalRepo);
   }
 
   function prependSidebarWorkspace(workspace: SidebarWorkspace) {
     setSidebarWorkspaces(prev => [workspace, ...prev.filter(item => item._id !== workspace._id)]);
+  }
+
+  async function deleteSidebarWorkspace(workspace: SidebarWorkspace) {
+    setDeletingWorkspaceId(workspace._id);
+    try {
+      window.dispatchEvent(new CustomEvent('allen:workspace-servers-stop', { detail: { workspaceId: workspace._id } }));
+      await workspacesApi.archive(workspace._id);
+      setSidebarWorkspaces(prev => prev.filter(item => item._id !== workspace._id));
+      try {
+        localStorage.removeItem(`allen-ws-chat-tabs:${workspace._id}`);
+      } catch {}
+      if (activeWorkspaceId === workspace._id) {
+        setChatSessionWorkspaceId(null);
+        setActiveWorkspaceName(null);
+        navigate('/chat');
+      }
+      setConfirmDeleteWorkspace(null);
+    } catch (err: any) {
+      window.alert(err?.message ?? 'Failed to delete workspace');
+    } finally {
+      setDeletingWorkspaceId(null);
+    }
   }
 
   useEffect(() => {
@@ -642,12 +732,23 @@ export default function App() {
     if (sidebarPanel !== 'workspaces') return;
     let cancelled = false;
     setSidebarWorkspacesLoading(true);
-    workspacesApi.list()
-      .then((items) => {
+    Promise.all([
+      workspacesApi.list().catch(() => []),
+      reposApi.list().catch(() => []),
+    ])
+      .then(([items, repoItems]) => {
         if (!cancelled) setSidebarWorkspaces((items ?? []) as SidebarWorkspace[]);
+        if (!cancelled) setSidebarRepos((repoItems ?? []) as SidebarRepo[]);
+        if (!cancelled) {
+          console.info('[workspace-create-debug] app-sidebar data loaded', {
+            workspaceCount: (items ?? []).length,
+            repos: ((repoItems ?? []) as SidebarRepo[]).map(workspaceCreateRepoDebug),
+          });
+        }
       })
       .catch(() => {
         if (!cancelled) setSidebarWorkspaces([]);
+        if (!cancelled) setSidebarRepos([]);
       })
       .finally(() => {
         if (!cancelled) setSidebarWorkspacesLoading(false);
@@ -948,17 +1049,52 @@ export default function App() {
                       const collapsed = collapsedWorkspaceRepos.has(group.key);
                       const hasActive = group.items.some((workspace) => workspace._id === activeWorkspaceId);
                       const showItems = !collapsed || hasActive;
-                      const repoWorkspace = group.items.find((workspace) => workspace.repoId) ?? group.items[0];
-                      const repo = repoWorkspace?.repoId
-                        ? { _id: repoWorkspace.repoId, name: group.label, path: repoWorkspace.repoPath }
+                      const repoWorkspace = group.items.find((workspace) => workspace.repoId) ?? group.items[0] ?? null;
+                      const savedRepo = group.repo ?? sidebarRepoForWorkspace(sidebarRepos, repoWorkspace, group.label);
+                      const repo = savedRepo
+                        ? {
+                            _id: savedRepo._id,
+                            name: savedRepo.name,
+                            path: savedRepo.path ?? repoWorkspace?.repoPath,
+                            branch: savedRepo.branch,
+                            defaultBranch: savedRepo.defaultBranch,
+                            detected: savedRepo.detected,
+                          }
+                        : repoWorkspace?.repoId
+                        ? {
+                            _id: repoWorkspace.repoId,
+                            name: group.label,
+                            path: repoWorkspace.repoPath,
+                            detected: { defaultBranch: repoWorkspace.repoDefaultBranch ?? repoWorkspace.baseBranch },
+                          }
                         : null;
+                      const handleCreateClick = () => {
+                        console.info('[workspace-create-debug] app-sidebar group plus source', {
+                          groupKey: group.key,
+                          groupLabel: group.label,
+                          repoWorkspace: repoWorkspace
+                            ? {
+                                id: repoWorkspace._id,
+                                repoId: repoWorkspace.repoId,
+                                repoName: repoWorkspace.repoName,
+                                repoPath: repoWorkspace.repoPath,
+                                repoDefaultBranch: repoWorkspace.repoDefaultBranch,
+                                baseBranch: repoWorkspace.baseBranch,
+                                branch: repoWorkspace.branch,
+                              }
+                            : null,
+                          savedRepo: workspaceCreateRepoDebug(savedRepo),
+                          clickRepo: workspaceCreateRepoDebug(repo),
+                        });
+                        void openCreateWorkspaceForRepo(repo);
+                      };
                       return (
                         <div key={group.key}>
-                          <div className="mb-1 flex items-center gap-1">
+                          <div className="group mb-1 flex items-center gap-1 rounded-md transition-colors hover:bg-app-muted">
                             <button
                               type="button"
                               onClick={() => toggleWorkspaceRepo(group.key)}
-                              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-theme-secondary transition-colors hover:bg-app-muted hover:text-theme-primary"
+                              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-theme-secondary transition-colors group-hover:text-theme-primary"
                             >
                               <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-theme-muted" />
                               <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{group.label}</span>
@@ -966,9 +1102,9 @@ export default function App() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => openCreateWorkspaceForRepo(repo)}
+                              onClick={handleCreateClick}
                               disabled={!repo}
-                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-theme-muted transition-colors hover:text-accent group-hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
                               title={`New workspace in ${group.label}`}
                               aria-label={`New workspace in ${group.label}`}
                             >
@@ -976,22 +1112,41 @@ export default function App() {
                             </button>
                           </div>
                           {showItems && (
-                            <div className="mt-1 space-y-1">
+                            <div className="mt-1 space-y-1 pl-4">
                               {group.items.map((workspace) => {
                                 const active = workspace._id === activeWorkspaceId;
+                                const deleting = deletingWorkspaceId === workspace._id;
                                 return (
-                                  <button
+                                  <div
                                     key={workspace._id}
-                                    type="button"
-                                    onClick={() => navigate(`/chat?workspaceId=${workspace._id}`)}
-                                    className={`group flex w-full items-center rounded-md border px-2.5 py-1.5 text-left transition-colors ${
+                                    className={`group flex w-full items-center rounded-md border py-1.5 pl-2.5 pr-1 transition-colors ${
                                       active
-                                        ? 'border-accent/30 bg-accent-soft text-accent'
-                                        : 'border-transparent text-theme-secondary hover:bg-app-muted hover:text-theme-primary'
+                                        ? 'border-transparent bg-transparent text-accent'
+                                        : 'border-transparent text-theme-muted hover:bg-app-muted hover:text-theme-secondary'
                                     }`}
                                   >
-                                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-5">{workspace.name}</span>
-                                  </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => navigate(workspaceChatPath(workspace._id))}
+                                      className="min-w-0 flex-1 truncate text-left text-[12.5px] font-medium leading-5"
+                                      disabled={deleting}
+                                    >
+                                      {workspace.name}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setConfirmDeleteWorkspace(workspace);
+                                      }}
+                                      disabled={deleting}
+                                      className="ml-1 grid h-6 w-6 shrink-0 place-items-center rounded-sm text-theme-subtle opacity-0 transition-colors hover:bg-accent-red/10 hover:text-accent-red focus:opacity-100 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                      title={`Delete ${workspace.name}`}
+                                      aria-label={`Delete ${workspace.name}`}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
                                 );
                               })}
                             </div>
@@ -1106,6 +1261,16 @@ export default function App() {
         onClose={() => setCommandOpen(false)}
         onNavigate={(to) => navigate(to)}
       />
+      {confirmDeleteWorkspace && (
+        <WorkspaceDeleteConfirmDialog
+          workspace={confirmDeleteWorkspace}
+          deleting={deletingWorkspaceId === confirmDeleteWorkspace._id}
+          onCancel={() => {
+            if (!deletingWorkspaceId) setConfirmDeleteWorkspace(null);
+          }}
+          onConfirm={() => void deleteSidebarWorkspace(confirmDeleteWorkspace)}
+        />
+      )}
       {workspaceCreateRepo && (
         <WorkspaceCreateDialog
           repo={workspaceCreateRepo}
@@ -1115,10 +1280,70 @@ export default function App() {
             prependSidebarWorkspace(workspace as SidebarWorkspace);
             setWorkspaceCreateRepo(null);
             setActiveWorkspaceName(workspace.name ?? null);
-            navigate(`/chat?workspaceId=${workspace._id}`);
+            navigate(workspaceChatPath(workspace._id));
           }}
         />
       )}
+    </div>
+  );
+}
+
+function WorkspaceDeleteConfirmDialog({
+  workspace,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  workspace: SidebarWorkspace;
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Delete workspace"
+      onClick={() => {
+        if (!deleting) onCancel();
+      }}
+    >
+      <div
+        className="w-full max-w-md overflow-hidden rounded-lg border border-app bg-app-card shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-3 border-b border-app px-5 py-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent-red/25 bg-accent-red/10">
+            <AlertTriangle className="h-4 w-4 text-accent-red" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold text-theme-primary">Delete workspace</h2>
+            <p className="mt-1 text-[12px] leading-5 text-theme-muted">
+              This will delete <span className="font-medium text-theme-primary">{workspace.name}</span> from your workspace list.
+            </p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-4">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={deleting}
+            className="btn btn-secondary btn-sm"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={deleting}
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-sm border border-accent-red/35 bg-accent-red px-3 text-[12px] font-medium text-white transition-colors hover:bg-accent-red/90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {deleting ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

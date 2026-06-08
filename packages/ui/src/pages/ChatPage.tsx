@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useChat, type SpawnedAgent } from '../hooks/useChat';
-import ChatInput, { type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
+import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
@@ -11,8 +11,9 @@ import { ToolCallLog } from '../components/common/ToolCallLog';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, type ChatQueueItem } from '../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
 import WorkspaceChatTabs, { type WorkspaceChatTab, getTabKey } from '../components/chat/WorkspaceChatTabs';
-import { BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Terminal, X } from 'lucide-react';
+import { BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Server, Terminal, X } from 'lucide-react';
 import { XTerminal } from '../components/workspace/XTerminal';
+import WorkspaceServersTab from '../components/workspace/WorkspaceServersTab';
 
 type PendingSendOptions = {
   provider?: string | null;
@@ -172,7 +173,7 @@ export default function ChatPage() {
     reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
     planMode?: boolean | null;
   }>({});
-  const chatInputRef = useRef<{ setValue: (v: string) => void; focus: () => void } | null>(null);
+  const chatInputRef = useRef<ChatInputHandle | null>(null);
   const processedDeepLinkRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<ChatQueueItem[]>([]);
   const editingQueuedIdRef = useRef<string | null>(null);
@@ -196,6 +197,7 @@ export default function ChatPage() {
     spawnedAgents, pendingUserQuestion, answerUserQuestion, answerWorkflowIntervention,
     loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
+    restoredDraft, clearRestoredDraft,
     refresh: refreshSessions,
   } = useChat();
 
@@ -206,6 +208,17 @@ export default function ChatPage() {
 
   useEffect(() => { queuedMessagesRef.current = queuedMessages; }, [queuedMessages]);
   useEffect(() => { editingQueuedIdRef.current = editingQueuedId; }, [editingQueuedId]);
+
+  useEffect(() => {
+    if (!restoredDraft?.trim()) return;
+    if (chatInputRef.current?.getValue().trim()) {
+      clearRestoredDraft();
+      return;
+    }
+    chatInputRef.current?.setValue(restoredDraft);
+    chatInputRef.current?.focus();
+    clearRestoredDraft();
+  }, [restoredDraft, clearRestoredDraft]);
 
   useEffect(() => {
     chatApi.providers().then(p => {
@@ -345,6 +358,7 @@ export default function ChatPage() {
         let restoredActiveId: string | null = null;
         let restoredActiveTabKey: string | null = null;
         let restoredTerminalOpen = false;
+        let restoredServersOpen = false;
         try {
           const stored = localStorage.getItem(`allen-ws-chat-tabs:${urlWorkspaceId}`);
           if (stored) {
@@ -356,6 +370,7 @@ export default function ChatPage() {
             restoredActiveId = typeof parsed.activeSessionId === 'string' ? parsed.activeSessionId : null;
             restoredActiveTabKey = typeof parsed.activeTabKey === 'string' ? parsed.activeTabKey : null;
             restoredTerminalOpen = parsed.openTerminal === true && parsed.terminalWorkspaceId === urlWorkspaceId;
+            restoredServersOpen = parsed.openServers === true && parsed.serversWorkspaceId === urlWorkspaceId && (ws.services?.length ?? 0) > 0;
           }
         } catch {}
 
@@ -365,6 +380,10 @@ export default function ChatPage() {
         const restoredTerminalTab: WorkspaceChatTab | null = restoredTerminalOpen
           ? { id: { kind: 'terminal' }, title: 'Terminal', isTemp: false }
           : null;
+        const restoredServersTab: WorkspaceChatTab | null = restoredServersOpen
+          ? { id: { kind: 'servers' }, title: 'Servers', isTemp: false }
+          : null;
+        const restoredUtilityTabs = [restoredTerminalTab, restoredServersTab].filter((tab): tab is WorkspaceChatTab => Boolean(tab));
 
         if (chats.length === 0) {
           const tempTab: WorkspaceChatTab = pendingTemp ?? {
@@ -373,13 +392,14 @@ export default function ChatPage() {
             isTemp: true,
             tempIndex: 0,
           };
-          const tabs = restoredTerminalTab && getTabKey(tempTab) !== 'terminal'
-            ? [tempTab, restoredTerminalTab]
-            : [tempTab];
+          const tabs = [
+            tempTab,
+            ...restoredUtilityTabs.filter(tab => getTabKey(tab) !== getTabKey(tempTab)),
+          ];
           const activeKey = pendingTemp
             ? getTabKey(pendingTemp)
-            : restoredActiveTabKey === 'terminal' && restoredTerminalTab
-              ? 'terminal'
+            : restoredActiveTabKey && tabs.some(tab => getTabKey(tab) === restoredActiveTabKey)
+              ? restoredActiveTabKey
               : getTabKey(tempTab);
           workspaceTabsWorkspaceIdRef.current = urlWorkspaceId;
           setOpenWorkspaceTabs(tabs);
@@ -398,13 +418,13 @@ export default function ChatPage() {
 
           const finalTabs = tabs.length > 0 ? tabs : [workspaceChatToTab(chats[0])];
 
-          const tabsWithTerminal = restoredTerminalTab && !finalTabs.some(t => getTabKey(t) === 'terminal')
-            ? [...finalTabs, restoredTerminalTab]
-            : finalTabs;
+          const tabsWithUtility = restoredUtilityTabs.reduce<WorkspaceChatTab[]>((acc, tab) => (
+            acc.some(item => getTabKey(item) === getTabKey(tab)) ? acc : [...acc, tab]
+          ), finalTabs);
 
-          const tabsWithPending = pendingTemp && !tabsWithTerminal.some(t => getTabKey(t) === getTabKey(pendingTemp))
-            ? [...tabsWithTerminal, pendingTemp]
-            : tabsWithTerminal;
+          const tabsWithPending = pendingTemp && !tabsWithUtility.some(t => getTabKey(t) === getTabKey(pendingTemp))
+            ? [...tabsWithUtility, pendingTemp]
+            : tabsWithUtility;
 
           if (tabsWithPending.length === 0) {
             const recentTab = workspaceChatToTab(chats[0]);
@@ -502,6 +522,7 @@ export default function ChatPage() {
         let hasStoredTabState = false;
         let restoredOpenIds: string[] = [];
         let restoredTerminalOpen = false;
+        let restoredServersOpen = false;
         try {
           const stored = localStorage.getItem(`allen-ws-chat-tabs:${wsId}`);
           if (stored) {
@@ -511,6 +532,7 @@ export default function ChatPage() {
               restoredOpenIds = parsed.openSessionIds;
             }
             restoredTerminalOpen = parsed.openTerminal === true && parsed.terminalWorkspaceId === wsId;
+            restoredServersOpen = parsed.openServers === true && parsed.serversWorkspaceId === wsId && (ws.services?.length ?? 0) > 0;
           }
         } catch {}
 
@@ -530,6 +552,9 @@ export default function ChatPage() {
 
         if (restoredTerminalOpen && !tabs.some(t => getTabKey(t) === 'terminal')) {
           tabs.push({ id: { kind: 'terminal' as const }, title: 'Terminal', isTemp: false });
+        }
+        if (restoredServersOpen && !tabs.some(t => getTabKey(t) === 'servers')) {
+          tabs.push({ id: { kind: 'servers' as const }, title: 'Servers', isTemp: false });
         }
 
         workspaceTabsWorkspaceIdRef.current = wsId;
@@ -588,6 +613,7 @@ export default function ChatPage() {
       .map(t => (t.id as { kind: 'session'; sessionId: string }).sessionId);
     const activeSessionIdForStorage = (openWorkspaceTabs.find(t => getTabKey(t) === activeWorkspaceTabKey)?.id as any)?.sessionId ?? null;
     const openTerminal = openWorkspaceTabs.some(t => t.id.kind === 'terminal');
+    const openServers = openWorkspaceTabs.some(t => t.id.kind === 'servers');
     try {
       localStorage.setItem(`allen-ws-chat-tabs:${activeWorkspaceId}`, JSON.stringify({
         openSessionIds,
@@ -595,6 +621,8 @@ export default function ChatPage() {
         activeTabKey: activeWorkspaceTabKey,
         openTerminal,
         terminalWorkspaceId: openTerminal ? activeWorkspaceId : null,
+        openServers,
+        serversWorkspaceId: openServers ? activeWorkspaceId : null,
       }));
     } catch {}
   }, [activeWorkspaceId, openWorkspaceTabs, activeWorkspaceTabKey]);
@@ -849,6 +877,12 @@ export default function ChatPage() {
       }
       switchSession('');
       navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+    } else if (tab.id.kind === 'servers') {
+      if (activeWorkspaceId) {
+        pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab };
+      }
+      switchSession('');
+      navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
     } else {
       // Temp tab: clear active session (blank chat)
       switchSession('');
@@ -857,6 +891,9 @@ export default function ChatPage() {
   }
 
   function handleWorkspaceTabClose(key: string) {
+    if (key === 'servers' && activeWorkspaceId) {
+      window.dispatchEvent(new CustomEvent('allen:workspace-servers-stop', { detail: { workspaceId: activeWorkspaceId } }));
+    }
     const next = openWorkspaceTabs.filter(t => getTabKey(t) !== key);
     if (next.length === 0) {
       const recentChat = workspaceChats[0];
@@ -894,6 +931,22 @@ export default function ChatPage() {
         navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
       }
     }
+  }
+
+  function handleWorkspaceTabReorder(dragKey: string, targetKey: string, position: 'before' | 'after') {
+    if (dragKey === targetKey) return;
+    setOpenWorkspaceTabs(prev => {
+      const fromIndex = prev.findIndex(tab => getTabKey(tab) === dragKey);
+      const targetIndex = prev.findIndex(tab => getTabKey(tab) === targetKey);
+      if (fromIndex < 0 || targetIndex < 0) return prev;
+
+      const next = [...prev];
+      const [dragged] = next.splice(fromIndex, 1);
+      let insertIndex = targetIndex + (position === 'after' ? 1 : 0);
+      if (fromIndex < insertIndex) insertIndex -= 1;
+      next.splice(insertIndex, 0, dragged);
+      return next;
+    });
   }
 
   function handleWorkspaceNewTab() {
@@ -943,6 +996,20 @@ export default function ChatPage() {
     pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab: terminalTab };
     setOpenWorkspaceTabs(prev => prev.some(tab => getTabKey(tab) === 'terminal') ? prev : [...prev, terminalTab]);
     setActiveWorkspaceTabKey('terminal');
+    switchSession('');
+    navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+  }
+
+  function handleWorkspaceServersTab() {
+    if (!activeWorkspaceId || (activeWorkspace?.services?.length ?? 0) === 0) return;
+    const serversTab: WorkspaceChatTab = {
+      id: { kind: 'servers' },
+      title: 'Servers',
+      isTemp: false,
+    };
+    pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab: serversTab };
+    setOpenWorkspaceTabs(prev => prev.some(tab => getTabKey(tab) === 'servers') ? prev : [...prev, serversTab]);
+    setActiveWorkspaceTabKey('servers');
     switchSession('');
     navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
   }
@@ -1065,6 +1132,9 @@ export default function ChatPage() {
   });
   const activeWorkspaceTab = openWorkspaceTabs.find(tab => getTabKey(tab) === activeWorkspaceTabKey) ?? null;
   const workspaceTerminalActive = activeWorkspaceTab?.id.kind === 'terminal';
+  const workspaceServersActive = activeWorkspaceTab?.id.kind === 'servers';
+  const workspaceServersTabOpen = openWorkspaceTabs.some(tab => tab.id.kind === 'servers');
+  const workspaceUtilityTabActive = workspaceTerminalActive || workspaceServersActive;
   const archivedWorkspace = activeSession?.archivedWorkspace;
   const repoBrowseSource = archivedWorkspace?.repoId
     ? { id: archivedWorkspace.repoId, name: archivedWorkspace.repoName ?? archivedWorkspace.name, path: archivedWorkspace.repoPath }
@@ -1084,6 +1154,7 @@ export default function ChatPage() {
           activeTabKey={activeWorkspaceTabKey}
           onSelect={handleWorkspaceTabSelect}
           onClose={handleWorkspaceTabClose}
+          onReorder={handleWorkspaceTabReorder}
           onNewTab={handleWorkspaceNewTab}
           availablePreviousChats={availablePreviousChats}
           onRestore={handleWorkspaceTabRestore}
@@ -1102,17 +1173,31 @@ export default function ChatPage() {
         <div className="flex-1 min-h-0">
           <XTerminal workspaceId={activeWorkspaceId} terminalId={`chat-tab-${activeWorkspaceId}`} className="h-full" />
         </div>
-      ) : loadingMessages && messages.length === 0 && !streaming ? (
-        <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
-      ) : messages.length === 0 && !activeSessionId && !streaming ? (
-        <div className="chat-empty-stream" aria-label="New conversation" />
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentReports={agentReports} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} />
+        <>
+        {workspaceServersTabOpen && activeWorkspaceId && (
+          <div className={`${workspaceServersActive ? 'flex-1 min-h-0' : 'fixed -left-[10000px] top-0 h-[720px] w-[1100px] pointer-events-none opacity-0'}`}>
+          <WorkspaceServersTab
+            workspaceId={activeWorkspaceId}
+            services={activeWorkspace?.services ?? []}
+          />
+          </div>
+        )}
+        {!workspaceServersActive && (
+          loadingMessages && messages.length === 0 && !streaming ? (
+            <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
+          ) : messages.length === 0 && !activeSessionId && !streaming ? (
+            <div className="chat-empty-stream" aria-label="New conversation" />
+          ) : (
+            <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentReports={agentReports} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} />
+          )
+        )}
+        </>
       )}
       {floatingPullRequest && <FloatingPullRequestCard pullRequest={floatingPullRequest} />}
 
       {/* Input */}
-      {!workspaceTerminalActive && <div className="chat-input-dock">
+      {!workspaceUtilityTabActive && <div className="chat-input-dock">
         {archivedWorkspace && (
           <div className="chat-archived-workspace-note">
             <div>
@@ -1356,6 +1441,11 @@ export default function ChatPage() {
           {activeWorkspaceId && (
             <button type="button" className={activeWorkspaceTabKey === 'terminal' ? 'active' : ''} onClick={handleWorkspaceTerminalTab} title="Terminal" data-tooltip="Terminal">
               <Terminal className="h-4 w-4" />
+            </button>
+          )}
+          {activeWorkspaceId && (activeWorkspace?.services?.length ?? 0) > 0 && (
+            <button type="button" className={activeWorkspaceTabKey === 'servers' ? 'active' : ''} onClick={handleWorkspaceServersTab} title="Servers" data-tooltip="Servers">
+              <Server className="h-4 w-4" />
             </button>
           )}
           <button type="button" className={sidePanelOpen && sidePanelTab === 'context' ? 'active' : ''} onClick={() => openSidePanel('context')} title="Context" data-tooltip="Context">

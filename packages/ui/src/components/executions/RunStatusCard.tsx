@@ -13,6 +13,7 @@ import {
   Users,
 } from 'lucide-react';
 import type { RunPhase, RunStatus } from '../../services/api';
+import { workspaceChatPath } from '../../lib/workspace-routes';
 
 function phaseLabel(phase: RunPhase): string {
   return phase
@@ -131,7 +132,7 @@ export default function RunStatusCard({
             icon={<FolderGit2 className="h-3.5 w-3.5" />}
             label="Workspace"
             value={context.workspace?.name ?? context.workspace?.id ?? context.workspace?.status}
-            href={context.workspace?.id ? `/workspaces/${context.workspace.id}` : undefined}
+            href={context.workspace?.id ? workspaceChatPath(context.workspace.id) : undefined}
           />
         )}
         {(showEmptyMeta || context.pullRequest || context.workspace?.prUrl) && (

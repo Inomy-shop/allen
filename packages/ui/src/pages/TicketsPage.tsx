@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import {
   linear as linearApi,
   teams as teamsApi,
@@ -14,6 +15,7 @@ import { type AgentOption, type TeamOption } from '../components/agents/AgentAss
 import DispatchModal, { type DispatchTarget, type WorkflowOption } from '../components/linear/DispatchModal';
 import RunStatusCard from '../components/executions/RunStatusCard';
 import Select from '../components/common/Select';
+import { workspaceChatPath } from '../lib/workspace-routes';
 import {
   AlertCircle, ChevronDown, ChevronRight, Circle, Clock, ExternalLink,
   FolderGit2, KeyRound, Loader2, MinusCircle, Play, RefreshCw, Search, X, Sparkles, CheckCircle,
@@ -228,6 +230,7 @@ export default function TicketsPage() {
   const { agents } = useAgents();
   const [teams, setTeams] = useState<any[]>([]);
 
+  const [showLinearModal, setShowLinearModal] = useState(false);
   const [status, setStatus] = useState<LinearStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [projects, setProjects] = useState<LinearProject[]>([]);
@@ -542,7 +545,7 @@ export default function TicketsPage() {
           <div className="mt-6 flex items-center justify-center gap-2">
             {!statusCheckFailed && (
               <button
-                onClick={() => navigate('/settings/mcp')}
+                onClick={() => setShowLinearModal(true)}
                 className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
                 type="button"
               >
@@ -559,6 +562,16 @@ export default function TicketsPage() {
           </div>
         </div>
         </div>
+        {showLinearModal && (
+          <McpPresetConnectModal
+            presetName="linear"
+            onClose={() => setShowLinearModal(false)}
+            onConnected={() => {
+              setShowLinearModal(false);
+              void loadStatus();
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -1235,7 +1248,7 @@ function TicketDrawer({
               <div className="flex items-center gap-2 pt-1">
                 {assignee.workspaceId && (
                   <button
-                    onClick={() => navigate(`/workspaces/${assignee.workspaceId}`)}
+                    onClick={() => navigate(workspaceChatPath(assignee.workspaceId!))}
                     className="inline-flex h-8 items-center gap-1.5 rounded-md border border-accent/25 bg-accent/10 px-2.5 font-mono text-[10.5px] text-accent transition-colors hover:border-accent/40 hover:bg-accent/15"
                   >
                     <FolderGit2 className="h-3.5 w-3.5" />

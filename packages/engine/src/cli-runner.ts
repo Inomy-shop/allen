@@ -78,12 +78,12 @@ export type MaterializedAgentFileMetadata = {
  * Throws loudly so the user knows CLI mode requires a globally-installed
  * Claude Code binary with `--agent` support, with a clear remediation hint.
  */
-function resolveClaudeBinary(): string {
-  const override = process.env.CLAUDE_BIN?.trim();
+function resolveClaudeBinary(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.CLAUDE_BIN?.trim();
   if (override) return override;
 
   // `which -a` lists all matches; skip any inside a node_modules/.bin/.
-  const r = spawnSync('which', ['-a', 'claude'], { encoding: 'utf8' });
+  const r = spawnSync('which', ['-a', 'claude'], { encoding: 'utf8', env });
   const candidates = (r.stdout ?? '')
     .split('\n')
     .map((s) => s.trim())
@@ -123,7 +123,8 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
     createdAt: materialized.createdAt,
   });
 
-  const claudeBin = resolveClaudeBinary();
+  const childEnv = opts.env ?? process.env;
+  const claudeBin = resolveClaudeBinary(childEnv);
 
   // Product directive: every CLI agent run bypasses every permission
   // prompt, unconditionally. --dangerously-skip-permissions is the
@@ -225,7 +226,7 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
   try {
     child = spawn(claudeBin, args, {
       cwd: opts.cwd,
-      env: opts.env ?? process.env,
+      env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       // Make claude its own process-group leader so we can kill the entire
       // MCP subtree via process.kill(-pid). See killGroup above.

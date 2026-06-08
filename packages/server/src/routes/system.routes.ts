@@ -16,6 +16,11 @@ import { mcpCredentialEnvKey } from '../runtime/mcp-credentials.js';
 import { MCP_PRESETS } from '../services/mcp.service.js';
 import { OrgSeedService } from '../services/org-seed.js';
 import { seedDefaultWorkflows } from '../seed.js';
+import {
+  CLAUDE_COMPATIBLE_PROVIDER_CONFIGS,
+  getEnabledProvidersInDefaultOrder,
+  normalizeDeepSeekAnthropicBaseUrl,
+} from '../services/chat-providers.js';
 
 const exec = promisify(execFile);
 const ONBOARDING_STEPS = new Set(['health', 'model_defaults', 'repository', 'first_workflow', 'complete']);
@@ -68,7 +73,10 @@ type DesktopCogneeSetupStatus = {
 const PROVIDER_OPTIONS = [
   { label: 'Codex', value: 'codex' },
   { label: 'Claude CLI', value: 'claude-cli' },
+  ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config) => ({ label: config.label, value: config.provider })),
 ] as const;
+
+type ProviderOptionValue = (typeof PROVIDER_OPTIONS)[number]['value'];
 
 const AGENT_MODEL_OPTIONS = [
   { label: 'Provider default', value: '' },
@@ -82,6 +90,7 @@ const AGENT_MODEL_OPTIONS = [
   { label: 'gpt-5.1-codex-max', value: 'gpt-5.1-codex-max' },
   { label: 'gpt-5.2', value: 'gpt-5.2' },
   { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini' },
+  ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.flatMap((config) => config.modelSuggestions.map((model) => ({ label: model, value: model }))),
 ] as const;
 
 const CLAUDE_AGENT_MODEL_OPTIONS = new Set(['', 'sonnet', 'opus', 'haiku']);
@@ -153,6 +162,7 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
     description: 'Defaults for new chat sessions, seeded workflow agents, and Claude/Codex execution behavior.',
     fields: [
       { key: 'ALLEN_DEFAULT_CHAT_PROVIDER', label: 'Default chat provider', kind: 'select', defaultValue: 'codex', options: [...PROVIDER_OPTIONS] },
+      { key: 'ALLEN_DEFAULT_CHAT_MODEL', label: 'Default chat model', description: 'Used when new chat sessions are created.', kind: 'select', defaultValue: 'provider default', options: [...AGENT_MODEL_OPTIONS], showWhen: { key: 'ALLEN_DEFAULT_CHAT_PROVIDER', notEquals: '' } },
       { key: 'ALLEN_DEFAULT_AGENT_PROVIDER', label: 'Default workflow agent provider', description: 'Preserve keeps the role-specific provider mix from seed definitions.', kind: 'select', defaultValue: 'preserve seeded mix', options: [{ label: 'Preserve seeded mix', value: '' }, ...PROVIDER_OPTIONS], restartRequired: true },
       { key: 'ALLEN_DEFAULT_AGENT_MODEL', label: 'Default workflow agent model', description: 'Used when a flattened workflow agent provider is selected.', kind: 'select', defaultValue: 'provider default', options: [...AGENT_MODEL_OPTIONS], restartRequired: true, showWhen: { key: 'ALLEN_DEFAULT_AGENT_PROVIDER', notEquals: '' } },
       { key: 'CLAUDE_BIN', label: 'Claude CLI path', kind: 'path', defaultValue: 'auto from PATH' },
@@ -199,11 +209,76 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
       { key: 'ALLEN_DESKTOP_MONGOD_BINARY', label: 'Custom MongoDB binary', kind: 'path', defaultValue: 'bundled MongoDB', restartRequired: true, advanced: true },
     ],
   },
+  ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config): RuntimeSettingGroupDef => {
+    const defaultBaseUrl = config.provider === 'deepseek'
+      ? normalizeDeepSeekAnthropicBaseUrl(config.defaultBaseUrl)
+      : config.defaultBaseUrl;
+    return {
+      id: config.provider,
+      title: config.label,
+      description: `${config.label} API provider configuration. Allen uses the Claude Code binary with your ${config.label} credentials. Set the API key in the ${config.label} section to enable this provider.`,
+      fields: [
+        {
+          key: config.baseUrlEnv,
+          label: 'API base URL',
+          description: config.baseUrlDescription,
+          kind: 'string',
+          defaultValue: defaultBaseUrl,
+          placeholder: defaultBaseUrl,
+        },
+        {
+          key: config.modelEnv,
+          label: config.opusModelEnv ? 'Default/Sonnet model' : 'Default model',
+          description: `Primary ${config.label} model for chat and agents${config.opusModelEnv ? ' (sonnet-equivalent role)' : ''}. Open text — enter any ${config.label} model ID.`,
+          kind: 'string',
+          defaultValue: config.defaultModel,
+          placeholder: config.defaultModel,
+        },
+        ...(config.opusModelEnv ? [{
+          key: config.opusModelEnv,
+          label: 'Opus model',
+          description: `High-capability ${config.label} model used for opus-equivalent roles.`,
+          kind: 'string' as const,
+          defaultValue: config.defaultOpusModel ?? config.defaultModel,
+          placeholder: config.defaultOpusModel ?? config.defaultModel,
+        }] : []),
+        {
+          key: config.flashModelEnv,
+          label: 'Fast model',
+          description: 'Fast/lightweight model for quick operations (haiku-equivalent role).',
+          kind: 'string',
+          defaultValue: config.defaultFlashModel,
+          placeholder: config.defaultFlashModel,
+        },
+      ],
+    };
+  }),
 ];
 
 const DESKTOP_RUNTIME_SETTING_DEFS = new Map(
   DESKTOP_RUNTIME_SETTING_GROUPS.flatMap((group) => group.fields.map((field) => [field.key, field] as const)),
 );
+
+function chatModelOptionsForProvider(provider: string): RuntimeSettingOption[] {
+  if (provider === 'claude-cli') {
+    return [...CLAUDE_AGENT_MODEL_OPTIONS]
+      .filter((value) => value !== '')
+      .map((value) => ({ label: value, value }));
+  }
+  if (provider === 'codex') {
+    return [...CODEX_AGENT_MODEL_OPTIONS]
+      .filter((value) => value !== '')
+      .map((value) => ({ label: value, value }));
+  }
+  const config = CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.find((item) => item.provider === provider);
+  return (config?.modelSuggestions ?? []).map((value) => ({ label: value, value }));
+}
+
+function fallbackChatModelForProvider(provider: string): string {
+  if (provider === 'claude-cli') return 'sonnet';
+  if (provider === 'codex') return 'gpt-5.5';
+  return CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.find((item) => item.provider === provider)?.defaultModel ?? 'gpt-5.5';
+}
 
 const COGNEE_CONTEXT_PROVIDERS = new Set(['cognee', 'cognee_memory']);
 const COGNEE_CONTEXT_VENV_DIR = resolve(homedir(), '.allen/python/context-eval');
@@ -211,6 +286,7 @@ const COGNEE_CONTEXT_VENV_PYTHON = resolve(COGNEE_CONTEXT_VENV_DIR, 'bin/python'
 const COGNEE_CONTEXT_DATA_DIR = resolve(homedir(), '.allen/cognee');
 
 const BASE_SECRET_DEFS = [
+  ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config) => ({ key: config.apiKeyEnv, label: `${config.label} API key`, group: config.label })),
   { key: 'ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN', label: 'GitHub personal access token', group: 'GitHub' },
   { key: 'ALLEN_LINEAR_ACCESS_TOKEN', label: 'Linear access token', group: 'Linear' },
   { key: 'ALLEN_SLACK_BOT_TOKEN', label: 'Slack bot token', group: 'Slack' },
@@ -347,6 +423,9 @@ function normalizeRuntimeSettingValue(field: RuntimeSettingDef, raw: unknown): s
       throw new Error(`invalid_value:${field.key}`);
     }
   }
+  if (field.key === 'ALLEN_DEEPSEEK_BASE_URL') {
+    return normalizeDeepSeekAnthropicBaseUrl(value);
+  }
   return value;
 }
 
@@ -362,9 +441,12 @@ function runtimeSettingValue(
 } {
   const defaultValue = detectedDefaults[field.key] ?? field.defaultValue;
   if (persisted[field.key] !== undefined) {
+    const persistedValue = field.key === 'ALLEN_DEEPSEEK_BASE_URL'
+      ? normalizeDeepSeekAnthropicBaseUrl(persisted[field.key])
+      : persisted[field.key];
     return {
-      currentValue: persisted[field.key],
-      configuredValue: persisted[field.key],
+      currentValue: persistedValue,
+      configuredValue: persistedValue,
       source: 'desktop_config',
       defaultValue,
     };
@@ -372,8 +454,11 @@ function runtimeSettingValue(
 
   const configValue = getRuntimeConfigProvider().get(field.key);
   if (configValue !== undefined) {
+    const runtimeConfigValue = field.key === 'ALLEN_DEEPSEEK_BASE_URL'
+      ? normalizeDeepSeekAnthropicBaseUrl(configValue)
+      : configValue;
     return {
-      currentValue: configValue,
+      currentValue: runtimeConfigValue,
       configuredValue: null,
       source: 'env',
       defaultValue,
@@ -462,6 +547,55 @@ async function desktopRuntimeSettingsPayload() {
   const configPath = config.get('ALLEN_DESKTOP_CONFIG_PATH');
   const persisted = readDesktopRuntimeConfigFile(configPath);
   const defaults = await detectedRuntimeDefaults(configPath);
+  const enabledProviderOptions = (await getEnabledProvidersInDefaultOrder()).map((provider) => ({
+    label: provider.label,
+    value: provider.provider,
+  }));
+  const enabledProviderValues = new Set<string>(enabledProviderOptions.map((option) => option.value));
+
+  function normalizeProviderField(field: RuntimeSettingDef, value: ReturnType<typeof runtimeSettingValue>) {
+    if (field.key === 'ALLEN_DEFAULT_CHAT_PROVIDER') {
+      return {
+        ...field,
+        options: enabledProviderOptions,
+        ...value,
+        currentValue: enabledProviderValues.has(value.currentValue) ? value.currentValue : enabledProviderOptions[0]?.value ?? 'codex',
+      };
+    }
+    if (field.key === 'ALLEN_DEFAULT_CHAT_MODEL') {
+      const chatProvider = currentRuntimeSettingValue('ALLEN_DEFAULT_CHAT_PROVIDER', persisted, defaults);
+      const normalizedProvider = enabledProviderValues.has(chatProvider) ? chatProvider : enabledProviderOptions[0]?.value ?? 'codex';
+      const modelOptions = chatModelOptionsForProvider(normalizedProvider);
+      const fallbackModel = fallbackChatModelForProvider(normalizedProvider);
+      const modelValues = new Set(modelOptions.map((option) => option.value));
+      const currentValue = value.currentValue && (modelValues.has(value.currentValue) || modelOptions.length === 0)
+        ? value.currentValue
+        : fallbackModel;
+      return {
+        ...field,
+        options: modelOptions.length > 0 ? modelOptions : [{ label: currentValue, value: currentValue }],
+        ...value,
+        currentValue,
+      };
+    }
+    if (field.key === 'ALLEN_DEFAULT_AGENT_PROVIDER') {
+      return {
+        ...field,
+        options: [{ label: 'Preserve seeded mix', value: '' }, ...enabledProviderOptions],
+        ...value,
+        currentValue: value.currentValue === '' || enabledProviderValues.has(value.currentValue) ? value.currentValue : '',
+      };
+    }
+    if (field.key === 'ALLEN_CONTEXT_LLM_PROVIDER') {
+      return {
+        ...field,
+        options: enabledProviderOptions,
+        ...value,
+        currentValue: enabledProviderValues.has(value.currentValue) ? value.currentValue : enabledProviderOptions[0]?.value ?? 'codex',
+      };
+    }
+    return { ...field, ...value };
+  }
 
   return {
     desktop,
@@ -480,13 +614,15 @@ async function desktopRuntimeSettingsPayload() {
       },
     groups: DESKTOP_RUNTIME_SETTING_GROUPS.map((group) => ({
       ...group,
-      fields: group.fields.map((field) => ({
-        ...field,
-        restartRequired: Boolean(field.restartRequired),
-        readOnly: Boolean(field.readOnly),
-        advanced: Boolean(field.advanced),
-        ...runtimeSettingValue(field, persisted, defaults),
-      })),
+      fields: group.fields.map((field) => {
+        const value = runtimeSettingValue(field, persisted, defaults);
+        return {
+          ...normalizeProviderField(field, value),
+          restartRequired: Boolean(field.restartRequired),
+          readOnly: Boolean(field.readOnly),
+          advanced: Boolean(field.advanced),
+        };
+      }),
     })),
   };
 }
@@ -506,13 +642,17 @@ function updateRuntimeProviderValue(key: string, value: string | undefined): voi
   else process.env[key] = value;
 }
 
-function isProviderValue(value: string): value is 'codex' | 'claude-cli' {
-  return value === 'codex' || value === 'claude-cli';
+function isProviderValue(value: string): value is ProviderOptionValue {
+  return PROVIDER_OPTIONS.some((option) => option.value === value);
 }
 
-function validateAgentModelForProvider(provider: 'codex' | 'claude-cli' | '', model: string): void {
+function validateAgentModelForProvider(provider: ProviderOptionValue | '', model: string): void {
   if (!provider) {
     if (model) throw new Error('agent_model_requires_agent_provider');
+    return;
+  }
+  if (CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.some((config) => config.provider === provider)) {
+    // Claude-compatible API providers use open model fields — any string is valid.
     return;
   }
   const allowed = provider === 'codex' ? CODEX_AGENT_MODEL_OPTIONS : CLAUDE_AGENT_MODEL_OPTIONS;
@@ -839,7 +979,7 @@ export function systemRoutes(db: Db): Router {
       if (agentProviderRaw && !isProviderValue(agentProviderRaw)) {
         return res.status(400).json({ error: 'invalid_agent_provider' });
       }
-      validateAgentModelForProvider(agentProviderRaw as 'codex' | 'claude-cli' | '', agentModel);
+      validateAgentModelForProvider(agentProviderRaw as ProviderOptionValue | '', agentModel);
 
       const persisted = readDesktopRuntimeConfigFile(configPath);
       persisted.ALLEN_DEFAULT_CHAT_PROVIDER = chatProviderRaw;

@@ -11,8 +11,10 @@ import { useNavigate } from 'react-router-dom';
 import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
 import { workspaces as wsApi } from '../services/workspaceService';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
+import { workspaceCreateBaseBranch } from '../lib/workspace-create';
 import { useToast } from '../components/common/Toast';
 import IconTooltipButton from '../components/common/IconTooltipButton';
+import { workspaceChatPath } from '../lib/workspace-routes';
 
 interface Repo {
   _id: string;
@@ -612,16 +614,12 @@ function CogneeProgress({ status }: { status?: CogneeStatus }) {
   const message = cogneeVisibleMessage(status);
   if (!message && !lines.length) return null;
   return (
-    <div className="pl-11 space-y-1 text-[10.5px] font-mono text-theme-muted">
-      {message && <div className="text-theme-secondary">{message}</div>}
-      {lines.length > 0 && (
-        <div className="flex flex-wrap gap-x-3 gap-y-1">
-          {lines.map((line) => (
-            <span key={line}>{line}</span>
-          ))}
-        </div>
-      )}
-    </div>
+    <>
+      {message && <span className="text-theme-secondary">{message}</span>}
+      {lines.map((line) => (
+        <span key={line}>{line}</span>
+      ))}
+    </>
   );
 }
 
@@ -836,32 +834,28 @@ export default function RepoManagerPage() {
               const remote = repoRemote(repo);
               return (
                 <div key={repo._id} className={`px-4 py-3 transition-colors hover:bg-app-muted/30 ${isArchived ? 'opacity-60' : ''}`}>
-                  <div className="grid min-h-[68px] grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
+                  <div className="grid min-h-[76px] grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                         <span className="truncate text-[14px] font-semibold text-theme-primary">{repo.name}</span>
-                        <span className="inline-flex items-center gap-1 font-mono text-[11px] text-theme-muted">
-                          <GitBranch className="h-3 w-3" />{repo.detected?.defaultBranch ?? 'main'}
-                        </span>
-                        {remote && (
-                          <a href={remote.href} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="inline-flex max-w-[260px] items-center gap-1 truncate font-mono text-[11px] text-theme-muted transition-colors hover:text-accent">
-                            <ExternalLink className="h-3 w-3 shrink-0" />
-                            <span className="truncate">{remote.label}</span>
-                          </a>
-                        )}
                         {isArchived && <span className="rounded-md border border-app bg-app px-2 py-0.5 font-mono text-[10.5px] text-theme-muted">archived</span>}
                       </div>
                       {repo.description && <p className="mt-0.5 text-[12px] text-theme-muted">{repo.description}</p>}
-                      {contextConfig.cogneeEnabled && (
-                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                          <span className="inline-flex items-center gap-1 rounded-md border border-app bg-app px-1.5 py-0.5 font-mono text-[10px] leading-4 text-theme-secondary" title={cogneeStatusTitle(cogneeStatus)}>
-                            <Sparkles className="h-3 w-3" />{contextStatusLabel(cogneeStatus)}
-                          </span>
-                        </div>
-                      )}
-                      <div className="mt-1 flex max-w-full items-center gap-1 font-mono text-[10.5px] leading-4 text-theme-subtle">
-                        <span className="uppercase tracking-[0.12em] text-theme-subtle">local</span>
-                        <span className="truncate text-theme-muted" title={repo.path}>{compactPath(repo.path)}</span>
+                      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] leading-4 text-theme-muted">
+                        <span className="inline-flex items-center gap-1">
+                          <GitBranch className="h-3 w-3 shrink-0" />
+                          {repo.detected?.defaultBranch ?? 'main'}
+                        </span>
+                        {remote && (
+                          <a href={remote.href} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="inline-flex max-w-[360px] items-center gap-1 truncate transition-colors hover:text-accent">
+                            <Github className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{remote.label}</span>
+                            <ExternalLink className="h-3 w-3 shrink-0 text-theme-subtle" />
+                          </a>
+                        )}
+                        <span className="inline-flex min-w-[180px] max-w-[340px] items-center gap-1.5 truncate text-[10.5px] text-theme-subtle">
+                          <span className="min-w-0 truncate text-theme-muted" title={repo.path}>{compactPath(repo.path)}</span>
+                        </span>
                         <IconTooltipButton
                           label={copiedPath === repo.path ? 'Copied' : 'Copy repository path'}
                           side="top"
@@ -874,7 +868,14 @@ export default function RepoManagerPage() {
                           {copiedPath === repo.path ? <Check className="h-3 w-3 text-accent-green" /> : <Copy className="h-3 w-3" />}
                         </IconTooltipButton>
                       </div>
-                      {contextConfig.cogneeEnabled && <CogneeProgress status={cogneeStatus} />}
+                      {contextConfig.cogneeEnabled && (
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10.5px] leading-4 text-theme-muted" title={cogneeStatusTitle(cogneeStatus)}>
+                          <span className="inline-flex items-center gap-1 text-theme-secondary">
+                            <Sparkles className="h-3 w-3 text-accent" />{contextStatusLabel(cogneeStatus)}
+                          </span>
+                          <CogneeProgress status={cogneeStatus} />
+                        </div>
+                      )}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-2">
                       <div className="flex items-center gap-1">
@@ -929,7 +930,7 @@ export default function RepoManagerPage() {
           onCancel={() => setDeletingRepo(null)}
         />
         {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
-        {wsCreateRepo && <QuickWorkspaceDialog repo={wsCreateRepo} onClose={() => setWsCreateRepo(null)} onCreated={(id) => { setWsCreateRepo(null); navigate(`/workspaces/${id}`); }} />}
+        {wsCreateRepo && <QuickWorkspaceDialog repo={wsCreateRepo} onClose={() => setWsCreateRepo(null)} onCreated={(id) => { setWsCreateRepo(null); navigate(workspaceChatPath(id)); }} />}
       </div>
     </div>
   );
@@ -937,7 +938,7 @@ export default function RepoManagerPage() {
 
 function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClose: () => void; onCreated: (id: string) => void }) {
   const [branch, setBranch] = useState('');
-  const [baseBranch, setBaseBranch] = useState(repo.detected?.defaultBranch ?? 'main');
+  const [baseBranch, setBaseBranch] = useState(workspaceCreateBaseBranch(repo));
   const [name, setName] = useState('');
   const [creating, setCreating] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -947,7 +948,7 @@ function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClos
     if (!branch.trim() || !name.trim()) { setError('Branch and name required'); return; }
     setCreating(true); setError('');
     try {
-      const ws = await wsApi.create({ repoId: repo._id, repoName: repo.name, repoPath: repo.path, branch: branch.trim(), baseBranch, name: name.trim() });
+      const ws = await wsApi.create({ repoId: repo._id, repoName: repo.name, repoPath: repo.path, branch: branch.trim(), baseBranch: baseBranch.trim() || workspaceCreateBaseBranch(repo), name: name.trim() });
       setPendingId(ws._id);
     } catch (err: any) { setError(err.message); setCreating(false); }
   }

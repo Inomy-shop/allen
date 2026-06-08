@@ -17,7 +17,7 @@ import { ShieldCheck, Sparkles } from 'lucide-react';
 import Select from '../common/Select';
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
-export type Provider = 'claude-cli' | 'codex';
+export type Provider = 'claude-cli' | 'codex' | (string & {});
 
 export interface AgentSettingsValue {
   provider?: Provider | null;
@@ -39,6 +39,12 @@ interface Props {
   onChange: (next: AgentSettingsValue) => void;
 }
 
+const OPEN_PROVIDER_MODEL_SUGGESTIONS: Partial<Record<Provider, string[]>> = {
+  deepseek: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
+  'xiaomi-mimo': ['mimo-v2.5-pro'],
+  kimi: ['kimi-k2.6', 'kimi-k2.5'],
+};
+
 const EFFORT_OPTIONS: Array<{ value: ReasoningEffort; label: string; description: string }> = [
   { value: 'off', label: 'Off', description: 'No extended thinking' },
   { value: 'low', label: 'Low', description: 'Quick thinking' },
@@ -57,6 +63,8 @@ export default function AgentSettingsForm({
 }: Props) {
   const isOverrideMode = mode !== 'agent-default';
   const isClaudeProvider = provider === 'claude-cli';
+  const openModelSuggestions = OPEN_PROVIDER_MODEL_SUGGESTIONS[provider];
+  const isOpenModelProvider = Boolean(openModelSuggestions);
 
   // Model display: show selected, or "(inherit)" + ghost text in override mode
   const modelValue = value.model ?? '';
@@ -84,6 +92,15 @@ export default function AgentSettingsForm({
   // Disable 'max' unless the effective model looks like Opus.
   const effectiveModel = modelValue || modelInherited || '';
   const opusLike = /opus/i.test(effectiveModel);
+  const openModelOptions = [
+    ...(isOverrideMode
+      ? [{ value: '', label: 'Inherit', sublabel: modelInherited }]
+      : []),
+    ...(openModelSuggestions ?? []).map((model) => ({ value: model, label: model })),
+    ...(isOpenModelProvider && modelValue && !(openModelSuggestions ?? []).includes(modelValue)
+      ? [{ value: modelValue, label: modelValue, sublabel: 'Custom model ID' }]
+      : []),
+  ];
 
   return (
     <div className="space-y-4">
@@ -92,20 +109,31 @@ export default function AgentSettingsForm({
         <label className="block overline mb-1.5">
           Model
         </label>
-        <Select
-          value={modelValue}
-          onChange={(next) => setField('model', next || null)}
-          searchPlaceholder="Search models..."
-          options={[
-            ...(isOverrideMode
-              ? [{ value: '', label: 'Inherit', sublabel: modelInherited }]
-              : []),
-            ...modelOptions.map((option) => ({
-              value: option.value,
-              label: option.label,
-            })),
-          ]}
-        />
+        {isOpenModelProvider ? (
+          <Select
+            value={modelValue}
+            onChange={(next) => setField('model', next || null)}
+            searchPlaceholder="Search or enter model ID..."
+            placeholder={`e.g. ${openModelSuggestions?.[0] ?? 'provider-model'}`}
+            options={openModelOptions}
+            allowCustomValue
+          />
+        ) : (
+          <Select
+            value={modelValue}
+            onChange={(next) => setField('model', next || null)}
+            searchPlaceholder="Search models..."
+            options={[
+              ...(isOverrideMode
+                ? [{ value: '', label: 'Inherit', sublabel: modelInherited }]
+                : []),
+              ...modelOptions.map((option) => ({
+                value: option.value,
+                label: option.label,
+              })),
+            ]}
+          />
+        )}
       </div>
 
       {/* ── Reasoning Effort ─────────────────────────────────────── */}
@@ -166,7 +194,7 @@ export default function AgentSettingsForm({
             Plan Mode
           </label>
           <div className="px-3 py-2 bg-surface-50 border border-app rounded-sm text-xs text-theme-subtle">
-            Claude only. Not supported for Codex agents.
+            Claude only. Not supported for this provider.
           </div>
         </div>
       )}

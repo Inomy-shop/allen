@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useRef, useState, useCallback } from 'react';
-import { Maximize2, Minimize2, X, Download, Copy, Check, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { Maximize2, Minimize2, X, Download, Copy, Check, ZoomIn, ZoomOut } from 'lucide-react';
 import { generateMermaid } from '../../lib/mermaid-generator';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { resolveColorMode } from '../../lib/theme';
@@ -46,9 +46,11 @@ function getMermaidTheme(colorMode: 'light' | 'dark') {
 
 interface Props {
   workflow: any;
+  /** Close (hide) the preview sidebar. When set, a button renders at the panel's top-left. */
+  onClose?: () => void;
 }
 
-export default function MermaidPreview({ workflow }: Props) {
+export default function MermaidPreview({ workflow, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgHtml, setSvgHtml] = useState('');
   const [error, setError] = useState('');
@@ -228,6 +230,11 @@ export default function MermaidPreview({ workflow }: Props) {
           <div className="flex items-center gap-2">
             {zoomControls}
             {actionButtons}
+            {onClose && (
+              <button onClick={onClose} title="Close panel" className="btn-ghost p-1 text-theme-muted hover:text-theme-primary shrink-0">
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
 

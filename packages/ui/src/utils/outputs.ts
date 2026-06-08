@@ -19,6 +19,16 @@ export function outputsAsKeys(spec: unknown): string[] {
 }
 
 /**
+ * Coerce either outputs form into the canonical key → description map.
+ * Legacy array entries map to an empty description.
+ */
+export function outputsAsMap(spec: unknown): Record<string, string> {
+  if (Array.isArray(spec)) return Object.fromEntries((spec as string[]).map((k) => [k, '']));
+  if (spec && typeof spec === 'object') return { ...(spec as Record<string, string>) };
+  return {};
+}
+
+/**
  * Merge a new comma-separated list of keys into the existing outputs spec,
  * preserving any existing descriptions and setting new keys to empty string.
  * Always returns the canonical object form.

@@ -3,6 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   Brain,
   CalendarClock,
+  ChevronDown,
+  Cpu,
   FolderOpen,
   HardDrive,
   LogOut,
@@ -16,6 +18,7 @@ import {
 import McpServerManager from '../components/settings/McpServerManager';
 import Select from '../components/common/Select';
 import ShortcutKey from '../components/common/ShortcutKey';
+import { ProviderIcon } from '../components/chat/ChatInput';
 import { auth as authApi, system as systemApi, type DesktopRuntimeSettingsResponse } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -27,6 +30,7 @@ import UsersAdminPage from './UsersAdminPage';
 const TABS = [
   { id: 'general', adminOnly: false },
   { id: 'runtime', adminOnly: false },
+  { id: 'models', adminOnly: false },
   { id: 'mcp', adminOnly: false },
   { id: 'schedules', adminOnly: false },
   { id: 'learnings', adminOnly: false },
@@ -46,6 +50,11 @@ const PAGE_COPY: Record<TabId, { title: string; description: string; icon: React
     title: 'Runtime',
     description: 'Review desktop runtime paths, database mode, logs, and diagnostics.',
     icon: HardDrive,
+  },
+  models: {
+    title: 'Models',
+    description: 'Configure default models and LLM providers used by Allen agents.',
+    icon: Cpu,
   },
   mcp: {
     title: 'MCP Servers',
@@ -79,6 +88,12 @@ const SETTINGS_TAB_ALIASES: Record<string, TabId> = {
   analytics: 'runtime',
   appearance: 'general',
   integrations: 'mcp',
+  llm: 'models',
+  llms: 'models',
+  model: 'models',
+  'model-providers': 'models',
+  model_defaults: 'models',
+  'model-defaults': 'models',
   notifications: 'general',
   profile: 'account',
   providers: 'mcp',
@@ -120,18 +135,20 @@ function SettingsPageShell({
 }
 
 function SettingsPanel({
+  className,
   title,
   description,
   action,
   children,
 }: {
+  className?: string;
   title: string;
   description?: string;
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section className="settings-panel">
+    <section className={`settings-panel ${className ?? ''}`}>
       <div className="settings-panel-head">
         <div className="settings-panel-head-copy">
           <h2>{title}</h2>
@@ -304,13 +321,28 @@ const CODEX_RUNTIME_MODEL_OPTIONS: RuntimeSettingOption[] = [
   { label: 'gpt-5.2', value: 'gpt-5.2' },
   { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini' },
 ];
+const OPEN_PROVIDER_RUNTIME_MODEL_OPTIONS: Record<string, RuntimeSettingOption[]> = {
+  deepseek: [
+    { label: 'deepseek-v4-pro[1m]', value: 'deepseek-v4-pro[1m]' },
+    { label: 'deepseek-v4-flash', value: 'deepseek-v4-flash' },
+  ],
+  'xiaomi-mimo': [
+    { label: 'mimo-v2.5-pro', value: 'mimo-v2.5-pro' },
+  ],
+  kimi: [
+    { label: 'kimi-k2.6', value: 'kimi-k2.6' },
+    { label: 'kimi-k2.5', value: 'kimi-k2.5' },
+  ],
+};
+const MODEL_RUNTIME_GROUP_IDS = new Set(['agents']);
+const ALL_PROVIDER_SETTINGS_ID = '__all-provider-settings__';
 
 function llmOptionsForProvider(provider: string, includeProviderDefault = false): RuntimeSettingOption[] {
   const models = provider === 'claude-cli'
     ? CLAUDE_RUNTIME_MODEL_OPTIONS
     : provider === 'codex'
       ? CODEX_RUNTIME_MODEL_OPTIONS
-      : [...CLAUDE_RUNTIME_MODEL_OPTIONS, ...CODEX_RUNTIME_MODEL_OPTIONS];
+      : OPEN_PROVIDER_RUNTIME_MODEL_OPTIONS[provider] ?? [...CLAUDE_RUNTIME_MODEL_OPTIONS, ...CODEX_RUNTIME_MODEL_OPTIONS];
   return includeProviderDefault ? [PROVIDER_DEFAULT_MODEL_OPTION, ...models] : models;
 }
 
@@ -343,6 +375,9 @@ function settingsValueMap(settings: RuntimeSettings): Record<string, string> {
 }
 
 function runtimeSelectOptions(field: RuntimeSettingField, values: Record<string, string>): RuntimeSettingOption[] {
+  if (field.key === 'ALLEN_DEFAULT_CHAT_MODEL') {
+    return llmOptionsForProvider(values.ALLEN_DEFAULT_CHAT_PROVIDER ?? '');
+  }
   if (field.key === 'ALLEN_DEFAULT_AGENT_MODEL') {
     return llmOptionsForProvider(values.ALLEN_DEFAULT_AGENT_PROVIDER ?? '', true);
   }
@@ -424,10 +459,274 @@ function RuntimeSettingControl({
   );
 }
 
-function RuntimeTab() {
+type ClaudeCompatibleProviderPanelConfig = {
+  title: string;
+  description: string;
+  disabledLabel: string;
+  apiKey: string;
+  apiKeyMissingDescription: string;
+  apiKeyPlaceholder: string;
+  groupId: string;
+  settingKeys: string[];
+  saveLabel: string;
+};
+
+function LlmProvidersPanel({
+  configs,
+  editable,
+  savedRuntimeValues,
+  showSourceMeta = true,
+  runtime,
+  runtimeSettings,
+  runtimeValues,
+  onRuntimeRefresh,
+  onRuntimeSettingsRefresh,
+  onUpdateRuntimeValue,
+}: {
+  configs: ClaudeCompatibleProviderPanelConfig[];
+  editable: boolean;
+  savedRuntimeValues: Record<string, string>;
+  showSourceMeta?: boolean;
+  runtime: Awaited<ReturnType<typeof systemApi.desktopRuntime>> | null;
+  runtimeSettings: RuntimeSettings | null;
+  runtimeValues: Record<string, string>;
+  onRuntimeRefresh: () => void;
+  onRuntimeSettingsRefresh: (updated: RuntimeSettings) => void;
+  onUpdateRuntimeValue: (key: string, value: string) => void;
+}) {
+  const [enabledById, setEnabledById] = useState<Record<string, boolean>>({});
+  const [expandedById, setExpandedById] = useState<Record<string, boolean>>({});
+  const [apiKeyInputs, setApiKeyInputs] = useState<Record<string, string>>({});
+  const [savingProviderId, setSavingProviderId] = useState<string | null>(null);
+  const [providerSaveError, setProviderSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEnabledById((current) => {
+      const next = { ...current };
+      for (const config of configs) {
+        const configured = Boolean(runtime?.secrets.find((s) => s.key === config.apiKey)?.configured);
+        if (configured) next[config.groupId] = true;
+        else if (next[config.groupId] === undefined) next[config.groupId] = false;
+      }
+      return next;
+    });
+  }, [configs, runtime]);
+
+  function apiKeyConfigured(config: ClaudeCompatibleProviderPanelConfig): boolean {
+    return Boolean(runtime?.secrets.find((s) => s.key === config.apiKey)?.configured);
+  }
+
+  function providerGroup(config: ClaudeCompatibleProviderPanelConfig) {
+    return runtimeSettings?.groups.find((g) => g.id === config.groupId);
+  }
+
+  function providerHasChanges(config: ClaudeCompatibleProviderPanelConfig) {
+    if ((apiKeyInputs[config.groupId] ?? '').trim()) return true;
+    return config.settingKeys.some((key) => runtimeValues[key] !== savedRuntimeValues[key]);
+  }
+
+  const changedProviderConfigs = configs.filter(providerHasChanges);
+  const savingAllProviders = savingProviderId === ALL_PROVIDER_SETTINGS_ID;
+
+  async function saveChangedProviderSettings() {
+    if (changedProviderConfigs.length === 0) return;
+    setSavingProviderId(ALL_PROVIDER_SETTINGS_ID);
+    setProviderSaveError(null);
+    try {
+      let shouldRefreshRuntime = false;
+      const nextApiKeyInputs = { ...apiKeyInputs };
+      const nonSecretValues: Record<string, string> = {};
+      for (const config of changedProviderConfigs) {
+        const apiKeyInput = apiKeyInputs[config.groupId] ?? '';
+        if (apiKeyInput.trim()) {
+          await systemApi.setDesktopSecret(config.apiKey, apiKeyInput.trim());
+          nextApiKeyInputs[config.groupId] = '';
+          shouldRefreshRuntime = true;
+        }
+        for (const key of config.settingKeys) {
+          if (runtimeValues[key] !== undefined && runtimeValues[key] !== savedRuntimeValues[key]) {
+            nonSecretValues[key] = runtimeValues[key];
+          }
+        }
+      }
+      setApiKeyInputs(nextApiKeyInputs);
+      if (shouldRefreshRuntime) {
+        onRuntimeRefresh();
+      }
+      if (Object.keys(nonSecretValues).length > 0) {
+        const updated = await systemApi.updateDesktopRuntimeSettings(nonSecretValues);
+        onRuntimeSettingsRefresh(updated);
+      }
+    } catch (err) {
+      setProviderSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingProviderId(null);
+    }
+  }
+
+  async function deleteApiKey(config: ClaudeCompatibleProviderPanelConfig) {
+    setSavingProviderId(config.groupId);
+    setProviderSaveError(null);
+    try {
+      await systemApi.deleteDesktopSecret(config.apiKey);
+      setEnabledById((current) => ({ ...current, [config.groupId]: false }));
+      setExpandedById((current) => ({ ...current, [config.groupId]: false }));
+      onRuntimeRefresh();
+    } catch (err) {
+      setProviderSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingProviderId(null);
+    }
+  }
+
+  return (
+    <SettingsPanel
+      className="settings-model-providers-panel"
+      title="LLM Providers"
+      description="Configure Anthropic-compatible API providers used by chat and workflow agents. Enable a provider to enter credentials and endpoint settings."
+      action={editable && (changedProviderConfigs.length > 0 || savingAllProviders) ? (
+        <button
+          type="button"
+          className="settings-secondary-button settings-primary-save-button"
+          disabled={savingProviderId !== null}
+          onClick={() => void saveChangedProviderSettings()}
+        >
+          {savingAllProviders ? 'Saving...' : 'Save settings'}
+        </button>
+      ) : undefined}
+    >
+      <div className="settings-provider-list">
+        {providerSaveError && (
+          <div className="settings-provider-save-error">
+            {providerSaveError}
+          </div>
+        )}
+        {configs.map((config) => {
+          const enabled = enabledById[config.groupId] ?? apiKeyConfigured(config);
+          const expanded = Boolean(expandedById[config.groupId]);
+          const configured = apiKeyConfigured(config);
+          const group = providerGroup(config);
+          const saving = savingProviderId === config.groupId || savingAllProviders;
+
+          return (
+            <div key={config.groupId} className={`settings-provider-item ${enabled ? 'enabled' : ''}`}>
+              <div className="settings-provider-summary">
+                <button
+                  type="button"
+                  className="settings-provider-main"
+                  onClick={() => {
+                    if (!enabled) {
+                      setEnabledById((current) => ({ ...current, [config.groupId]: true }));
+                      setExpandedById((current) => ({ ...current, [config.groupId]: true }));
+                      return;
+                    }
+                    setExpandedById((current) => ({ ...current, [config.groupId]: !current[config.groupId] }));
+                  }}
+                  aria-expanded={expanded}
+                >
+                  <span className="settings-provider-mark">
+                    <ProviderIcon provider={config.groupId} className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="settings-provider-copy">
+                    <span className="settings-provider-title-line">
+                      <strong>{config.title}</strong>
+                      <SettingsBadge tone={configured ? 'ok' : enabled ? 'warn' : 'neutral'}>
+                        {configured ? 'configured' : enabled ? 'needs key' : 'disabled'}
+                      </SettingsBadge>
+                    </span>
+                    <span>{configured ? 'API key configured' : enabled ? 'Enter API key and endpoint settings' : config.disabledLabel}</span>
+                  </span>
+                </button>
+                <span className="settings-provider-state">
+                  <SettingsSwitch
+                    checked={enabled}
+                    disabled={!editable || saving}
+                    onClick={() => {
+                      if (enabled && configured) {
+                        void deleteApiKey(config);
+                        return;
+                      }
+                      setEnabledById((current) => ({ ...current, [config.groupId]: !enabled }));
+                      setExpandedById((current) => ({ ...current, [config.groupId]: !enabled }));
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="settings-provider-chevron-button"
+                    aria-label={`${expanded ? 'Collapse' : 'Expand'} ${config.title} provider settings`}
+                    aria-expanded={expanded}
+                    disabled={!enabled}
+                    onClick={() => setExpandedById((current) => ({ ...current, [config.groupId]: !current[config.groupId] }))}
+                  >
+                    <ChevronDown className={`settings-provider-chevron ${expanded ? 'open' : ''}`} />
+                  </button>
+                </span>
+              </div>
+
+              {enabled && expanded && (
+                <div className="settings-provider-details">
+                  <SettingsRow
+                    label="API key"
+                    description={configured ? 'Key is configured. Enter a new value to replace it.' : config.apiKeyMissingDescription}
+                  >
+                    <div className="settings-field-control">
+                      <input
+                        type="password"
+                        className="settings-edit-input"
+                        placeholder={configured ? '••••••••  (configured — enter to replace)' : config.apiKeyPlaceholder}
+                        value={apiKeyInputs[config.groupId] ?? ''}
+                        disabled={!editable}
+                        onChange={(event) => setApiKeyInputs((current) => ({ ...current, [config.groupId]: event.target.value }))}
+                        autoComplete="off"
+                      />
+                      <div className="settings-field-meta">
+                        <span>{configured ? 'Key configured' : 'Not configured'}</span>
+                        <span>Stored via secrets API</span>
+                      </div>
+                    </div>
+                  </SettingsRow>
+
+                  {group?.fields.map((field) => (
+                    <SettingsRow
+                      key={field.key}
+                      label={field.label}
+                      description={field.description ?? field.key}
+                    >
+                      <div className="settings-field-control">
+                        <input
+                          type="text"
+                          className="settings-edit-input"
+                          placeholder={field.placeholder ?? field.defaultValue}
+                          value={runtimeValues[field.key] ?? ''}
+                          disabled={!editable || field.readOnly}
+                          onChange={(event) => onUpdateRuntimeValue(field.key, event.target.value)}
+                        />
+                        <div className="settings-field-meta">
+                          {showSourceMeta && <span>Default: {field.defaultValue || 'empty'}</span>}
+                          {showSourceMeta && <span>Source: {runtimeSourceLabel(field.source)}</span>}
+                          {field.restartRequired && runtimeValues[field.key] !== savedRuntimeValues[field.key] && (
+                            <span className="settings-field-warning">Restart required after save</span>
+                          )}
+                        </div>
+                      </div>
+                    </SettingsRow>
+                  ))}
+
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </SettingsPanel>
+  );
+}
+
+function RuntimeSettingsTab({ view }: { view: 'runtime' | 'models' }) {
   const [runtime, setRuntime] = useState<Awaited<ReturnType<typeof systemApi.desktopRuntime>> | null>(null);
   const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
   const [runtimeValues, setRuntimeValues] = useState<Record<string, string>>({});
+  const [savedRuntimeValues, setSavedRuntimeValues] = useState<Record<string, string>>({});
   const [desktopInfo, setDesktopInfo] = useState<Awaited<ReturnType<NonNullable<typeof window.allenDesktop>['getRuntimeInfo']>> | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -438,8 +737,10 @@ function RuntimeTab() {
       setError(err instanceof Error ? err.message : String(err));
     });
     void systemApi.desktopRuntimeSettings().then((settings) => {
+      const values = settingsValueMap(settings);
       setRuntimeSettings(settings);
-      setRuntimeValues(settingsValueMap(settings));
+      setRuntimeValues(values);
+      setSavedRuntimeValues(values);
     }).catch((err) => {
       setError(err instanceof Error ? err.message : String(err));
     });
@@ -455,6 +756,12 @@ function RuntimeTab() {
           next.ALLEN_DEFAULT_AGENT_MODEL = '';
         }
       }
+      if (key === 'ALLEN_DEFAULT_CHAT_PROVIDER') {
+        const options = llmOptionsForProvider(value);
+        if (!options.some((option) => option.value === next.ALLEN_DEFAULT_CHAT_MODEL)) {
+          next.ALLEN_DEFAULT_CHAT_MODEL = options[0]?.value ?? '';
+        }
+      }
       if (key === 'ALLEN_CONTEXT_LLM_PROVIDER') {
         const options = llmOptionsForProvider(value);
         if (!options.some((option) => option.value === next.ALLEN_CONTEXT_LLM_MODEL)) {
@@ -465,13 +772,22 @@ function RuntimeTab() {
     });
   }
 
+  async function refreshRuntime() {
+    try {
+      const updated = await systemApi.desktopRuntime();
+      setRuntime(updated);
+    } catch { /* non-fatal */ }
+  }
+
   async function saveRuntimeSettings() {
     setSaving('runtime-settings');
     setError(null);
     try {
       const updated = await systemApi.updateDesktopRuntimeSettings(runtimeValues);
+      const values = settingsValueMap(updated);
       setRuntimeSettings(updated);
-      setRuntimeValues(settingsValueMap(updated));
+      setRuntimeValues(values);
+      setSavedRuntimeValues(values);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -486,8 +802,10 @@ function RuntimeTab() {
     try {
       const selectedProvider = runtimeValues.ALLEN_CONTEXT_PROVIDER === 'cognee_memory' ? 'cognee_memory' : 'cognee';
       const result = await systemApi.setupDesktopCogneeContext(selectedProvider);
+      const values = settingsValueMap(result.settings);
       setRuntimeSettings(result.settings);
-      setRuntimeValues(settingsValueMap(result.settings));
+      setRuntimeValues(values);
+      setSavedRuntimeValues(values);
       setCogneeSetupStatus(result.output.length > 0 ? result.output.join('\n') : result.setup.detail);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -503,47 +821,91 @@ function RuntimeTab() {
     !cogneeSetup.configuredPython || !cogneeSetup.cogneeImportOk
   ));
   const showCogneeSetupPanel = Boolean(runtimeSettings?.editable && cogneeProviderSelected && cogneeSetup);
+  const apiProviderPanelConfigs: ClaudeCompatibleProviderPanelConfig[] = (runtimeSettings?.groups ?? [])
+    .map((group) => {
+      const secret = runtime?.secrets.find((item) => item.group === group.title && item.key.endsWith('_API_KEY'));
+      if (!secret || group.fields.length === 0) return null;
+      return {
+        title: group.title,
+        description: `${group.title} API provider. Allen uses the Claude Code binary with your ${group.title} credentials. Enable to configure API access.`,
+        disabledLabel: 'Disabled — toggle on to configure',
+        apiKey: secret.key,
+        apiKeyMissingDescription: `Required to use ${group.title}. Stored securely — never displayed.`,
+        apiKeyPlaceholder: 'api-key',
+        groupId: group.id,
+        settingKeys: group.fields.map((field) => field.key),
+        saveLabel: `Save ${group.title} settings`,
+      };
+    })
+    .filter((config): config is ClaudeCompatibleProviderPanelConfig => config !== null);
+  const apiProviderGroupIds = new Set(apiProviderPanelConfigs.map((config) => config.groupId));
+  const isModelsView = view === 'models';
+  const visibleSettingGroups = (runtimeSettings?.groups ?? []).filter((group) => {
+    if (apiProviderGroupIds.has(group.id)) return false;
+    const isModelGroup = MODEL_RUNTIME_GROUP_IDS.has(group.id);
+    return isModelsView ? isModelGroup : !isModelGroup;
+  });
+  const saveButtonLabel = isModelsView ? 'Save model settings' : 'Save runtime settings';
+  const changedRuntimeKeys = new Set(Object.keys(runtimeValues).filter((key) => runtimeValues[key] !== savedRuntimeValues[key]));
+
+  function groupHasChanges(group: RuntimeSettings['groups'][number]) {
+    return group.fields.some((field) => changedRuntimeKeys.has(field.key));
+  }
+
+  function groupHasRestartRequiredChanges(group: RuntimeSettings['groups'][number]) {
+    return group.fields.some((field) => field.restartRequired && changedRuntimeKeys.has(field.key));
+  }
 
   return (
-    <SettingsPageShell activeTab="runtime" wide>
-      <SettingsPanel title="Environment" description="Runtime configuration Allen is currently using.">
-        {error && (
-          <SettingsRow label="Status">
+    <SettingsPageShell activeTab={isModelsView ? 'models' : 'runtime'} wide>
+      {!isModelsView && (
+        <SettingsPanel title="Environment" description="Runtime configuration Allen is currently using.">
+          {error && (
+            <SettingsRow label="Status">
+              <SettingsBadge tone="warn">{error}</SettingsBadge>
+            </SettingsRow>
+          )}
+          <SettingsRow label="Mode">
+            <SettingsBadge tone="ok">{runtime?.desktop ? 'Desktop' : 'Web'}</SettingsBadge>
+          </SettingsRow>
+          {runtimeSettings && !runtimeSettings.editable && (
+            <SettingsRow label="Configuration source" description="Web/runtime mode is intentionally read-only here. Edit the deployment .env for web installs.">
+              <SettingsBadge tone="warn">.env controlled</SettingsBadge>
+            </SettingsRow>
+          )}
+          <SettingsRow label="Database">
+            <SettingsValue>{runtime?.runtime.managedMongo ? 'Managed local MongoDB' : 'Configured MongoDB URI'}</SettingsValue>
+          </SettingsRow>
+          <SettingsRow label="Allen home">
+            <SettingsValue mono>{runtime?.paths.allenHome ?? '-'}</SettingsValue>
+          </SettingsRow>
+          <SettingsRow label="Workspaces">
+            <SettingsValue mono>{runtime?.paths.workspaceBaseDir ?? '-'}</SettingsValue>
+          </SettingsRow>
+          {desktopInfo?.logsDir && (
+            <SettingsRow label="Logs">
+              <div className="settings-inline-action">
+                <SettingsValue mono>{desktopInfo.logsDir}</SettingsValue>
+                <button type="button" className="settings-icon-button" title="Open logs" onClick={() => void window.allenDesktop?.openLogsDirectory()}>
+                  <FolderOpen className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </SettingsRow>
+          )}
+        </SettingsPanel>
+      )}
+
+      {isModelsView && error && (
+        <SettingsPanel title="Status">
+          <SettingsRow label="Runtime settings">
             <SettingsBadge tone="warn">{error}</SettingsBadge>
           </SettingsRow>
-        )}
-        <SettingsRow label="Mode">
-          <SettingsBadge tone="ok">{runtime?.desktop ? 'Desktop' : 'Web'}</SettingsBadge>
-        </SettingsRow>
-        {runtimeSettings && !runtimeSettings.editable && (
-          <SettingsRow label="Configuration source" description="Web/runtime mode is intentionally read-only here. Edit the deployment .env for web installs.">
-            <SettingsBadge tone="warn">.env controlled</SettingsBadge>
-          </SettingsRow>
-        )}
-        <SettingsRow label="Database">
-          <SettingsValue>{runtime?.runtime.managedMongo ? 'Managed local MongoDB' : 'Configured MongoDB URI'}</SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="Allen home">
-          <SettingsValue mono>{runtime?.paths.allenHome ?? '-'}</SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="Workspaces">
-          <SettingsValue mono>{runtime?.paths.workspaceBaseDir ?? '-'}</SettingsValue>
-        </SettingsRow>
-        {desktopInfo?.logsDir && (
-          <SettingsRow label="Logs">
-            <div className="settings-inline-action">
-              <SettingsValue mono>{desktopInfo.logsDir}</SettingsValue>
-              <button type="button" className="settings-icon-button" title="Open logs" onClick={() => void window.allenDesktop?.openLogsDirectory()}>
-                <FolderOpen className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </SettingsRow>
-        )}
-      </SettingsPanel>
+        </SettingsPanel>
+      )}
 
       {runtimeSettings && (
         <>
-          {runtimeSettings.groups.map((group) => {
+          {visibleSettingGroups.map((group) => {
             const isCogneeContextGroup = group.id === 'context';
             const providerField = group.fields.find((field) => field.key === 'ALLEN_CONTEXT_PROVIDER');
             const cogneeEnabled = runtimeValues.ALLEN_CONTEXT_PROVIDER === 'cognee'
@@ -555,18 +917,39 @@ function RuntimeTab() {
               && !(isCogneeContextGroup && field.key === 'ALLEN_CONTEXT_PROVIDER')
             ));
             if (fields.length === 0 && !isCogneeContextGroup) return null;
+            const modelDefaultsGroup = isModelsView && group.id === 'agents';
+            const modelDefaultsChanged = modelDefaultsGroup && groupHasChanges(group);
+            const modelDefaultsRestartRequired = modelDefaultsGroup && groupHasRestartRequiredChanges(group);
+            const panelAction = modelDefaultsGroup ? (
+              <div className="settings-model-panel-actions">
+                {modelDefaultsChanged && (
+                  <SettingsBadge tone={modelDefaultsRestartRequired ? 'warn' : 'neutral'}>
+                    {modelDefaultsRestartRequired ? 'restart after save' : 'unsaved changes'}
+                  </SettingsBadge>
+                )}
+                <button
+                  type="button"
+                  className="settings-secondary-button settings-primary-save-button"
+                  disabled={saving === 'runtime-settings' || !runtimeSettings.editable || !modelDefaultsChanged}
+                  onClick={() => void saveRuntimeSettings()}
+                >
+                  {saving === 'runtime-settings' ? 'Saving...' : modelDefaultsChanged ? 'Save model settings' : 'Saved'}
+                </button>
+              </div>
+            ) : isCogneeContextGroup && providerField ? (
+              <SettingsSwitch
+                checked={cogneeEnabled}
+                disabled={!runtimeSettings.editable || providerField.readOnly}
+                onClick={() => updateRuntimeValue('ALLEN_CONTEXT_PROVIDER', cogneeEnabled ? '' : 'cognee')}
+              />
+            ) : undefined;
             return (
               <SettingsPanel
+                className={modelDefaultsGroup ? 'settings-model-defaults-panel' : undefined}
                 key={group.id}
-                title={isCogneeContextGroup ? 'Cognee Context' : group.title}
-                description={isCogneeContextGroup ? 'Enable Cognee-backed repository context. Saving this change applies to future context builds without restarting the app.' : group.description}
-                action={isCogneeContextGroup && providerField ? (
-                  <SettingsSwitch
-                    checked={cogneeEnabled}
-                    disabled={!runtimeSettings.editable || providerField.readOnly}
-                    onClick={() => updateRuntimeValue('ALLEN_CONTEXT_PROVIDER', cogneeEnabled ? '' : 'cognee')}
-                  />
-                ) : undefined}
+                title={modelDefaultsGroup ? 'Model Defaults' : isCogneeContextGroup ? 'Cognee Context' : group.title}
+                description={modelDefaultsGroup ? 'Choose the default providers and model behavior used by chat and workflow agents.' : isCogneeContextGroup ? 'Enable Cognee-backed repository context. Saving this change applies to future context builds without restarting the app.' : group.description}
+                action={panelAction}
               >
                 {fields.map((field) => (
                   <SettingsRow
@@ -583,7 +966,14 @@ function RuntimeTab() {
                         onChange={updateRuntimeValue}
                       />
                       <div className="settings-field-meta">
-                        {field.key === 'ALLEN_CONTEXT_PROVIDER' ? (
+                        {modelDefaultsGroup ? (
+                          <>
+                            {changedRuntimeKeys.has(field.key) && <span className="settings-field-unsaved">Unsaved change</span>}
+                            {field.restartRequired && changedRuntimeKeys.has(field.key) && (
+                              <span className="settings-field-warning">Restart required after save</span>
+                            )}
+                          </>
+                        ) : field.key === 'ALLEN_CONTEXT_PROVIDER' ? (
                           <>
                             <span>{runtimeValues[field.key] === 'cognee' || runtimeValues[field.key] === 'cognee_memory' ? 'Sets provider: cognee' : 'Provider not set'}</span>
                             <span>No restart required</span>
@@ -653,21 +1043,49 @@ function RuntimeTab() {
             );
           })}
 
-          <div className="settings-floating-actions">
+          {isModelsView && apiProviderPanelConfigs.length > 0 && (
+            <LlmProvidersPanel
+              configs={apiProviderPanelConfigs}
+              editable={runtimeSettings.editable}
+              savedRuntimeValues={savedRuntimeValues}
+              showSourceMeta={false}
+              runtime={runtime}
+              runtimeSettings={runtimeSettings}
+              runtimeValues={runtimeValues}
+              onRuntimeRefresh={() => void refreshRuntime()}
+              onRuntimeSettingsRefresh={(updated) => {
+                const values = settingsValueMap(updated);
+                setRuntimeSettings(updated);
+                setRuntimeValues(values);
+                setSavedRuntimeValues(values);
+              }}
+              onUpdateRuntimeValue={updateRuntimeValue}
+            />
+          )}
+
+          {!isModelsView && <div className="settings-floating-actions">
             <button
               type="button"
               className="settings-secondary-button"
               disabled={saving === 'runtime-settings' || !runtimeSettings.editable}
               onClick={() => void saveRuntimeSettings()}
             >
-              Save runtime settings
+              {saveButtonLabel}
             </button>
-          </div>
+          </div>}
         </>
       )}
 
     </SettingsPageShell>
   );
+}
+
+function RuntimeTab() {
+  return <RuntimeSettingsTab view="runtime" />;
+}
+
+function ModelsTab() {
+  return <RuntimeSettingsTab view="models" />;
 }
 
 function McpTab() {
@@ -791,6 +1209,7 @@ const TAB_COMPONENTS: Record<TabId, React.FC> = {
   account: AccountTab,
   general: GeneralTab,
   learnings: LearningsTab,
+  models: ModelsTab,
   mcp: McpTab,
   runtime: RuntimeTab,
   schedules: SchedulesTab,

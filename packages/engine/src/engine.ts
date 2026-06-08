@@ -59,6 +59,10 @@ export interface EngineConfig {
    * callers wire this to their `loadMcpTools(db)` helper.
    */
   discoverMcpToolNames?: () => Promise<string[]>;
+  /** Resolved Claude Code executable path for CLI-mode workflow agents. */
+  claudeCodeExecutable?: string;
+  /** Optional provider-specific env builder for Claude-compatible workflow agents. */
+  buildClaudeCompatibleEnvOverlay?: (provider: string, model?: string) => Promise<Record<string, string>>;
 }
 
 export interface RunOptions {
@@ -1379,6 +1383,8 @@ ${lines.join('\n')}
       services: this.config.services,
       abortSignal: ac.signal,
       discoverMcpToolNames: this.config.discoverMcpToolNames,
+      claudeCodeExecutable: this.config.claudeCodeExecutable,
+      buildClaudeCompatibleEnvOverlay: this.config.buildClaudeCompatibleEnvOverlay,
       repoKnowledgeContext: repoKnowledgePacket?.traceSummary ? {
         packetId: repoKnowledgePacket.traceSummary.packetId,
         repoId: repoKnowledgePacket.traceSummary.repoId,
@@ -1995,6 +2001,8 @@ ${lines.join('\n')}
           services: this.config.services,
           abortSignal: retryAc.signal,
           discoverMcpToolNames: this.config.discoverMcpToolNames,
+          claudeCodeExecutable: this.config.claudeCodeExecutable,
+          buildClaudeCompatibleEnvOverlay: this.config.buildClaudeCompatibleEnvOverlay,
         };
 
         // Each branch reads from the snapshot, not the live state
@@ -2282,9 +2290,12 @@ ${lines.join('\n')}
       // edges (human-override routes from escalation_review) get the same
       // freshness guard so stale escalation state can't keep re-routing.
       const isReRouteEdge = edge.max_retries != null || edge.retry_context != null;
-      if (isReRouteEdge && justFinishedSet) {
-        const anyJustFinished = fromNodes.some(f => justFinishedSet.has(f));
-        if (!anyJustFinished) continue;
+      const isAllowRevisitEdge = edge.allow_revisit === true;
+      const sourceJustFinished = justFinishedSet
+        ? fromNodes.some(f => justFinishedSet.has(f))
+        : true;
+      if ((isReRouteEdge || isAllowRevisitEdge) && justFinishedSet) {
+        if (!sourceJustFinished) continue;
       }
 
       // For forward-only edges: skip if ALL targets are already completed.
@@ -2292,8 +2303,10 @@ ${lines.join('\n')}
       // iterations (e.g. edge `[req, ux] → threat-model` firing again
       // after threat-model already ran). Retry and human-override edges
       // INTENTIONALLY re-route to completed nodes (the whole point is to
-      // run them again with new context), so they bypass this check.
-      if (!isReRouteEdge) {
+      // run them again with new context). Explicit allow_revisit edges
+      // bypass this check only while their source just finished; they do
+      // not become stale historical reroutes on later iterations.
+      if (!isReRouteEdge && !(isAllowRevisitEdge && sourceJustFinished)) {
         const targets = Array.isArray(edge.to) ? edge.to : [edge.to];
         const allTargetsDone = targets.every(t => t !== 'END' && effectiveCompleted.has(t));
         if (allTargetsDone) continue;

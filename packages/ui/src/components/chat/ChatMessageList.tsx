@@ -8,11 +8,13 @@ import { Bot, AlertCircle, AlertTriangle, Copy, Check, Clock, Wrench, CheckCircl
 import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentReport, SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
+import TokenUsageDisplay from '../common/TokenUsageDisplay';
 import MermaidChatBlock from './MermaidChatBlock';
 import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { WorkflowInterventionAction } from '../execution/WorkflowInterventionAction';
 import { sanitizeChatAssistantResponse } from '../../lib/chat-response-sanitize';
+import { workspaceChatPath } from '../../lib/workspace-routes';
 
 const ChatExecutionsPanel = React.lazy(() =>
   import('./ChatRunSidebar').then(module => ({ default: module.ExecutionsPanel })),
@@ -116,9 +118,7 @@ type ChatDiffSnapshot = {
   files?: ChatDiffFile[];
 };
 
-type ChatTimelineItem =
-  | { type: 'message'; key: string; message: ChatMessage; index: number; timeMs: number }
-  | { type: 'message-part'; key: string; message: ChatMessage; index: number; part: 'thinking' | 'response'; timeMs: number };
+type ChatTimelineItem = { type: 'message'; key: string; message: ChatMessage; index: number; timeMs: number };
 
 /* ── Copy button for code blocks ─────────────────────────────────────────── */
 function CopyButton({ text }: { text: string }) {
@@ -246,41 +246,13 @@ function timestampMs(value?: string | number | Date | null): number | null {
 }
 
 function buildChatTimeline(messages: ChatMessage[]): ChatTimelineItem[] {
-  const timeline: ChatTimelineItem[] = [];
-
-  messages.forEach((message, index) => {
-    const messageTime = timestampMs(message.createdAt) ?? index;
-    const shouldSplit = message.role === 'assistant' && Boolean(message.thinkingText) && Boolean(message.content || message.error);
-    if (!shouldSplit) {
-      timeline.push({
-        type: 'message',
-        key: `message:${message._id ?? index}`,
-        message,
-        index,
-        timeMs: messageTime,
-      });
-      return;
-    }
-
-    timeline.push({
-      type: 'message-part',
-      key: `message:${message._id ?? index}:thinking`,
-      message,
-      index,
-      part: 'thinking',
-      timeMs: messageTime,
-    });
-    timeline.push({
-      type: 'message-part',
-      key: `message:${message._id ?? index}:response`,
-      message,
-      index,
-      part: 'response',
-      timeMs: messageTime + 1,
-    });
-  });
-
-  return timeline;
+  return messages.map((message, index) => ({
+    type: 'message',
+    key: `message:${message._id ?? index}`,
+    message,
+    index,
+    timeMs: timestampMs(message.createdAt) ?? index,
+  }));
 }
 
 function formatClock(dateStr?: string | null): string {
@@ -1741,7 +1713,7 @@ function RunProgressCard({ run }: { run: SpawnedAgent }) {
 
       <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[10px]">
         {context?.workspace?.id && (
-          <a href={`/workspaces/${context.workspace.id}`} className="flex items-center gap-1.5 text-theme-muted hover:text-accent min-w-0">
+          <a href={workspaceChatPath(context.workspace.id)} className="flex items-center gap-1.5 text-theme-muted hover:text-accent min-w-0">
             <FolderGit2 className="w-3 h-3 shrink-0" />
             <span className="truncate">{context.workspace.repoName ?? context.workspace.name ?? 'Workspace'} · {context.workspace.branch ?? 'branch'}</span>
           </a>
@@ -2243,10 +2215,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       {chatTimeline.map((item) => {
         const msg = item.message;
         const i = item.index;
-        const timelinePart = item.type === 'message-part' ? item.part : 'full';
-        const showThinking = msg.role === 'assistant' && msg.thinkingText && timelinePart !== 'response';
-        const showResponse = timelinePart !== 'thinking';
-        const suppressLinkedRunPanels = item.type === 'message-part';
+        const showThinking = msg.role === 'assistant' && Boolean(msg.thinkingText);
         const senderLabel = msg.role === 'user' ? userDisplayName(msg) : '';
         const visibleContent = msg.role === 'assistant' ? sanitizeChatAssistantResponse(msg.content) : msg.content;
         const visibleError = msg.role === 'assistant' ? sanitizeChatAssistantResponse(msg.error) : msg.error;
@@ -2260,6 +2229,8 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             : forwardedDiffRunsByMessage.get(msg._id) ?? []
           : [];
         const messageHasActiveRuns = messageRuns.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
+        const hasAssistantMetrics = msg.role !== 'user'
+          && ((msg.costUsd != null && msg.costUsd > 0) || Boolean(msg.tokenUsage));
         return (<React.Fragment key={item.key}>
         <div className={`ch-msg ${msg.role === 'user' ? 'you' : 'allen'} group/msg al-msg-enter`}>
           <div className="ch-avatar">{msg.role === 'user' ? senderInitial(senderLabel) : 'a'}</div>
@@ -2271,30 +2242,37 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               <span className="ch-msg-ts" title={formatTimestampTitle(msg.createdAt)}>
                 {formatTime(msg.createdAt)}
               </span>
-              {msg.role !== 'user' && msg.costUsd != null && msg.costUsd > 0 && <span className="ch-msg-ts">${msg.costUsd.toFixed(4)}</span>}
-              {msg.role !== 'user' && msg.durationMs != null && msg.durationMs > 0 && <span className="ch-msg-ts">{(msg.durationMs / 1000).toFixed(1)}s</span>}
+              {msg.role !== 'user' && msg.durationMs != null && msg.durationMs > 0 && (
+                <span className="ch-msg-ts">{formatDuration(msg.durationMs)}</span>
+              )}
             </div>
+            {hasAssistantMetrics && (
+              <div className="ch-msg-meta-line">
+                {msg.costUsd != null && msg.costUsd > 0 && <span className="ch-msg-ts">${msg.costUsd.toFixed(4)}</span>}
+                {msg.tokenUsage && <TokenUsageDisplay tokenUsage={msg.tokenUsage} />}
+              </div>
+            )}
 
             <div className={`ch-msg-text ${msg.status === 'failed' || msg.status === 'cancelled' ? 'failed' : ''}`}>
               {showThinking && (
                 <ThinkingBlock text={msg.thinkingText ?? ''} durationMs={msg.durationMs} />
               )}
-              {showResponse && diffSplit.text && (
+              {diffSplit.text && (
                 <div>
                   {renderMarkdown(diffSplit.text)}
                 </div>
               )}
-              {showResponse && msg.role === 'assistant' && !messageHasActiveRuns && (
+              {msg.role === 'assistant' && !messageHasActiveRuns && (
                 <ToolCallsSection calls={msg.toolCalls} />
               )}
-              {showResponse && visibleError && (
+              {visibleError && (
                 <div className="chat-msg-error">
                   <AlertCircle className="w-3 h-3 shrink-0" />
                   {visibleError}
                 </div>
               )}
             </div>
-            {showResponse && (visibleContent || visibleError) && (
+            {(visibleContent || visibleError) && (
               <div className="chat-save-row">
                 <MessageCopyButton text={visibleContent || visibleError || ''} />
                 {msg.role !== 'user' && visibleContent && onSaveToLearnings && (
@@ -2311,7 +2289,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           </div>
         </div>
 
-        {showResponse && diffSplit.diff && (
+        {diffSplit.diff && (
           <div className="ch-msg allen al-msg-enter">
             <div className="ch-avatar">a</div>
             <div className="ch-msg-body">
@@ -2320,7 +2298,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           </div>
         )}
 
-        {messageRuns.length > 0 && !messageHasActiveRuns && !suppressLinkedRunPanels && (
+        {messageRuns.length > 0 && !messageHasActiveRuns && (
           <section className="run-progress-feed" aria-label={`${messageRuns.length} linked execution${messageRuns.length === 1 ? '' : 's'}`}>
             <React.Suspense fallback={<div className="run-progress-loading">Loading execution details...</div>}>
               <ChatExecutionsPanel runs={messageRuns} renderExecutionHeaderAction={renderWorkflowInterventionHeaderAction} />
@@ -2328,7 +2306,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
           </section>
         )}
 
-        {showResponse && diffPreviewRuns.length > 0 && (
+        {diffPreviewRuns.length > 0 && (
           <ChatCodeDiffPreview
             runs={diffPreviewRuns}
             sessionId={msg.sessionId}

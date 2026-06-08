@@ -41,7 +41,7 @@ export class RepoContextGraphService {
 
   private async getAllenGraph(repoId: string, options: ContextGraphOptions): Promise<Record<string, unknown>> {
     const [allEntries, mandatoryMappings, agents] = await Promise.all([
-      this.db.collection('repo_context_curation_entries').find({ repoId }, { sort: { path: 1, updatedAt: -1 } }).toArray(),
+      this.db.collection('repo_context_curation_entries').find({ repoId, active: { $ne: false } }, { sort: { path: 1, updatedAt: -1 } }).toArray(),
       this.mandatoryContext.list(repoId),
       this.mandatoryContext.listAgents(),
     ]);
@@ -136,7 +136,7 @@ function buildAllenContextManagementGraph(
 }
 
 function activeCurationEntries(entries: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-  return entries.filter((entry) => entry.inclusion === 'include');
+  return entries.filter((entry) => entry.active !== false && entry.inclusion === 'include');
 }
 
 function countValues(items: Array<Record<string, unknown>>, field: string, outputField: string): Array<Record<string, unknown>> {

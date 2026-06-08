@@ -7,9 +7,10 @@
 
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
+import type { TokenUsageInfo } from '@allen/engine';
 import type { Response } from 'express';
 import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
-import { getDefaultChatProvider, getProvidersInDefaultOrder, getTitleGenProviderModel } from './chat-providers.js';
+import { getDefaultChatModel, getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getTitleGenProviderModel, isClaudeCompatibleProvider } from './chat-providers.js';
 import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
 import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
@@ -91,6 +92,7 @@ export interface ChatMessage {
   senderSource?: 'ui' | 'slack' | 'system';
   costUsd?: number;
   durationMs?: number;
+  tokenUsage?: TokenUsageInfo | null;
   numTurns?: number;
   error?: string;
   toolCalls?: ToolCallRecord[];
@@ -488,6 +490,8 @@ For code tasks: direct specialist spawns need an Allen workspace first; workflow
 interface ActiveQuery {
   sessionId: string;
   messageId: string;
+  userMessage: string;
+  llmSessionId?: string;
   currentText: string;
   currentThinking: string;
   toolCalls: ToolCallRecord[];
@@ -548,6 +552,9 @@ export interface ChatCancelResult {
   sessionId: string;
   messageId?: string;
   content?: string;
+  userMessage?: string;
+  resumableSessionAvailable?: boolean;
+  restoreDraft?: string;
   cancelledExecutions: CancelledExecutionInfo[];
 }
 
@@ -833,12 +840,12 @@ async function interruptedTaskContext(db: Db, sessionId: string): Promise<string
  *
  * This is an INTERRUPT, not just a stop:
  *   1. Kills the claude-cli / codex subprocess (SIGTERM via AbortController)
- *   2. Clears the stale llmSessionId so the next message starts a fresh
- *      thread instead of trying to resume the dead one (which fails with
- *      "no rollout found" on Codex)
+ *   2. Preserves any captured llmSessionId so the next message can resume
+ *      when the provider session was already created
  *   3. Marks the in-flight assistant message as cancelled
  *   4. Removes the session from activeQueries so it's not "busy"
- *   5. Broadcasts a cancel event to any SSE listeners
+ *   5. Broadcasts a cancel event to any SSE listeners, including restoreDraft
+ *      when no resumable provider session was captured
  *
  * After cancel, the user can immediately send a new message.
  */
@@ -846,6 +853,19 @@ export async function cancelChatSession(sessionId: string, db?: Db): Promise<Cha
   const entry = activeQueries.get(sessionId);
   let cancelledExecutions: CancelledExecutionInfo[] = [];
   let cancelledContent: string | undefined;
+
+  const userMessage = entry?.userMessage;
+  // Do not use chat_sessions.llmSessionId here: that can belong to a prior
+  // turn. Draft restore depends on whether this interrupted turn reached the
+  // provider, so only current-turn signals count.
+  const resumableSessionAvailable = Boolean(
+    entry?.llmSessionId
+    || entry?.currentText
+    || entry?.currentThinking
+    || (entry?.pendingToolCalls.size ?? 0) > 0
+    || (entry?.toolCalls.length ?? 0) > 0,
+  );
+  const restoreDraft = !resumableSessionAvailable ? userMessage : undefined;
 
   // 1. Kill the subprocess for THIS turn only
   if (entry) {
@@ -883,14 +903,29 @@ export async function cancelChatSession(sessionId: string, db?: Db): Promise<Cha
 
   // 5. Broadcast cancel event so UI updates immediately
   if (entry) {
-    broadcastToListeners(entry, 'cancelled', { messageId: entry.messageId, cancelledExecutions });
+    broadcastToListeners(entry, 'cancelled', {
+      messageId: entry.messageId,
+      cancelledExecutions,
+      userMessage,
+      resumableSessionAvailable,
+      restoreDraft,
+    });
     closeStreamListeners(entry);
   }
 
   // 6. Remove from active queries so the user can send the next message
   if (entry) activeQueries.delete(sessionId);
 
-  return { cancelled: Boolean(entry), sessionId, messageId: entry?.messageId, content: cancelledContent, cancelledExecutions };
+  return {
+    cancelled: Boolean(entry),
+    sessionId,
+    messageId: entry?.messageId,
+    content: cancelledContent,
+    userMessage,
+    resumableSessionAvailable,
+    restoreDraft,
+    cancelledExecutions,
+  };
 }
 
 function broadcastToListeners(entry: ActiveQuery, event: string, data: unknown): void {
@@ -929,7 +964,7 @@ export class ChatService {
   private get messages() { return this.db.collection('chat_messages'); }
   private get messageQueue() { return this.db.collection('chat_message_queue'); }
 
-  getProviders() { return getProvidersInDefaultOrder(); }
+  getProviders() { return getEnabledProvidersInDefaultOrder(); }
 
   async createSession(
     provider: ChatProvider = getDefaultChatProvider(),
@@ -941,6 +976,7 @@ export class ChatService {
     owner?: { userId?: string; name?: string; email?: string },
   ): Promise<ChatSession> {
     const now = new Date();
+    const effectiveModel = model ?? getDefaultChatModel(provider);
     let repoPath: string | undefined;
     let repoName: string | undefined;
     if (repoId) {
@@ -956,7 +992,7 @@ export class ChatService {
     }
     const doc: ChatSession = {
       title: 'New Conversation', titleSource: 'default', status: 'active', messageCount: 0,
-      lastMessageAt: now, totalCostUsd: 0, provider, model,
+      lastMessageAt: now, totalCostUsd: 0, provider, model: effectiveModel,
       source,
       ...(slackContext ? { slackContext } : {}),
       ...(repoId && repoPath ? { repoId, repoPath, repoName } : {}),
@@ -1263,7 +1299,7 @@ export class ChatService {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
 
     const entry: ActiveQuery = {
-      sessionId, messageId: assistantMsgId, currentText: '', currentThinking: '', toolCalls: [],
+      sessionId, messageId: assistantMsgId, userMessage: content, currentText: '', currentThinking: '', toolCalls: [],
       pendingToolCalls: new Map(), listeners: new Set([res]), aborted: false, abortController: new AbortController(),
     };
     activeQueries.set(sessionId, entry);
@@ -1309,7 +1345,7 @@ export class ChatService {
 
     // ActiveQuery with no SSE listeners — UI can still subscribe via GET /stream
     const entry: ActiveQuery = {
-      sessionId, messageId: assistantMsgId, currentText: '', currentThinking: '', toolCalls: [],
+      sessionId, messageId: assistantMsgId, userMessage: content, currentText: '', currentThinking: '', toolCalls: [],
       pendingToolCalls: new Map(),
       listeners: new Set(), aborted: false, abortController: new AbortController(),
       ...(onEvent ? { eventHandlers: new Set([onEvent]) } : {}),
@@ -1648,7 +1684,7 @@ User: ${userMessage.slice(0, 500)}`;
 
       // Build message history
       let llmMessages: ChatLLMMessage[];
-      const hasSessionResume = (provider === 'claude-cli' || provider === 'codex') && resumeSessionId;
+      const hasSessionResume = (provider === 'claude-cli' || provider === 'codex' || isClaudeCompatibleProvider(provider)) && resumeSessionId;
       if (hasSessionResume) {
         // CLI providers use session resume — only send new message
         llmMessages = [{ role: 'user', content: enrichedContent }];
@@ -1772,6 +1808,7 @@ User: ${userMessage.slice(0, 500)}`;
           }
         },
         onSessionId: (sid: string) => {
+          entry.llmSessionId = sid;
           // Save session ID to DB immediately so auto-retry can resume even if the process times out
           this.sessions.updateOne(
             { _id: new ObjectId(sessionId) },
@@ -1823,12 +1860,13 @@ User: ${userMessage.slice(0, 500)}`;
       clearInterval(saveInterval);
       const durationMs = Date.now() - startMs;
       const costUsd = result.costUsd;
+      const tokenUsage = result.tokenUsage ?? null;
       const visibleResponseText = sanitizeChatAssistantResponse(result.text);
       entry.currentText = visibleResponseText;
 
       await this.messages.updateOne(
         { _id: new ObjectId(assistantMsgId) },
-        { $set: { content: visibleResponseText, status: 'completed', costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+        { $set: { content: visibleResponseText, status: 'completed', costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
       );
 
       // Save execution trace to chat_logs (fire-and-forget)
@@ -1840,6 +1878,7 @@ User: ${userMessage.slice(0, 500)}`;
         assistantResponse: visibleResponseText.slice(0, 2000),
         model: result.model,
         costUsd,
+        tokenUsage,
         durationMs,
         toolCalls: entry.toolCalls,
         trace: result.trace,
@@ -1869,7 +1908,7 @@ User: ${userMessage.slice(0, 500)}`;
       );
 
       broadcastToListeners(entry, 'message_complete', {
-        messageId: assistantMsgId, text: visibleResponseText, costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking,
+        messageId: assistantMsgId, text: visibleResponseText, costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking,
       });
 
       // Auto-title strategy: fire exactly once on turn 1, using only the
@@ -2024,16 +2063,17 @@ User: ${userMessage.slice(0, 500)}`;
 
           // Save successful retry result
           const durationMs = Date.now() - startMs;
+          const tokenUsage = retryResult.tokenUsage ?? null;
           const visibleRetryText = sanitizeChatAssistantResponse(retryResult.text);
           entry.currentText = visibleRetryText;
           await this.messages.updateOne(
             { _id: new ObjectId(assistantMsgId) },
-            { $set: { content: visibleRetryText, status: 'completed', costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+            { $set: { content: visibleRetryText, status: 'completed', costUsd: retryResult.costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
           );
           if (retryResult.sessionId) {
             await this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set: { llmSessionId: retryResult.sessionId } });
           }
-          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: visibleRetryText, costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
+          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: visibleRetryText, costUsd: retryResult.costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
           return; // success — skip error handling below
         } catch (retryErr) {
           console.error('Auto-retry also failed:', retryErr instanceof Error ? retryErr.message : retryErr);

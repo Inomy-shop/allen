@@ -1,11 +1,12 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { normalizeModelAlias } from '@allen/engine';
+import { normalizeClaudeUsage, normalizeModelAlias, type TokenUsageInfo } from '@allen/engine';
 import { AGENT_FALLBACK_CWD, type ChatProvider } from './chat-providers.js';
 import { toClaudeSdkOptions } from './agent-settings.js';
 import { buildControlledMcpConfig, writeClaudeMcpConfigFile } from './chat-controlled-mcp.js';
 import { logRuntimeEvent } from './chat-runtime-logs.js';
+import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
 import type { ChatTraceEvent } from './chat-llm.js';
 import type { PersistentChatRuntime, RuntimeCreateInput, RuntimeTurnInput, RuntimeTurnResult } from './chat-runtime-types.js';
 
@@ -20,6 +21,7 @@ type ActiveTurn = {
   text: string;
   thinking: string;
   costUsd: number;
+  tokenUsage: TokenUsageInfo | null;
   trace: ChatTraceEvent[];
   pendingTools: Map<string, PendingTool>;
   resolve: (result: RuntimeTurnResult) => void;
@@ -55,6 +57,7 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
         text: '',
         thinking: '',
         costUsd: 0,
+        tokenUsage: null,
         trace,
         pendingTools: new Map(),
         resolve,
@@ -237,6 +240,7 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
         turn.input.callbacks.onText(turn.text);
       }
       turn.costUsd = typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : 0;
+      turn.tokenUsage = normalizeClaudeUsage(msg.usage as Record<string, unknown> | undefined | null);
       if (sessionId) this.sessionId = sessionId;
       const done = this.currentTurn;
       this.currentTurn = undefined;
@@ -246,6 +250,7 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
         costUsd: done.costUsd,
         sessionId: this.sessionId,
         trace: done.trace,
+        tokenUsage: done.tokenUsage,
       });
     }
   }
@@ -430,6 +435,11 @@ function resolveClaudeBin(): string {
   const override = process.env.CLAUDE_BIN?.trim();
   if (override) {
     claudeBinCache = override;
+    return claudeBinCache;
+  }
+  const resolved = resolveClaudeCodeExecutable();
+  if (resolved) {
+    claudeBinCache = resolved;
     return claudeBinCache;
   }
   const r = spawnSync('which', ['-a', 'claude'], { encoding: 'utf8' });
