@@ -439,6 +439,18 @@ IMPORTANT RULES:
     if (repos.length > 0) {
       reposBlock = `\n\nAvailable repos: ${repos.map((r: any) => `${r.name} (${r.path})`).join(', ')}. User references with @repo-name.`;
     }
+    // Surface the default design repo regardless of status (active, registered,
+    // placeholder, etc.) — only archived repos are excluded.  This block has
+    // different semantics from Available Repositories and it is intentionally OK
+    // for the same repo to appear in both sections.
+    const defaultDesignRepo = await db.collection('repos').findOne({
+      isDefaultDesignRepo: true,
+      path: { $exists: true, $ne: '' },
+      status: { $ne: 'archived' },
+    }) as { name: string; path: string } | null;
+    if (defaultDesignRepo) {
+      reposBlock += `\n\nDefault design repo: ${defaultDesignRepo.name} at ${defaultDesignRepo.path} (use this path for design workflow \`repo_path\`/\`design_repo_path\` inputs).`;
+    }
   } catch {}
 
   // Single unified tail for both providers — keeps tool guidance,
@@ -2309,6 +2321,23 @@ RULES:
       if (repos.length > 0) {
         const repoList = repos.map((r: any) => `- ${r.name}: ${r.path} (${(r.detected?.language ?? []).join(', ')})`).join('\n');
         parts.push(`\n## Available Repositories\n${repoList}\nUser references repos with @repo-name. Only ask which repo if the task requires code changes and it's ambiguous.`);
+      }
+      // Surface the default design repo regardless of status (active, registered,
+      // placeholder, etc.) — only archived repos are excluded.  Having a usable
+      // path is the key requirement.  This block has different semantics from
+      // Available Repositories; it is intentionally OK for the same repo to appear
+      // in both sections.  The "do not ask" instruction below is what matters here.
+      const defaultDesignRepo = await this.db.collection('repos').findOne({
+        isDefaultDesignRepo: true,
+        path: { $exists: true, $ne: '' },
+        status: { $ne: 'archived' },
+      }) as { name: string; path: string } | null;
+      if (defaultDesignRepo) {
+        parts.push(
+          `\n## Default Design Repository\nThe default design output repo is **${defaultDesignRepo.name}** at \`${defaultDesignRepo.path}\`. ` +
+          `Use this path as \`repo_path\`/\`design_repo_path\` for design workflow inputs unless the user explicitly provides a different path. ` +
+          `Do NOT ask the user which design repo to use when this default is set.`,
+        );
       }
     } catch {}
 

@@ -38,6 +38,7 @@ vi.mock('@allen/engine', () => ({
   resolveRepositoriesDir: vi.fn().mockReturnValue('/mock/allen/repositories'),
 }));
 
+import { existsSync } from 'node:fs';
 import { DesignRepoService, DEFAULT_UI_DESIGNS_CLONE_URL, DEFAULT_UI_DESIGNS_HTTPS_URL, DEFAULT_UI_DESIGNS_LOCAL_PATH } from './design-repo.service.js';
 
 // ── Mock factory ──────────────────────────────────────────────────────────────
@@ -585,6 +586,104 @@ describe('DesignRepoService', () => {
       const setFields = updateCall?.[1]?.$set ?? {};
       expect(setFields.path).toBe('/new/path');
       expect(setFields.status).toBeUndefined();
+    });
+  });
+
+  // ── bootstrapUiDesigns — stale placeholder promotion ─────────────────────────
+
+  describe('bootstrapUiDesigns — stale placeholder promotion', () => {
+    it('promotes existing placeholder to registered when the effective path exists on disk', async () => {
+      const existingRepo = {
+        _id: 'placeholder-id',
+        name: 'ui-designs',
+        roles: ['design_repo'],
+        isDefaultDesignRepo: true,
+        status: 'placeholder',
+        path: '/mock/allen/repositories/ui-designs',
+      };
+      mocks.colFindOne
+        .mockResolvedValueOnce(existingRepo) // findOne for bootstrap lookup
+        .mockResolvedValueOnce({ ...existingRepo, status: 'registered' }); // findOne after updateOne
+
+      // Simulate that the directory now exists on disk
+      vi.mocked(existsSync).mockReturnValueOnce(true);
+
+      await service.bootstrapUiDesigns();
+
+      const updateCall = mocks.colUpdateOne.mock.calls[0];
+      const setFields = updateCall?.[1]?.$set ?? {};
+      expect(setFields.status).toBe('registered');
+    });
+
+    it('does NOT set status when placeholder path does not yet exist on disk', async () => {
+      const existingRepo = {
+        _id: 'placeholder-id',
+        name: 'ui-designs',
+        roles: ['design_repo'],
+        isDefaultDesignRepo: true,
+        status: 'placeholder',
+        path: '/mock/allen/repositories/ui-designs',
+      };
+      mocks.colFindOne
+        .mockResolvedValueOnce(existingRepo)
+        .mockResolvedValueOnce(existingRepo);
+
+      // existsSync returns false (default mock — path not yet present)
+      vi.mocked(existsSync).mockReturnValueOnce(false);
+
+      await service.bootstrapUiDesigns();
+
+      const updateCall = mocks.colUpdateOne.mock.calls[0];
+      const setFields = updateCall?.[1]?.$set ?? {};
+      expect(setFields.status).toBeUndefined();
+    });
+
+    it('does NOT change status when existing repo status is already registered', async () => {
+      const existingRepo = {
+        _id: 'registered-id',
+        name: 'ui-designs',
+        roles: ['design_repo'],
+        isDefaultDesignRepo: true,
+        status: 'registered',
+        path: '/mock/allen/repositories/ui-designs',
+      };
+      mocks.colFindOne
+        .mockResolvedValueOnce(existingRepo)
+        .mockResolvedValueOnce(existingRepo);
+
+      // No existsSync mock needed here: the promotion guard short-circuits on
+      // status !== 'placeholder' before existsSync is ever called.
+
+      await service.bootstrapUiDesigns();
+
+      const updateCall = mocks.colUpdateOne.mock.calls[0];
+      const setFields = updateCall?.[1]?.$set ?? {};
+      expect(setFields.status).toBeUndefined();
+    });
+
+    it('falls back to effectivePath for path resolution when existing path is empty', async () => {
+      const existingRepo = {
+        _id: 'placeholder-id',
+        name: 'ui-designs',
+        roles: ['design_repo'],
+        isDefaultDesignRepo: false,
+        status: 'placeholder',
+        path: '',
+      };
+      mocks.colFindOne
+        .mockResolvedValueOnce(existingRepo)
+        .mockResolvedValueOnce({ ...existingRepo, status: 'registered' });
+
+      // existsSync called on effectivePath (DEFAULT_UI_DESIGNS_LOCAL_PATH) — returns true
+      vi.mocked(existsSync).mockReturnValueOnce(true);
+
+      await service.bootstrapUiDesigns();
+
+      const updateCall = mocks.colUpdateOne.mock.calls[0];
+      const setFields = updateCall?.[1]?.$set ?? {};
+      expect(setFields.status).toBe('registered');
+      // path should also be set since existing.path was empty
+      expect(setFields.path).toBeTruthy();
     });
   });
 

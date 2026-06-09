@@ -250,6 +250,14 @@ export class DesignRepoService {
       if (existing.path === '' || !existing.path) {
         setFields.path = effectivePath;
       }
+      // Promote stale placeholder status when the path already exists on disk.
+      // bootstrapUiDesigns may be called again after a background clone has completed
+      // or after the directory was created externally. If the effective path is
+      // present, the record is no longer a placeholder.
+      const resolvedPath = (existing.path !== '' && existing.path) ? existing.path : effectivePath;
+      if (existing.status === 'placeholder' && existsSync(resolvedPath)) {
+        setFields.status = 'registered';
+      }
       // Attach default preview config only if the repo has none yet
       if (!existing.designPreviewConfig) {
         setFields.designPreviewConfig = { ...UI_DESIGNS_DEFAULT_PREVIEW_CONFIG };
