@@ -243,6 +243,50 @@ async function openExternalUrl(raw: string): Promise<boolean> {
   return true;
 }
 
+function installTrustedNavigationGuards(win: BrowserWindow, openTrustedUrl: (targetUrl: string) => void): void {
+  win.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    if (isTrustedAppUrl(targetUrl)) {
+      openTrustedUrl(targetUrl);
+    } else {
+      void openExternalUrl(targetUrl);
+    }
+    return { action: 'deny' };
+  });
+
+  win.webContents.on('will-navigate', (event, targetUrl) => {
+    if (isTrustedAppUrl(targetUrl)) return;
+    event.preventDefault();
+    void openExternalUrl(targetUrl);
+  });
+}
+
+function createTrustedPopupWindow(parent: BrowserWindow, targetUrl: string): void {
+  const popup = new BrowserWindow({
+    width: 1120,
+    height: 820,
+    minWidth: 720,
+    minHeight: 520,
+    title: 'Allen',
+    parent,
+    modal: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#0b1020',
+    webPreferences: {
+      preload: preloadPath(),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+    },
+  });
+
+  installTrustedNavigationGuards(popup, (trustedTargetUrl) => {
+    createTrustedPopupWindow(popup, trustedTargetUrl);
+  });
+  void popup.loadURL(targetUrl);
+}
+
 function navigateTo(path: string): void {
   const url = appUrl(path);
   if (!url) return;
@@ -642,19 +686,8 @@ function createWindow(url: string): BrowserWindow {
     },
   });
 
-  win.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    if (isTrustedAppUrl(targetUrl)) {
-      void win.loadURL(targetUrl);
-    } else {
-      void openExternalUrl(targetUrl);
-    }
-    return { action: 'deny' };
-  });
-
-  win.webContents.on('will-navigate', (event, targetUrl) => {
-    if (isTrustedAppUrl(targetUrl)) return;
-    event.preventDefault();
-    void openExternalUrl(targetUrl);
+  installTrustedNavigationGuards(win, (targetUrl) => {
+    createTrustedPopupWindow(win, targetUrl);
   });
 
   win.webContents.on('render-process-gone', (_event, details) => {
