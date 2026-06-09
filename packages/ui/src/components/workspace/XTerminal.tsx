@@ -354,7 +354,9 @@ export function XTerminal({ workspaceId, terminalId = 'default', sourceType = 'w
 
   return (
     <div className={`relative min-h-0 overflow-hidden bg-[#0b0f14] ${className ?? ''}`} data-terminal-runtime={runtimeMode}>
-      <div ref={containerRef} className="allen-terminal h-full w-full px-3 py-2" />
+      <div className="flex h-full min-h-0 w-full px-3 pb-8 pt-2">
+        <div ref={containerRef} className="allen-terminal min-h-0 flex-1 overflow-hidden" />
+      </div>
       {badge && (
         <div className={`absolute right-2 top-2 text-[10px] font-mono px-2 py-0.5 rounded border ${badge.cls}`}>
           {badge.text}
