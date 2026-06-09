@@ -6928,8 +6928,10 @@
 
   .chat-msg-error {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 6px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     margin-top: 6px;
     border: 1px solid rgb(var(--color-accent-red) / 0.16);
     border-radius: 6px;

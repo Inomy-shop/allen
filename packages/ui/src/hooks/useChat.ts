@@ -261,6 +261,26 @@ function activeToolCallsFromRecords(records?: ToolCallRecord[]): ActiveToolCall[
   }));
 }
 
+async function errorMessageFromResponse(response: Response): Promise<string> {
+  try {
+    const raw = await response.text();
+    if (!raw) return `Request failed: ${response.status}`;
+    try {
+      const parsed = JSON.parse(raw) as { error?: unknown; message?: unknown };
+      const detail = typeof parsed.error === 'string'
+        ? parsed.error
+        : typeof parsed.message === 'string'
+          ? parsed.message
+          : raw;
+      return detail || `Request failed: ${response.status}`;
+    } catch {
+      return raw;
+    }
+  } catch {
+    return `Request failed: ${response.status}`;
+  }
+}
+
 function mergeToolStart(prev: ActiveToolCall[], data: any): ActiveToolCall[] {
   const toolUseId = data.toolUseId ?? data.tool_use_id;
   if (toolUseId && prev.some(tc => tc.toolUseId === toolUseId)) return prev;
@@ -708,23 +728,28 @@ export function useChat() {
         setActiveToolCalls([]);
         break;
 
-      case 'error':
+      case 'error': {
+        const errorText = typeof data.error === 'string' ? data.error : String(data.error ?? 'Unknown error');
         setMessages(prev => [
-          ...prev,
+          ...prev.filter(m => m.status !== 'streaming'),
           {
+            _id: data.messageId,
             sessionId,
             role: 'assistant',
-            content: streamText || `Error: ${data.error}`,
+            content: typeof data.content === 'string' && data.content ? data.content : (streamText || `Error: ${errorText}`),
             status: 'failed',
-            error: data.error,
-            thinkingText,
+            error: errorText,
+            toolCalls: data.toolCalls,
+            thinkingText: data.thinkingText ?? thinkingText,
             createdAt: new Date().toISOString(),
           },
         ]);
         setStreamText('');
+        setThinkingText('');
         setActiveToolCalls([]);
         setStreaming(false);
         break;
+      }
     }
   }, [streamText, thinkingText]);
 
@@ -829,8 +854,11 @@ export function useChat() {
         signal: abortController.signal,
       });
 
-      if (!response.ok || !response.body) {
-        throw new Error(`Request failed: ${response.status}`);
+      if (!response.ok) {
+        throw new Error(await errorMessageFromResponse(response));
+      }
+      if (!response.body) {
+        throw new Error(`Request failed: ${response.status} (empty response body)`);
       }
 
       const reader = response.body.getReader();
@@ -994,21 +1022,28 @@ export function useChat() {
                   ));
                   break;
 
-                case 'error':
+                case 'error': {
+                  const errorText = typeof data.error === 'string' ? data.error : String(data.error ?? 'Unknown error');
+                  const msgId = data.messageId || assistantMsgId;
                   setMessages(prev => [
-                    ...prev,
+                    ...prev.filter(m => m.status !== 'streaming'),
                     {
+                      _id: msgId,
                       sessionId,
                       role: 'assistant',
-                      content: assistantText || `Error: ${data.error}`,
+                      content: typeof data.content === 'string' && data.content ? data.content : (assistantText || `Error: ${errorText}`),
                       status: 'failed',
-                      error: data.error,
+                      error: errorText,
+                      toolCalls: data.toolCalls || collectedToolCalls,
+                      thinkingText: data.thinkingText ?? assistantThinking,
                       createdAt: new Date().toISOString(),
                     },
                   ]);
                   setStreamText('');
+                  setThinkingText('');
                   setActiveToolCalls([]);
                   break;
+                }
               }
             } catch {
               // ignore parse errors

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeGeneratedChatTitle, sanitizeChatAssistantResponse, sanitizeChatTitle } from './chat.service.js';
+import { failedAssistantContent, normalizeGeneratedChatTitle, sanitizeChatAssistantResponse, sanitizeChatTitle } from './chat.service.js';
 
 describe('chat title normalization', () => {
   it('caps titles to one short line', () => {
@@ -59,5 +59,20 @@ describe('chat assistant response sanitization', () => {
 
   it('preserves normal prose that mentions repo context usage', () => {
     expect(sanitizeChatAssistantResponse('The repo context usage tab has the details.')).toBe('The repo context usage tab has the details.');
+  });
+});
+
+
+describe('failed assistant content', () => {
+  it('persists the exact backend error in assistant content when no text streamed', () => {
+    expect(failedAssistantContent('', 'Provider failed: model unavailable')).toBe('Error: Provider failed: model unavailable');
+  });
+
+  it('keeps partial assistant text and appends the exact backend error', () => {
+    expect(failedAssistantContent('I checked the repo.', 'Tool failed:\nmissing input')).toBe('I checked the repo.\n\nError: Tool failed:\nmissing input');
+  });
+
+  it('does not duplicate an error already present in partial text', () => {
+    expect(failedAssistantContent('Error: network timeout', 'network timeout')).toBe('Error: network timeout');
   });
 });

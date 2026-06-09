@@ -657,6 +657,14 @@ export function sanitizeChatAssistantResponse(candidate: unknown): string {
   return text;
 }
 
+export function failedAssistantContent(partialContent: unknown, errorMessage: string): string {
+  const visiblePartial = sanitizeChatAssistantResponse(partialContent).trimEnd();
+  const errorLine = `Error: ${errorMessage}`;
+  if (!visiblePartial) return errorLine;
+  if (visiblePartial.includes(errorMessage) || visiblePartial.includes(errorLine)) return visiblePartial;
+  return `${visiblePartial}\n\n${errorLine}`;
+}
+
 function stripTrailingRepoContextUsageMarker(text: string): string {
   return text.replace(
     /(?:\n\s*)*(?:repo[_\s-]*context[_\s-]*usage|repocontextusage)\s*:\s*no\s+repo\s+context\s+used\.?\s*$/i,
@@ -2041,9 +2049,11 @@ User: ${userMessage.slice(0, 500)}`;
         }
       }
 
+      const failedContent = failedAssistantContent(entry.currentText, errorMsg);
+      entry.currentText = failedContent;
       await this.messages.updateOne(
         { _id: new ObjectId(assistantMsgId) },
-        { $set: { content: entry.currentText || '', status: 'failed', error: errorMsg, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+        { $set: { content: failedContent, status: 'failed', error: errorMsg, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
       );
 
       this.db.collection('chat_logs').insertOne({
@@ -2063,7 +2073,7 @@ User: ${userMessage.slice(0, 500)}`;
         relatedIds: { chatSessionId: sessionId, chatMessageId: assistantMsgId, agent: effectiveAgent },
       }).catch(() => {});
 
-      broadcastToListeners(entry, 'error', { error: errorMsg, messageId: assistantMsgId });
+      broadcastToListeners(entry, 'error', { error: errorMsg, content: failedContent, messageId: assistantMsgId, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
       new AlertService(this.db).onChatError(sessionId, errorMsg).catch(() => {});
     } finally {
       // Wait for background spawns to finish before closing SSE stream
