@@ -20,7 +20,7 @@ vi.mock('../../hooks/useEnabledProviders', () => ({
       {
         provider: 'claude-cli',
         label: 'Claude (CLI)',
-        models: ['sonnet', 'opus', 'haiku'],
+        models: ['fable', 'sonnet', 'opus', 'haiku'],
         defaultModel: 'sonnet',
       },
       {

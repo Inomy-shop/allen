@@ -317,6 +317,14 @@ describe('DeepSeek provider registry', () => {
   });
 });
 
+describe('Claude provider registry', () => {
+  it('exposes Fable in the Claude CLI model list', () => {
+    const claude = PROVIDERS.find(p => p.provider === 'claude-cli');
+    expect(claude).toBeDefined();
+    expect(claude?.models).toEqual(['fable', 'sonnet', 'opus', 'haiku']);
+  });
+});
+
 describe('Xiaomi MiMo provider registry', () => {
   it('xiaomi-mimo is in PROVIDERS with correct shape', () => {
     const mimo = PROVIDERS.find(p => p.provider === 'xiaomi-mimo');

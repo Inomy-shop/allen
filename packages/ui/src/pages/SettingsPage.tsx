@@ -388,6 +388,7 @@ type RuntimeSettingOption = NonNullable<RuntimeSettingField['options']>[number];
 
 const PROVIDER_DEFAULT_MODEL_OPTION: RuntimeSettingOption = { label: 'Provider default', value: '' };
 const CLAUDE_RUNTIME_MODEL_OPTIONS: RuntimeSettingOption[] = [
+  { label: 'fable', value: 'fable' },
   { label: 'sonnet', value: 'sonnet' },
   { label: 'opus', value: 'opus' },
   { label: 'haiku', value: 'haiku' },

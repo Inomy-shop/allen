@@ -646,6 +646,7 @@ export function CreateTeamFromAgentsDialog({
                 onChange={setLeadModel}
                 searchable={false}
                 options={[
+                  { value: 'fable', label: 'fable' },
                   { value: 'haiku', label: 'haiku' },
                   { value: 'sonnet', label: 'sonnet' },
                   { value: 'opus', label: 'opus' },

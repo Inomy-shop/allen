@@ -80,6 +80,7 @@ type ProviderOptionValue = (typeof PROVIDER_OPTIONS)[number]['value'];
 
 const AGENT_MODEL_OPTIONS = [
   { label: 'Provider default', value: '' },
+  { label: 'fable', value: 'fable' },
   { label: 'sonnet', value: 'sonnet' },
   { label: 'opus', value: 'opus' },
   { label: 'haiku', value: 'haiku' },
@@ -93,7 +94,7 @@ const AGENT_MODEL_OPTIONS = [
   ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.flatMap((config) => config.modelSuggestions.map((model) => ({ label: model, value: model }))),
 ] as const;
 
-const CLAUDE_AGENT_MODEL_OPTIONS = new Set(['', 'sonnet', 'opus', 'haiku']);
+const CLAUDE_AGENT_MODEL_OPTIONS = new Set(['', 'fable', 'sonnet', 'opus', 'haiku']);
 const CODEX_AGENT_MODEL_OPTIONS = new Set([
   '',
   'gpt-5.5',
@@ -110,6 +111,7 @@ const CONTEXT_LLM_MODEL_OPTIONS = [
   { label: 'gpt-5.4', value: 'gpt-5.4' },
   { label: 'gpt-5.3-codex', value: 'gpt-5.3-codex' },
   { label: 'gpt-5.2-codex', value: 'gpt-5.2-codex' },
+  { label: 'fable', value: 'fable' },
   { label: 'sonnet', value: 'sonnet' },
   { label: 'opus', value: 'opus' },
   { label: 'haiku', value: 'haiku' },

@@ -6,7 +6,7 @@ import Select from '../common/Select';
 import IconTooltipButton from '../common/IconTooltipButton';
 import { useToast } from '../common/Toast';
 
-const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
+const CLAUDE_MODELS = ['fable', 'sonnet', 'opus', 'haiku'];
 const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'];
 
 type BulkAgentModelDialogProps = {

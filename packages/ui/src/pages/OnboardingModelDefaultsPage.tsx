@@ -27,6 +27,7 @@ interface HealthSummary {
 }
 
 const CLAUDE_MODELS = [
+  { label: 'fable', value: 'fable', sublabel: 'Latest Claude model for inbuilt agents' },
   { label: 'opus', value: 'opus', sublabel: 'Highest-capability Claude model for inbuilt agents' },
   { label: 'sonnet', value: 'sonnet', sublabel: 'Balanced Claude model for inbuilt agents' },
   { label: 'haiku', value: 'haiku', sublabel: 'Fastest Claude model for inbuilt agents' },

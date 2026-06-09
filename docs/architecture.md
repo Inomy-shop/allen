@@ -63,7 +63,7 @@ Important files:
 - `src/clarify-synthesizer.ts` - clarification gate handling for human checkpoints.
 - `src/orphan-sweeper.ts` - background sweep of orphaned MCP child processes.
 - `src/paths.ts` - resolves `ALLEN_HOME` and `WORKSPACE_BASE_DIR`.
-- `src/model-alias.ts` - resolves `ALLEN_MODEL_HAIKU/SONNET/OPUS` overrides.
+- `src/model-alias.ts` - resolves `ALLEN_MODEL_HAIKU/SONNET/OPUS/FABLE` overrides.
 - `src/validator.ts` and `src/types.ts` - workflow YAML schema and types.
 - `src/token-usage.ts` - normalized token usage type (`TokenUsageInfo`), provider normalization helpers (`normalizeCodexUsage`, `normalizeClaudeUsage`), null-aware aggregation (`aggregateTokenUsage`), and child-execution rollup marker helpers (`attachChildTokenUsageMarkers`, `tokenUsageFromChildMarkers`). Central module imported by the executors, engine, and server. Values are independently nullable per sub-field — `null` means "provider did not report", never `0`.
 - `workflows/*.yml` - eight runnable workflows: `feature-plan-and-implement`, `bug-fix-by-severity`, `tdd-design-by-severity`, `milestone-implementation-from-prd-tdd`, `self-healing-incident-triage`, `allen-self-healing-monitor-hourly`, `multi-repo-change-orchestration`, `source-prd-to-ui-designs-variations` (Design tab: accepts `output_mode: 'spec_only' | 'prototype'`, `design_session_id`, and `design_repo_path`; when `output_mode='spec_only'` (default) prototype-generation nodes are skipped and only UX options/specs are produced).
