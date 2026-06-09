@@ -30,6 +30,25 @@ declare global {
         bytes?: number;
         error?: string;
       }>;
+      getUpdateSettings(): Promise<{
+        autoUpdateEnabled: boolean;
+        currentVersion: string;
+      }>;
+      setAutoUpdateEnabled(enabled: boolean): Promise<{
+        autoUpdateEnabled: boolean;
+        currentVersion: string;
+      }>;
+      checkForUpdates(): Promise<
+        | { status: 'disabled'; currentVersion: string }
+        | { status: 'not-available'; currentVersion: string; latestVersion: string }
+        | { status: 'update-available'; currentVersion: string; latestVersion: string; url: string; opened: boolean }
+      >;
+      onUpdatePrompt(handler: (payload: {
+        requestId: string;
+        currentVersion: string;
+        latestVersion: string;
+      }) => void): () => void;
+      respondToUpdatePrompt(requestId: string, action: 'update-now' | 'update-later'): void;
     };
   }
 }

@@ -544,6 +544,45 @@ function isNavItemActive(
 
 // ── Main App ──
 
+
+type UpdatePromptState = {
+  requestId: string;
+  currentVersion: string;
+  latestVersion: string;
+};
+
+function UpdatePromptModal({
+  prompt,
+  onAction,
+}: {
+  prompt: UpdatePromptState;
+  onAction: (action: 'update-now' | 'update-later') => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="allen-update-title">
+      <div className="w-full max-w-md overflow-hidden rounded-2xl border border-app bg-app-card shadow-2xl">
+        <div className="border-b border-app px-6 py-5">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">Update available</div>
+          <h2 id="allen-update-title" className="mt-2 text-[18px] font-semibold tracking-tight text-theme-primary">
+            Allen {prompt.latestVersion} is available
+          </h2>
+          <p className="mt-2 text-[13px] leading-5 text-theme-muted">
+            You are currently using Allen {prompt.currentVersion}. Download and open the latest installer now, or update later.
+          </p>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-6 py-4">
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => onAction('update-later')}>
+            Update later
+          </button>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => onAction('update-now')}>
+            Update now
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -554,6 +593,7 @@ export default function App() {
   const [activeWorkspaceName, setActiveWorkspaceName] = useState<string | null>(null);
   const routeBaseDetail = routeDetail(location.pathname, chatTopbarTitle);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [updatePrompt, setUpdatePrompt] = useState<UpdatePromptState | null>(null);
   const [liveCount, setLiveCount] = useState(0);
   const [approvalCount, setApprovalCount] = useState(0);
   const [canGoBack, setCanGoBack] = useState(false);
@@ -728,6 +768,17 @@ export default function App() {
     window.addEventListener('allen:active-chat-conversation', onActiveChatConversation);
     return () => window.removeEventListener('allen:active-chat-conversation', onActiveChatConversation);
   }, []);
+
+  useEffect(() => {
+    if (!window.allenDesktop?.onUpdatePrompt) return undefined;
+    return window.allenDesktop.onUpdatePrompt((payload) => setUpdatePrompt(payload));
+  }, []);
+
+  function respondToUpdatePrompt(action: 'update-now' | 'update-later') {
+    if (!updatePrompt) return;
+    window.allenDesktop?.respondToUpdatePrompt?.(updatePrompt.requestId, action);
+    setUpdatePrompt(null);
+  }
 
   useEffect(() => {
     const match = location.pathname.match(/^\/chat\/([^/]+)/);
@@ -1366,6 +1417,13 @@ export default function App() {
           </ErrorBoundary>
         </div>
       </main>
+      {updatePrompt && (
+        <UpdatePromptModal
+          prompt={updatePrompt}
+          onAction={respondToUpdatePrompt}
+        />
+      )}
+
       <ShellCommandPalette
         open={commandOpen}
         onClose={() => setCommandOpen(false)}

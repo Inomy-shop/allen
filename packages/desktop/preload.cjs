@@ -11,6 +11,15 @@ const allenDesktop = {
   openLogsDirectory: () => ipcRenderer.invoke('allen:open-logs-directory'),
   exportSupportBundle: (targetPath) => ipcRenderer.invoke('allen:export-support-bundle', targetPath),
   writeClipboardText: (text) => ipcRenderer.invoke('allen:clipboard-write-text', text),
+  getUpdateSettings: () => ipcRenderer.invoke('allen:update-settings-get'),
+  setAutoUpdateEnabled: (enabled) => ipcRenderer.invoke('allen:update-settings-set-auto-enabled', enabled),
+  checkForUpdates: () => ipcRenderer.invoke('allen:update-check-now'),
+  onUpdatePrompt: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('allen:update-prompt', listener);
+    return () => ipcRenderer.off('allen:update-prompt', listener);
+  },
+  respondToUpdatePrompt: (requestId, action) => ipcRenderer.send('allen:update-prompt-response', { requestId, action }),
 };
 
 contextBridge.exposeInMainWorld('allenDesktop', allenDesktop);

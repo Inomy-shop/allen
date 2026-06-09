@@ -276,6 +276,52 @@ function AppearancePicker() {
 }
 
 function GeneralTab() {
+  const [updateSettings, setUpdateSettings] = useState<Awaited<ReturnType<NonNullable<typeof window.allenDesktop>['getUpdateSettings']>> | null>(null);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const desktopUpdatesAvailable = Boolean(window.allenDesktop);
+
+  useEffect(() => {
+    if (!desktopUpdatesAvailable) return;
+    void window.allenDesktop?.getUpdateSettings()
+      .then(setUpdateSettings)
+      .catch((err) => setUpdateStatus(err instanceof Error ? err.message : String(err)));
+  }, [desktopUpdatesAvailable]);
+
+  async function toggleAutoUpdates() {
+    if (!window.allenDesktop?.setAutoUpdateEnabled || !updateSettings) return;
+    setUpdateStatus(null);
+    try {
+      const updated = await window.allenDesktop.setAutoUpdateEnabled(!updateSettings.autoUpdateEnabled);
+      setUpdateSettings(updated);
+      setUpdateStatus(updated.autoUpdateEnabled ? 'Automatic update checks enabled.' : 'Automatic update checks disabled.');
+    } catch (err) {
+      setUpdateStatus(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function checkForUpdatesNow() {
+    if (!window.allenDesktop?.checkForUpdates) return;
+    setCheckingUpdates(true);
+    setUpdateStatus(null);
+    try {
+      const result = await window.allenDesktop.checkForUpdates();
+      if (result.status === 'disabled') {
+        setUpdateStatus('Update checks are disabled for this build.');
+      } else if (result.status === 'not-available') {
+        setUpdateStatus(`Allen ${result.currentVersion} is up to date.`);
+      } else {
+        setUpdateStatus(result.opened
+          ? `Allen ${result.latestVersion} installer opened.`
+          : `Allen ${result.latestVersion} is available.`);
+      }
+    } catch (err) {
+      setUpdateStatus(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCheckingUpdates(false);
+    }
+  }
+
   return (
     <SettingsPageShell activeTab="general">
       <SettingsPanel title="Workspace behavior" description="Defaults for the local Allen desktop experience.">
@@ -288,6 +334,40 @@ function GeneralTab() {
         <SettingsRow label="Focus chat input" description="Focus chat input, or jump to dashboard and focus it from another page.">
           <ShortcutKey value="⌘L" />
         </SettingsRow>
+      </SettingsPanel>
+
+      <SettingsPanel title="Application updates" description="Control whether Allen checks for new production builds on startup.">
+        {desktopUpdatesAvailable ? (
+          <>
+            <SettingsRow label="Automatic checks" description="When enabled, Allen checks for a new version when the desktop app opens.">
+              <SettingsSwitch
+                checked={updateSettings?.autoUpdateEnabled ?? true}
+                disabled={!updateSettings}
+                onClick={() => void toggleAutoUpdates()}
+              />
+            </SettingsRow>
+            <SettingsRow label="Current version" description="Manually check the production update feed now.">
+              <div className="settings-field-control">
+                <div className="settings-inline-action">
+                  <SettingsValue mono>{updateSettings?.currentVersion ?? '-'}</SettingsValue>
+                  <button
+                    type="button"
+                    className="settings-secondary-button"
+                    disabled={checkingUpdates}
+                    onClick={() => void checkForUpdatesNow()}
+                  >
+                    <span>{checkingUpdates ? 'Checking...' : 'Check for updates'}</span>
+                  </button>
+                </div>
+                {updateStatus && <div className="settings-field-meta"><span>{updateStatus}</span></div>}
+              </div>
+            </SettingsRow>
+          </>
+        ) : (
+          <SettingsRow label="Updates" description="Update controls are available in the packaged desktop app.">
+            <SettingsValue>Unavailable</SettingsValue>
+          </SettingsRow>
+        )}
       </SettingsPanel>
 
       <SettingsPanel title="Notifications" description="Keep interruptions focused on work that needs attention.">

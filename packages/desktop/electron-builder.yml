@@ -96,4 +96,4 @@ dmg:
 
 publish:
   - provider: generic
-    url: https://askallen.build/releases
+    url: https://askallen.build/download
