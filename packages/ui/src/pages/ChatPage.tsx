@@ -227,6 +227,10 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const pullRequests = collectPullRequests(spawnedAgents);
   const floatingPullRequest = !sidePanelOpen ? pullRequests[0] ?? null : null;
 
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('allen:active-chat-conversation', { detail: { sessionId: activeSessionId ?? null } }));
+  }, [activeSessionId]);
+
   useEffect(() => { queuedMessagesRef.current = queuedMessages; }, [queuedMessages]);
   useEffect(() => { editingQueuedIdRef.current = editingQueuedId; }, [editingQueuedId]);
 

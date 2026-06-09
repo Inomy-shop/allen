@@ -9,7 +9,7 @@ import {
   ChevronRight, Plus, Palette,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
   SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain, Cpu,
-  Trash2, AlertTriangle,
+  Trash2, AlertTriangle, Copy, Check,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
@@ -268,6 +268,7 @@ function AppTopbar({
   canGoBack,
   colorMode,
   onColorModeToggle,
+  chatConversationId,
 }: {
   title: string;
   detail?: string | null;
@@ -281,7 +282,33 @@ function AppTopbar({
   canGoBack: boolean;
   colorMode: 'light' | 'dark';
   onColorModeToggle: () => void;
+  chatConversationId?: string | null;
 }) {
+  const [copiedChatId, setCopiedChatId] = useState(false);
+
+  async function copyChatConversationId() {
+    if (!chatConversationId) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(chatConversationId);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = chatConversationId;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedChatId(true);
+      window.setTimeout(() => setCopiedChatId(false), 1600);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Failed to copy conversation id');
+    }
+  }
+
   return (
     <header className="topbar">
       <button
@@ -316,6 +343,18 @@ function AppTopbar({
           </>
         )}
       </div>
+
+      {chatConversationId && (
+        <button
+          type="button"
+          onClick={() => void copyChatConversationId()}
+          className="foot-btn topbar-icon-btn"
+          title={copiedChatId ? 'Copied conversation ID' : 'Copy conversation ID'}
+          aria-label={copiedChatId ? 'Copied conversation ID' : 'Copy conversation ID'}
+        >
+          {copiedChatId ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+        </button>
+      )}
 
       <div className="spacer" />
 
@@ -511,6 +550,7 @@ export default function App() {
   const routeBaseTitle = routeTitle(location.pathname, location.search);
   const [chatTopbarTitle, setChatTopbarTitle] = useState<string | null>(null);
   const [chatSessionWorkspaceId, setChatSessionWorkspaceId] = useState<string | null>(null);
+  const [activeChatConversationId, setActiveChatConversationId] = useState<string | null>(null);
   const [activeWorkspaceName, setActiveWorkspaceName] = useState<string | null>(null);
   const routeBaseDetail = routeDetail(location.pathname, chatTopbarTitle);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -553,6 +593,8 @@ export default function App() {
   const workspaceIdFromPath = location.pathname.match(/^\/workspaces\/([^/]+)/)?.[1] ?? null;
   const workspaceIdFromSearch = new URLSearchParams(location.search).get('workspaceId');
   const activeWorkspaceId = workspaceIdFromPath ?? workspaceIdFromSearch ?? chatSessionWorkspaceId;
+  const routeChatConversationId = location.pathname.match(/^\/chat\/([^/]+)/)?.[1] ?? null;
+  const copyableChatConversationId = location.pathname.startsWith('/chat') ? routeChatConversationId ?? activeChatConversationId : null;
   const isWorkspaceChatRoute = location.pathname.startsWith('/chat') && Boolean(activeWorkspaceId);
   const title = isWorkspaceChatRoute ? 'workspace' : routeBaseTitle;
   const detail = isWorkspaceChatRoute ? activeWorkspaceName ?? 'Workspace' : routeBaseDetail;
@@ -679,14 +721,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    function onActiveChatConversation(event: Event) {
+      const sessionId = (event as CustomEvent<{ sessionId?: string | null }>).detail?.sessionId ?? null;
+      setActiveChatConversationId(sessionId);
+    }
+    window.addEventListener('allen:active-chat-conversation', onActiveChatConversation);
+    return () => window.removeEventListener('allen:active-chat-conversation', onActiveChatConversation);
+  }, []);
+
+  useEffect(() => {
     const match = location.pathname.match(/^\/chat\/([^/]+)/);
     if (!match) {
       setChatTopbarTitle(null);
       setChatSessionWorkspaceId(null);
+      if (!location.pathname.startsWith('/chat')) setActiveChatConversationId(null);
       return;
     }
     let cancelled = false;
     const sessionId = match[1];
+    setActiveChatConversationId(sessionId);
     const loadTitle = () => {
       chatApi.getSession(sessionId)
         .then((session) => {
@@ -1305,6 +1358,7 @@ export default function App() {
           canGoBack={canGoBack}
           colorMode={resolvedMode}
           onColorModeToggle={toggleColorMode}
+          chatConversationId={copyableChatConversationId}
         />
         <div className="flex-1 min-h-0 overflow-auto">
           <ErrorBoundary>
