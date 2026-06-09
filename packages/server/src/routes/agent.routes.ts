@@ -33,6 +33,48 @@ type BulkModelRequest = {
   clearIncompatibleSettings: boolean;
 };
 
+type AgentBundle = {
+  version?: number;
+  kind?: string;
+  exportedAt?: string;
+  agents?: Record<string, unknown>[];
+  teams?: Record<string, unknown>[];
+};
+
+function sanitizePortableAgent(agent: Record<string, unknown>): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...agent };
+  delete copy._id;
+  delete copy.createdAt;
+  delete copy.updatedAt;
+  delete copy.sourceRepoId;
+  delete copy.sourceRepoPath;
+  delete copy.sourceFile;
+  delete copy.sourceSha;
+  copy.isBuiltIn = false;
+  copy.createdBy = 'import';
+  return copy;
+}
+
+function sanitizePortableTeam(team: Record<string, unknown>): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...team };
+  delete copy._id;
+  delete copy.createdAt;
+  delete copy.updatedAt;
+  copy.isBuiltIn = false;
+  copy.createdBy = 'import';
+  return copy;
+}
+
+function parseAgentNames(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : [];
+  return [...new Set(raw.map((name) => typeof name === 'string' ? name.trim() : '').filter(Boolean))];
+}
+
+
 function titleFromAgentSlug(slug: string): string {
   return slug
     .split(/[-_]+/)
@@ -156,6 +198,113 @@ function markClearableBulkModelField(
 export function agentRoutes(db: Db): Router {
   const router = Router();
   const col = db.collection('agents');
+
+  // POST /api/agents/export — portable JSON bundle for selected/all agents.
+  router.post('/export', async (req: Request, res: Response) => {
+    try {
+      const agentNames = parseAgentNames(req.body?.agentNames);
+      const filter = agentNames.length > 0 ? { name: { $in: agentNames } } : {};
+      const rows = await col.find(filter).sort({ name: 1 }).toArray();
+      const exportedAgents = rows.map((agent) => sanitizePortableAgent(agent as Record<string, unknown>));
+      const teamNames = [...new Set(exportedAgents
+        .map((agent) => typeof agent.teamName === 'string' ? agent.teamName : '')
+        .filter(Boolean))];
+      const teams = teamNames.length > 0
+        ? await db.collection('teams').find({ name: { $in: teamNames } }).sort({ name: 1 }).toArray()
+        : [];
+
+      res.json({
+        kind: 'allen-agents-bundle',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        agents: exportedAgents,
+        teams: teams.map((team) => sanitizePortableTeam(team as Record<string, unknown>)),
+      });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/agents/import/json — import agents exported by /agents/export.
+  router.post('/import/json', async (req: Request, res: Response) => {
+    try {
+      const bundle = (req.body ?? {}) as AgentBundle;
+      const incomingAgents = Array.isArray(bundle.agents) ? bundle.agents : [];
+      const incomingTeams = Array.isArray(bundle.teams) ? bundle.teams : [];
+      if (incomingAgents.length === 0) {
+        return res.status(400).json({ error: 'agents must be a non-empty array' });
+      }
+
+      const createdTeams: string[] = [];
+      const skippedTeams: { name: string; reason: string }[] = [];
+      for (const rawTeam of incomingTeams) {
+        const name = typeof rawTeam.name === 'string' ? rawTeam.name.trim() : '';
+        const displayName = typeof rawTeam.displayName === 'string' ? rawTeam.displayName.trim() : '';
+        const leadAgentName = typeof rawTeam.leadAgentName === 'string' ? rawTeam.leadAgentName.trim() : '';
+        if (!name || !displayName || !leadAgentName) {
+          skippedTeams.push({ name: name || '(missing)', reason: 'invalid-team' });
+          continue;
+        }
+        const existing = await db.collection('teams').findOne({ name });
+        if (existing) {
+          skippedTeams.push({ name, reason: 'already-exists' });
+          continue;
+        }
+        const teamDoc = {
+          ...sanitizePortableTeam(rawTeam),
+          name,
+          displayName,
+          leadAgentName,
+          description: typeof rawTeam.description === 'string' ? rawTeam.description : '',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        await db.collection('teams').insertOne(teamDoc);
+        createdTeams.push(name);
+      }
+
+      const created: string[] = [];
+      const skipped: { name: string; reason: string }[] = [];
+      for (const rawAgent of incomingAgents) {
+        const name = typeof rawAgent.name === 'string' ? rawAgent.name.trim() : '';
+        if (!name) {
+          skipped.push({ name: '(missing)', reason: 'invalid-agent' });
+          continue;
+        }
+        const existing = await col.findOne({ name });
+        if (existing) {
+          skipped.push({ name, reason: 'already-exists' });
+          continue;
+        }
+
+        const agentDoc = {
+          ...sanitizePortableAgent(rawAgent),
+          name,
+          displayName: typeof rawAgent.displayName === 'string' && rawAgent.displayName.trim()
+            ? rawAgent.displayName.trim()
+            : titleFromAgentSlug(name),
+          teamName: typeof rawAgent.teamName === 'string' && rawAgent.teamName.trim() ? rawAgent.teamName.trim() : 'unassigned',
+          teamRole: rawAgent.teamRole === 'lead' ? 'lead' : 'member',
+          provider: typeof rawAgent.provider === 'string' ? rawAgent.provider : getAgentDefaults().provider,
+          model: typeof rawAgent.model === 'string' ? rawAgent.model : getAgentDefaults().model,
+          isBuiltIn: false,
+          createdBy: 'import',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        validateAgentSettingsFields(agentDoc);
+        await col.insertOne(agentDoc);
+        created.push(name);
+      }
+
+      res.status(201).json({ created, skipped, createdTeams, skippedTeams });
+    } catch (err: unknown) {
+      if (err instanceof AgentSettingsValidationError) {
+        return res.status(400).json({ error: err.message, code: err.code });
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
   // GET /api/agents
   router.get('/', async (_req: Request, res: Response) => {

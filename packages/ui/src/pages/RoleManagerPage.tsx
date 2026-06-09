@@ -13,7 +13,7 @@ import {
   RefreshCw, Sparkles, Users, Crown, Search, Play, ArrowRight,
   X, FolderGit2, Plus, Pencil, Trash2, LayoutGrid, Info, Home,
   ChevronRight, GitBranch, ExternalLink,
-  Layers, Tag, FileText, Monitor, Download, ScanSearch, Settings, BookOpen,
+  Layers, Tag, FileText, Monitor, Download, Upload, ScanSearch, Settings, BookOpen,
 } from 'lucide-react';
 import { SpawnTargetGraph } from '../components/agents/SpawnTargetGraph';
 import McpServerManager from '../components/settings/McpServerManager';
@@ -589,6 +589,30 @@ export default function RoleManagerPage() {
     setDialogOpen(true);
   }
 
+  async function handleExportAgents(agentNames?: string[]) {
+    try {
+      const names = agentNames ?? Array.from(selectedAgents);
+      const bundle = await agentsApi.exportJson(names);
+      downloadJsonFile(names.length === 1 ? `allen-agent-${names[0]}.json` : 'allen-agents-export.json', bundle);
+      const count = Number(bundle.agents?.length ?? 0);
+      toast.success(`Exported ${count} agent${count === 1 ? '' : 's'}.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to export agents');
+    }
+  }
+
+  async function handleImportAgentJson() {
+    try {
+      const bundle = await pickJsonFile();
+      const result = await agentsApi.importJson(bundle);
+      toast.success(`Imported ${result.created.length} agent${result.created.length === 1 ? '' : 's'}; skipped ${result.skipped.length}.`);
+      await reloadTeams();
+      await refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to import agents');
+    }
+  }
+
   async function handleDeleteAgent() {
     if (!deletingRole) return;
     try {
@@ -825,6 +849,7 @@ export default function RoleManagerPage() {
             <span className="font-mono">{selectedAgents.size} selected</span>
             <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={() => setAssignOpen(true)}><ArrowRight className="h-3.5 w-3.5" /> Assign</button>
             <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={() => setBulkModelOpen(true)}><Settings className="h-3.5 w-3.5" /> Change model</button>
+            <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={() => { void handleExportAgents(); }}><Upload className="h-3.5 w-3.5" /> Export</button>
             <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={() => setCreateTeamOpen(true)}><Plus className="h-3.5 w-3.5" /> Create team</button>
             <button className="inline-flex h-8 items-center gap-1.5 rounded px-2.5 transition-colors hover:bg-white/10" onClick={clearSelection}><X className="h-3.5 w-3.5" /> Clear</button>
           </div>
@@ -846,6 +871,8 @@ export default function RoleManagerPage() {
             onBuildTeamWithAi={handleBuildTeamWithAi}
             onCreateAgent={() => handleCreate()}
             onImportAgents={() => setImportOpen(true)}
+            onImportAgentJson={() => { void handleImportAgentJson(); }}
+            onExportAgents={(names) => { void handleExportAgents(names); }}
             onEditTeam={(team) => setTeamDialog({ type: 'edit', team })}
             onDeleteTeam={setDeletingTeam}
             onAddAgentToTeam={handleAddAgentToTeam}
@@ -953,6 +980,36 @@ function csvToArray(value: string): string[] {
 
 function arrayToCsv(value: unknown): string {
   return Array.isArray(value) ? value.join(', ') : '';
+}
+
+function downloadJsonFile(filename: string, data: unknown): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function pickJsonFile(): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) { reject(new Error('No file selected')); return; }
+      try {
+        resolve(JSON.parse(await file.text()));
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error('Invalid JSON file'));
+      }
+    };
+    input.click();
+  });
 }
 
 function blankSkill(): SkillRecord {
@@ -1299,7 +1356,7 @@ function LibrarySkillsPane({
 function LibraryTeamsAgentsPane({
   teams, agents, agentsByTeam, activityByAgent, selectedAgents,
   onToggleSelect, onViewAgent, onEditAgent, onDeleteAgent, onRunAgent,
-  onCreateTeam, onBuildTeamWithAi, onCreateAgent, onImportAgents, onEditTeam, onDeleteTeam,
+  onCreateTeam, onBuildTeamWithAi, onCreateAgent, onImportAgents, onImportAgentJson, onExportAgents, onEditTeam, onDeleteTeam,
   onAddAgentToTeam, onRefresh,
 }: {
   teams: Team[];
@@ -1316,6 +1373,8 @@ function LibraryTeamsAgentsPane({
   onBuildTeamWithAi: () => void;
   onCreateAgent: () => void;
   onImportAgents: () => void;
+  onImportAgentJson: () => void;
+  onExportAgents: (names?: string[]) => void;
   onEditTeam: (team: Team) => void;
   onDeleteTeam: (team: Team) => void;
   onAddAgentToTeam: (team: Team) => void;
@@ -1384,8 +1443,14 @@ function LibraryTeamsAgentsPane({
           <IconTooltipButton label="Refresh" onClick={onRefresh} className="h-9 w-9 rounded-md border border-app bg-app-card">
             <RefreshCw className="h-4 w-4" />
           </IconTooltipButton>
+          <button className="btn btn-secondary btn-sm h-9" onClick={() => onExportAgents()}>
+            <Upload className="h-3.5 w-3.5" /> Export
+          </button>
+          <button className="btn btn-secondary btn-sm h-9" onClick={onImportAgentJson}>
+            <Download className="h-3.5 w-3.5" /> Import JSON
+          </button>
           <button className="btn btn-secondary btn-sm h-9" onClick={onImportAgents}>
-            <FolderGit2 className="h-3.5 w-3.5" /> Import
+            <FolderGit2 className="h-3.5 w-3.5" /> Import from repo
           </button>
           <button className="btn btn-secondary btn-sm h-9" onClick={onCreateTeam}>
             <Plus className="h-3.5 w-3.5" /> New team

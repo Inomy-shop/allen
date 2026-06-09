@@ -20,6 +20,13 @@ export const workflows = {
     fetch(`${BASE}/workflows/${id}/export`, { headers: authHeaders() }).then(r => r.text()),
   importYaml: (yaml: string) =>
     request<any>('/workflows/import', { method: 'POST', body: JSON.stringify({ yaml }) }),
+  exportJson: (ids: string[] = []) =>
+    request<any>('/workflows/export', { method: 'POST', body: JSON.stringify({ ids }) }),
+  importJson: (bundle: any) =>
+    request<{ created: string[]; skipped: { name: string; reason: string }[] }>('/workflows/import/json', {
+      method: 'POST',
+      body: JSON.stringify(bundle),
+    }),
   ensureDefaults: (names: string[]) =>
     request<any[]>('/workflows/ensure-defaults', { method: 'POST', body: JSON.stringify({ names }) }),
 };
@@ -521,6 +528,15 @@ export const agents = {
       '/agents/import',
       { method: 'POST', body: JSON.stringify({ repoId, agentNames }) },
     ),
+  exportJson: (agentNames: string[] = []) =>
+    request<any>('/agents/export', { method: 'POST', body: JSON.stringify({ agentNames }) }),
+  importJson: (bundle: any) =>
+    request<{
+      created: string[];
+      skipped: { name: string; reason: string }[];
+      createdTeams: string[];
+      skippedTeams: { name: string; reason: string }[];
+    }>('/agents/import/json', { method: 'POST', body: JSON.stringify(bundle) }),
   resync: (name: string) =>
     request<any>(`/agents/${name}/resync`, { method: 'POST' }),
   moveToTeam: (name: string, teamName: string, teamRole: 'lead' | 'member' = 'member') =>

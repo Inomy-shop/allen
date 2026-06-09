@@ -40,6 +40,29 @@ export function workflowRoutes(db: Db): Router {
     }
   });
 
+  // POST /api/workflows/export — portable JSON bundle for selected/all workflows.
+  router.post('/export', async (req: Request, res: Response) => {
+    try {
+      const ids = Array.isArray(req.body?.ids)
+        ? req.body.ids.filter((id: unknown): id is string => typeof id === 'string' && id.trim().length > 0)
+        : [];
+      const bundle = await service.exportAsJson(ids);
+      res.json(bundle);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/workflows/import/json — import workflow bundles exported by /workflows/export.
+  router.post('/import/json', async (req: Request, res: Response) => {
+    try {
+      const result = await service.importFromJsonBundle(req.body);
+      res.status(201).json(result);
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   // GET /api/workflows/:id
   router.get('/:id', async (req: Request, res: Response) => {
     try {
