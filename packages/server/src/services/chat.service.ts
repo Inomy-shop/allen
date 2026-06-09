@@ -50,6 +50,7 @@ export interface ChatSession {
   _id?: ObjectId;
   title: string;
   titleSource?: 'default' | 'auto' | 'user';
+  titleRefreshedAt?: Date;
   status: 'active' | 'archived';
   messageCount: number;
   lastMessageAt: Date;
@@ -585,7 +586,7 @@ function compactChatTitle(value: unknown): string | null {
   return trimmed;
 }
 
-function deterministicSessionTaskTitle(userMessage: string): string | null {
+export function deterministicSessionTaskTitle(userMessage: string): string | null {
   const linearTitleMatch = userMessage.match(/Linear title:\s*([^\n]+)/i)
     ?? userMessage.match(/Ticket title:\s*([^\n]+)/i)
     ?? userMessage.match(/Issue title:\s*([^\n]+)/i);
@@ -596,8 +597,7 @@ function deterministicSessionTaskTitle(userMessage: string): string | null {
   const dispatchTitle = compactChatTitle(dispatchMatch?.[2]);
   if (dispatchTitle && !/^through allen$/i.test(dispatchTitle)) return dispatchTitle;
 
-  const assignMatch = userMessage.match(/\b(?:assign|work on|fix|implement|review|debug|investigate)\b(?:\s+this)?(?:\s+task|\s+ticket|\s+issue)?[:\-–—]?\s+([^\n]+)/i);
-  return compactChatTitle(assignMatch?.[1]) ?? null;
+  return null;
 }
 
 export function sanitizeChatTitle(candidate: unknown): string | null {
@@ -631,15 +631,44 @@ export function sanitizeChatTitle(candidate: unknown): string | null {
   return title || null;
 }
 
-function fallbackTitleFromUserMessage(userMessage: string): string {
-  const cleaned = userMessage
+export function fallbackTitleFromUserMessage(userMessage: string): string {
+  let cleaned = userMessage
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/https?:\/\/\S+/g, '')
+    // Strip "For Allen," / "Hey Allen," / "Hi Allen," / "Hello Allen," prefixes (case-insensitive)
+    .replace(/^(for|hey|hi|hello)\s+allen\b[,.]?\s*/i, '')
+    // Strip standalone "Hi," / "Hey," / "Hello," starters
+    .replace(/^(for|hey|hi|hello)[,.]?\s+/i, '')
+    // Normalize common typos
+    .replace(/\bi\s+wan\s+to\b/gi, 'i want to')
+    .replace(/\bi\s+wanna\b/gi, 'i want to')
+    // Strip filler phrases
     .replace(/\b(can you|could you|please|do one thing|i want to|we need to)\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+  // Capitalize first letter
+  cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+
+  // Prepend "About " if the result starts with no action verb (likely a noun phrase)
+  const startsWithActionVerb = /^(fix|build|debug|review|find|add|improve|analyse|analyze|investigate|create|update|delete|check|run|generate|write|test|implement|deploy|migrate|refactor|explore|configure|manage|plan|design|optimize|show|help|assist|identify|evaluate|propose|research|compare|summarize|list|get|set|use)\b/i.test(cleaned);
+  if (!startsWithActionVerb && cleaned.length > 0) {
+    cleaned = 'About ' + cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+  }
+
   return sanitizeChatTitle(cleaned) ?? 'New conversation';
+}
+
+function looksLikeFallbackTitle(title: string | undefined): boolean {
+  if (!title) return true;
+  const words = title.split(/\s+/);
+  if (words.length >= CHAT_TITLE_MAX_WORDS) return true;
+  if (title.length >= CHAT_TITLE_MAX_CHARS) return true;
+  if (/^(for|hey|hi|hello)\s+allen\b/i.test(title)) return true;
+  const startsWithActionVerb = /^(fix|build|debug|review|find|add|improve|analyse|analyze|investigate|create|update|delete|check|run|generate|write|test|implement|deploy|migrate|refactor|explore|configure|manage|plan|design|optimize|show|help|assist|identify|evaluate|propose|research|compare|summarize|list|get|set|use|about)\b/i.test(title);
+  if (!startsWithActionVerb) return true;
+  return false;
 }
 
 export function normalizeGeneratedChatTitle(candidate: unknown, userMessage: string): string {
@@ -722,8 +751,8 @@ function sanitizeChatMessagesForDisplay(messages: ChatMessage[]): ChatMessage[] 
 
 interface VerifiedTitle {
   title: string;
-  isValid: boolean;
-  reason?: string;
+  confidence: number;  // 0.0–1.0; any value > 0 from a non-empty title is accepted
+  notes?: string;
 }
 
 /**
@@ -746,8 +775,8 @@ function parseTitleVerification(raw: string): VerifiedTitle | null {
       if (parsed && typeof parsed === 'object' && typeof parsed.final_title === 'string') {
         return {
           title: parsed.final_title,
-          isValid: parsed.is_valid !== false,
-          reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+          confidence: typeof parsed.confidence === 'number' ? parsed.confidence : (parsed.is_valid !== false ? 0.7 : 0.1),
+          notes: typeof parsed.notes === 'string' ? parsed.notes : (typeof parsed.reason === 'string' ? parsed.reason : undefined),
         };
       }
     } catch {}
@@ -1466,22 +1495,31 @@ export class ChatService {
           onToolStart: () => {},
           onToolResult: () => {},
         });
-        return parseTitleVerification(result.text.trim());
+        const parsed = parseTitleVerification(result.text.trim());
+        if (!parsed) {
+          console.log('[chat_title_llm_parse_failed] Could not parse LLM title response');
+        }
+        return parsed;
       } catch (err) {
-        console.error('LLM title generation failed:', err instanceof Error ? err.message : err);
+        console.log('[chat_title_llm_threw] LLM title generation threw:', err instanceof Error ? err.message : err);
         return null;
       }
     };
 
     const first = await callOnce(prompt);
-    if (first?.isValid && first.title) {
+    // Accept any non-empty title from the first call, regardless of confidence
+    if (first?.title) {
+      if (first.confidence < 0.2) {
+        console.log('[chat_title_llm_invalid] Low-confidence title accepted as best-effort:', first.confidence, first.notes);
+      }
       return normalizeGeneratedChatTitle(first.title, userMessage);
     }
 
-    const feedback = first?.reason || 'The previous draft did not meet the rules. Produce a corrected title.';
-    const retryPrompt = `${prompt}\n\nYour previous attempt failed self-verification with reason: ${feedback}\nProduce a fully verified title that passes every rule.`;
+    // Only retry when first call produced no title at all
+    const feedback = first?.notes || 'No title was produced. Generate a best-effort title even if imperfect.';
+    const retryPrompt = `${prompt}\n\nYour previous attempt produced no title. Produce any best-effort title now. Reason: ${feedback}`;
     const second = await callOnce(retryPrompt);
-    if (second?.isValid && second.title) {
+    if (second?.title) {
       return normalizeGeneratedChatTitle(second.title, userMessage);
     }
 
@@ -1514,10 +1552,9 @@ Self-verification (the model MUST do this internally before answering):
 - Confirm the final title actually summarises what the user is trying to accomplish.
 
 Output format — RETURN ONLY this JSON object on a single line, nothing else:
-{"final_title":"<the verified title>","is_valid":true,"reason":""}
+{"final_title":"<the best title you can produce>","confidence":0.9,"notes":""}
 
-If you cannot produce a title that passes every check, return:
-{"final_title":"","is_valid":false,"reason":"<short explanation>"}
+Always return a best-effort title even if it is imperfect. Use a lower confidence (0.3–0.6) if you are uncertain. Never return an empty final_title.
 
 Good examples (the title field):
 - Fix visual search failure in image embeddings
@@ -1544,10 +1581,9 @@ Self-verification (the model MUST do this internally before answering):
 - Confirm the final title actually summarises what the user is trying to accomplish.
 
 Output format — RETURN ONLY this JSON object on a single line, nothing else:
-{"final_title":"<the verified title>","is_valid":true,"reason":""}
+{"final_title":"<the best title you can produce>","confidence":0.9,"notes":""}
 
-If you cannot produce a title that passes every check, return:
-{"final_title":"","is_valid":false,"reason":"<short explanation>"}
+Always return a best-effort title even if it is imperfect. Use a lower confidence (0.3–0.6) if you are uncertain. Never return an empty final_title.
 
 Good examples (the title field):
 - Fix visual search failure in image embeddings
@@ -1560,7 +1596,14 @@ User: ${userMessage.slice(0, 500)}`;
 
     const verified = await this.runVerifiedTitleLLM(prompt, userMessage);
     if (verified) return verified;
-    return deterministicSessionTaskTitle(userMessage) ?? fallbackTitleFromUserMessage(userMessage);
+    const deterministicResult = deterministicSessionTaskTitle(userMessage);
+    if (deterministicResult) {
+      const branch = /linear title:|ticket title:|issue title:/i.test(userMessage) ? 'deterministic-linear' : 'deterministic-dispatch';
+      console.log(`[chat_title_fallback_used] branch=${branch}`);
+      return deterministicResult;
+    }
+    console.log('[chat_title_fallback_used] branch=raw-truncation');
+    return fallbackTitleFromUserMessage(userMessage);
   }
 
   /**
@@ -1920,9 +1963,9 @@ User: ${userMessage.slice(0, 500)}`;
       const priorCount = (session?.messageCount as number) ?? 0;
       const prevSource = session?.titleSource;
       const shouldAutoTitle = priorCount <= 2 && prevSource !== 'user' && prevSource !== 'auto';
+      const responseText = visibleResponseText.trim() || undefined;
 
       if (shouldAutoTitle) {
-        const responseText = visibleResponseText.trim() || undefined;
         const deterministicTitle = deterministicSessionTaskTitle(content);
         Promise.resolve(deterministicTitle ?? this.generateTitleWithLLM(content, responseText))
           .then(async (generatedTitle) => {
@@ -1932,6 +1975,40 @@ User: ${userMessage.slice(0, 500)}`;
             }
           })
           .catch((err) => console.error('Failed to generate session title', err.message));
+      }
+
+      // One-shot title refresh after the conversation has more context.
+      // Fires at most once per session (titleRefreshedAt guards against repeats).
+      const refreshThreshold = 8; // messageCount >= 8 = >= 4 turns
+      const shouldRefreshTitle =
+        priorCount >= refreshThreshold &&
+        prevSource === 'auto' &&
+        !(session?.titleRefreshedAt) &&
+        looksLikeFallbackTitle(session?.title as string | undefined);
+
+      if (shouldRefreshTitle) {
+        (async () => {
+          try {
+            // Fetch first user + first assistant messages for richer context
+            const firstMessages = await this.messages
+              .find({ sessionId, role: { $in: ['user', 'assistant'] } })
+              .sort({ createdAt: 1 })
+              .limit(4)
+              .toArray();
+            const firstUser = (firstMessages.find(m => m.role === 'user')?.content as string | undefined) ?? content;
+            const firstAssistant = (firstMessages.find(m => m.role === 'assistant')?.content as string | undefined) ?? responseText ?? '';
+            const refreshedTitle = await this.generateTitleWithLLM(firstUser, firstAssistant || undefined);
+            if (refreshedTitle) {
+              await this.sessions.updateOne(
+                { _id: new ObjectId(sessionId) },
+                { $set: { title: refreshedTitle, titleSource: 'auto', titleRefreshedAt: new Date(), updatedAt: new Date() } },
+              );
+              broadcastToListeners(entry, 'session_update', { title: refreshedTitle });
+            }
+          } catch (err) {
+            console.error('[chat-title] one-shot refresh failed:', (err as Error).message);
+          }
+        })();
       }
     } catch (error) {
       clearInterval(saveInterval);
@@ -1960,6 +2037,38 @@ User: ${userMessage.slice(0, 500)}`;
               }
             })
             .catch(() => {});
+        }
+
+        // One-shot title refresh — mirrors the success path refresh block.
+        const refreshThresholdAbort = 8;
+        const shouldRefreshTitleOnAbort =
+          priorCount >= refreshThresholdAbort &&
+          prevSource === 'auto' &&
+          !(session?.titleRefreshedAt) &&
+          looksLikeFallbackTitle(session?.title as string | undefined);
+
+        if (shouldRefreshTitleOnAbort) {
+          (async () => {
+            try {
+              const firstMessages = await this.messages
+                .find({ sessionId, role: { $in: ['user', 'assistant'] } })
+                .sort({ createdAt: 1 })
+                .limit(4)
+                .toArray();
+              const firstUser = (firstMessages.find(m => m.role === 'user')?.content as string | undefined) ?? content;
+              const firstAssistant = (firstMessages.find(m => m.role === 'assistant')?.content as string | undefined) ?? (entry.currentText.trim() || undefined);
+              const refreshedTitle = await this.generateTitleWithLLM(firstUser, firstAssistant || undefined);
+              if (refreshedTitle) {
+                await this.sessions.updateOne(
+                  { _id: new ObjectId(sessionId) },
+                  { $set: { title: refreshedTitle, titleSource: 'auto', titleRefreshedAt: new Date(), updatedAt: new Date() } },
+                );
+                broadcastToListeners(entry, 'session_update', { title: refreshedTitle });
+              }
+            } catch (err) {
+              console.error('[chat-title] one-shot refresh failed (abort):', (err as Error).message);
+            }
+          })();
         }
         return;
       }
