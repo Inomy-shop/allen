@@ -11,7 +11,7 @@ import { ToolCallLog } from '../components/common/ToolCallLog';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, type ChatQueueItem } from '../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
 import WorkspaceChatTabs, { type WorkspaceChatTab, getTabKey } from '../components/chat/WorkspaceChatTabs';
-import { BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Server, Terminal, X } from 'lucide-react';
+import { AppWindow, BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Server, Terminal, X } from 'lucide-react';
 import { XTerminal } from '../components/workspace/XTerminal';
 import WorkspaceServersTab from '../components/workspace/WorkspaceServersTab';
 
@@ -44,7 +44,39 @@ type PendingSendOptions = {
   };
 };
 
+type ExternalIdeId = 'vscode' | 'cursor';
+
+type IdeOption = {
+  id: ExternalIdeId;
+  label: string;
+  icon: () => JSX.Element;
+};
+
 type ChatPullRequest = NonNullable<NonNullable<SpawnedAgent['runContext']>['pullRequest']>;
+
+function VsCodeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="chat-ide-option-icon">
+      <path fill="#22a7f2" d="M19.3 3.1 9.6 12l9.7 8.9c.6.5 1.7.1 1.7-.7V3.8c0-.8-1.1-1.2-1.7-.7Z" />
+      <path fill="#007acc" d="m8.4 8.7-4-3.1c-.4-.3-.9-.3-1.2.1l-1 1c-.3.3-.3.8.1 1.1L6.6 12l-4.3 4.2c-.4.3-.4.8-.1 1.1l1 1c.3.4.8.4 1.2.1l4-3.1 3.7 2.9c.5.4 1.2 0 1.2-.6V6.4c0-.6-.7-1-1.2-.6L8.4 8.7Z" />
+    </svg>
+  );
+}
+
+function CursorIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="chat-ide-option-icon">
+      <path fill="currentColor" d="M4 2.8 20.5 12 4 21.2V2.8Z" />
+      <path fill="rgb(var(--color-card))" d="m7.2 7 8.6 5-8.6 5V7Z" />
+      <path fill="currentColor" d="m9.4 10.5 3.4 1.5-3.4 1.5v-3Z" />
+    </svg>
+  );
+}
+
+const IDE_OPTIONS: IdeOption[] = [
+  { id: 'vscode', label: 'VS Code', icon: VsCodeIcon },
+  { id: 'cursor', label: 'Cursor', icon: CursorIcon },
+];
 
 function humanLabel(value?: string | null): string {
   if (!value) return '';
@@ -202,6 +234,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const wsLoadedForSessionRef = useRef<string | null>(null);
   const pendingWorkspaceTempTabRef = useRef<{ workspaceId: string; tab: WorkspaceChatTab } | null>(null);
   const workspaceTabsWorkspaceIdRef = useRef<string | null>(null);
+  const ideMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Workspace mode state
   const [activeWorkspace, setActiveWorkspace] = useState<any | null>(null);
@@ -211,6 +244,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const [activeWorkspaceTabKey, setActiveWorkspaceTabKey] = useState<string | null>(null);
   const [tempTabCounter, setTempTabCounter] = useState(0);
   const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null);
+  const [ideMenuOpen, setIdeMenuOpen] = useState(false);
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
@@ -233,6 +267,26 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
 
   useEffect(() => { queuedMessagesRef.current = queuedMessages; }, [queuedMessages]);
   useEffect(() => { editingQueuedIdRef.current = editingQueuedId; }, [editingQueuedId]);
+
+  useEffect(() => {
+    if (!ideMenuOpen) return undefined;
+
+    function onPointerDown(event: PointerEvent) {
+      if (ideMenuRef.current?.contains(event.target as Node)) return;
+      setIdeMenuOpen(false);
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setIdeMenuOpen(false);
+    }
+
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [ideMenuOpen]);
 
   useEffect(() => {
     if (!restoredDraft?.trim()) return;
@@ -1048,6 +1102,15 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
   }
 
+  async function handleOpenWorkspaceIde(ide: ExternalIdeId) {
+    if (!activeWorkspaceId || !window.allenDesktop?.openWorkspaceIde) return;
+    setIdeMenuOpen(false);
+    const result = await window.allenDesktop.openWorkspaceIde(activeWorkspaceId, ide);
+    if (!result.ok) {
+      window.alert(result.error ?? 'Could not open workspace in IDE');
+    }
+  }
+
   const linkedWorkspaceId = activeWorkspaceId ?? activeSession?.workspaceId ?? null;
   // Also check spawned agents for a workspace id (covers the case where the workspace is
   // visible in runContext but not yet DB-linked to the chatSession).
@@ -1181,6 +1244,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const workspaceServersActive = activeWorkspaceTab?.id.kind === 'servers';
   const workspaceServersTabOpen = openWorkspaceTabs.some(tab => tab.id.kind === 'servers');
   const workspaceUtilityTabActive = workspaceTerminalActive || workspaceServersActive;
+  const canOpenWorkspaceIde = Boolean(activeWorkspaceId && window.allenDesktop?.openWorkspaceIde);
   const archivedWorkspace = activeSession?.archivedWorkspace;
   const repoBrowseSource = archivedWorkspace?.repoId
     ? { id: archivedWorkspace.repoId, name: archivedWorkspace.repoName ?? archivedWorkspace.name, path: archivedWorkspace.repoPath }
@@ -1526,6 +1590,40 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
             <button type="button" className={activeWorkspaceTabKey === 'terminal' ? 'active' : ''} onClick={handleWorkspaceTerminalTab} title="Terminal" data-tooltip="Terminal">
               <Terminal className="h-4 w-4" />
             </button>
+          )}
+          {canOpenWorkspaceIde && (
+            <div className={`chat-ide-menu-wrap ${ideMenuOpen ? 'expanded' : ''}`} ref={ideMenuRef}>
+              <button
+                type="button"
+                className={ideMenuOpen ? 'active' : ''}
+                onClick={() => setIdeMenuOpen(value => !value)}
+                title="Open workspace in IDE"
+                data-tooltip="Open in IDE"
+                aria-haspopup="menu"
+                aria-expanded={ideMenuOpen}
+              >
+                <AppWindow className="h-4 w-4" />
+              </button>
+              <div className="chat-ide-inline-options" role="menu" aria-label="Open workspace in IDE">
+                {IDE_OPTIONS.map((option) => {
+                  const Icon = option.icon;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="menuitem"
+                      className="chat-ide-option-button"
+                      title={`Open in ${option.label}`}
+                      data-tooltip={option.label}
+                      aria-label={`Open workspace in ${option.label}`}
+                      onClick={() => void handleOpenWorkspaceIde(option.id)}
+                    >
+                      <Icon />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           )}
           {activeWorkspaceId && (activeWorkspace?.services?.length ?? 0) > 0 && (
             <button type="button" className={activeWorkspaceTabKey === 'servers' ? 'active' : ''} onClick={handleWorkspaceServersTab} title="Servers" data-tooltip="Servers">

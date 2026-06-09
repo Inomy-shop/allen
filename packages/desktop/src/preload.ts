@@ -8,6 +8,7 @@ const allenDesktop = {
   selectDirectory: () => ipcRenderer.invoke('allen:select-directory'),
   showItemInFolder: (path: string) => ipcRenderer.invoke('allen:show-item-in-folder', path),
   openExternal: (url: string) => ipcRenderer.invoke('allen:open-external', url),
+  openWorkspaceIde: (workspaceId: string, ide: 'vscode' | 'cursor') => ipcRenderer.invoke('allen:open-workspace-ide', { workspaceId, ide }),
   openLogsDirectory: () => ipcRenderer.invoke('allen:open-logs-directory'),
   exportSupportBundle: (targetPath?: string) => ipcRenderer.invoke('allen:export-support-bundle', targetPath),
   writeClipboardText: (text: string) => ipcRenderer.invoke('allen:clipboard-write-text', text),

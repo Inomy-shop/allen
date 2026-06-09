@@ -8,6 +8,7 @@ const allenDesktop = {
   selectDirectory: () => ipcRenderer.invoke('allen:select-directory'),
   showItemInFolder: (path) => ipcRenderer.invoke('allen:show-item-in-folder', path),
   openExternal: (url) => ipcRenderer.invoke('allen:open-external', url),
+  openWorkspaceIde: (workspaceId, ide) => ipcRenderer.invoke('allen:open-workspace-ide', { workspaceId, ide }),
   openLogsDirectory: () => ipcRenderer.invoke('allen:open-logs-directory'),
   exportSupportBundle: (targetPath) => ipcRenderer.invoke('allen:export-support-bundle', targetPath),
   writeClipboardText: (text) => ipcRenderer.invoke('allen:clipboard-write-text', text),

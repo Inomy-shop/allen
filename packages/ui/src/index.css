@@ -10724,3 +10724,52 @@
   .shadow-popover   { box-shadow: var(--shadow-popover); }
   .ring-focus       { box-shadow: var(--focus-ring); }
 }
+
+.chat-ide-menu-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-ide-inline-options {
+  display: flex;
+  max-height: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition: max-height 140ms ease, opacity 120ms ease, transform 120ms ease;
+}
+
+.chat-ide-menu-wrap:hover .chat-ide-inline-options,
+.chat-ide-menu-wrap:focus-within .chat-ide-inline-options,
+.chat-ide-menu-wrap.expanded .chat-ide-inline-options {
+  max-height: 80px;
+  overflow: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.chat-resource-rail .chat-ide-option-button {
+  width: 34px;
+  height: 34px;
+  color: rgb(var(--color-secondary));
+}
+
+.chat-resource-rail .chat-ide-option-button:hover,
+.chat-resource-rail .chat-ide-option-button:focus-visible {
+  color: rgb(var(--color-primary));
+  background: rgb(var(--color-muted-bg));
+}
+
+.chat-ide-option-icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}

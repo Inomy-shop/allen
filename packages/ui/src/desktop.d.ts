@@ -21,6 +21,11 @@ declare global {
       selectDirectory(): Promise<string | null>;
       showItemInFolder(path: string): Promise<boolean>;
       openExternal(url: string): Promise<boolean>;
+      openWorkspaceIde(workspaceId: string, ide: 'vscode' | 'cursor'): Promise<{
+        ok: boolean;
+        ide: 'vscode' | 'cursor';
+        error?: string;
+      }>;
       openLogsDirectory(): Promise<boolean>;
       writeClipboardText(text: string): Promise<boolean>;
       exportSupportBundle(targetPath?: string): Promise<{

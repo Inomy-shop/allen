@@ -11,7 +11,7 @@ import {
   type MessageBoxOptions,
   type OpenDialogOptions,
 } from 'electron';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
@@ -27,6 +27,7 @@ import {
 } from 'node:fs';
 import { arch, platform, release } from 'node:os';
 import { dirname, resolve } from 'node:path';
+import { ObjectId } from 'mongodb';
 import { Readable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
@@ -68,6 +69,19 @@ interface SupportBundleResult {
   bytes?: number;
   error?: string;
 }
+
+type ExternalIdeId = 'vscode' | 'cursor';
+
+interface OpenWorkspaceIdeResult {
+  ok: boolean;
+  ide: ExternalIdeId;
+  error?: string;
+}
+
+const EXTERNAL_IDE_CONFIG: Record<ExternalIdeId, { label: string; cli: string; macAppName: string }> = {
+  vscode: { label: 'Visual Studio Code', cli: 'code', macAppName: 'Visual Studio Code' },
+  cursor: { label: 'Cursor', cli: 'cursor', macAppName: 'Cursor' },
+};
 
 function isSmokeMode(): boolean {
   return process.env.ALLEN_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
@@ -308,6 +322,80 @@ async function openDirectory(path: string | null | undefined): Promise<void> {
       title: 'Allen could not open the folder',
       message: result,
     });
+  }
+}
+
+function isExternalIdeId(value: unknown): value is ExternalIdeId {
+  return value === 'vscode' || value === 'cursor';
+}
+
+function execFileQuiet(command: string, args: string[]): Promise<void> {
+  return new Promise((resolveExec, rejectExec) => {
+    execFile(command, args, { timeout: 8_000 }, (error) => {
+      if (error) rejectExec(error);
+      else resolveExec();
+    });
+  });
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function launchIde(ide: ExternalIdeId, workspacePath: string): Promise<void> {
+  const config = EXTERNAL_IDE_CONFIG[ide];
+  try {
+    await execFileQuiet(config.cli, [workspacePath]);
+    return;
+  } catch (cliErr) {
+    if (process.platform !== 'darwin') throw cliErr;
+  }
+
+  await execFileQuiet('open', ['-a', config.macAppName, workspacePath]);
+}
+
+async function openWorkspaceInIde(workspaceId: unknown, ide: unknown): Promise<OpenWorkspaceIdeResult> {
+  const selectedIde: ExternalIdeId = isExternalIdeId(ide) ? ide : 'vscode';
+  const config = EXTERNAL_IDE_CONFIG[selectedIde];
+
+  try {
+    if (typeof workspaceId !== 'string' || !ObjectId.isValid(workspaceId)) {
+      return { ok: false, ide: selectedIde, error: 'Invalid workspace id' };
+    }
+    if (!serverHandle) {
+      return { ok: false, ide: selectedIde, error: 'Allen desktop server is not ready yet' };
+    }
+
+    const workspace = await serverHandle.db.collection('workspaces').findOne(
+      { _id: new ObjectId(workspaceId) },
+      { projection: { worktreePath: 1, status: 1, name: 1 } },
+    );
+    if (!workspace || workspace.status === 'archived') {
+      return { ok: false, ide: selectedIde, error: 'Workspace is not available' };
+    }
+
+    const worktreePath = typeof workspace.worktreePath === 'string' ? workspace.worktreePath.trim() : '';
+    if (!worktreePath || !existsSync(worktreePath) || !isDirectory(worktreePath)) {
+      return { ok: false, ide: selectedIde, error: 'Workspace folder is missing' };
+    }
+
+    await launchIde(selectedIde, worktreePath);
+    return { ok: true, ide: selectedIde };
+  } catch (err) {
+    console.warn('[desktop] failed to open workspace IDE', {
+      ide: selectedIde,
+      workspaceId: typeof workspaceId === 'string' ? workspaceId : null,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return {
+      ok: false,
+      ide: selectedIde,
+      error: `Could not open ${config.label}. Make sure it is installed.`,
+    };
   }
 }
 
@@ -766,6 +854,10 @@ ipcMain.handle('allen:open-external', async (_event, url: string) => {
   if (typeof url !== 'string') return false;
   return openExternalUrl(url);
 });
+
+ipcMain.handle('allen:open-workspace-ide', async (_event, payload: { workspaceId?: unknown; ide?: unknown }) => (
+  openWorkspaceInIde(payload?.workspaceId, payload?.ide)
+));
 
 ipcMain.handle('allen:open-logs-directory', async () => {
   if (!logsDir) return false;
