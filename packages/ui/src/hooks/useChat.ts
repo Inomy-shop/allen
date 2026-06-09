@@ -390,6 +390,7 @@ export function useChat() {
   const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [messageReloadNonce, setMessageReloadNonce] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const clearRestoredDraft = useCallback(() => setRestoredDraft(null), []);
 
@@ -593,7 +594,7 @@ export function useChat() {
         void streamReader.cancel().catch(() => {});
       }
     };
-  }, [activeSessionId]);
+  }, [activeSessionId, messageReloadNonce]);
 
   // Centralized SSE event handler
   const handleSSEEvent = useCallback((event: string, data: any, sessionId: string) => {
@@ -1145,6 +1146,11 @@ export function useChat() {
     }
   }, [activeSessionId, streaming, loadSessions]);
 
+  const refreshActiveSession = useCallback(() => {
+    if (!activeSessionId) return;
+    setMessageReloadNonce(n => n + 1);
+  }, [activeSessionId]);
+
   const cancelStream = useCallback(() => {
     // 1. Abort the frontend SSE fetch so the UI stops receiving chunks.
     if (abortRef.current) {
@@ -1295,5 +1301,6 @@ export function useChat() {
     restoredDraft,
     clearRestoredDraft,
     refresh: loadSessions,
+    refreshActiveSession,
   };
 }

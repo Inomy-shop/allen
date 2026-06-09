@@ -253,7 +253,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
     restoredDraft, clearRestoredDraft,
-    refresh: refreshSessions,
+    refresh: refreshSessions, refreshActiveSession,
   } = useChat();
 
   const activeSession = sessions.find(s => s._id === activeSessionId);
@@ -722,7 +722,12 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     }
     try {
       const items = await chatApi.getQueue(sessionId);
-      setQueuedMessages(items ?? []);
+      const allActiveItems = items ?? [];
+      const visibleItems = allActiveItems.filter(item => item.status !== 'running');
+      setQueuedMessages(visibleItems);
+      if (allActiveItems.some(item => item.status === 'running') && !streaming) {
+        refreshActiveSession();
+      }
     } catch (err) {
       console.warn('Failed to load chat queue:', err);
     }
