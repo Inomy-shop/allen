@@ -1,5 +1,5 @@
 import type { Db } from 'mongodb';
-import { AGENT_FALLBACK_CWD, type ChatProvider } from './chat-providers.js';
+import { AGENT_FALLBACK_CWD, isClaudeFamilyProvider, type ChatProvider } from './chat-providers.js';
 import { ClaudePersistentRuntime } from './claude-persistent-runtime.js';
 import { CodexAppServerRuntime } from './codex-app-server-runtime.js';
 import { logRuntimeEvent } from './chat-runtime-logs.js';
@@ -54,9 +54,11 @@ export async function runPersistentChatTurn(input: RuntimeTurnInput): Promise<Ru
   return turn;
 }
 
-export async function runPersistentCodexSlashCommand(input: RuntimeTurnInput, command: RuntimeSlashCommand): Promise<RuntimeTurnResult> {
+export async function runPersistentChatSlashCommand(input: RuntimeTurnInput, command: RuntimeSlashCommand): Promise<RuntimeTurnResult> {
   if (!input.chatSessionId) throw new Error('Persistent chat runtime requires chatSessionId');
-  if (input.provider !== 'codex') throw new Error('Codex slash commands require the Codex provider');
+  if (input.provider !== 'codex' && !isClaudeFamilyProvider(input.provider)) {
+    throw new Error(`Slash commands are not supported for provider ${input.provider}`);
+  }
   const key = runtimeKey(input);
   const entry = getOrCreateRuntime(key, input);
   clearIdleTimer(entry);
@@ -68,8 +70,8 @@ export async function runPersistentCodexSlashCommand(input: RuntimeTurnInput, co
     if (input.callbacks.signal?.aborted) onAbort();
     else input.callbacks.signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      if (!(entry.runtime instanceof CodexAppServerRuntime)) {
-        throw new Error('Codex slash commands require the Codex app-server runtime');
+      if (typeof entry.runtime.sendSlashCommand !== 'function') {
+        throw new Error(`Runtime for ${input.provider} does not support slash commands`);
       }
       logRuntimeEvent({
         db: input.db,
@@ -131,8 +133,8 @@ function getOrCreateRuntime(key: string, input: RuntimeTurnInput): RuntimeEntry 
 }
 
 function createRuntime(input: RuntimeCreateInput): PersistentChatRuntime {
-  if (input.provider === 'claude-cli') return new ClaudePersistentRuntime(input);
   if (input.provider === 'codex') return new CodexAppServerRuntime(input);
+  if (isClaudeFamilyProvider(input.provider)) return new ClaudePersistentRuntime(input);
   throw new Error(`Unsupported persistent chat provider: ${input.provider}`);
 }
 

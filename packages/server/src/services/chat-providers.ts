@@ -157,6 +157,10 @@ export function getClaudeCompatibleProviderConfig(provider: unknown): ClaudeComp
   return CLAUDE_COMPATIBLE_PROVIDER_BY_ID.get(provider as ClaudeCompatibleProviderConfig['provider']);
 }
 
+export function isClaudeFamilyProvider(provider: unknown): boolean {
+  return provider === 'claude-cli' || isClaudeCompatibleProvider(provider);
+}
+
 // ── Provider Registry ──
 
 export const PROVIDERS: ProviderConfig[] = [

@@ -2,13 +2,13 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:chil
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { normalizeClaudeUsage, normalizeModelAlias, type TokenUsageInfo } from '@allen/engine';
-import { AGENT_FALLBACK_CWD, type ChatProvider } from './chat-providers.js';
+import { AGENT_FALLBACK_CWD, buildClaudeCompatibleEnvOverlay, isClaudeCompatibleProvider, type ChatProvider } from './chat-providers.js';
 import { toClaudeSdkOptions } from './agent-settings.js';
 import { buildControlledMcpConfig, writeClaudeMcpConfigFile } from './chat-controlled-mcp.js';
 import { logRuntimeEvent } from './chat-runtime-logs.js';
 import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
 import type { ChatTraceEvent } from './chat-llm.js';
-import type { PersistentChatRuntime, RuntimeCreateInput, RuntimeTurnInput, RuntimeTurnResult } from './chat-runtime-types.js';
+import type { PersistentChatRuntime, RuntimeCreateInput, RuntimeSlashCommand, RuntimeTurnInput, RuntimeTurnResult } from './chat-runtime-types.js';
 
 type PendingTool = {
   tool: string;
@@ -30,7 +30,7 @@ type ActiveTurn = {
 
 export class ClaudePersistentRuntime implements PersistentChatRuntime {
   readonly id = `claude-${randomUUID()}`;
-  readonly provider: ChatProvider = 'claude-cli';
+  readonly provider: ChatProvider;
   readonly key: string;
 
   private proc?: ChildProcessWithoutNullStreams;
@@ -43,13 +43,26 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
 
   constructor(private readonly createInput: RuntimeCreateInput) {
     this.key = createInput.key;
+    this.provider = createInput.provider;
   }
 
   async sendTurn(input: RuntimeTurnInput): Promise<RuntimeTurnResult> {
+    return this.sendUserText(input, claudePrompt(input), 'turn_send');
+  }
+
+  async sendSlashCommand(input: RuntimeTurnInput, command: RuntimeSlashCommand): Promise<RuntimeTurnResult> {
+    return this.sendUserText(input, command.raw, 'slash_command_send', command);
+  }
+
+  private async sendUserText(
+    input: RuntimeTurnInput,
+    text: string,
+    event: 'turn_send' | 'slash_command_send',
+    command?: RuntimeSlashCommand,
+  ): Promise<RuntimeTurnResult> {
     if (this.currentTurn) throw new Error('Claude runtime already has an active turn');
     await this.ensureStarted(input);
 
-    const prompt = claudePrompt(input);
     const trace: ChatTraceEvent[] = [];
     const completion = new Promise<RuntimeTurnResult>((resolve, reject) => {
       this.currentTurn = {
@@ -71,15 +84,19 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
       provider: this.provider,
       runtimeId: this.id,
       eventType: 'lifecycle',
-      event: 'turn_send',
-      data: { providerSessionId: this.sessionId, promptPreview: prompt.slice(0, 300) },
+      event,
+      data: {
+        providerSessionId: this.sessionId,
+        promptPreview: text.slice(0, 300),
+        ...(command ? { command } : {}),
+      },
     });
 
     this.proc?.stdin.write(JSON.stringify({
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: prompt }],
+        content: [{ type: 'text', text }],
       },
     }) + '\n');
 
@@ -141,9 +158,15 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
       args.push('--mcp-config', writeClaudeMcpConfigFile(this.id, mcp.servers), '--strict-mcp-config');
     }
 
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (isClaudeCompatibleProvider(input.provider)) {
+      Object.assign(env, await buildClaudeCompatibleEnvOverlay(input.provider, input.model));
+    }
+    if (input.chatSessionId) env.ALLEN_CHAT_SESSION_ID = input.chatSessionId;
+
     this.proc = spawn(resolveClaudeBin(), args, {
       cwd,
-      env: { ...process.env, ...(input.chatSessionId ? { ALLEN_CHAT_SESSION_ID: input.chatSessionId } : {}) },
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.proc.stdout.on('data', (chunk: Buffer) => this.handleStdout(chunk));

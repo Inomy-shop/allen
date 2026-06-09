@@ -16,19 +16,14 @@ export interface SlashCommandInfo {
 }
 
 const CLAUDE_BUILTINS: SlashCommandInfo[] = [
+  { name: '/clear', description: 'Start a fresh conversation.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
   { name: '/compact', description: 'Compact conversation history.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
   { name: '/context', description: 'Show context usage.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
-  { name: '/usage', description: 'Show token usage statistics.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
   { name: '/cost', description: 'Show conversation cost and usage.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
-  { name: '/init', description: 'Initialize project guidance.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
+  { name: '/goal', description: 'Set a goal Claude checks before stopping', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
+  { name: '/init', description: 'Initialize project guidance (CLAUDE.md).', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
   { name: '/review', description: 'Run Claude code review.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
   { name: '/security-review', description: 'Run a security-focused review.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
-  { name: '/help', description: 'Show Claude Code help.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
-  { name: '/model', description: 'Interactive model picker in Claude Code.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: false, unavailableReason: 'Interactive picker is not available through Allen yet.' },
-  { name: '/clear', description: 'Clear interactive Claude Code UI context.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: false, unavailableReason: 'Claude docs mark /clear as interactive-only for SDK style sessions.' },
-  { name: '/agents', description: 'Interactive Claude agents manager.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: false, unavailableReason: 'Interactive manager is not available through Allen yet.' },
-  { name: '/mcp', description: 'Interactive MCP manager.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: false, unavailableReason: 'Use Allen MCP settings for now.' },
-  { name: '/memory', description: 'Interactive memory editor.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: false, unavailableReason: 'Interactive editor is not available through Allen yet.' },
 ];
 
 const CODEX_BUILTINS: SlashCommandInfo[] = [

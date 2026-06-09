@@ -303,7 +303,7 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
   log(`Prompt: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
   const usePersistentRuntime = persistentChatRuntimeEnabled()
     && options.chatSessionId
-    && (provider === 'codex' || provider === 'claude-cli');
+    && (provider === 'codex' || provider === 'claude-cli' || isClaudeCompatibleProvider(provider));
   if (options.resumeSessionId) {
     log(usePersistentRuntime
       ? `Provider session: ${options.resumeSessionId.slice(0, 8)}...`

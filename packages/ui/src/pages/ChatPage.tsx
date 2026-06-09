@@ -908,16 +908,11 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     setCmdPaletteAnchor(null);
   }
 
-  function handleSlashCommand(command: SlashCommandOption, raw: string): boolean {
+  function handleSlashCommand(command: SlashCommandOption, _raw: string): boolean {
     if (command.name === '/clear') {
       switchSession('');
       navigate(`/${routeBase}`, { replace: true });
       return true;
-    }
-    if (command.name === '/help') {
-      setCmdPaletteAnchor(null);
-      setCmdPaletteOpen(true);
-      return command.provider === 'codex';
     }
     if (!command.dispatchable) return true;
     return false;

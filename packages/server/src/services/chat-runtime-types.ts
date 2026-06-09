@@ -39,6 +39,7 @@ export interface PersistentChatRuntime {
   readonly provider: ChatProvider;
   readonly key: string;
   sendTurn(input: RuntimeTurnInput): Promise<RuntimeTurnResult>;
+  sendSlashCommand?(input: RuntimeTurnInput, command: RuntimeSlashCommand): Promise<RuntimeTurnResult>;
   close(reason: string): Promise<void>;
 }
 

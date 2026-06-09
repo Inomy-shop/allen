@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import type { TokenUsageInfo } from '@allen/engine';
 import type { Response } from 'express';
 import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
-import { getDefaultChatModel, getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getTitleGenProviderModel, isClaudeCompatibleProvider } from './chat-providers.js';
+import { getDefaultChatModel, getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getTitleGenProviderModel, isClaudeCompatibleProvider, isClaudeFamilyProvider } from './chat-providers.js';
 import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
 import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
@@ -19,7 +19,7 @@ import { buildOrgContextBlock } from './org-context.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { ExecutionService } from './execution.service.js';
 import { LinearService } from './linear.service.js';
-import { runPersistentCodexSlashCommand } from './chat-runtime-manager.js';
+import { runPersistentChatSlashCommand } from './chat-runtime-manager.js';
 import { listSlashCommands, type SlashCommandInfo } from './slash-commands.js';
 import type { RuntimeSlashCommand } from './chat-runtime-types.js';
 import { ChatContextPacketService } from './context/core/chat-context-packet.service.js';
@@ -1874,16 +1874,22 @@ User: ${userMessage.slice(0, 500)}`;
 
       const effectiveProvider = (resolvedSettings?.provider as ChatProvider) ?? provider;
       const effectiveModel = resolvedSettings?.model || model || PROVIDERS.find(p => p.provider === effectiveProvider)?.defaultModel || 'gpt-5.5';
-      const codexSlashCommand = effectiveProvider === 'codex'
-        ? resolveSlashCommand(content, listSlashCommands('codex', workspaceCwd))
-        : null;
+      const slashCommand = (() => {
+        if (effectiveProvider === 'codex') {
+          return resolveSlashCommand(content, listSlashCommands('codex', workspaceCwd));
+        }
+        if (isClaudeFamilyProvider(effectiveProvider)) {
+          return resolveSlashCommand(content, listSlashCommands('claude-cli', workspaceCwd));
+        }
+        return null;
+      })();
 
-      const result = codexSlashCommand
+      const result = slashCommand
         ? {
-            ...(await runPersistentCodexSlashCommand({
+            ...(await runPersistentChatSlashCommand({
               db: this.db,
               chatSessionId: sessionId,
-              provider: 'codex',
+              provider: effectiveProvider,
               model: effectiveModel,
               resolvedSettings,
               systemPrompt,
@@ -1892,7 +1898,7 @@ User: ${userMessage.slice(0, 500)}`;
               skipTools: undefined,
               cwd: workspaceCwd,
               callbacks,
-            }, codexSlashCommand)),
+            }, slashCommand)),
             durationMs: Date.now() - startMs,
             model: effectiveModel,
             provider: effectiveProvider,

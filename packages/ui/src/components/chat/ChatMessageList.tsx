@@ -696,6 +696,12 @@ function splitFirstDiffFence(content: string): { text: string; diff: string | nu
   };
 }
 
+function splitLeadingSlashCommand(content: string): { command: string | null; rest: string } {
+  const match = content.match(/^\s*(\/[A-Za-z0-9:_-]+)([\s\S]*)$/);
+  if (!match) return { command: null, rest: content };
+  return { command: match[1], rest: match[2].replace(/^\s+/, '') };
+}
+
 /* ── Markdown rendering pipeline ─────────────────────────────────────────── */
 
 /** Top-level: split by code blocks, then render everything else as inline markdown */
@@ -2257,11 +2263,22 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               {showThinking && (
                 <ThinkingBlock text={msg.thinkingText ?? ''} durationMs={msg.durationMs} />
               )}
-              {diffSplit.text && (
+              {diffSplit.text && (msg.role === 'user' ? (() => {
+                const slash = splitLeadingSlashCommand(diffSplit.text);
+                if (!slash.command) return <div>{renderMarkdown(diffSplit.text)}</div>;
+                return (
+                  <div>
+                    <span style={{ backgroundColor: 'rgb(var(--color-accent) / 0.18)', color: 'rgb(var(--color-accent))', borderRadius: '4px' }}>
+                      {slash.command}
+                    </span>
+                    {slash.rest && <> {renderMarkdown(slash.rest)}</>}
+                  </div>
+                );
+              })() : (
                 <div>
                   {renderMarkdown(diffSplit.text)}
                 </div>
-              )}
+              ))}
               {msg.role === 'assistant' && !messageHasActiveRuns && (
                 <ToolCallsSection calls={msg.toolCalls} />
               )}

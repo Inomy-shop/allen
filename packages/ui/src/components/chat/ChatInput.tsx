@@ -306,6 +306,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         .slice(0, 12)
     : [];
 
+  // Highlight only once the slash token is "committed" — either Tab/picker autocomplete
+  // (which appends a trailing space) or the user manually types a space after the command.
+  // Mid-typing partial tokens like "/cont" stay un-highlighted.
+  const activeSlashCommand: SlashCommandOption | null = (() => {
+    const match = value.trimStart().match(/^(\/[A-Za-z0-9:_-]+)(?=\s)/);
+    if (!match) return null;
+    return slashCommands.find(command => command.name === match[1]) ?? null;
+  })();
+
   // Effective values: override wins, else inherited agent default
   const effectiveEffort = (agentOverrides?.reasoningEffort ?? inheritedEffort) ?? null;
   const effectivePlanMode =
@@ -657,11 +666,10 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
       />
 
       {slashVisible && (
-        <div className="absolute bottom-full left-0 right-0 z-50 mb-2 overflow-hidden rounded-lg border border-app bg-app-card p-2 shadow-2xl">
-          <div className="px-3 pb-2 pt-1 text-[13px] font-medium text-theme-muted">Commands</div>
+        <div className="absolute bottom-full left-0 right-0 z-50 mb-2 overflow-hidden rounded-[6px] border border-app bg-app-card p-1 shadow-2xl">
           <div className="max-h-72 overflow-y-auto">
             {filteredSlashCommands.length === 0 ? (
-              <div className="px-3 py-5 text-center text-[13px] text-theme-muted">No slash commands found</div>
+              <div className="px-3 py-4 text-center text-[12px] text-theme-muted">No slash commands found</div>
             ) : filteredSlashCommands.map((command, index) => {
               const selected = index === slashSelectedIdx;
               return (
@@ -671,19 +679,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   disabled={!command.dispatchable}
                   onMouseEnter={() => setSlashSelectedIdx(index)}
                   onClick={() => command.dispatchable && handleSlashSelect(command)}
-                  className={`flex min-h-11 w-full items-center gap-3 rounded-md px-3 py-2 text-left text-[14px] transition-colors ${
+                  className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${
                     selected ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary hover:bg-app-muted/70'
                   } ${!command.dispatchable ? 'cursor-not-allowed opacity-55' : ''}`}
-                  title={command.unavailableReason}
+                  title={command.unavailableReason ?? command.description}
                 >
-                  <span className="font-mono text-[13px] text-accent">{command.name}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{command.description}</span>
-                    <span className="mt-0.5 block truncate font-mono text-[12px] text-theme-muted">
-                      {command.dispatchable ? `${command.source} · ${command.provider}` : command.unavailableReason}
-                    </span>
+                  <span className="font-mono text-[12px] text-accent shrink-0">{command.name}</span>
+                  <span className="truncate text-[12px] text-theme-muted">
+                    {command.dispatchable ? command.description : (command.unavailableReason ?? command.description)}
                   </span>
-                  {selected && <Check className="h-4 w-4 shrink-0 text-theme-secondary" />}
                 </button>
               );
             })}
@@ -738,19 +742,55 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             <CornerDownLeft className="h-3 w-3" />
           </span>
         </div>
-        {/* Textarea */}
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={placeholder ?? CHAT_PLACEHOLDER}
-          disabled={disabled}
-          rows={1}
-          className="w-full resize-none bg-transparent px-2 py-1.5 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ minHeight: `${TEXTAREA_MIN_HEIGHT}px`, maxHeight: `${TEXTAREA_MAX_HEIGHT}px`, overflowY: 'hidden' }}
-        />
+        {/* Textarea with inline slash-command highlight overlay */}
+        <div className="relative">
+          {activeSlashCommand && (() => {
+            const leading = value.length - value.trimStart().length;
+            const prefix = value.slice(0, leading);
+            const rest = value.slice(leading + activeSlashCommand.name.length);
+            return (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words font-body"
+                style={{
+                  padding: '4px 90px 4px 2px',
+                  fontSize: '13px',
+                  lineHeight: 1.55,
+                  color: 'rgb(var(--color-text-primary))',
+                }}
+              >
+                {prefix}
+                <span
+                  style={{
+                    backgroundColor: 'rgb(var(--color-accent) / 0.18)',
+                    color: 'rgb(var(--color-accent))',
+                    borderRadius: '4px',
+                  }}
+                >
+                  {activeSlashCommand.name}
+                </span>
+                {rest}
+              </div>
+            );
+          })()}
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={placeholder ?? CHAT_PLACEHOLDER}
+            disabled={disabled}
+            rows={1}
+            className="relative w-full resize-none bg-transparent px-2 py-1.5 text-sm placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              minHeight: `${TEXTAREA_MIN_HEIGHT}px`,
+              maxHeight: `${TEXTAREA_MAX_HEIGHT}px`,
+              overflowY: 'hidden',
+              ...(activeSlashCommand ? { color: 'transparent', caretColor: 'rgb(var(--color-text-primary))' } : {}),
+            }}
+          />
+        </div>
 
         {/* Bottom bar inside the input — model selector + send button */}
         <div className="chat-input-controls cc-foot !mt-0 !pt-0">
