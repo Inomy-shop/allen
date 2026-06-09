@@ -1044,6 +1044,13 @@ export function agentTraceContextCount(trace: any): number | null {
 
 export function agentContextAttemptCount(contextAttempt: any): number | null {
   if (!contextAttempt) return null;
+  const summaryCounts = [
+    Number(contextAttempt.injectedCount ?? 0),
+    Number(contextAttempt.selectedCount ?? contextAttempt.preselectedCount ?? 0),
+    Number(contextAttempt.filteredCount ?? 0),
+    Number(contextAttempt.candidateCount ?? 0),
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  if (summaryCounts.length > 0) return summaryCounts[0];
   const groups = groupContextRefs(contextAttempt);
   if (groups.injected.length > 0) return groups.injected.length;
   if (groups.selected.length > 0) return groups.selected.length;
@@ -1056,7 +1063,9 @@ export function findAgentContextAttempt(report: any, agentName: string, selected
     ? report.nodeAttempts
     : Array.isArray(report?.packets)
       ? report.packets
-      : [];
+      : Array.isArray(report?.nodeSummaries)
+        ? report.nodeSummaries
+        : [];
   const named = attempts.filter((attempt: any) => {
     const nodeName = String(attempt?.nodeName ?? attempt?.node ?? attempt?.agent ?? '');
     return nodeName === agentName;
@@ -1975,10 +1984,12 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   useEffect(() => {
     if (!id || !contextEngineEnabled) return;
     let alive = true;
-    const fetchContextReport = async () => {
+    const running = execution.status === 'running' || execution.status === 'waiting_for_input';
+    const view = agentContextOpen ? 'full' : 'summary';
+    const fetchContextReport = async (refresh = false) => {
       setAgentContextLoading(true);
       try {
-        const report = await api.contextUsage(id);
+        const report = await api.contextUsage(id, { view, refresh });
         if (!alive) return;
         setAgentContextReport(report);
         setAgentContextError(null);
@@ -1989,16 +2000,22 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         if (alive) setAgentContextLoading(false);
       }
     };
-    const poll = async () => {
+    const run = async () => {
+      await fetchContextReport(false);
+      if (!running) {
+        await new Promise(r => setTimeout(r, 2500));
+        if (alive) await fetchContextReport(true);
+        return;
+      }
+      if (!agentContextOpen) return;
       while (alive) {
-        await fetchContextReport();
-        if (execution.status !== 'running' && execution.status !== 'waiting_for_input') break;
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 10000));
+        if (alive) await fetchContextReport(false);
       }
     };
-    poll();
+    run();
     return () => { alive = false; };
-  }, [id, execution.status, contextEngineEnabled]);
+  }, [id, execution.status, contextEngineEnabled, agentContextOpen]);
 
   // Build the Activity Log stream. Order of precedence:
   //   1. persisted execution_logs rows (liveLogs)
@@ -2517,15 +2534,15 @@ export default function ExecutionDetailPage() {
         });
     };
     loadArtifacts();
-    if (execution?.status === 'running' || execution?.status === 'waiting_for_input' || execution?.status === 'queued') {
-      const timer = window.setInterval(loadArtifacts, 3000);
+    if (rightPanelView === 'artifacts' && (execution?.status === 'running' || execution?.status === 'waiting_for_input' || execution?.status === 'queued')) {
+      const timer = window.setInterval(loadArtifacts, 10000);
       return () => {
         cancelled = true;
         window.clearInterval(timer);
       };
     }
     return () => { cancelled = true; };
-  }, [id, execution?.status, execution?.completedNodes?.length]);
+  }, [id, execution?.status, execution?.completedNodes?.length, rightPanelView]);
 
   useEffect(() => {
     if (!id) return;
@@ -2537,7 +2554,7 @@ export default function ExecutionDetailPage() {
     };
     loadContext();
     if (execution?.status === 'running' || execution?.status === 'waiting_for_input' || execution?.status === 'queued') {
-      const timer = window.setInterval(loadContext, 3000);
+      const timer = window.setInterval(loadContext, 10000);
       return () => {
         cancelled = true;
         window.clearInterval(timer);

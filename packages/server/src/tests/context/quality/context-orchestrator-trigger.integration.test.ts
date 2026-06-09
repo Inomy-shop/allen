@@ -53,6 +53,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForAdapterCalls(expected: number, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (fakeAdapter.calls.length < expected && Date.now() < deadline) {
+    await sleep(10);
+  }
+  if (fakeAdapter.calls.length < expected) {
+    throw new Error(`Timed out waiting for ${expected} adapter call(s); saw ${fakeAdapter.calls.length}`);
+  }
+}
+
 // ─── Test setup ───────────────────────────────────────────────────────────────
 
 let mongo: MongoMemoryServer;
@@ -103,6 +113,8 @@ describe('POST /orchestrator/trigger with FakeOrchestratorDispatchAdapter', () =
     expect(res.body.runId).toBeDefined();
     expect(res.body.status).toBe('triggered');
     expect(res.body.triggeredBy).toBe('ui');
+
+    await waitForAdapterCalls(1);
   });
 
   it('creates a global run record when no repoId/repoIds provided', async () => {
@@ -113,6 +125,8 @@ describe('POST /orchestrator/trigger with FakeOrchestratorDispatchAdapter', () =
     expect(res.status).toBe(201);
     expect(res.body.global).toBe(true);
     expect(res.body.repoId).toBeUndefined();
+
+    await waitForAdapterCalls(1);
   });
 
   it('creates a repo-scoped run record when repoId is provided', async () => {
@@ -123,6 +137,8 @@ describe('POST /orchestrator/trigger with FakeOrchestratorDispatchAdapter', () =
     expect(res.status).toBe(201);
     expect(res.body.repoId).toBe('repo-trigger-test');
     expect(res.body.global).toBe(false);
+
+    await waitForAdapterCalls(1);
   });
 
   it('dispatch adapter receives the correct OrchestratorDispatchRequest', async () => {
@@ -134,7 +150,7 @@ describe('POST /orchestrator/trigger with FakeOrchestratorDispatchAdapter', () =
     const runId = res.body.runId;
 
     // Wait for the async dispatch to complete
-    await sleep(100);
+    await waitForAdapterCalls(1);
 
     expect(fakeAdapter.calls).toHaveLength(1);
     const dispatchCall = fakeAdapter.calls[0];
@@ -151,7 +167,7 @@ describe('POST /orchestrator/trigger with FakeOrchestratorDispatchAdapter', () =
 
     expect(res.status).toBe(201);
 
-    await sleep(100);
+    await waitForAdapterCalls(1);
 
     expect(fakeAdapter.calls).toHaveLength(1);
     expect(fakeAdapter.calls[0].global).toBe(true);
@@ -229,6 +245,8 @@ describe('POST /orchestrator/trigger with FakeOrchestratorDispatchAdapter', () =
     expect(res.status).toBe(201);
     // The response should be fast (not waiting for the async dispatch)
     expect(responseTime).toBeLessThan(3000);
+
+    await waitForAdapterCalls(1);
   });
 
   it('accepts repoIds array and passes them to the adapter', async () => {
@@ -239,7 +257,7 @@ describe('POST /orchestrator/trigger with FakeOrchestratorDispatchAdapter', () =
     expect(res.status).toBe(201);
     expect(res.body.global).toBe(false);
 
-    await sleep(100);
+    await waitForAdapterCalls(1);
 
     expect(fakeAdapter.calls).toHaveLength(1);
     expect(fakeAdapter.calls[0].repoIds).toEqual(['repo-a', 'repo-b']);
@@ -275,8 +293,8 @@ describe('vi.useFakeTimers — adapter call count isolation', () => {
     await supertest(app)
       .post('/api/context/quality/orchestrator/trigger')
       .send({ triggeredBy: 'ui' });
-    await sleep(50);
-    expect(fakeAdapter.calls.length).toBeGreaterThanOrEqual(0);
+    await waitForAdapterCalls(1);
+    expect(fakeAdapter.calls.length).toBeGreaterThanOrEqual(1);
     // After reset (next beforeEach), calls will be 0 again
   });
 });

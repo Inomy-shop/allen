@@ -21,6 +21,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { contextQualityRoutes } from '../../../routes/context-quality.routes.js';
+import { contextRoutes } from '../../../routes/context.routes.js';
 
 let mongo: MongoMemoryServer;
 let client: MongoClient;
@@ -36,6 +37,8 @@ const MCP_SERVER_SRC = path.resolve(
   __dirname,
   '../../../services/allen-mcp-server.ts',
 );
+const ENGINE_MCP_TOOLS_SRC = path.resolve(__dirname, '../../../../../engine/src/allen-mcp-tools.ts');
+const UI_MCP_TOOLS_SRC = path.resolve(__dirname, '../../../../../ui/src/lib/allen-mcp-tools.ts');
 
 beforeAll(async () => {
   process.env['ALLEN_CONTEXT_PROVIDER'] = 'allen';
@@ -50,6 +53,7 @@ beforeAll(async () => {
     (req as any).user = { userId: 'test-user', role: 'admin' };
     next();
   });
+  app.use('/api/context', contextRoutes(db));
   app.use('/api/context/quality', contextQualityRoutes(db));
 });
 
@@ -68,6 +72,8 @@ beforeEach(async () => {
   await db.collection('context_trace_analysis_assignments').deleteMany({});
   await db.collection('context_orchestration_sessions').deleteMany({});
   await db.collection('executions').deleteMany({});
+  await db.collection('context_artifacts').deleteMany({});
+  await db.collection('context_ref_events').deleteMany({});
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,6 +126,54 @@ describe('MCP handler: context_quality_get_usage_trace — URL construction via 
     expect(res.body.resolved).toBe(true);
   });
 
+  it('query with executionId returns all matching attempts for exhaustive analysis', async () => {
+    await db.collection('context_attempts').insertMany([
+      {
+        contextAttemptId: 'ca-mcp-exhaustive-1', executionId: 'exec-mcp-exhaustive', repoId: 'repo-mcp',
+        executionKind: 'workflow_node', status: 'ready',
+        contextInjection: { injectedCount: 1, consideredCount: 3 }, createdAt: new Date('2026-01-01T00:00:01.000Z'),
+      },
+      {
+        contextAttemptId: 'ca-mcp-exhaustive-2', executionId: 'exec-mcp-exhaustive', repoId: 'repo-mcp',
+        executionKind: 'workflow_node', status: 'ready',
+        contextInjection: { injectedCount: 2, consideredCount: 4 }, createdAt: new Date('2026-01-01T00:00:02.000Z'),
+      },
+    ]);
+
+    const res = await supertest(app)
+      .get('/api/context/quality/usage-trace')
+      .query({ executionId: 'exec-mcp-exhaustive' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.contextAttemptId).toBe('ca-mcp-exhaustive-1');
+    expect(res.body.contextAttemptIds).toEqual(['ca-mcp-exhaustive-1', 'ca-mcp-exhaustive-2']);
+    expect(res.body.matchingContextAttempts).toHaveLength(2);
+    expect(res.body.attemptCount).toBe(2);
+  });
+
+  it('normalizes chat_agent attempts to chat_turn for session lookup', async () => {
+    await db.collection('context_attempts').insertOne({
+      contextAttemptId: 'ca-mcp-chat-1',
+      executionId: 'chat-session-1',
+      sessionId: 'chat-session-1',
+      repoId: 'repo-chat',
+      executionKind: 'chat_agent',
+      status: 'ready',
+      contextInjection: { injectedCount: 1, consideredCount: 2 },
+      createdAt: new Date(),
+    });
+
+    const res = await supertest(app)
+      .get('/api/context/quality/usage-trace')
+      .query({ sessionId: 'chat-session-1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.contextAttemptId).toBe('ca-mcp-chat-1');
+    expect(res.body.sourceKind).toBe('chat_turn');
+    expect(res.body.flowKind).toBe('chat_agent');
+    expect(res.body.matchingContextAttempts[0].sourceKind).toBe('chat_turn');
+  });
+
   it('query with both contextAttemptId and executionId resolves correctly (contextAttemptId wins)', async () => {
     await db.collection('context_attempts').insertOne({
       contextAttemptId: 'ca-mcp-3', executionId: 'exec-mcp-3', repoId: 'repo-mcp',
@@ -167,6 +221,67 @@ describe('MCP handler: context_quality_get_usage_trace — URL construction via 
       .query({ contextAttemptId: 'ca-mcp-4' });
     expect(correctRes.status).toBe(200);
     expect(correctRes.body.contextAttemptId).toBe('ca-mcp-4');
+  });
+});
+
+describe('MCP handler: context_quality_get_attempt_evidence route and batch contract', () => {
+  beforeEach(async () => {
+    await db.collection('context_attempts').insertMany([
+      {
+        contextAttemptId: 'ca-evidence-1',
+        executionId: 'exec-evidence',
+        repoId: 'repo-evidence',
+        executionKind: 'workflow_node',
+        status: 'ready',
+        contextInjection: { injectedCount: 1, consideredCount: 2 },
+        createdAt: new Date(),
+      },
+      {
+        contextAttemptId: 'ca-evidence-2',
+        executionId: 'exec-evidence',
+        repoId: 'repo-evidence',
+        executionKind: 'workflow_node',
+        status: 'ready',
+        contextInjection: { injectedCount: 0, consideredCount: 1 },
+        createdAt: new Date(),
+      },
+    ]);
+  });
+
+  it('GET /api/context/attempts/:id/evidence returns one evidence bundle', async () => {
+    const res = await supertest(app).get('/api/context/attempts/ca-evidence-1/evidence');
+
+    expect(res.status).toBe(200);
+    expect(res.body.contextAttemptId).toBe('ca-evidence-1');
+    expect(res.body.executionId).toBe('exec-evidence');
+    expect(res.body.completeness).toEqual(expect.objectContaining({
+      injectedContextIncluded: true,
+      sourceEvaluationsIncluded: true,
+      priorFindingsIncluded: true,
+    }));
+  });
+
+  it('POST /api/context/attempts/evidence/batch reports found, missing, and errors separately', async () => {
+    const res = await supertest(app)
+      .post('/api/context/attempts/evidence/batch')
+      .send({ context_attempt_ids: ['ca-evidence-1', 'missing-attempt', 'ca-evidence-2'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.contextAttemptIds).toEqual(['ca-evidence-1', 'missing-attempt', 'ca-evidence-2']);
+    expect(Object.keys(res.body.evidenceByAttemptId)).toEqual(['ca-evidence-1', 'ca-evidence-2']);
+    expect(res.body.missingContextAttemptIds).toEqual(['missing-attempt']);
+    expect(res.body.errorsByAttemptId).toEqual({});
+    expect(res.body.counts).toEqual({ requested: 3, found: 2, missing: 1, errors: 0 });
+  });
+
+  it('allen MCP batch tool calls the batch evidence API and preserves error fields', () => {
+    const src = fs.readFileSync(MCP_SERVER_SRC, 'utf8');
+    const batchCase = src.slice(
+      src.indexOf("case 'context_quality_get_attempt_evidence_batch'"),
+      src.indexOf("case 'context_quality_get_usage_trace'"),
+    );
+    expect(batchCase).toContain("/api/context/attempts/evidence/batch");
+    expect(batchCase).not.toContain("Promise.all(contextAttemptIds.map");
   });
 });
 
@@ -219,6 +334,20 @@ describe('ENG-1760 Blocker A: MCP tool registry includes all required trace tool
     for (const toolName of REQUIRED_TOOLS) {
       // Each tool must have a case in the executeTool switch
       expect(src, `Expected executeTool to handle case: ${toolName}`).toContain(`case '${toolName}'`);
+    }
+  });
+
+  it('static Allen MCP allowlists include every built-in context_quality tool', () => {
+    const serverSrc = fs.readFileSync(MCP_SERVER_SRC, 'utf8');
+    const engineSrc = fs.readFileSync(ENGINE_MCP_TOOLS_SRC, 'utf8');
+    const uiSrc = fs.readFileSync(UI_MCP_TOOLS_SRC, 'utf8');
+    const contextQualityToolNames = [...serverSrc.matchAll(/name:\s*'([^']+)'/g)]
+      .map(match => match[1])
+      .filter((toolName): toolName is string => Boolean(toolName?.startsWith('context_quality_')));
+
+    for (const toolName of new Set(contextQualityToolNames)) {
+      expect(engineSrc, `engine allowlist missing ${toolName}`).toContain(`'${toolName}'`);
+      expect(uiSrc, `ui allowlist missing ${toolName}`).toContain(`'${toolName}'`);
     }
   });
 

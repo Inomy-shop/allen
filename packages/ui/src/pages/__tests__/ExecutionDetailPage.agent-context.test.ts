@@ -52,6 +52,20 @@ describe('agent execution context affordance', () => {
     expect(agentHasContextEvidence(null, attempt, false)).toBe(true);
   });
 
+  it('finds context attempts from the summary context usage report', () => {
+    const report = {
+      view: 'summary',
+      nodeSummaries: [
+        { contextAttemptId: 'summary-a1', nodeName: 'backend-developer', attempt: 1, injectedCount: 2 },
+      ],
+    };
+    const attempt = findAgentContextAttempt(report, 'backend-developer', 1);
+
+    expect(attempt?.contextAttemptId).toBe('summary-a1');
+    expect(agentContextAttemptCount(attempt)).toBe(2);
+    expect(agentHasContextEvidence(null, attempt, false)).toBe(true);
+  });
+
   it('can expose the context button while a repo-backed agent is still waiting for trace hydration', () => {
     expect(agentHasContextEvidence({ status: 'running' }, null, true)).toBe(true);
   });

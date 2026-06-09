@@ -367,7 +367,12 @@ export const executions = {
     runContext?: RunStatus | null;
   }>>(`/executions/chat/${sessionId}`),
   context: (id: string) => request<RunStatus>(`/executions/${id}/context`),
-  contextUsage: (id: string) => request<any>(`/executions/${id}/context-usage`),
+  contextUsage: (id: string, params?: { view?: 'summary' | 'full' | 'normalized'; refresh?: boolean }) => {
+    const qs = new URLSearchParams();
+    if (params?.view) qs.set('view', params.view);
+    if (params?.refresh) qs.set('refresh', 'true');
+    return request<any>(`/executions/${id}/context-usage${qs.toString() ? `?${qs.toString()}` : ''}`);
+  },
   start: (
     workflowId: string,
     input: Record<string, unknown>,

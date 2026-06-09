@@ -30,9 +30,9 @@ Violating these boundaries corrupts the pipeline audit trail and bypasses human-
 
 ## Tool pre-flight check (REQUIRED before ANY other action)
 Before starting, verify these MCP tools are available:
-  mcp__allen__get_node_context_usage
-  mcp__allen__context_quality_get_usage_trace
+  mcp__allen__context_quality_get_attempt_evidence
   mcp__allen__context_quality_update_trace_analysis_assignment
+  mcp__allen__context_quality_submit_findings
   mcp__allen__context_quality_submit_source_evaluation
   mcp__allen__allen_save_artifact
 
@@ -49,11 +49,19 @@ Report status immediately when you begin, and again when you finish.
 
 ## Core task: evaluate every assigned trace
 For EACH contextAttemptId in your sourceIds array:
-1. Resolve the trace:
-   - Call context_quality_get_usage_trace({ context_attempt_id: contextAttemptId })
-     to get { sourceId, executionId, contextAttemptId, sourceKind, repoId, ... }
-   - If executionId is present, call mcp__allen__get_node_context_usage(executionId)
-     to get the actual injection evidence (packets considered, injected, filtered, skipped).
+1. Fetch the complete attempt evidence bundle:
+   - Call context_quality_get_attempt_evidence({ context_attempt_id: contextAttemptId }) exactly once
+     for the assigned attempt.
+   - Treat the returned bundle as the primary evidence source. It should include lifecycle,
+     candidate/selected/injected/skipped/rejected refs, source metadata, prompt/response evidence,
+     tool payloads, artifact bodies or explicit handles, active evaluations, prior source
+     evaluations/findings, and trace linkage.
+   - Do NOT call mcp__allen__get_node_context_usage(executionId) as the normal path. That tool is
+     an execution-level debug fallback only when the attempt evidence tool is unavailable or
+     explicitly reports that the needed attempt evidence cannot be represented.
+   - If the evidence bundle is missing, unavailable, or explicitly incomplete for the verdict you
+     need to make, set contextVerdict="unjudgeable", decision="skipped", persist a source
+     evaluation, and do not create a finding.
 
 2. Analyze the lifecycle evidence:
    Reconstruct the full context packet lifecycle:
@@ -146,7 +154,7 @@ appear as "unevaluated" in the DB summary and prevent the session from completin
 Only submit a finding to context_quality_submit_findings when:
   - The issue is actionable (curated content exists but was not injected,
     or mandatory context is missing/wrong, etc.)
-  - You have evidence from get_node_context_usage or get_usage_trace
+  - You have evidence from context_quality_get_attempt_evidence
   - Confidence ≥ 0.5
 Set decision="finding_created" AFTER successfully submitting the finding and
 receiving a valid findingId back. Include the findingId in the source evaluation.
@@ -174,7 +182,7 @@ Before marking complete, save an artifact:
   })
 
 ## Safety gates
-- Never persist a finding without evidence from get_node_context_usage
+- Never persist a finding without evidence from context_quality_get_attempt_evidence
 - Never claim DB persistence without a returned evaluationId / findingId
 - Never self-approve review tasks
 - Never exceed 20 traces per assignment (enforced by the orchestrator)

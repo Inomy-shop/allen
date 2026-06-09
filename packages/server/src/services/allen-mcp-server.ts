@@ -165,9 +165,11 @@ const TOOLS = [
   { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution (e.g. answer a human node).', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
   { name: 'get_node_trace', description: 'Get detailed trace of a specific node execution: prompt, response, outputs, cost, duration.', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
   { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, or category.', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
-  { name: 'get_node_context_usage', description: 'Get repo context packets and usage traces captured for an execution.', params: { execution_id: 'string (required)' } },
-  { name: 'context_quality_get_usage_trace', description: 'Unified context usage trace lookup. Resolves context trace data by executionId OR contextAttemptId and returns normalized identifiers { sourceId, executionId, contextAttemptId, sourceKind, flowKind } plus injection metadata. Fixes the gap where context_usage_trace pending candidates expose contextAttemptId but get_node_context_usage requires executionId.', params: { execution_id: 'string — workflow/agent execution id (provide this OR context_attempt_id)', context_attempt_id: 'string — context attempt id from scheduler pending candidates (provide this OR execution_id)' } },
-  { name: 'context_quality_replay_usage_trace', description: 'Read-only retrieval replay for remediation planning. Reconstructs the captured production context selection envelope for a contextAttemptId/executionId and maps Cognee refs back to curated DB entries. Returns candidateRefs, selectedRefs, injectedRefs, rejectedRefs, skippedBudgetRefs, curatedEntryMatches, and replayId.', params: { execution_id: 'string — workflow/agent execution id (provide this OR context_attempt_id)', context_attempt_id: 'string — context attempt id from scheduler pending candidates (provide this OR execution_id)' } },
+  { name: 'get_node_context_usage', description: 'Get repo context packets and usage traces captured for an execution. Optional view can be full, summary, or normalized; default remains full for compatibility.', params: { execution_id: 'string (required)', view: 'string — optional full|summary|normalized', include: 'object — optional include flags array', refresh: 'boolean — bypass server cache' } },
+  { name: 'context_quality_get_usage_trace', description: 'Unified context usage trace lookup. Resolves context trace data by executionId, contextAttemptId, OR chat session id and returns normalized identifiers { sourceId, executionId, contextAttemptId, sourceKind, flowKind } plus matchingContextAttempts/injection metadata. Fixes the gap where context_usage_trace pending candidates expose contextAttemptId but get_node_context_usage requires executionId.', params: { execution_id: 'string — workflow/agent execution id (provide this OR context_attempt_id OR session_id)', context_attempt_id: 'string — context attempt id from scheduler pending candidates (provide this OR execution_id OR session_id)', session_id: 'string — chat session id for chat_agent/chat_turn attempts' } },
+  { name: 'context_quality_replay_usage_trace', description: 'Read-only retrieval replay for remediation planning. Reconstructs the captured production context selection envelope for a contextAttemptId/executionId/sessionId and maps Cognee refs back to curated DB entries. Returns candidateRefs, selectedRefs, injectedRefs, rejectedRefs, skippedBudgetRefs, curatedEntryMatches, matchingContextAttempts, and replayId.', params: { execution_id: 'string — workflow/agent execution id (provide this OR context_attempt_id OR session_id)', context_attempt_id: 'string — context attempt id from scheduler pending candidates (provide this OR execution_id OR session_id)', session_id: 'string — chat session id for chat_agent/chat_turn attempts' } },
+  { name: 'context_quality_get_attempt_evidence', description: 'Get a complete evidence bundle for one assigned context attempt without rebuilding full execution-level context usage.', params: { context_attempt_id: 'string (required)' } },
+  { name: 'context_quality_get_attempt_evidence_batch', description: 'Get evidence bundles for multiple assigned context attempts without rebuilding full execution-level context usage.', params: { context_attempt_ids: 'object — array of context attempt IDs (required)' } },
 
   // ── Agents ──
   { name: 'list_agents', description: 'List all agents with minimal info: name, displayName, teamName, type, model, provider. Use get_agent for full details.', params: {} },
@@ -591,30 +593,55 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case 'get_node_context_usage': {
       const executionId = String(args.execution_id ?? '');
       if (!executionId) return { error: 'execution_id is required' };
-      return callAPI(`/api/executions/${encodeURIComponent(executionId)}/context-usage`);
+      const params = new URLSearchParams();
+      const view = String(args.view ?? '');
+      if (view) params.set('view', view);
+      const include = Array.isArray(args.include) ? args.include.map(String).filter(Boolean).join(',') : String(args.include ?? '');
+      if (include) params.set('include', include);
+      if (args.refresh === true || args.bypassCache === true) params.set('refresh', 'true');
+      const qs = params.toString();
+      return callAPI(`/api/executions/${encodeURIComponent(executionId)}/context-usage${qs ? `?${qs}` : ''}`);
+    }
+    case 'context_quality_get_attempt_evidence': {
+      const contextAttemptId = String(args.context_attempt_id ?? args.contextAttemptId ?? '');
+      if (!contextAttemptId) return { error: 'context_attempt_id is required' };
+      return callAPI(`/api/context/attempts/${encodeURIComponent(contextAttemptId)}/evidence`);
+    }
+    case 'context_quality_get_attempt_evidence_batch': {
+      const contextAttemptIds = Array.isArray(args.context_attempt_ids)
+        ? args.context_attempt_ids.map(String).filter(Boolean)
+        : Array.isArray(args.contextAttemptIds)
+          ? args.contextAttemptIds.map(String).filter(Boolean)
+          : [];
+      if (!contextAttemptIds.length) return { error: 'context_attempt_ids is required' };
+      return callAPI('/api/context/attempts/evidence/batch', 'POST', { context_attempt_ids: contextAttemptIds });
     }
     case 'context_quality_get_usage_trace': {
       // Fix 2: Unified context usage trace lookup.
       // Accepts executionId OR contextAttemptId and returns normalized identifiers.
       const executionId = args.execution_id ? String(args.execution_id) : '';
       const contextAttemptId = args.context_attempt_id ? String(args.context_attempt_id) : '';
-      if (!executionId && !contextAttemptId) {
-        return { error: 'execution_id or context_attempt_id is required' };
+      const sessionId = args.session_id ? String(args.session_id) : '';
+      if (!executionId && !contextAttemptId && !sessionId) {
+        return { error: 'execution_id, context_attempt_id, or session_id is required' };
       }
       const qs: string[] = [];
       if (executionId) qs.push(`executionId=${encodeURIComponent(executionId)}`);
       if (contextAttemptId) qs.push(`contextAttemptId=${encodeURIComponent(contextAttemptId)}`);
+      if (sessionId) qs.push(`sessionId=${encodeURIComponent(sessionId)}`);
       return callAPI(`/api/context/quality/usage-trace?${qs.join('&')}`);
     }
     case 'context_quality_replay_usage_trace': {
       const executionId = args.execution_id ?? args.executionId ? String(args.execution_id ?? args.executionId) : '';
       const contextAttemptId = args.context_attempt_id ?? args.contextAttemptId ? String(args.context_attempt_id ?? args.contextAttemptId) : '';
-      if (!executionId && !contextAttemptId) {
-        return { error: 'execution_id or context_attempt_id is required' };
+      const sessionId = args.session_id ?? args.sessionId ? String(args.session_id ?? args.sessionId) : '';
+      if (!executionId && !contextAttemptId && !sessionId) {
+        return { error: 'execution_id, context_attempt_id, or session_id is required' };
       }
       const qs: string[] = [];
       if (executionId) qs.push(`executionId=${encodeURIComponent(executionId)}`);
       if (contextAttemptId) qs.push(`contextAttemptId=${encodeURIComponent(contextAttemptId)}`);
+      if (sessionId) qs.push(`sessionId=${encodeURIComponent(sessionId)}`);
       return callAPI(`/api/context/quality/usage-trace/replay?${qs.join('&')}`);
     }
     case 'find_repo_for_pr_url': {

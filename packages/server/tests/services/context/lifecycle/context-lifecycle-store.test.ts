@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MongoClient, type Db } from 'mongodb';
+import { MongoClient, ObjectId, type Db } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { ContextLifecycleStore } from '../../../../src/services/context/lifecycle/context-lifecycle-store.js';
 
@@ -24,6 +24,10 @@ describe('ContextLifecycleStore', () => {
       db.collection('context_ref_events').deleteMany({}),
       db.collection('context_evaluations').deleteMany({}),
       db.collection('context_artifacts').deleteMany({}),
+      db.collection('execution_traces').deleteMany({}),
+      db.collection('executions').deleteMany({}),
+      db.collection('chat_sessions').deleteMany({}),
+      db.collection('chat_messages').deleteMany({}),
     ]);
   });
 
@@ -135,6 +139,171 @@ describe('ContextLifecycleStore', () => {
     const intent = await store.getAttemptQueryContent('attempt-1', 'intent');
     expect(query).toEqual(expect.objectContaining({ content: expect.stringContaining('Retrieval signals: Fix payment writes') }));
     expect(intent?.content).toContain('"role":"backend-developer"');
+  });
+
+  it('returns summary, normalized, and attempt evidence views without dropping evidence handles', async () => {
+    const store = new ContextLifecycleStore(db);
+    await store.saveAttemptFromPacket(sampleAttempt());
+    const sessionId = new ObjectId();
+    const userMessageId = new ObjectId();
+    const assistantMessageId = new ObjectId();
+    await db.collection('chat_sessions').insertOne({
+      _id: sessionId,
+      title: 'Context evidence chat',
+      source: 'ui',
+      provider: 'codex',
+      model: 'gpt-test',
+      messageCount: 2,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:02.000Z'),
+    });
+    await db.collection('chat_messages').insertMany([
+      {
+        _id: userMessageId,
+        sessionId: sessionId.toHexString(),
+        role: 'user',
+        content: 'User asked for a context-faithful implementation.',
+        status: 'completed',
+        createdAt: new Date('2026-01-01T00:00:01.000Z'),
+      },
+      {
+        _id: assistantMessageId,
+        sessionId: sessionId.toHexString(),
+        role: 'assistant',
+        content: 'Assistant response linked to the execution.',
+        status: 'completed',
+        toolCalls: [{ tool: 'run_workflow', result: { id: 'exec-1' } }],
+        createdAt: new Date('2026-01-01T00:00:02.000Z'),
+        completedAt: new Date('2026-01-01T00:00:03.000Z'),
+      },
+    ]);
+    await db.collection('executions').insertOne({
+      id: 'exec-1',
+      status: 'completed',
+      source: 'chat',
+      meta: { chatSessionId: sessionId.toHexString(), parentMessageId: assistantMessageId.toHexString() },
+    });
+    await db.collection('execution_traces').insertOne({
+      executionId: 'exec-1',
+      executionTraceId: 'trace-1',
+      type: 'agent',
+      node: 'implement',
+      agent: 'backend-developer',
+      attempt: 1,
+      contextAttemptId: 'attempt-1',
+      inputState: { prompt: 'input-state prompt' },
+      output: { final: 'final response object' },
+      toolCalls: [{ tool: 'read_file', args: { path: 'packages/server/src/file.ts' } }],
+      startedAt: new Date(),
+    });
+    await db.collection('context_source_evaluations').insertOne({
+      sourceId: 'attempt-1',
+      contextAttemptId: 'attempt-1',
+      decision: 'no_issue',
+      contextVerdict: 'correct',
+      createdAt: new Date(),
+    });
+    await db.collection('context_findings').insertOne({
+      findingId: 'finding-1',
+      primarySourceId: 'attempt-1',
+      contextAttemptId: 'attempt-1',
+      classification: 'incomplete_context',
+      status: 'open',
+      createdAt: new Date(),
+    });
+
+    const summary = await store.getExecutionContextUsageReport('exec-1', { view: 'summary' });
+    expect(summary).toEqual(expect.objectContaining({
+      view: 'summary',
+      counts: expect.objectContaining({ attempts: 1, refs: 2, events: expect.any(Number) }),
+      nodeSummaries: expect.arrayContaining([expect.objectContaining({ contextAttemptId: 'attempt-1' })]),
+      nodeAttempts: expect.arrayContaining([expect.objectContaining({ contextAttemptId: 'attempt-1' })]),
+    }));
+    expect(summary).not.toHaveProperty('refs');
+    expect(summary).not.toHaveProperty('events');
+
+    const normalized = await store.getExecutionContextUsageReport('exec-1', { view: 'normalized' });
+    expect(normalized).toEqual(expect.objectContaining({
+      view: 'normalized',
+      attemptsById: expect.objectContaining({ 'attempt-1': expect.any(Object) }),
+      refsById: expect.objectContaining({ 'attempt-1:ref-1': expect.any(Object) }),
+      views: expect.objectContaining({
+        selectedRefs: expect.arrayContaining(['attempt-1:ref-1']),
+      }),
+    }));
+
+    const evidence = await store.getAttemptEvidence('attempt-1');
+    expect(evidence).toEqual(expect.objectContaining({
+      contextAttemptId: 'attempt-1',
+      usage: expect.objectContaining({ contextAttemptId: 'attempt-1' }),
+      completeness: expect.objectContaining({
+        injectedContextIncluded: true,
+        fullRenderedPromptIncluded: true,
+        fullRenderedPromptAvailable: true,
+        rawResponseIncluded: true,
+        rawResponseAvailable: true,
+        toolPayloadsIncluded: true,
+        toolPayloadsAvailable: true,
+        fullArtifactBodiesIncluded: true,
+        sourceEvaluationsIncluded: true,
+        priorFindingsIncluded: true,
+        chatEvidenceIncluded: true,
+        chatEvidenceAvailable: true,
+      }),
+      chatEvidence: expect.objectContaining({
+        sessionId: sessionId.toHexString(),
+        parentMessageId: assistantMessageId.toHexString(),
+        messagesIncluded: true,
+        messagesAvailable: true,
+        handles: expect.objectContaining({
+          chatSessionTool: 'get_chat_session',
+          chatSessionArgs: { session_id: sessionId.toHexString() },
+          chatMessagesTool: 'get_chat_messages',
+          chatMessagesArgs: expect.objectContaining({ session_id: sessionId.toHexString() }),
+          messageContentHandles: expect.arrayContaining([
+            expect.objectContaining({
+              tool: 'get_chat_messages',
+              args: expect.objectContaining({ session_id: sessionId.toHexString() }),
+            }),
+          ]),
+        }),
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            messageId: userMessageId.toHexString(),
+            role: 'user',
+            content: 'User asked for a context-faithful implementation.',
+            contentHandle: expect.objectContaining({ tool: 'get_chat_messages' }),
+          }),
+          expect.objectContaining({ messageId: assistantMessageId.toHexString(), role: 'assistant', content: 'Assistant response linked to the execution.' }),
+        ]),
+      }),
+      traceEvidence: expect.arrayContaining([
+        expect.objectContaining({
+          renderedPrompt: 'input-state prompt',
+          output: { final: 'final response object' },
+          toolCalls: expect.arrayContaining([expect.objectContaining({ tool: 'read_file' })]),
+        }),
+      ]),
+      artifactBodiesByHash: expect.any(Object),
+      refContentById: expect.objectContaining({
+        'ref-1': expect.objectContaining({ content: 'hello world' }),
+      }),
+      sourceEvaluations: expect.arrayContaining([expect.objectContaining({ decision: 'no_issue' })]),
+      priorFindings: expect.arrayContaining([expect.objectContaining({ findingId: 'finding-1' })]),
+      handles: expect.objectContaining({
+        artifactContentBaseUrl: '/api/context/artifacts/{hash}',
+        renderedContextQueryUrl: '/api/context/attempts/attempt-1/query',
+        nodeTraceTool: 'get_node_trace',
+      }),
+    }));
+    const artifactBody = Object.values(evidence?.artifactBodiesByHash as Record<string, any>)
+      .find((body: any) => body.kind === 'ref_content') as any;
+    expect(artifactBody.contentHandle).toEqual(expect.objectContaining({
+      url: expect.stringMatching(/^\/api\/context\/artifacts\//),
+      tool: 'query_database',
+      args: expect.objectContaining({ collection: 'context_artifacts' }),
+    }));
+    expect((evidence?.views as any).injectedRefs[0]).toEqual(expect.objectContaining({ refId: 'ref-1', content: 'hello world' }));
   });
 
   it('stores Cognee scores only for Cognee refs and keeps rerank metadata from rejected snapshots', async () => {

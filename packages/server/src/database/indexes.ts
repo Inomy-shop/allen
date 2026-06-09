@@ -94,6 +94,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('execution_traces').createIndex({ executionId: 1, node: 1, attempt: 1 });
   await db.collection('execution_traces').createIndex({ executionTraceId: 1 }, { sparse: true });
   await db.collection('execution_traces').createIndex({ executionId: 1, startedAt: 1 });
+  await db.collection('execution_traces').createIndex({ executionId: 1, type: 1, startedAt: 1 });
 
   // Checkpoints
   await db.collection('checkpoints').createIndex({ executionId: 1, createdAt: -1 });
@@ -126,6 +127,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('repo_contexts').createIndex({ repoId: 1 }, { unique: true });
 
   await db.collection('context_attempts').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
+  await db.collection('context_attempts').createIndex({ executionId: 1, createdAt: 1 });
   await db.collection('context_attempts').createIndex({ contextAttemptId: 1 }, { unique: true });
   await db.collection('context_attempts').createIndex({ rootExecutionId: 1, createdAt: 1 });
   await db.collection('context_attempts').createIndex({ parentExecutionId: 1, createdAt: 1 });
@@ -135,9 +137,13 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('context_attempts').createIndex({ repoId: 1, executionKind: 1, status: 1, createdAt: 1 });
   await db.collection('context_refs').createIndex({ contextAttemptId: 1, refId: 1 }, { unique: true });
   await db.collection('context_refs').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
+  await db.collection('context_refs').createIndex({ executionId: 1, rank: 1, createdAt: 1 });
+  await db.collection('context_refs').createIndex({ contextAttemptId: 1, rank: 1, createdAt: 1 });
   await db.collection('context_refs').createIndex({ providerId: 1, cogneeScore: -1 });
   await db.collection('context_ref_events').createIndex({ contextAttemptId: 1, refId: 1, createdAt: 1 });
   await db.collection('context_ref_events').createIndex({ executionId: 1, nodeName: 1, attempt: 1 });
+  await db.collection('context_ref_events').createIndex({ executionId: 1, createdAt: 1 });
+  await db.collection('context_ref_events').createIndex({ contextAttemptId: 1, createdAt: 1 });
   await db.collection('context_ref_events').createIndex({ executionTraceId: 1 }, { sparse: true });
   await db.collection('context_ref_events').createIndex({ usageTraceId: 1 }, { sparse: true });
   await db.collection('context_ref_events').createIndex({ rootExecutionId: 1, createdAt: 1 });
@@ -146,6 +152,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('context_artifacts').createIndex({ hash: 1 }, { unique: true });
   await db.collection('context_artifacts').createIndex({ kind: 1, createdAt: -1 });
   await db.collection('context_evaluations').createIndex({ executionId: 1, nodeName: 1, attempt: 1, active: 1 });
+  await db.collection('context_evaluations').createIndex({ executionId: 1, active: 1, createdAt: 1 });
   await db.collection('context_evaluations').createIndex({ evaluationId: 1 }, { unique: true });
   await db.collection('context_evaluations').createIndex({ traceId: 1 }, { unique: true });
   await db.collection('context_evaluations').createIndex({ contextAttemptId: 1, usageTraceId: 1, scope: 1, active: 1 });

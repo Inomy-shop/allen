@@ -433,7 +433,7 @@ export function useChat() {
     refreshContexts();
     const hasActive = spawnedAgents.some(s => !terminal.has(s.runContext?.status ?? s.status));
     if (!hasActive) return () => { cancelled = true; };
-    const timer = window.setInterval(refreshContexts, 3000);
+    const timer = window.setInterval(refreshContexts, 10000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);

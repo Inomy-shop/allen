@@ -165,7 +165,12 @@ export function executionRoutes(db: Db): Router {
     try {
       if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
       const executionId = param(req, 'id');
-      res.json(await repoKnowledge.getExecutionContextUsageReport(executionId));
+      const view = typeof req.query.view === 'string' ? req.query.view : undefined;
+      const includeFlags = typeof req.query.include === 'string'
+        ? req.query.include.split(',').map((flag) => flag.trim()).filter(Boolean)
+        : [];
+      const bypassCache = req.query.refresh === 'true' || req.query.bypassCache === 'true';
+      res.json(await repoKnowledge.getExecutionContextUsageReport(executionId, { view: view as any, includeFlags, bypassCache }));
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
