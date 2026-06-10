@@ -831,6 +831,23 @@ export class ExecutionService {
       return !rowSessionId || rowSessionId === sessionId;
     };
 
+    const isDirectChatLinkedExecution = (row: Record<string, unknown>): boolean => {
+      const id = stringValue(row.id);
+      if (!id) return false;
+
+      // The chat page should list only executions directly started by chat:
+      //   - a workflow run launched from chat, or
+      //   - an agent spawned directly from chat.
+      // Workflow-node / nested agent executions are descendants of those
+      // direct runs and belong on the execution detail page, not the chat's
+      // top-level run list.
+      if (stringValue(row.source) === 'spawn') return false;
+      if (stringValue(row.parentExecutionId)) return false;
+      const rootExecutionId = stringValue(row.rootExecutionId);
+      if (rootExecutionId && rootExecutionId !== id) return false;
+      return true;
+    };
+
     const directRows = (await this.db.collection('executions')
       .find({
         $or: [
@@ -842,7 +859,10 @@ export class ExecutionService {
       .limit(200)
       .toArray()
       .catch(() => []))
-      .filter((row) => belongsToChatSession(row as Record<string, unknown>)) as Record<string, unknown>[];
+      .filter((row) => {
+        const r = row as Record<string, unknown>;
+        return belongsToChatSession(r) && isDirectChatLinkedExecution(r);
+      }) as Record<string, unknown>[];
 
     const metadataUpdates = [];
     for (const row of directRows) {
@@ -876,9 +896,6 @@ export class ExecutionService {
       await this.db.collection('executions').bulkWrite(metadataUpdates, { ordered: false }).catch(() => {});
     }
 
-    const rootIds = [...new Set(directRows
-      .map(row => stringValue(row.id))
-      .filter((id): id is string => Boolean(id)))];
     const rootParentByExecution = new Map<string, string>();
     for (const row of directRows) {
       const id = stringValue(row.id);
@@ -888,24 +905,8 @@ export class ExecutionService {
       if (parentMessageId) rootParentByExecution.set(id, parentMessageId);
     }
 
-    const descendants = rootIds.length
-      ? (await this.db.collection('executions')
-        .find({
-          id: { $nin: rootIds },
-          $or: [
-            { rootExecutionId: { $in: rootIds } },
-            { parentExecutionId: { $in: rootIds } },
-          ],
-        })
-        .sort({ startedAt: 1, createdAt: 1 })
-        .limit(300)
-        .toArray()
-        .catch(() => []))
-        .filter((row) => belongsToChatSession(row as Record<string, unknown>)) as Record<string, unknown>[]
-      : [];
-
     const byId = new Map<string, Record<string, unknown>>();
-    for (const row of [...directRows, ...descendants] as Record<string, unknown>[]) {
+    for (const row of directRows as Record<string, unknown>[]) {
       const id = stringValue(row.id);
       if (!id || byId.has(id)) continue;
       const meta = ((row.meta ?? {}) as Record<string, unknown>) ?? {};

@@ -163,6 +163,95 @@ describe('ExecutionService.getContext', () => {
     });
   });
 
+  it('lists only executions directly linked to chat, excluding workflow child agent runs', async () => {
+    const workflowId = new ObjectId();
+    const db = makeDb({
+      chat_messages: [],
+      workflows: [
+        {
+          _id: workflowId,
+          name: 'feature-plan-and-implement',
+          version: 1,
+          nodes: [],
+        },
+      ],
+      executions: [
+        {
+          id: 'wf-chat-1',
+          workflowId: String(workflowId),
+          workflowName: 'feature-plan-and-implement',
+          source: 'chat',
+          status: 'running',
+          input: { task: 'Build feature' },
+          state: {},
+          currentNodes: ['implement'],
+          completedNodes: [],
+          startedAt: new Date('2026-05-01T00:00:00Z'),
+          meta: { chatSessionId: 'chat-1', parentMessageId: 'msg-wf' },
+        },
+        {
+          id: 'agent-direct-1',
+          workflowId: null,
+          workflowName: 'chat:spawn_agent/backend-developer',
+          source: 'chat',
+          status: 'running',
+          input: { agent_name: 'backend-developer', prompt: 'Direct chat spawn' },
+          state: {},
+          currentNodes: ['backend-developer'],
+          completedNodes: [],
+          startedAt: new Date('2026-05-01T00:00:01Z'),
+          meta: { chatSessionId: 'chat-1', parentMessageId: 'msg-agent' },
+        },
+        {
+          id: 'agent-workflow-child-1',
+          workflowId: null,
+          workflowName: 'implement:spawn_agent/frontend-developer',
+          source: 'spawn',
+          status: 'running',
+          input: { agent_name: 'frontend-developer', prompt: 'Workflow node spawn' },
+          parentExecutionId: 'wf-chat-1',
+          rootExecutionId: 'wf-chat-1',
+          spawnDepth: 1,
+          state: {},
+          currentNodes: ['frontend-developer'],
+          completedNodes: [],
+          startedAt: new Date('2026-05-01T00:00:02Z'),
+          meta: { chatSessionId: 'chat-1', parentMessageId: 'msg-wf' },
+        },
+        {
+          id: 'agent-nested-child-1',
+          workflowId: null,
+          workflowName: 'frontend-developer:spawn_agent/qa-engineer',
+          source: 'spawn',
+          status: 'running',
+          input: { agent_name: 'qa-engineer', prompt: 'Nested spawn' },
+          parentExecutionId: 'agent-workflow-child-1',
+          rootExecutionId: 'wf-chat-1',
+          spawnDepth: 2,
+          state: {},
+          currentNodes: ['qa-engineer'],
+          completedNodes: [],
+          startedAt: new Date('2026-05-01T00:00:03Z'),
+          meta: { chatSessionId: 'chat-1', parentMessageId: 'msg-wf' },
+        },
+      ],
+      execution_traces: [],
+      execution_logs: [],
+      agent_activity: [],
+      workflow_interventions: [],
+      workspaces: [],
+      ticket_assignments: [],
+      pull_requests: [],
+      artifacts: [],
+    });
+
+    const rows = await new ExecutionService(db).listForChatSession('chat-1');
+
+    expect(rows.map(row => row.executionId)).toEqual(['wf-chat-1', 'agent-direct-1']);
+    expect(rows.find(row => row.executionId === 'wf-chat-1')).toMatchObject({ kind: 'workflow' });
+    expect(rows.find(row => row.executionId === 'agent-direct-1')).toMatchObject({ kind: 'agent' });
+  });
+
   it('normalizes workflow progress, child agents, interventions, workspace, and artifacts', async () => {
     const workflowId = new ObjectId();
     const workspaceId = new ObjectId();
