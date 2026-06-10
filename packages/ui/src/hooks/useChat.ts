@@ -322,21 +322,6 @@ function runsFromMessages(messages: ChatMessage[]): SpawnedAgent[] {
       run.sourceMessageId = message._id;
       runs.push(run);
     }
-    if (!message.content) continue;
-    const matches = message.content.matchAll(/\/executions\/([A-Za-z0-9_-]+)/g);
-    for (const match of matches) {
-      const executionId = match[1];
-      if (!executionId || seen.has(executionId)) continue;
-      seen.add(executionId);
-      runs.push({
-        executionId,
-        sourceMessageId: message._id,
-        agent: 'Routed run',
-        prompt: message.content.split('\n').find(Boolean) ?? '',
-        status: 'running',
-        activity: [],
-      });
-    }
   }
   return runs;
 }
@@ -364,8 +349,8 @@ function runsFromPersistedExecutions(items: Array<{
     .map(item => ({
       executionId: item.executionId,
       sourceMessageId: item.sourceMessageId ?? item.runContext?.chat?.parentMessageId ?? undefined,
-      parentExecutionId: item.runContext?.execution.parentExecutionId ?? undefined,
-      spawnDepth: item.runContext?.execution.spawnDepth ?? undefined,
+      parentExecutionId: item.runContext?.execution?.parentExecutionId ?? undefined,
+      spawnDepth: item.runContext?.execution?.spawnDepth ?? undefined,
       agent: item.agent ?? item.runContext?.title ?? 'Routed run',
       prompt: item.prompt ?? item.runContext?.io?.input ?? '',
       status: (item.runContext?.status ?? item.status ?? 'running') as SpawnedAgent['status'],
@@ -423,8 +408,8 @@ export function useChat() {
             status: update.context.status as SpawnedAgent['status'],
             runContext: update.context,
             sourceMessageId: update.context.chat?.parentMessageId ?? run.sourceMessageId,
-            parentExecutionId: update.context.execution.parentExecutionId ?? run.parentExecutionId,
-            spawnDepth: update.context.execution.spawnDepth ?? run.spawnDepth,
+            parentExecutionId: update.context.execution?.parentExecutionId ?? run.parentExecutionId,
+            spawnDepth: update.context.execution?.spawnDepth ?? run.spawnDepth,
           };
         });
         return changed ? next : prev;
