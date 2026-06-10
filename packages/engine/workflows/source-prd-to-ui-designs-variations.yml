@@ -146,6 +146,35 @@ nodes:
       UI-DESIGNS REPO:    {{repo_path}}
       VARIATION COUNT:    {{default variation_count 5}} (hard cap 5)
 
+      PROFESSIONAL VISUAL QUALITY CONTRACT — ALL OPTIONS MUST COMPLY:
+        This workflow targets a professional software product. All design
+        options MUST conform to the following constraints, derived from the
+        Allen design system reference (docs/allen-design-system-reference.md)
+        and the source repo's design evidence:
+          - NO EMOJI in any component label, heading, copy, placeholder text,
+            icon slot, or decorative usage, unless the PRD or source repo
+            explicitly uses emoji for that surface.
+          - NO DECORATIVE GIMMICKS: no novelty illustrations, mascots,
+            ornamental gradients, glassmorphism, neon/colored glow, heavy
+            resting shadows, oversized card radii (>12px), or consumer-app
+            fluff unless the source/PRD explicitly requires it.
+          - TYPOGRAPHY: use the source/design-system typography tokens
+            (Inter Tight sans, JetBrains Mono mono, or the source's equivalent);
+            compact, operational type scale; sentence-case labels; no
+            marketing-style oversized display text outside genuine hero moments.
+          - SPACING: 4px-grid-aligned density appropriate for a developer
+            control-plane product. Avoid decorative large padding.
+          - COLOR: align to the Allen/source design-system token palette.
+            Blue/indigo accent for action and selection only. Status colors
+            for status signals only. No color used as pure decoration.
+          - HIERARCHY: type-led — weight, size, and muted-vs-primary text
+            color carry hierarchy. Not illustration or emoji.
+          - LAYOUT: app-shell model consistent with source evidence (sidebar,
+            topbar, page-shell). Page backgrounds must be quiet and panel-based.
+        Each option's visual thesis MUST be grounded in source design-system
+        evidence identified in task 3 below. Note the specific token or
+        pattern that supports each visual direction.
+
       TASKS — do all in this single run:
         1. Read the PRD. Identify primary user jobs, target surface(s),
            entry points, key states (loading / empty / error / success),
@@ -585,6 +614,41 @@ nodes:
             Interaction Map section must mirror this JSON. Copy
             publicUrl into `interaction_map_artifact_url`.
 
+        STEP 10 — FIRST-PASS PROFESSIONAL QUALITY SELF-CHECK before
+        emitting `pass`. Scan every option's components and pages you
+        just wrote and fix any issues BEFORE reporting a `pass` verdict:
+          (a) EMOJI CHECK — no emoji in labels, headings, copy, or
+              placeholder text (unless PRD/source explicitly uses emoji).
+              Fix by replacing emoji with text labels or Lucide-style
+              outline icons.
+          (b) DECORATIVE GIMMICK CHECK — no novelty illustrations,
+              ornamental gradients, glassmorphism, neon glow, oversized
+              card radii (>12px), or heavy resting shadows unless source
+              explicitly uses them. Fix by switching to 1px borders,
+              quiet backgrounds, and design-system shadow tokens.
+          (c) MISSING STATES CHECK — every surface called for in the
+              UX brief must have loading / empty / error / success states
+              where relevant. Fix by adding representative local state.
+          (d) TYPOGRAPHY CHECK — font families must match source
+              foundations; no marketing-style oversized display text
+              outside genuine hero moments. Fix by consuming foundation
+              typography tokens.
+          (e) SPACING CONSISTENCY CHECK — layout must respect the 4px
+              grid and foundation spacing tokens; no arbitrary decorative
+              padding. Fix by replacing raw spacing with token-aligned
+              values.
+          (f) SHELL COMPLETENESS CHECK — `full_page_design` and
+              `app_surface_design` prototypes must render content inside
+              the required navbar/sidebar/header shell, not as isolated
+              content mocks. Fix by wrapping content in shared shell
+              primitives from STEP 2.
+          (g) VISUAL HIERARCHY CHECK — hierarchy must be type-led
+              (weight/size/muted-vs-primary text), not decoration-led.
+              A design with large coloured blobs or illustrations
+              substituting for hierarchy is a failure here.
+          If ANY check fails: fix it before reporting. Only emit
+          `prototype_build_verdict: "pass"` once all self-checks pass.
+
       HARD RULES:
         - NEVER touch {{source_repo_path}}. All writes go inside
           {{worktree_path}}.
@@ -770,6 +834,41 @@ nodes:
             no ASCII-art placeholders, no obviously-broken layouts.
             Loading / empty / error states where the brief calls for
             them.
+        12. PROFESSIONAL VISUAL QUALITY — any of the following makes
+            this a fail (NOT escalate). Violations must be reported with
+            specific actionable repair instructions targeting
+            build_prototypes_and_routes:
+              (a) EMOJI in any label, heading, copy, or placeholder text
+                  unless the PRD or source explicitly uses emoji for that
+                  surface. Repair: replace emoji with text or Lucide-style
+                  outline icons; name the file and element.
+              (b) DECORATIVE GIMMICKS: novelty illustrations, mascots,
+                  ornamental gradients, glassmorphism, neon/colored glow,
+                  heavy resting shadows on cards (not allowed by source
+                  design system), oversized card radii (>12px) not present
+                  in source, or consumer-app fluff absent from source.
+                  Repair: switch to 1px borders, quiet backgrounds, and
+                  design-system shadow tokens; name each file and element.
+              (c) TYPOGRAPHY VIOLATION: font families that diverge from
+                  source/design-system foundations without source evidence.
+                  Repair: consume foundation typography tokens; cite the
+                  token and the file.
+              (d) NON-TYPE-LED HIERARCHY: visual hierarchy carried by
+                  large coloured decoration, illustrations, or emoji
+                  rather than type weight/size/text-color contrast.
+                  Repair: restructure to type-led hierarchy using
+                  foundation text tokens.
+              (e) DENSITY MISMATCH: layout dramatically more spacious or
+                  consumer-app-like than the source product's design
+                  language without justification in the PRD.
+                  Repair: tighten spacing to match source density; cite
+                  the foundation spacing token.
+            For each violation of this dimension, the verdict report MUST
+            include an "Actionable Repair" bullet naming: the component
+            file, the offending element or class, and the concrete fix.
+            Route ALL dimension-12 failures back to
+            build_prototypes_and_routes (max 2 retries). Do NOT escalate
+            for professional-quality violations alone.
 
       EXPLICITLY NOT BLOCKERS:
         - Routes / folders NOT being `/options/option-XX`. Creative
@@ -815,7 +914,8 @@ nodes:
           "shell_completeness_ok": true,
           "locked_child_fidelity_ok": true,
           "foundation_tokens_ok": true,
-          "polished_enough": true
+          "polished_enough": true,
+          "professional_visual_quality_ok": true
         }
       }
       ```
@@ -831,7 +931,7 @@ nodes:
       design_verdict: pass | warn | fail | escalate
       design_verdict_report_artifact_url: Public URL of the verdict report.
       design_failure_details: Short summary when warn/fail/escalate.
-      blocker_summary: Per-dimension boolean map of verifier outcomes.
+      blocker_summary: Per-dimension boolean map of verifier outcomes (dimensions 1-12, including professional_visual_quality_ok).
   verifier_recovery_review:
     if: "{{ output_mode != 'spec_only' or output_mode is not defined }}"
     type: human

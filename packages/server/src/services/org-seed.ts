@@ -1893,6 +1893,24 @@ Rules:
 - Read design-system research before declaring component constraints.
 - Keep the UX brief generic to the target repo; do not assume Inomy, buyer-app, or any specific product.
 
+## PROFESSIONAL VISUAL QUALITY DIRECTION (mandatory in every brief)
+
+When producing option proposals or a UX brief, include an explicit
+"Visual Quality Contract" section. This is a professional software product;
+all options must be designed for a developer/engineering-tool audience:
+- Cite the source/design-system evidence (token file paths, component patterns)
+  that ground each option's visual direction. An option without source grounding
+  is under-specified.
+- Explicitly ban emoji, decorative illustrations, ornamental gradients,
+  glassmorphism, neon glow, and consumer-app visual language unless the source
+  repo or PRD explicitly uses them. State this ban in the brief so downstream
+  agents cannot ignore it.
+- Require typography, spacing, and color that match the source design system
+  (Inter Tight/JetBrains Mono or equivalent, 4px grid, token palette).
+- For \`full_page_design\` and \`app_surface_design\` scopes: require page chrome
+  (navbar, sidebar, header) be recreated from source patterns — options that
+  render content as isolated floating mocks without shell are unacceptable.
+
 Brief contents:
 - Primary and secondary user jobs.
 - Entry points and screen list.
@@ -1901,6 +1919,8 @@ Brief contents:
 - Design-system constraints with citations.
 - Accessibility and responsive requirements.
 - Design acceptance criteria; mark inferred criteria as inferred-needs-confirmation.
+- Visual quality contract (see above): source grounding, emoji/decoration ban,
+  typography/spacing/color directives, shell requirements.
 
 When you also produce option proposals (e.g. inside a workflow that asks for research-and-options in one shot), each option must include:
 - \`option_id\` — stable internal id \`option-01\`..\`option-05\`.
@@ -2233,11 +2253,44 @@ For each option emit:
 - Loading, empty, error, success, mobile/responsive, and accessibility notes
 - Strengths, weaknesses, implementation/design-system impact
 
+## PROFESSIONAL VISUAL QUALITY CONTRACT (HARD — all options must comply)
+
+All design options produced MUST conform to these constraints. This is a
+developer control-plane product; designs must feel like a dense engineering
+tool — calm, precise, type-led, and operational.
+- NO EMOJI in any component label, heading, copy, placeholder text, icon
+  slot, or decorative usage, unless the PRD or source repo explicitly uses
+  emoji for that exact surface.
+- NO DECORATIVE GIMMICKS: no novelty illustrations, mascots, ornamental
+  gradients, glassmorphism, neon/colored glow, heavy resting shadows, oversized
+  card radii (>12px), or consumer-app fluff unless the source/PRD explicitly
+  requires it.
+- TYPOGRAPHY: use the source/design-system typography tokens (Inter Tight
+  sans, JetBrains Mono mono, or the source equivalent). Compact, operational
+  type scale. Sentence-case labels. No marketing-style oversized display text
+  outside genuine hero moments.
+- SPACING: 4px-grid density appropriate for a developer control plane.
+- COLOR: align to the design-system token palette. Blue/indigo accent for
+  action and selection only. Status colors for status signals only.
+- HIERARCHY: type-led — weight, size, and muted-vs-primary text color carry
+  hierarchy, not decoration or emoji.
+- LAYOUT: app-shell model (sidebar, topbar, page-shell) consistent with source.
+  Page backgrounds quiet and panel-based.
+Every option's visual thesis MUST cite a specific source design-system token
+or pattern that supports it.
+
 ## Write targets
 
-- \`repos/{prd_slug}/options/option-01.md\` through \`option-NN.md\`.
-- \`prototypes/{prd_slug}/{concept_slug}/\` only when creating code prototypes (the prototype-route-builder usually owns this).
-- Save a consolidated options index as a markdown artifact via \`mcp__allen__allen_save_artifact("ux/{prd_slug}/options-index.md", …, overwrite=true)\` and surface its \`publicUrl\` as \`options_index_artifact_url\`.
+- Option specs: \`repos/{prd_slug}/options/{concept_slug}.md\` (named by
+  \`concept_slug\`, not by \`option_id\`). Include \`option_id\` as stable
+  metadata inside the file.
+- Do NOT use \`option-XX\` as folder names, route URL segments, or spec
+  filenames. \`option_id\` is an internal tracking id, not a URL slug.
+- \`prototypes/{prd_slug}/{concept_slug}/\` only when creating code prototypes
+  (the prototype-route-builder usually owns this).
+- Save a consolidated options index as a markdown artifact via
+  \`mcp__allen__allen_save_artifact("ux/{prd_slug}/options-index.md", …, overwrite=true)\`
+  and surface its \`publicUrl\` as \`options_index_artifact_url\`.
 
 ## Output
 
@@ -2352,6 +2405,33 @@ If you receive a parity-failure feedback flagging a \`*Replica\` as drifted, fix
 - \`prototypes/{prd_slug}/{concept_slug}/\` for prototype code per option.
 - \`prototypes/{prd_slug}/{concept_slug}/_local/\` for snippet-derived local replicas / adapted components.
 - \`app/repos/{prd_slug}/{concept_slug}/...\` for the static per-option Next.js route folders.
+
+## PROFESSIONAL VISUAL QUALITY (HARD — apply before emitting pass)
+
+All prototypes MUST pass the following checks. Fix issues before reporting
+a \`pass\` verdict. Violations are rank-blockers for the design verifier.
+
+- NO EMOJI in any label, heading, copy, or placeholder text unless PRD/source
+  explicitly uses emoji for that surface. Prefer Lucide-style outline icons
+  (16px, currentColor) over emoji for all interactive and decorative slots.
+- NO DECORATIVE GIMMICKS: no novelty illustrations, ornamental gradients,
+  glassmorphism, neon/colored glow, heavy resting-card shadows (use 1px borders
+  instead), oversized card radii (>12px without source evidence), or
+  consumer-app fluff. These are professional developer-tool designs.
+- DESIGN SYSTEM REFERENCE COMPLIANCE: before writing any option's components,
+  read the foundations reference (copied from the source repo) for token names,
+  typography scale, spacing grid, and color palette. Every component MUST
+  reference those tokens — do not invent a visual language.
+- TYPOGRAPHY: consume source/foundation font tokens (Inter Tight sans, JetBrains
+  Mono mono, or source equivalent). Sentence-case labels. No marketing-style
+  oversized display text outside genuine hero moments.
+- SPACING: 4px grid, compact developer-control-plane density. Avoid large
+  decorative whitespace that would look out of place in a Linear-like tool.
+- VISUAL HIERARCHY: type-led — weight, size, and muted-vs-primary text color
+  carry hierarchy. Not illustration, emoji, or colored decoration.
+- SHELL REQUIRED: \`full_page_design\` and \`app_surface_design\` prototypes MUST
+  render content inside the shared shell primitives (navbar/sidebar/header) —
+  never as isolated floating content mocks.
 
 ## INTERACTIVITY REQUIREMENTS (HARD)
 
@@ -2556,6 +2636,31 @@ For \`component_redesign\` scopes (especially product-card style work), the lock
    Do NOT fail because URLs are not \`/options/option-XX\` — concept-driven URLs are the desired outcome.
 9. MISSING REQUIRED SNIPPET REPLICA: a \`required_snippet\` with \`fidelity_class == exact\` / \`exact_locked\` has no corresponding local replica → fail.
 10. SHELL COMPLETENESS (NEW): when \`design_scope_type\` is \`full_page_design\` or \`app_surface_design\`, OR when the \`layout_shell_contract\` contains entries classified \`exact_locked\`, the worktree MUST contain a shared shell primitive replica for every required entry (navbar, sidebar, page-header, page-container, tabs/filters, drawers/modals as listed in the contract). Each option's layout/page MUST consume those shared shell primitives. Inline option-only chrome that bypasses the shared shell → fail. Missing primitive → fail with an actionable repair entry naming the missing primitive and its source path. The verdict report MUST contain a "Shell Completeness Map" section listing required primitives, replica paths, and per-option consumption status.
+11. PROFESSIONAL VISUAL QUALITY (NEW): any of the following → fail. Route
+    ALL violations back to build_prototypes_and_routes (max_retries loop).
+    Do NOT use \`escalate\` for professional-quality violations alone.
+    For each violation, the verdict report MUST include an "Actionable Repair"
+    bullet naming: the component file, the offending element or class, and
+    the concrete fix.
+    (a) EMOJI: emoji present in any label, heading, copy, or placeholder text
+        unless the PRD or source repo explicitly uses emoji for that surface.
+        Repair: replace with text label or Lucide-style outline icon; name
+        the file and element.
+    (b) DECORATIVE GIMMICKS: novelty illustrations, mascots, ornamental
+        gradients, glassmorphism, neon/colored glow, oversized card radii
+        (>12px without source evidence), heavy resting shadows absent from
+        source design system, or consumer-app fluff. Repair: switch to 1px
+        borders, quiet backgrounds, design-system shadow tokens; name files.
+    (c) TYPOGRAPHY VIOLATION: font families diverging from source/foundation
+        tokens. Repair: consume foundation typography tokens; cite the token
+        and file.
+    (d) NON-TYPE-LED HIERARCHY: visual hierarchy carried by large coloured
+        blobs, illustrations, or emoji rather than type weight/size/text-color
+        contrast. Repair: restructure to type-led hierarchy using foundation
+        text tokens.
+    (e) DENSITY MISMATCH: layout dramatically more spacious or consumer-app-
+        like than the source product's design language without PRD justification.
+        Repair: tighten spacing to match source density; cite foundation tokens.
 
 ## Soft-blocker dimensions (warn-only)
 
@@ -2847,11 +2952,17 @@ Required checks before work:
 - Is the source repo readable? If not, mark evidence as unverified.
 - Where should outputs go: ui-designs or fallback active-repo prototype route?
 - Should the output be markdown specs, Next.js prototype routes, Figma links, or a combination?
+- Have the downstream agents been given the professional visual quality contract
+  (no emoji, no decorative gimmicks, design-system token compliance, type-led
+  hierarchy)? If not, include it in the brief forwarded to each specialist.
 
 Output convention:
 - List verified evidence with file paths.
 - List generated route paths and filesystem paths.
-- Separate verified facts from proposed UX choices.`,
+- Separate verified facts from proposed UX choices.
+- Flag any visual direction in the generated options that violates the
+  professional quality contract (emoji, decorative gimmicks, consumer-app
+  fluff) so the relevant specialist can correct it before the verifier runs.`,
   },
   {
     name: 'design-assistant',

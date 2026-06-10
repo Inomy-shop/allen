@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OrgSeedService } from './org-seed.js';
 
@@ -263,6 +265,70 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
     }
   });
 
+  it('design agent seeds include the professional visual quality / no-emoji / no-decorative constraints', async () => {
+    const db = makeDb();
+
+    await new OrgSeedService(db).seed();
+
+    // Agents that must carry the professional quality contract
+    const agentsRequiringQualityContract = [
+      'design-variation-generator',
+      'prototype-route-builder',
+      'design-critic',
+      'prd-ux-translator',
+    ];
+
+    for (const agentName of agentsRequiringQualityContract) {
+      const agent = db.store.agents.find((a: any) => a.name === agentName);
+      expect(agent, `${agentName} must be seeded`).toBeDefined();
+      const system: string = agent.system;
+
+      // Every design agent must explicitly ban emoji (various phrasings accepted:
+      //   "NO EMOJI", "no emoji", "ban emoji", "emoji … violation", "emoji … blocker", etc.)
+      expect(
+        system,
+        `${agentName} must contain a no-emoji instruction`,
+      ).toMatch(/no.{0,20}emoji|emoji.{0,40}(ban|violat|blocker|check|present)|ban.{0,10}emoji/i);
+
+      // Every design agent must explicitly ban decorative gimmicks or consumer-app fluff
+      expect(
+        system,
+        `${agentName} must contain a no-decorative-gimmicks or professional-quality instruction`,
+      ).toMatch(/decorative|gimmick|glassmorphism|professional.*visual|visual.*quality/i);
+    }
+  });
+
+  it('design-variation-generator no longer instructs concept routes to be /options/option-XX when a plan provides concept_slug/primary_route', async () => {
+    const db = makeDb();
+
+    await new OrgSeedService(db).seed();
+
+    const agent = db.store.agents.find((a: any) => a.name === 'design-variation-generator');
+    expect(agent, 'design-variation-generator must be seeded').toBeDefined();
+    const system: string = agent.system;
+
+    // Must NOT contain the old /options/option-01 through option-NN routing rule
+    // as a write-target instruction (the old line was:
+    //   `repos/{prd_slug}/options/option-01.md` through `option-NN.md`
+    // which conflated the URL slug with option_id)
+    expect(
+      system,
+      'design-variation-generator must not instruct concept routes to use /options/option-XX as write targets',
+    ).not.toMatch(/options\/option-0[1-9]\.md/);
+
+    // Must contain an instruction that option_id is NOT a URL segment
+    expect(
+      system,
+      'design-variation-generator must state that option_id is NOT a URL segment',
+    ).toMatch(/option_id.*NOT.*URL|NOT.*option_id.*URL|option_id is not a URL/i);
+
+    // Must contain concept_slug-based write target rule
+    expect(
+      system,
+      'design-variation-generator must use concept_slug for write targets / spec filenames',
+    ).toMatch(/concept_slug/);
+  });
+
   it('preserves the Design team while keeping its existing lead orchestration contract', async () => {
     const db = makeDb();
 
@@ -345,5 +411,51 @@ describe('design-assistant agent seed', () => {
     const agent = db.store.agents.find((a: any) => a.name === 'design-assistant');
     expect(agent.capabilities).toContain('design');
     expect(agent.spawnTargets).toContain('frontend-developer');
+  });
+});
+
+describe('source-prd-to-ui-designs-variations workflow YAML invariants', () => {
+  // Resolve the workflow YAML relative to this test file's location in the monorepo.
+  // The file lives at packages/engine/workflows/…; this test lives at packages/server/src/services/…
+  // Going up 4 levels from packages/server/src/services/ reaches the workspace root.
+  const workflowPath = path.resolve(
+    __dirname,
+    '../../../../packages/engine/workflows/source-prd-to-ui-designs-variations.yml',
+  );
+
+  let workflowYaml: string;
+
+  beforeEach(() => {
+    workflowYaml = fs.readFileSync(workflowPath, 'utf8');
+  });
+
+  it('keeps max_retries: 2 on the final_design_verifier → build_prototypes_and_routes retry edge', () => {
+    // The retry edge from final_design_verifier must have max_retries: 2 — never reduced to 1.
+    expect(workflowYaml).toMatch(/max_retries:\s*2/);
+    // Specifically it must NOT have max_retries: 1
+    expect(workflowYaml).not.toMatch(/max_retries:\s*1/);
+  });
+
+  it('contains the professional visual quality contract in the research_and_options prompt', () => {
+    expect(workflowYaml).toMatch(/PROFESSIONAL VISUAL QUALITY CONTRACT/);
+    expect(workflowYaml).toMatch(/NO EMOJI/i);
+    expect(workflowYaml).toMatch(/NO DECORATIVE GIMMICKS/i);
+  });
+
+  it('contains the first-pass quality self-check in the build_prototypes_and_routes prompt', () => {
+    expect(workflowYaml).toMatch(/FIRST-PASS.*QUALITY.*SELF-CHECK|QUALITY.*SELF-CHECK/i);
+    expect(workflowYaml).toMatch(/EMOJI CHECK/i);
+    expect(workflowYaml).toMatch(/DECORATIVE GIMMICK CHECK/i);
+  });
+
+  it('adds professional_visual_quality_ok to the final_design_verifier blocker_summary', () => {
+    expect(workflowYaml).toContain('professional_visual_quality_ok');
+  });
+
+  it('treats professional quality violations as rank-blockers in final_design_verifier', () => {
+    // Dimension 12 must be present and must route failures to build_prototypes_and_routes
+    expect(workflowYaml).toMatch(/PROFESSIONAL VISUAL QUALITY.*rank-blocker|rank-blocker.*PROFESSIONAL VISUAL QUALITY|12\.\s+PROFESSIONAL VISUAL QUALITY/i);
+    // Must route violations to build_prototypes_and_routes, not escalate
+    expect(workflowYaml).toMatch(/build_prototypes_and_routes.*NOT escalate|NOT escalate.*build_prototypes_and_routes/i);
   });
 });
