@@ -1169,7 +1169,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     const refreshDiffSummary = async () => {
       const parts = await Promise.all(workspaceRefs.map(async ref => {
         try {
-          const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode });
+          const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode, anchor: 'creation' });
           const files = ((result.files ?? []) as DiffSummaryFile[])
             .filter(hasChangedDiffMetadata);
           return files;
