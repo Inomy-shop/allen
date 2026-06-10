@@ -7,7 +7,7 @@ import {
   ArrowRight, AlertTriangle, Save, Activity,
   MessageSquare, FileText, FolderGit2, GitPullRequest, ExternalLink, Cpu,
   BookOpen,
-  Copy, Check,
+  Copy, Check, Loader2,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent, type NodeState } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
@@ -2466,7 +2466,7 @@ export default function ExecutionDetailPage() {
   const {
     execution, workflow, traces, timeline, nodeStates,
     logs, logFilter, setLogFilter,
-    loading, connected, isLive, refresh,
+    loading, connected, isLive, refresh, markExecutionRunning,
     children, descendantsMode, toggleDescendants,
     liveToolCallsByNode,
   } = useExecution(id);
@@ -2723,15 +2723,17 @@ export default function ExecutionDetailPage() {
     setResumeBusy(true);
     setResumePickerOpen(false);
     try {
+      markExecutionRunning(node);
       await api.retryFrom(id, node);
-      refresh();
+      window.setTimeout(() => { void refresh(); }, 750);
     } catch (err) {
       // Surface failures inline — the operator should see why resume didn't start.
       alert(`Failed to resume from ${node}: ${(err as Error).message}`);
+      await refresh();
     } finally {
       setResumeBusy(false);
     }
-  }, [id, refresh]);
+  }, [id, refresh, markExecutionRunning]);
 
   const handleRerunContextEvaluation = useCallback(async () => {
     if (!id || !contextEngineEnabled) return;
@@ -2988,10 +2990,14 @@ export default function ExecutionDetailPage() {
           {execution.status === 'failed' && execution.failedNode && (
             <button
               onClick={() => handleRetryFrom(execution.failedNode)}
-              className="btn-ghost text-xs text-accent-yellow"
+              disabled={resumeBusy}
+              className="btn-ghost text-xs text-accent-yellow disabled:cursor-not-allowed disabled:opacity-50"
               title="Retry from failed node"
             >
-              <RotateCcw className="w-3.5 h-3.5 mr-1" /> Retry
+              {resumeBusy
+                ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                : <RotateCcw className="w-3.5 h-3.5 mr-1" />}
+              {resumeBusy ? 'Starting…' : 'Retry'}
             </button>
           )}
           {isLive && (
@@ -3009,11 +3015,14 @@ export default function ExecutionDetailPage() {
           with the error shown, the failing node called out, and a picker
           to rewind further back than the failure point if needed. */}
       {execution.status === 'failed' && execution.failedNode && (
-        <div className="flex items-start gap-4 px-6 py-3 border-b border-accent-red/30 bg-accent-red/10">
-          <AlertTriangle className="w-5 h-5 text-accent-red shrink-0 mt-0.5" />
+        <div className={`flex items-start gap-4 px-6 py-4 border-b ${resumeBusy ? 'border-accent-blue/30 bg-accent-blue/10' : 'border-accent-red/30 bg-accent-red/10'}`}>
+          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border ${resumeBusy ? 'border-accent-blue/30 bg-accent-blue/10 text-accent-blue' : 'border-accent-red/30 bg-accent-red/10 text-accent-red'}`}>
+            {resumeBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <AlertTriangle className="h-5 w-5" />}
+          </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-heading font-semibold text-theme-primary">
-              FAILED AT <span className="font-mono text-accent-red">{execution.failedNode}</span>
+            <div className="flex flex-wrap items-center gap-2 text-xs font-heading font-semibold text-theme-primary">
+              <span className="tracking-wide">{resumeBusy ? 'STARTING RERUN FROM' : 'FAILED AT'}</span>
+              <span className={`rounded-md border px-1.5 py-0.5 font-mono ${resumeBusy ? 'border-accent-blue/25 bg-accent-blue/10 text-accent-blue' : 'border-accent-red/25 bg-accent-red/10 text-accent-red'}`}>{execution.failedNode}</span>
               {(() => {
                 // Surface the failing tool call from the failed node's trace.
                 const failedTrace = (traces ?? []).find(
@@ -3029,7 +3038,7 @@ export default function ExecutionDetailPage() {
               })()}
               <button
                 onClick={() => { inspectNode(execution.failedNode); }}
-                className="ml-3 text-[10px] font-mono underline text-theme-muted hover:text-theme-primary"
+                className="text-[10px] font-mono underline text-theme-muted hover:text-theme-primary"
                 title="Jump to failed node + Inspector tab for state-at-failure"
               >
                 Inspect →
@@ -3047,19 +3056,22 @@ export default function ExecutionDetailPage() {
                 </pre>
               </details>
             )}
-            <div className="text-[10px] font-mono text-theme-subtle mt-1">
-              Resume rewinds state to the checkpoint taken before the selected node and re-enters the graph from there. Upstream outputs and agent sessions are preserved.
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-mono text-theme-subtle">
+              <span className="rounded-full border border-app bg-app-card px-2 py-0.5">Checkpoint rewind</span>
+              <span className="rounded-full border border-app bg-app-card px-2 py-0.5">Preserves upstream output</span>
+              <span className="rounded-full border border-app bg-app-card px-2 py-0.5">Reuses agent sessions</span>
+              {resumeBusy && <span className="text-accent-blue">Updating this run now…</span>}
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 relative">
             <button
               onClick={() => handleRetryFrom(execution.failedNode)}
               disabled={resumeBusy}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-red text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-red text-white shadow-sm shadow-accent-red/20 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
               title={`Resume execution from ${execution.failedNode}`}
             >
-              <RotateCcw className="w-3 h-3" />
-              {resumeBusy ? 'Resuming…' : `Continue from ${execution.failedNode}`}
+              {resumeBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+              {resumeBusy ? 'Starting…' : `Continue from ${execution.failedNode}`}
             </button>
             {execution.completedNodes && execution.completedNodes.length > 0 && (
               <>
@@ -3226,6 +3238,7 @@ export default function ExecutionDetailPage() {
                     agentNodeNames={agentNodeNames}
                     onFeedbackCreated={(entries) => setFeedbackEntries((prev) => [...prev, ...entries])}
                     onRefreshExecution={refresh}
+                    onResumeStarted={(node) => markExecutionRunning(node)}
                   />
                 </div>
               ) : rightPanelView === 'artifacts' ? (

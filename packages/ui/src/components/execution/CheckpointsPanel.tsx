@@ -37,7 +37,8 @@ interface Props {
   canAppendFeedback?: boolean;
   agentNodeNames?: string[];
   onFeedbackCreated?: (entries: WorkflowFeedbackEntry[]) => void;
-  onRefreshExecution?: () => void;
+  onRefreshExecution?: () => void | Promise<void>;
+  onResumeStarted?: (node?: string) => void;
 }
 
 /**
@@ -56,6 +57,7 @@ export default function CheckpointsPanel({
   agentNodeNames = [],
   onFeedbackCreated,
   onRefreshExecution,
+  onResumeStarted,
 }: Props) {
   const [checkpoints, setCheckpoints] = useState<CheckpointDoc[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,6 +65,7 @@ export default function CheckpointsPanel({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<CheckpointDoc | null>(null);
   const [busy, setBusy] = useState<Record<string, 'run' | 'fork' | null>>({});
+  const runningCheckpointId = Object.entries(busy).find(([, value]) => value === 'run')?.[0] ?? null;
   /** Multi-select set of checkpoint ids for diffing. When exactly 2 are
    *  selected, the "Compare selected" button lights up and opens the diff. */
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -105,11 +108,12 @@ export default function CheckpointsPanel({
   async function handleRun(cp: CheckpointDoc) {
     setBusy((b) => ({ ...b, [cp._id]: 'run' }));
     try {
+      onResumeStarted?.(cp.afterNode);
       await api.checkpoints.run(executionId, cp._id);
-      // Reload the page so the user sees the execution-running state.
-      window.location.reload();
+      window.setTimeout(() => { void onRefreshExecution?.(); }, 750);
     } catch (e) {
       alert(`Could not resume: ${(e as Error).message}`);
+      await onRefreshExecution?.();
     } finally {
       setBusy((b) => ({ ...b, [cp._id]: null }));
     }
@@ -252,6 +256,12 @@ export default function CheckpointsPanel({
           <h2 className="font-label text-xs uppercase tracking-widest text-theme-muted">Saved states to rerun from</h2>
           {!loading && <span className="text-[10px] font-mono text-theme-subtle">{checkpoints.length} saved</span>}
         </div>
+        {runningCheckpointId && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-accent-blue/25 bg-accent-blue/10 px-2 py-1 font-mono text-[10px] text-accent-blue">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Resuming saved state…
+          </span>
+        )}
         {selected.size >= 2 && (
           <button
             onClick={() => {
@@ -354,7 +364,7 @@ export default function CheckpointsPanel({
                   </button>
                   <button
                     onClick={() => handleRun(cp)}
-                    disabled={!canRunFromCheckpoint || busy[cp._id] === 'run'}
+                    disabled={!canRunFromCheckpoint || runningCheckpointId != null || busy[cp._id] === 'run'}
                     className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-green disabled:opacity-30 transition-colors"
                     title={canRunFromCheckpoint
                       ? 'Resume this execution from this saved state'
@@ -366,7 +376,7 @@ export default function CheckpointsPanel({
                   </button>
                   <button
                     onClick={() => handleFork(cp)}
-                    disabled={busy[cp._id] === 'fork'}
+                    disabled={runningCheckpointId != null || busy[cp._id] === 'fork'}
                     className="p-1.5 rounded-md hover:bg-app-muted text-theme-muted hover:text-accent-blue disabled:opacity-30 transition-colors"
                     title="Fork: create a new execution from this saved state"
                   >

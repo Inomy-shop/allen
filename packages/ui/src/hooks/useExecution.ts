@@ -667,8 +667,9 @@ export function useExecution(id: string | undefined) {
     setNodeStates(prev => {
       const merged = new Map(map);
       // If a node is currently running via SSE but trace shows completed, trust SSE (more recent)
+      const serverStillActive = exec.status === 'running' || exec.status === 'waiting_for_input' || exec.status === 'queued';
       for (const [name, state] of prev) {
-        if ((state.status === 'running' || state.status === 'waiting_for_input') && (!merged.has(name) || merged.get(name)?.status !== 'completed')) {
+        if (serverStillActive && (state.status === 'running' || state.status === 'waiting_for_input') && (!merged.has(name) || merged.get(name)?.status !== 'completed')) {
           merged.set(name, state);
         }
       }
@@ -689,6 +690,40 @@ export function useExecution(id: string | undefined) {
         .catch(() => { /* ignore */ });
     }
   }, [id]);
+
+
+  const markExecutionRunning = useCallback((currentNode?: string) => {
+    const startedAt = new Date();
+    setExecution((prev: any) => prev ? {
+      ...prev,
+      status: 'running',
+      failedNode: null,
+      errorMessage: null,
+      completedAt: null,
+      currentNodes: currentNode ? [currentNode] : (prev.currentNodes ?? []),
+    } : prev);
+
+    if (!currentNode) return;
+    setNodeStates(prev => {
+      const next = new Map(prev);
+      const existing = next.get(currentNode);
+      next.set(currentNode, {
+        name: currentNode,
+        status: 'running',
+        attempt: Math.max(1, (existing?.attempt ?? 0) + 1),
+        output: undefined,
+        durationMs: 0,
+        startedAt,
+        completedAt: null,
+        cost: undefined,
+        streamText: '',
+        activity: [],
+        renderedPrompt: existing?.renderedPrompt,
+        inputState: existing?.inputState,
+      });
+      return next;
+    });
+  }, []);
 
   // Auto-refresh every 5 seconds when execution is active
   useEffect(() => {
@@ -746,6 +781,7 @@ export function useExecution(id: string | undefined) {
     connected,
     isLive: !!isLive,
     refresh,
+    markExecutionRunning,
     // Spawn-tree children — workflow nodes that called `spawn_agent` appear
     // here. `descendantsMode=true` also pulls grandchildren and deeper.
     children,
