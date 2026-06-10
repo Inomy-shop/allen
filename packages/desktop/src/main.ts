@@ -38,6 +38,7 @@ import { isAllowedExternalUrl } from './url-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
+const trustedPopupWindows = new Set<BrowserWindow>();
 let serverHandle: AllenServerHandle | null = null;
 let mongoHandle: ManagedMongoRuntime | null = null;
 let isQuitting = false;
@@ -293,6 +294,11 @@ function createTrustedPopupWindow(parent: BrowserWindow, targetUrl: string): voi
       webSecurity: true,
       allowRunningInsecureContent: false,
     },
+  });
+
+  trustedPopupWindows.add(popup);
+  popup.on('closed', () => {
+    trustedPopupWindows.delete(popup);
   });
 
   installTrustedNavigationGuards(popup, (trustedTargetUrl) => {

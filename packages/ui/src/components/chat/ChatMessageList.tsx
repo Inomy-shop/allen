@@ -560,6 +560,27 @@ function artifactIdFromUrl(url: string): string | null {
   return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
+function openNonArtifactChatLink(event: React.MouseEvent<HTMLAnchorElement>, href: string): void {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+  if (typeof window !== 'undefined' && window.allenDesktop?.openExternal) {
+    let resolved: URL;
+    try {
+      resolved = new URL(href, window.location.href);
+    } catch {
+      return;
+    }
+
+    const isHttpUrl = resolved.protocol === 'http:' || resolved.protocol === 'https:';
+    const isSameOrigin = resolved.origin === window.location.origin;
+
+    if (isHttpUrl && !isSameOrigin) {
+      event.preventDefault();
+      void window.allenDesktop.openExternal(resolved.toString());
+    }
+  }
+}
+
 function ArtifactMarkdownLink({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) {
   const artifactId = artifactIdFromUrl(href);
   const [artifact, setArtifact] = useState<ArtifactDoc | null>(null);
@@ -571,7 +592,7 @@ function ArtifactMarkdownLink({ href, children, className }: { href: string; chi
 
   if (!artifactId) {
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
+      <a href={href} target="_blank" rel="noopener noreferrer" className={className} onClick={(event) => openNonArtifactChatLink(event, href)}>
         {children}
       </a>
     );
