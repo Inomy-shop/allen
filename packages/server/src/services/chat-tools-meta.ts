@@ -24,7 +24,7 @@ import type { ChatTool } from './chat-tools.js';
 import { resolveActiveSession } from './chat-tools.js';
 import { TeamService } from './team.service.js';
 import { WorkflowService } from './workflow.service.js';
-import { SkillService } from './skill.service.js';
+import { SkillService, type SkillInput } from './skill.service.js';
 import type { WorkflowDef } from '@allen/engine';
 import yaml from 'js-yaml';
 
@@ -172,6 +172,84 @@ const getSkillTool: ChatTool = {
     const skill = id ? await service.getById(id) : await service.getByName(name);
     if (!skill) return { error: 'Skill not found' };
     return { skill };
+  },
+};
+
+const updateSkillTool: ChatTool = {
+  name: 'update_skill',
+  description: 'Update an existing Allen Library skill. Supports partial updates — only the fields you provide are changed. Resolve skill by id or name.',
+  destructive: true,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'Skill MongoDB _id' },
+      name: { type: 'string', description: 'Skill name slug (used when id is omitted)' },
+      new_name: { type: 'string', description: 'New name slug (renames the skill)' },
+      displayName: { type: 'string' },
+      description: { type: 'string' },
+      category: { type: 'string' },
+      triggers: { type: 'array', items: { type: 'string' } },
+      excludes: { type: 'array', items: { type: 'string' } },
+      priority: { type: 'number' },
+      enabled: { type: 'boolean' },
+      allowedRoutes: { type: 'array', items: { type: 'string' } },
+      relatedWorkflows: { type: 'array', items: { type: 'string' } },
+      relatedAgents: { type: 'array', items: { type: 'string' } },
+      body: { type: 'string' },
+      tags: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  async execute(args, db) {
+    const service = new SkillService(db);
+    const id = typeof args.id === 'string' ? args.id.trim() : '';
+    const name = typeof args.name === 'string' ? args.name.trim() : '';
+
+    if (!id && !name) return { error: 'Provide either id or name' };
+
+    // Resolve skill
+    let skill: Record<string, unknown> | null = null;
+    if (id) {
+      skill = await service.getById(id);
+    } else {
+      skill = await service.getByName(name);
+    }
+    if (!skill) return { error: 'Skill not found' };
+
+    const skillId = String(skill._id);
+
+    // Build Partial<SkillInput> from provided args only
+    const allowedFields = [
+      'displayName', 'description', 'category', 'triggers', 'excludes',
+      'priority', 'enabled', 'allowedRoutes', 'relatedWorkflows',
+      'relatedAgents', 'body', 'tags', 'new_name',
+    ];
+    const updates: Record<string, unknown> = {};
+    for (const key of allowedFields) {
+      if (args[key] !== undefined) {
+        // Map new_name -> name for the service layer
+        const targetKey = key === 'new_name' ? 'name' : key;
+        updates[targetKey] = args[key];
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return { error: 'No updatable fields supplied' };
+    }
+
+    try {
+      const updated = await service.update(skillId, updates as Partial<SkillInput>);
+      return {
+        success: true,
+        skill: {
+          _id: String(updated._id ?? skillId),
+          name: updated.name,
+          version: updated.version,
+          displayName: updated.displayName,
+        },
+      };
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
   },
 };
 
@@ -710,6 +788,8 @@ export const metaChatTools: ChatTool[] = [
   listSkillsTool,
   searchSkillsTool,
   getSkillTool,
+  // Skill management
+  updateSkillTool,
   // Self-introspection (any agent)
   getMySessionHistory,
   // Team management
@@ -736,4 +816,5 @@ export const META_DESTRUCTIVE_TOOLS = [
   'delete_agent',
   'create_workflow',
   'update_workflow',
+  'update_skill',
 ];

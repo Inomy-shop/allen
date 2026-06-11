@@ -32,11 +32,17 @@ vi.mock('./workflow.service.js', () => ({
   WorkflowService: vi.fn(),
 }));
 
+// Mock SkillService so skill operations don't need a real MongoDB connection.
+vi.mock('./skill.service.js', () => ({
+  SkillService: vi.fn(),
+}));
+
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
 import { resolveActiveSession } from './chat-tools.js';
 import { TeamService } from './team.service.js';
 import { WorkflowService } from './workflow.service.js';
+import { SkillService } from './skill.service.js';
 import { metaChatTools } from './chat-tools-meta.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -159,6 +165,26 @@ function configureWorkflowService(overrides: Partial<{
     }),
   };
   vi.mocked(WorkflowService).mockImplementation(() => instance as any);
+  return instance;
+}
+
+/** Configure SkillService mock to provide canned skill-service behaviour. */
+function configureSkillService(overrides: Partial<{
+  getById: (id: string) => Promise<unknown>;
+  getByName: (name: string) => Promise<unknown>;
+  update: (id: string, input: unknown) => Promise<unknown>;
+}> = {}) {
+  const instance = {
+    getById: overrides.getById ?? vi.fn().mockResolvedValue(null),
+    getByName: overrides.getByName ?? vi.fn().mockResolvedValue(null),
+    update: overrides.update ?? vi.fn().mockResolvedValue({
+      _id: 'skill-001',
+      name: 'test-skill',
+      version: 3,
+      displayName: 'Test Skill',
+    }),
+  };
+  vi.mocked(SkillService).mockImplementation(() => instance as any);
   return instance;
 }
 
@@ -289,6 +315,145 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
       );
 
       expect(result).toMatchObject({ error: expect.stringContaining('system-seeded') });
+    });
+  });
+
+  // ── update_skill ────────────────────────────────────────────────────────────
+
+  describe('update_skill', () => {
+    const tool = getTool('update_skill');
+
+    for (const scenario of CALLER_SCENARIOS) {
+      it(`succeeds from ${scenario.label}`, async () => {
+        scenario.setup();
+        configureSkillService({
+          getById: vi.fn().mockResolvedValue({
+            _id: 'skill-001',
+            name: 'test-skill',
+            version: 2,
+            displayName: 'Test Skill',
+          }),
+          update: vi.fn().mockResolvedValue({
+            _id: 'skill-001',
+            name: 'test-skill',
+            version: 3,
+            displayName: 'Updated Display Name',
+          }),
+        });
+        const db = makeMockDb();
+
+        const result = await tool.execute(
+          { id: 'skill-001', displayName: 'Updated Display Name' },
+          db,
+        );
+
+        expect(result).not.toMatchObject({ error: expect.stringContaining('Permission denied') });
+        expect(result).toMatchObject({ success: true });
+      });
+    }
+
+    it('returns error when skill not found by id', async () => {
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
+      configureSkillService({
+        getById: vi.fn().mockResolvedValue(null),
+      });
+      const db = makeMockDb();
+
+      const result = await tool.execute({ id: 'nonexistent-id' }, db);
+
+      expect(result).toMatchObject({ error: 'Skill not found' });
+    });
+
+    it('returns error when skill not found by name', async () => {
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
+      configureSkillService({
+        getByName: vi.fn().mockResolvedValue(null),
+      });
+      const db = makeMockDb();
+
+      const result = await tool.execute({ name: 'nonexistent-skill' }, db);
+
+      expect(result).toMatchObject({ error: 'Skill not found' });
+    });
+
+    it('returns error when no updatable fields supplied', async () => {
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
+      configureSkillService({
+        getById: vi.fn().mockResolvedValue({
+          _id: 'skill-001',
+          name: 'test-skill',
+          version: 2,
+          displayName: 'Test Skill',
+        }),
+      });
+      const db = makeMockDb();
+
+      const result = await tool.execute({ id: 'skill-001' }, db);
+
+      expect(result).toMatchObject({ error: 'No updatable fields supplied' });
+    });
+
+    it('successfully partially updates a skill', async () => {
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
+      const mockUpdate = vi.fn().mockResolvedValue({
+        _id: 'skill-001',
+        name: 'test-skill',
+        version: 3,
+        displayName: 'Updated Skill',
+      });
+      configureSkillService({
+        getById: vi.fn().mockResolvedValue({
+          _id: 'skill-001',
+          name: 'test-skill',
+          version: 2,
+          displayName: 'Original Skill',
+        }),
+        update: mockUpdate,
+      });
+      const db = makeMockDb();
+
+      const result = await tool.execute(
+        { id: 'skill-001', displayName: 'Updated Skill', description: 'A new description' },
+        db,
+      );
+
+      // Verify update was called with correct id
+      expect(mockUpdate).toHaveBeenCalledWith('skill-001', expect.objectContaining({
+        displayName: 'Updated Skill',
+        description: 'A new description',
+      }));
+      // Verify version bump observed in response
+      expect(result).toMatchObject({
+        success: true,
+        skill: {
+          _id: 'skill-001',
+          name: 'test-skill',
+          version: 3,
+          displayName: 'Updated Skill',
+        },
+      });
+    });
+
+    it('propagates validation errors', async () => {
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
+      configureSkillService({
+        getById: vi.fn().mockResolvedValue({
+          _id: 'skill-001',
+          name: 'test-skill',
+          version: 2,
+          displayName: 'Test Skill',
+        }),
+        update: vi.fn().mockRejectedValue(new Error('Skill "test-skill" already exists')),
+      });
+      const db = makeMockDb();
+
+      const result = await tool.execute(
+        { id: 'skill-001', new_name: 'duplicate-name' },
+        db,
+      );
+
+      // Error is returned, not thrown
+      expect(result).toMatchObject({ error: 'Skill "test-skill" already exists' });
     });
   });
 

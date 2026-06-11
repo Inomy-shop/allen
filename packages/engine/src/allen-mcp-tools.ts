@@ -4,6 +4,7 @@ export const ALLEN_MCP_TOOL_NAMES: readonly string[] = [
   'list_skills',
   'search_skills',
   'get_skill',
+  'update_skill',
   'list_workflows',
   'get_workflow',
   'run_workflow',
