@@ -1,17 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, type ReactNode } from 'react';
 import type { Node } from '@xyflow/react';
-import { Trash2, Plus, X } from 'lucide-react';
+import { Trash2, Plus, X, ChevronDown, SlidersHorizontal } from 'lucide-react';
 import { agents as agentsApi, mcp as mcpApi, type McpToolGroup } from '../../services/api';
 import Select from '../common/Select';
-import { outputsAsKeys, mergeOutputsFromKeys } from '../../utils/outputs';
+import { outputsAsMap } from '../../utils/outputs';
 import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
+import { useEnabledProviders } from '../../hooks/useEnabledProviders';
+import HumanNodeEditor from './HumanNodeEditor';
+import KeyValueEditor from './KeyValueEditor';
+import JsonField from './JsonField';
+import InputSchemaEditor from './InputSchemaEditor';
 
-interface HumanField {
+interface ConditionRow {
   name: string;
-  type: string;
-  label?: string;
-  required?: boolean;
-  options?: string[];
+  expression: string;
 }
 
 interface Props {
@@ -20,6 +22,28 @@ interface Props {
   onDelete: (id: string) => void;
   /** Workflow-level input schema (`input:` section in YAML). Shown when START is selected. */
   workflowInput?: Record<string, any> | null;
+  /** Workflow-level `context:` block. Shown when START is selected. */
+  workflowContext?: Record<string, any> | null;
+  /** Patch workflow-level metadata (input / context). Enables START editing. */
+  onWorkflowMetaPatch?: (patch: { input?: any; context?: any }) => void;
+  /** All node ids in the graph — used by the human editor for action routes. */
+  nodeIds?: string[];
+  /** Collapse (hide) the properties sidebar. When set, a button renders at the panel's top-left. */
+  onClose?: () => void;
+}
+
+/** Top-left close control shared across every panel state. */
+function PanelCloseButton({ onClose }: { onClose?: () => void }) {
+  if (!onClose) return null;
+  return (
+    <button
+      onClick={onClose}
+      title="Close panel"
+      className="btn-ghost p-1 text-theme-muted hover:text-theme-primary shrink-0"
+    >
+      <X className="w-4 h-4" />
+    </button>
+  );
 }
 
 const builtIns = [
@@ -29,13 +53,24 @@ const builtIns = [
   'classify-task',
   'prompt-user',
 ];
-const fieldTypes = ['string', 'text', 'boolean', 'number', 'select'];
 const MCP_TOOL_REFRESH_DELAYS = [1_500, 5_000, 10_000, 20_000, 30_000];
 
-export default function NodeProperties({ node, onUpdate, onDelete, workflowInput }: Props) {
-  const [localData, setLocalData] = useState<Record<string, any>>({});
+export default function NodeProperties({ node, onUpdate, onDelete, workflowInput, workflowContext, onWorkflowMetaPatch, nodeIds = [], onClose }: Props) {
+  const [localData, setLocalData] = useState<Record<string, any>>(() => (node ? { ...node.data } : {}));
   const [agentList, setAgentList] = useState<any[]>([]);
   const [mcpToolGroups, setMcpToolGroups] = useState<McpToolGroup[]>([]);
+
+  // Seed localData synchronously when a different node is selected. Child
+  // editors that snapshot their value on mount (outputs / input_map /
+  // output_map) are keyed by node.id, so they must see the real data on the
+  // first render — not the previous node's, and not the empty initial state a
+  // post-render effect would leave behind. Setting state during render is
+  // React's documented "reset all state when a prop changes" pattern.
+  const [seededNodeId, setSeededNodeId] = useState(node?.id);
+  if (node && node.id !== seededNodeId) {
+    setSeededNodeId(node.id);
+    setLocalData({ ...node.data });
+  }
 
   // Fetch agents from backend
   useEffect(() => {
@@ -75,54 +110,74 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
 
   if (!node) {
     return (
-      <div className="p-4 text-sm text-theme-muted font-mono">
-        SELECT A NODE TO EDIT
+      <div className="flex flex-col h-full">
+        {onClose && (
+          <div className="flex items-center justify-end px-2 py-2 border-b border-app shrink-0">
+            <PanelCloseButton onClose={onClose} />
+          </div>
+        )}
+        <div className="p-4 text-sm text-theme-muted font-mono">SELECT A NODE TO EDIT</div>
       </div>
     );
   }
 
-  // START — show workflow input schema so users can see what data the
-  // workflow expects at run time.
+  // START — edit the workflow-level input schema + context (what the user is
+  // prompted for at run time, and the workflow's requires/tools/secrets).
   if (node.id === 'START') {
-    const inputs = workflowInput && typeof workflowInput === 'object' ? Object.entries(workflowInput) : [];
+    const ctx = (workflowContext ?? {}) as Record<string, any>;
+    const patchContext = (patch: Record<string, any>) => {
+      if (!onWorkflowMetaPatch) return;
+      const next = { ...ctx, ...patch };
+      for (const k of Object.keys(next)) {
+        const v = next[k];
+        if (v === '' || v === undefined || (Array.isArray(v) && v.length === 0)) delete next[k];
+      }
+      onWorkflowMetaPatch({ context: Object.keys(next).length > 0 ? next : undefined });
+    };
+    const listField = (key: 'requires' | 'tools' | 'secrets', label: string, placeholder: string) => (
+      <div>
+        <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">{label}</label>
+        <input
+          className="input w-full text-xs font-mono"
+          value={Array.isArray(ctx[key]) ? ctx[key].join(', ') : ''}
+          onChange={e => patchContext({ [key]: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+          placeholder={placeholder}
+          disabled={!onWorkflowMetaPatch}
+        />
+      </div>
+    );
     return (
-      <div className="p-4 space-y-3 overflow-auto h-full">
-        <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wider">Workflow Input</h3>
+      <div className="p-4 space-y-4 overflow-auto h-full">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wider">Workflow Input</h3>
+          <PanelCloseButton onClose={onClose} />
+        </div>
         <p className="text-[11px] text-theme-muted font-body">
-          Fields the user is prompted for when running this workflow. Edit in the YAML view under <code className="bg-app-muted px-1 rounded text-[10px]">input:</code>.
+          Fields the user is prompted for when running this workflow.
         </p>
-        {inputs.length === 0 ? (
-          <div className="text-xs text-theme-subtle italic">No inputs declared.</div>
-        ) : (
-          <div className="space-y-2">
-            {inputs.map(([name, def]) => {
-              const d = (def ?? {}) as Record<string, any>;
-              return (
-                <div key={name} className="border border-app rounded-md p-2.5 bg-app-muted/40">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-mono text-theme-primary font-semibold">{name}</span>
-                    <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent-blue/10 text-accent-blue">
-                      {d.type ?? 'string'}
-                    </span>
-                    {d.required && (
-                      <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent-red/10 text-accent-red">
-                        required
-                      </span>
-                    )}
-                  </div>
-                  {d.description && (
-                    <p className="text-[10px] text-theme-muted font-body">{d.description}</p>
-                  )}
-                  {d.default !== undefined && (
-                    <div className="text-[10px] text-theme-subtle font-mono mt-1">
-                      default: <span className="text-theme-secondary">{JSON.stringify(d.default)}</span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+        <InputSchemaEditor
+          value={(workflowInput as Record<string, any> | undefined) ?? undefined}
+          onChange={(next) => onWorkflowMetaPatch?.({ input: next })}
+        />
+
+        <div className="border-t border-app pt-3 space-y-3">
+          <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wider">Context</h3>
+          {listField('requires', 'Requires', 'repo ids / capabilities')}
+          {listField('tools', 'Tools', 'tool names')}
+          {listField('secrets', 'Secrets', 'secret names')}
+          <div>
+            <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Concurrency</label>
+            <input
+              type="number"
+              min={1}
+              className="input w-20 text-xs"
+              value={ctx.concurrency ?? ''}
+              onChange={e => patchContext({ concurrency: e.target.value === '' ? undefined : Number(e.target.value) })}
+              placeholder="auto"
+              disabled={!onWorkflowMetaPatch}
+            />
           </div>
-        )}
+        </div>
       </div>
     );
   }
@@ -130,8 +185,13 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
   // END — nothing to configure
   if (node.id === 'END') {
     return (
-      <div className="p-4 text-sm text-theme-muted font-mono">
-        END — no configuration
+      <div className="flex flex-col h-full">
+        {onClose && (
+          <div className="flex items-center justify-end px-2 py-2 border-b border-app shrink-0">
+            <PanelCloseButton onClose={onClose} />
+          </div>
+        )}
+        <div className="p-4 text-sm text-theme-muted font-mono">END — no configuration</div>
       </div>
     );
   }
@@ -144,35 +204,45 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
     onUpdate(node.id, next);
   };
 
-  const updateOutputs = (val: string) => {
-    update('outputs', mergeOutputsFromKeys(localData.outputs, val));
+  // ── Condition helpers ──
+  const conditions: ConditionRow[] = (localData.conditions as ConditionRow[]) ?? [];
+
+  const addCondition = () => {
+    update('conditions', [...conditions, { name: '', expression: '' }]);
   };
 
-  // ── Human field helpers ──
-  const fields: HumanField[] = (localData.fields as HumanField[]) ?? [];
-
-  const addField = () => {
-    update('fields', [...fields, { name: '', type: 'string', label: '', required: false }]);
-  };
-
-  const updateField = (idx: number, key: keyof HumanField, value: any) => {
-    const next = [...fields];
+  const updateCondition = (idx: number, key: keyof ConditionRow, value: string) => {
+    const next = [...conditions];
     next[idx] = { ...next[idx], [key]: value };
-    update('fields', next);
+    update('conditions', next);
   };
 
-  const removeField = (idx: number) => {
-    update('fields', fields.filter((_, i) => i !== idx));
+  const removeCondition = (idx: number) => {
+    update('conditions', conditions.filter((_, i) => i !== idx));
   };
 
   return (
-    <div className="p-4 space-y-4 overflow-auto h-full">
-      <div className="flex items-center justify-between">
-        <h3 className="font-heading text-sm font-semibold text-theme-primary tracking-wider">{(localData.label as string) ?? node.id}</h3>
-        <button onClick={() => onDelete(node.id)} className="btn-ghost text-xs text-accent-red hover:text-accent-red/80 p-1">
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
+    <div className="flex flex-col h-full">
+      {/* Header — node identity + delete, fixed above the scrolling body */}
+      <div className="flex items-start justify-between gap-2 px-4 py-3 border-b border-app bg-app-card shrink-0">
+        <div className="min-w-0">
+          <div className="text-[13.5px] font-semibold text-theme-primary truncate">{(localData.label as string) ?? node.id}</div>
+          <div className="mt-1 flex items-center gap-1.5 min-w-0">
+            <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-sm bg-accent-blue/10 text-accent-blue shrink-0">{type}</span>
+            <span className="font-mono text-[10px] text-theme-muted truncate">{node.id}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <button onClick={() => onDelete(node.id)} className="btn-ghost text-xs text-accent-red hover:text-accent-red/80 p-1" title="Delete node">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+          <PanelCloseButton onClose={onClose} />
+        </div>
       </div>
+
+      {/* Scrolling body */}
+      <div className="flex-1 overflow-auto p-4 space-y-4">
+      <SectionLabel divider={false}>Basics</SectionLabel>
 
       {/* Node name */}
       <div>
@@ -196,6 +266,8 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
           ]}
         />
       </div>
+
+      <SectionLabel>Configuration</SectionLabel>
 
       {/* ── Agent-specific ── */}
       {type === 'agent' && (
@@ -239,6 +311,34 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
             overrides={(localData.agentOverrides as AgentOverridesValue | undefined) ?? {}}
             onChange={(next) => update('agentOverrides', next)}
           />
+
+          <div>
+            <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Output format</label>
+            <Select
+              value={(localData.output_format as string) ?? ''}
+              onChange={(value) => update('output_format', value || undefined)}
+              searchable={false}
+              options={[
+                { value: '', label: 'Default' },
+                { value: 'json', label: 'json', sublabel: 'parse the response as JSON keyed by outputs' },
+                { value: 'freeform', label: 'freeform', sublabel: 'store the raw text response' },
+              ]}
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Session key</label>
+            <input
+              className="input w-full text-xs font-mono"
+              value={(localData.session_key as string) ?? ''}
+              onChange={e => update('session_key', e.target.value || undefined)}
+              placeholder="e.g. implementer:{{current_milestone_id}}"
+            />
+            <p className="text-[10px] text-theme-subtle font-body mt-1 leading-relaxed">
+              Isolates agent sessions per rendered value — used for node-loop workflows so each iteration gets a fresh session.
+            </p>
+          </div>
+
         </>
       )}
 
@@ -256,80 +356,207 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
             />
           </div>
           <div>
+            <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Config</label>
+            <JsonField
+              value={localData.config as Record<string, unknown> | undefined}
+              onChange={(next) => update('config', next)}
+              placeholder={'{ "branch": "{{task_id}}" }'}
+            />
+          </div>
+          <div>
             <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Retries</label>
             <input type="number" min={0} max={10} className="input w-20 text-xs" value={(localData.retries as number) ?? 0} onChange={e => update('retries', parseInt(e.target.value) || 0)} />
           </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Backoff</label>
+              <Select
+                value={(localData.backoff as string) ?? ''}
+                onChange={(value) => update('backoff', value || undefined)}
+                searchable={false}
+                options={[
+                  { value: '', label: 'Default' },
+                  { value: 'exponential', label: 'exponential' },
+                  { value: 'linear', label: 'linear' },
+                  { value: 'fixed', label: 'fixed' },
+                ]}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Base ms</label>
+              <input type="number" min={0} className="input w-full text-xs" value={(localData.backoff_base_ms as number) ?? ''} onChange={e => update('backoff_base_ms', parseInt(e.target.value) || undefined)} placeholder="1000" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Retry on (comma-separated)</label>
+            <input
+              className="input w-full text-xs font-mono"
+              value={Array.isArray(localData.retry_on) ? (localData.retry_on as string[]).join(', ') : ''}
+              onChange={e => {
+                const arr = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                update('retry_on', arr.length > 0 ? arr : undefined);
+              }}
+              placeholder="error substrings that should retry"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">On failure</label>
+            <Select
+              value={(localData.on_failure as string) ?? ''}
+              onChange={(value) => update('on_failure', value || undefined)}
+              searchable={false}
+              options={[
+                { value: '', label: 'Default (fail)' },
+                { value: 'fail', label: 'fail' },
+                { value: 'skip', label: 'skip', sublabel: 'continue past this node' },
+                { value: 'fallback', label: 'fallback', sublabel: 'use the fallback value below' },
+              ]}
+            />
+          </div>
+          {localData.on_failure === 'fallback' && (
+            <div>
+              <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Fallback value</label>
+              <JsonField
+                value={localData.fallback_value as Record<string, unknown> | undefined}
+                onChange={(next) => update('fallback_value', next)}
+              />
+            </div>
+          )}
         </>
       )}
 
       {/* ── Human-specific ── */}
       {type === 'human' && (
-        <>
-          <div>
-            <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Prompt</label>
-            <textarea className="input w-full text-xs h-20 resize-none" value={(localData.prompt as string) ?? ''} onChange={e => update('prompt', e.target.value)} placeholder="What should the user see?" />
-          </div>
-
-          {/* Field editor */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-xs font-label font-medium text-theme-secondary uppercase tracking-wider">Fields</label>
-              <button onClick={addField} className="btn-ghost text-xs p-1 text-accent-blue">
-                <Plus className="w-3 h-3" />
-              </button>
-            </div>
-            <div className="space-y-2">
-              {fields.map((field, idx) => (
-                <div key={idx} className="bg-surface-200/80 rounded-sm p-2 space-y-1.5 border border-app">
-                  <div className="flex items-center gap-1">
-                    <input className="input flex-1 text-xs" placeholder="name" value={field.name} onChange={e => updateField(idx, 'name', e.target.value)} />
-                    <Select
-                      className="w-24"
-                      value={field.type}
-                      onChange={(value) => updateField(idx, 'type', value)}
-                      searchable={false}
-                      options={fieldTypes.map(fieldType => ({ value: fieldType, label: fieldType }))}
-                    />
-                    <button onClick={() => removeField(idx)} className="text-theme-muted hover:text-accent-red p-0.5 transition-colors">
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                  <input className="input w-full text-xs" placeholder="Label" value={field.label ?? ''} onChange={e => updateField(idx, 'label', e.target.value)} />
-                  <div className="flex items-center gap-2">
-                    <input type="checkbox" checked={!!field.required} onChange={e => updateField(idx, 'required', e.target.checked)} className="w-3 h-3 rounded-sm bg-surface border-border accent-accent-blue" />
-                    <span className="overline">Required</span>
-                  </div>
-                  {field.type === 'select' && (
-                    <input className="input w-full text-xs" placeholder="Options (comma-separated)" value={(field.options ?? []).join(', ')} onChange={e => updateField(idx, 'options', e.target.value.split(',').map(s => s.trim()).filter(Boolean))} />
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </>
+        <HumanNodeEditor data={localData} update={update} nodeIds={nodeIds} />
       )}
 
       {/* ── Workflow-specific ── */}
       {type === 'workflow' && (
+        <>
+          <div>
+            <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Sub-workflow name</label>
+            <input className="input w-full text-xs" value={(localData.workflow as string) ?? ''} onChange={e => update('workflow', e.target.value)} placeholder="e.g., bugfix" />
+          </div>
+          <div>
+            <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Input map</label>
+            <p className="text-[10px] text-theme-subtle font-body mb-1.5 leading-relaxed">
+              Sub-workflow input ← value from this workflow's state.
+            </p>
+            <KeyValueEditor
+              key={`${node.id}-input-map`}
+              value={localData.input_map as Record<string, string> | undefined}
+              onChange={(next) => update('input_map', next)}
+              keyLabel="Sub-workflow input"
+              valueLabel="Source value"
+              keyPlaceholder="input name in the sub-workflow"
+              valuePlaceholder="value / {{state}} from this workflow"
+              emptyHint="No input mapping."
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Output map</label>
+            <p className="text-[10px] text-theme-subtle font-body mb-1.5 leading-relaxed">
+              This node's output key ← sub-workflow output.
+            </p>
+            <KeyValueEditor
+              key={`${node.id}-output-map`}
+              value={localData.output_map as Record<string, string> | undefined}
+              onChange={(next) => update('output_map', next)}
+              keyLabel="Output key"
+              valueLabel="Sub-workflow output"
+              keyPlaceholder="output name on this node"
+              valuePlaceholder="output name from the sub-workflow"
+              emptyHint="No output mapping."
+            />
+          </div>
+        </>
+      )}
+
+      {/* ── Condition-specific ── */}
+      {type === 'condition' && (
         <div>
-          <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Sub-workflow name</label>
-          <input className="input w-full text-xs" value={(localData.workflow as string) ?? ''} onChange={e => update('workflow', e.target.value)} placeholder="e.g., bugfix" />
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-xs font-label font-medium text-theme-secondary uppercase tracking-wider">Conditions</label>
+            <button onClick={addCondition} className="btn-ghost text-xs p-1 text-accent-blue" title="Add condition">
+              <Plus className="w-3 h-3" />
+            </button>
+          </div>
+          <p className="text-[10px] text-theme-subtle font-body mb-2 leading-relaxed">
+            Named branches evaluated top-to-bottom. Each expression is filtrex — supports
+            <code className="bg-app-muted px-1 rounded mx-0.5">and / or / not</code>, comparisons,
+            <code className="bg-app-muted px-1 rounded mx-0.5">in</code>, and dotted state paths
+            (e.g. <code className="bg-app-muted px-1 rounded">nodes.review.status</code>). The branch
+            name is referenced by outgoing edges.
+          </p>
+          <div className="space-y-2">
+            {conditions.map((cond, idx) => (
+              <div key={idx} className="bg-surface-200/80 rounded-sm p-2 space-y-1.5 border border-app">
+                <div className="flex items-center gap-1">
+                  <input
+                    className="input flex-1 text-xs font-mono"
+                    placeholder="branch name (e.g. is_critical)"
+                    value={cond.name}
+                    onChange={e => updateCondition(idx, 'name', e.target.value)}
+                  />
+                  <button onClick={() => removeCondition(idx)} className="text-theme-muted hover:text-accent-red p-0.5 transition-colors" title="Remove condition">
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+                <textarea
+                  className="input w-full text-xs h-14 resize-none font-mono"
+                  placeholder={'expression, e.g. severity == "critical"'}
+                  value={cond.expression}
+                  onChange={e => updateCondition(idx, 'expression', e.target.value)}
+                />
+              </div>
+            ))}
+            {conditions.length === 0 && (
+              <p className="text-[10px] text-theme-subtle italic">No conditions yet — add at least one branch.</p>
+            )}
+          </div>
         </div>
       )}
 
       {/* Outputs (all types except condition) */}
       {type !== 'condition' && (
         <div>
-          <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Outputs (comma-separated)</label>
-          <input className="input w-full text-xs" value={outputsAsKeys(localData.outputs).join(', ')} onChange={e => updateOutputs(e.target.value)} placeholder="e.g., changed_files, summary" />
+          <SectionLabel>Outputs</SectionLabel>
+          <label className="block text-xs font-label font-medium text-theme-secondary mb-1 mt-3 uppercase tracking-wider">Declared outputs</label>
+          <p className="text-[10px] text-theme-subtle font-body mb-1.5 leading-relaxed">
+            Each key + description. The description is injected into the agent's response-format block.
+          </p>
+          <KeyValueEditor
+            key={`${node.id}-outputs`}
+            value={outputsAsMap(localData.outputs)}
+            onChange={(next) => update('outputs', next)}
+            keyLabel="Output key"
+            valueLabel="Description"
+            keyPlaceholder="e.g. summary"
+            valuePlaceholder="what this value should contain (injected into the agent's response format)"
+            valueMultiline
+            emptyHint="No declared outputs."
+          />
         </div>
       )}
 
-      {/* Timeout */}
+      {/* Execution */}
+      <SectionLabel>Execution</SectionLabel>
       <div>
         <label className="block text-xs font-label font-medium text-theme-secondary mb-1 uppercase tracking-wider">Timeout (seconds)</label>
         <input type="number" className="input w-20 text-xs" value={(localData.timeout as number) ?? ''} onChange={e => update('timeout', parseInt(e.target.value) || undefined)} placeholder="600" />
       </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Section label ────────────────────────────────────────────────────────
+ * Group header inside the properties panel. A top divider separates each
+ * group from the one above; the first group passes divider={false}. */
+function SectionLabel({ children, divider = true }: { children: ReactNode; divider?: boolean }) {
+  return (
+    <div className={`overline ${divider ? 'border-t border-app pt-3.5 mt-1' : ''}`}>
+      {children}
     </div>
   );
 }
@@ -337,7 +564,7 @@ export default function NodeProperties({ node, onUpdate, onDelete, workflowInput
 /* ── Agent override sub-component ─────────────────────────────────────── */
 
 type EffortValue = 'off' | 'low' | 'medium' | 'high' | 'max';
-type ProviderValue = 'claude-cli' | 'codex';
+type ProviderValue = string;
 
 interface AgentOverridesValue {
   provider?: ProviderValue | null;
@@ -352,7 +579,7 @@ interface AgentOverridesValue {
 // Both Claude and Codex model lists — the dropdown always shows both, grouped
 // by provider, so you can cross-override a Claude agent to run on Codex (or
 // vice versa) on just this workflow node.
-const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
+const CLAUDE_MODELS = ['fable', 'sonnet', 'opus', 'haiku'];
 const CODEX_MODELS = ['default', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex'];
 
 // Compound value in the <select>. Encodes both provider and model so a single
@@ -364,12 +591,13 @@ function decodeModelOption(value: string): { provider: ProviderValue; model: str
   if (!value) return null;
   const [p, ...rest] = value.split('::');
   if (!rest.length) return null;
-  if (p !== 'claude-cli' && p !== 'codex') return null;
   return { provider: p, model: rest.join('::') };
 }
 
-function normalizeProvider(p: string | undefined): ProviderValue {
-  return p === 'codex' ? 'codex' : 'claude-cli';
+function normalizeProvider(p: string | undefined, enabledProviderIds: Set<string>): ProviderValue {
+  if (p === 'codex') return 'codex';
+  if (p && enabledProviderIds.has(p)) return p;
+  return 'claude-cli';
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -433,13 +661,22 @@ function AgentNodeOverrides({
   onChange: (next: AgentOverridesValue) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const enabledProviders = useEnabledProviders();
+  const enabledProviderIds = useMemo(() => new Set(enabledProviders.map((provider) => provider.provider)), [enabledProviders]);
+  const openProviderModelSuggestions = useMemo(() => Object.fromEntries(
+    enabledProviders
+      .filter((provider) => provider.open)
+      .map((provider) => [provider.provider, provider.modelSuggestions && provider.modelSuggestions.length > 0
+        ? provider.modelSuggestions
+        : [provider.defaultModel]]),
+  ) as Record<string, string[]>, [enabledProviders]);
   if (!agentName) return null;
 
   const agent = agentList.find((a) => a.name === agentName);
   if (!agent) return null;
 
   // Agent defaults — what the node inherits if no override is set.
-  const agentProvider = normalizeProvider(agent.provider);
+  const agentProvider = normalizeProvider(agent.provider, enabledProviderIds);
   const agentModel: string | undefined = agent.model;
   const agentEffort: EffortValue | undefined = agent.reasoningEffort;
   const agentPlan: boolean | undefined = agent.planMode;
@@ -454,6 +691,49 @@ function AgentNodeOverrides({
   // Effective resolved values (override wins, else agent default).
   const effectiveProvider: ProviderValue = overrides.provider ?? agentProvider;
   const effectiveIsClaude = effectiveProvider === 'claude-cli';
+  const openModelSuggestions = openProviderModelSuggestions[effectiveProvider];
+  const isOpenModelProvider = Boolean(openModelSuggestions);
+  const providerLabel = (provider: ProviderValue) => {
+    if (provider === 'claude-cli') return 'Claude';
+    if (provider === 'codex') return 'Codex';
+    const enabledProvider = enabledProviders.find((item) => item.provider === provider);
+    if (enabledProvider) return enabledProvider.label;
+    return provider;
+  };
+  const selectableModelGroups = enabledProviders.flatMap((provider) => {
+    if (provider.provider === 'claude-cli') {
+      return CLAUDE_MODELS.map((model) => ({
+        value: encodeModelOption(provider.provider, model),
+        label: model,
+        sublabel: providerLabel(provider.provider),
+      }));
+    }
+    if (provider.provider === 'codex') {
+      return CODEX_MODELS.map((model) => ({
+        value: encodeModelOption(provider.provider, model),
+        label: model,
+        sublabel: providerLabel(provider.provider),
+      }));
+    }
+    if (provider.open) {
+      const suggestions = openProviderModelSuggestions[provider.provider] ?? [];
+      const currentModel = provider.provider === (overrides.provider ?? agentProvider) ? overrides.model : null;
+      const models = [
+        ...suggestions,
+        ...(currentModel && !suggestions.includes(currentModel) ? [currentModel] : []),
+      ];
+      return models.map((model) => ({
+        value: encodeModelOption(provider.provider, model),
+        label: model,
+        sublabel: providerLabel(provider.provider),
+      }));
+    }
+    return (provider.models ?? []).map((model) => ({
+      value: encodeModelOption(provider.provider, model),
+      label: model,
+      sublabel: providerLabel(provider.provider),
+    }));
+  });
 
   // Current value for the model dropdown — if no override, show the inherit option.
   const modelSelectValue =
@@ -461,7 +741,7 @@ function AgentNodeOverrides({
       ? encodeModelOption(overrides.provider ?? agentProvider, overrides.model)
       : '';
 
-  const inheritedModelLabel = `${agentProvider === 'claude-cli' ? 'Claude' : 'Codex'} / ${agentModel ?? '(CLI default)'}`;
+  const inheritedModelLabel = `${providerLabel(agentProvider)} / ${agentModel ?? '(provider default)'}`;
   const inheritedEffortLabel = agentEffort ?? '(CLI default)';
   const inheritedPlanLabel =
     agentPlan === true ? 'on' : agentPlan === false ? 'off' : '(CLI default: off)';
@@ -495,13 +775,14 @@ function AgentNodeOverrides({
     }
     const decoded = decodeModelOption(value);
     if (!decoded) return;
+    if (!enabledProviderIds.has(decoded.provider)) return;
     const next: AgentOverridesValue = {
       ...overrides,
       provider: decoded.provider,
       model: decoded.model,
     };
-    // Moving to Codex? Drop any explicit plan-mode override.
-    if (decoded.provider === 'codex' && next.planMode === true) next.planMode = null;
+    // Moving away from Claude? Drop any explicit plan-mode override.
+    if (decoded.provider !== 'claude-cli' && next.planMode === true) next.planMode = null;
     update(next);
   }
 
@@ -556,19 +837,23 @@ function AgentNodeOverrides({
   }
 
   return (
-    <div className="mt-3 border-t border-app pt-3">
+    <div className={`rounded border bg-app-muted/40 overflow-hidden transition-colors ${expanded ? 'border-app-strong' : 'border-app'}`}>
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex items-center justify-between w-full text-left"
+        className="flex items-center justify-between w-full gap-2 px-3 py-2.5 text-left transition-colors hover:bg-app-muted"
       >
-        <span className="overline text-theme-secondary">
-          Override agent settings {hasAnyOverride && <span className="text-accent-blue">●</span>}
+        <span className="flex items-center gap-2 min-w-0">
+          <SlidersHorizontal className="w-3.5 h-3.5 text-theme-muted shrink-0" />
+          <span className="text-xs font-medium text-theme-secondary truncate">Override Model &amp; MCP servers</span>
+          {hasAnyOverride && (
+            <span className="text-[8.5px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-sm bg-accent-blue/10 text-accent-blue shrink-0">on</span>
+          )}
         </span>
-        <span className="text-[10px] text-theme-subtle">{expanded ? '▾' : '▸'}</span>
+        <ChevronDown className={`w-3.5 h-3.5 text-theme-muted shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </button>
       {expanded && (
-        <div className="mt-2 space-y-3">
+        <div className="px-3 pb-3 pt-3 space-y-3 border-t border-app">
           <p className="text-[10px] text-theme-subtle font-body leading-relaxed">
             Ephemeral per-node overrides. The agent's defaults are not modified — these
             values only apply when this workflow node runs. You can cross-override a
@@ -584,18 +869,12 @@ function AgentNodeOverrides({
               value={modelSelectValue}
               onChange={handleModelChange}
               searchPlaceholder="Search models..."
+              allowCustomValue={isOpenModelProvider}
+              createCustomValue={(query) => encodeModelOption(effectiveProvider, query)}
+              customValueLabel={(query) => `Use "${query}"`}
               options={[
                 { value: '', label: 'Inherit', sublabel: inheritedModelLabel },
-                ...CLAUDE_MODELS.map((model) => ({
-                  value: encodeModelOption('claude-cli', model),
-                  label: model,
-                  sublabel: 'Claude',
-                })),
-                ...CODEX_MODELS.map((model) => ({
-                  value: encodeModelOption('codex', model),
-                  label: model,
-                  sublabel: 'Codex',
-                })),
+                ...selectableModelGroups,
               ]}
             />
           </div>
@@ -643,8 +922,8 @@ function AgentNodeOverrides({
             </div>
           ) : (
             <div className="text-[10px] text-theme-subtle font-body leading-relaxed">
-              Plan mode is Claude-only — this node currently resolves to Codex, so plan
-              mode is unavailable. Switch the model back to a Claude option to use it.
+              Plan mode is Claude-only — this node currently resolves to {providerLabel(effectiveProvider)}, so plan
+              mode is unavailable. Switch the model to a Claude option to use it.
             </div>
           )}
 
@@ -688,9 +967,9 @@ function AgentNodeOverrides({
                   const enabled = isAllen || selectedExternalMcpServers.includes(group.serverName);
                   const disabledForServer = disabledMcpTools[group.serverName] ?? [];
                   return (
-                    <div key={group.serverName} className="border border-app rounded-md bg-app-muted/40">
+                    <div key={group.serverName} className="border border-app rounded bg-app-muted/40">
                       <label
-                        className={`flex items-center gap-2 text-[11px] font-mono px-2 py-1.5 rounded-t-md cursor-pointer border-b border-app ${
+                        className={`flex items-center gap-2 text-[11px] font-mono px-2 py-1.5 rounded-t cursor-pointer border-b border-app ${
                           enabled ? 'text-accent-blue' : 'text-theme-muted hover:text-theme-primary'
                         }`}
                       >

@@ -11,6 +11,7 @@ import { DiffEditor } from '@monaco-editor/react';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 import { setupMonaco, getMonacoTheme } from '../lib/monaco-theme';
+import { workspaceChatPath } from '../lib/workspace-routes';
 
 interface DiffFile {
   path: string;
@@ -275,7 +276,7 @@ export default function PullRequestDetailPage() {
       {pendingWsId && (
         <SetupProgressDialog
           workspaceId={pendingWsId}
-          onComplete={(ws) => { setPendingWsId(null); navigate(`/workspaces/${ws._id}`); }}
+          onComplete={(ws) => { setPendingWsId(null); navigate(workspaceChatPath(ws._id)); }}
           onFailed={() => setPendingWsId(null)}
         />
       )}

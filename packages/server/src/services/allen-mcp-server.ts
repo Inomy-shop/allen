@@ -118,6 +118,10 @@ globalThis.fetch = async (input: FetchInput, init?: RequestInit): Promise<Respon
 
 // ── Helpers ──
 
+function pathSegment(value: unknown): string {
+  return encodeURIComponent(String(value));
+}
+
 /**
  * Map a parameter description string to its JSON Schema type.
  * The TOOLS array uses prose descriptions like "boolean (required) — must be true";
@@ -143,6 +147,7 @@ const TOOLS = [
   { name: 'list_skills', description: 'List all available Allen Library routing skills with lightweight metadata only. Use this first for non-trivial Allen-supported requests, choose the best skill from metadata by user intent, then call get_skill for the selected playbook.', params: { include_disabled: 'boolean — include disabled skills; default false' } },
   { name: 'search_skills', description: 'Optional ranking hint for Allen Library routing skills. Do not treat the top score as the final decision; review list_skills metadata and choose by user intent before calling get_skill.', params: { query: 'string (required) — user request or routing question', context: 'object — optional context such as intent, repo, currentPage, prUrl, ticketId, executionId', limit: 'number — max skills to return, default 5', include_disabled: 'boolean — include disabled skills; default false' } },
   { name: 'get_skill', description: 'Get the full routing/playbook instructions for one Allen Library skill. Use after selecting the best skill from list_skills metadata by user intent.', params: { name: 'string — skill slug', id: 'string — skill MongoDB _id; use name OR id' } },
+  { name: 'update_skill', description: 'Update an existing Allen Library skill. Supports partial updates — only the fields you provide are changed. Resolve skill by id or name.', params: { id: 'string — skill MongoDB _id', name: 'string — skill slug (used when id is omitted)', new_name: 'string — new name slug (renames the skill)', displayName: 'string', description: 'string', category: 'string', triggers: 'array of strings', excludes: 'array of strings', priority: 'number', enabled: 'boolean', allowedRoutes: 'array of strings', relatedWorkflows: 'array of strings', relatedAgents: 'array of strings', body: 'string', tags: 'array of strings' } },
 
   // ── Workflows ──
   { name: 'list_workflows', description: 'List all workflows with name, description, node count, validation status.', params: {} },
@@ -161,7 +166,11 @@ const TOOLS = [
   { name: 'submit_execution_input', description: 'Submit input to a paused workflow execution (e.g. answer a human node).', params: { execution_id: 'string (required)', node: 'string (required)', data: 'object (required)' } },
   { name: 'get_node_trace', description: 'Get detailed trace of a specific node execution: prompt, response, outputs, cost, duration.', params: { execution_id: 'string (required)', node_name: 'string (required)' } },
   { name: 'get_execution_logs', description: 'Get execution logs filtered by node, level, or category.', params: { execution_id: 'string (required)', node: 'string', level: 'string', category: 'string', limit: 'number' } },
-  { name: 'get_node_context_usage', description: 'Get repo context packets and usage traces captured for an execution.', params: { execution_id: 'string (required)' } },
+  { name: 'get_node_context_usage', description: 'Get repo context packets and usage traces captured for an execution. Optional view can be full, summary, or normalized; default remains full for compatibility.', params: { execution_id: 'string (required)', view: 'string — optional full|summary|normalized', include: 'object — optional include flags array', refresh: 'boolean — bypass server cache' } },
+  { name: 'context_quality_get_usage_trace', description: 'Unified context usage trace lookup. Resolves context trace data by executionId, contextAttemptId, OR chat session id and returns normalized identifiers { sourceId, executionId, contextAttemptId, sourceKind, flowKind } plus matchingContextAttempts/injection metadata. Fixes the gap where context_usage_trace pending candidates expose contextAttemptId but get_node_context_usage requires executionId.', params: { execution_id: 'string — workflow/agent execution id (provide this OR context_attempt_id OR session_id)', context_attempt_id: 'string — context attempt id from scheduler pending candidates (provide this OR execution_id OR session_id)', session_id: 'string — chat session id for chat_agent/chat_turn attempts' } },
+  { name: 'context_quality_replay_usage_trace', description: 'Read-only retrieval replay for remediation planning. Reconstructs the captured production context selection envelope for a contextAttemptId/executionId/sessionId and maps Cognee refs back to curated DB entries. Returns candidateRefs, selectedRefs, injectedRefs, rejectedRefs, skippedBudgetRefs, curatedEntryMatches, matchingContextAttempts, and replayId.', params: { execution_id: 'string — workflow/agent execution id (provide this OR context_attempt_id OR session_id)', context_attempt_id: 'string — context attempt id from scheduler pending candidates (provide this OR execution_id OR session_id)', session_id: 'string — chat session id for chat_agent/chat_turn attempts' } },
+  { name: 'context_quality_get_attempt_evidence', description: 'Get a complete evidence bundle for one assigned context attempt without rebuilding full execution-level context usage.', params: { context_attempt_id: 'string (required)' } },
+  { name: 'context_quality_get_attempt_evidence_batch', description: 'Get evidence bundles for multiple assigned context attempts without rebuilding full execution-level context usage.', params: { context_attempt_ids: 'object — array of context attempt IDs (required)' } },
 
   // ── Agents ──
   { name: 'list_agents', description: 'List all agents with minimal info: name, displayName, teamName, type, model, provider. Use get_agent for full details.', params: {} },
@@ -226,13 +235,46 @@ const TOOLS = [
   // ── Self-healing monitoring evidence + incident state ──
   { name: 'allen_monitoring_get_scan_cursor', description: 'Read the self-healing monitoring cursor. Use before planning an hourly scan window.', params: { name: 'string — cursor name, default hourly-agent' } },
   { name: 'allen_monitoring_update_scan_cursor', description: 'Update the self-healing monitoring cursor after the agent-led scan completes.', params: { name: 'string — cursor name', last_successful_scan_at: 'string — ISO timestamp', execution_id: 'string', summary: 'string' } },
-  { name: 'allen_monitoring_search_records', description: 'Search redacted raw Allen runtime records for evidence collection. The agent decides what is wrong; this tool only fetches records.', params: { surface: 'string (required) — chat_sessions, chat_messages, chat_logs, agent_conversations, agent_activity, executions, execution_logs, execution_traces, memory_injection_audits, learnings, ticket_assignments, monitoring_events, monitoring_incidents', since: 'string — ISO lower bound', until: 'string — ISO upper bound', statuses: 'object — array of status strings', root_id: 'string — execution/session/incident id', text: 'string — text search', limit: 'number — max 100' } },
+  { name: 'allen_monitoring_search_records', description: 'Search redacted raw Allen runtime records for evidence collection. The agent decides what is wrong; this tool only fetches records.', params: { surface: 'string (required) — chat_sessions, chat_messages, chat_logs, agent_conversations, agent_activity, executions, execution_logs, execution_traces, memory_injection_audits, learnings, ticket_assignments, monitoring_events, monitoring_incidents', since: 'string — ISO lower bound', until: 'string — ISO upper bound', statuses: 'object — array of status strings', root_id: 'string — execution/session/incident id', text: 'string — text search', limit: 'number — max 100', exclude_successful_with_error_mode: 'boolean — when true and surface=chat_logs, exclude completed sessions that have a non-null failureMode (false positives)' } },
   { name: 'allen_monitoring_get_record', description: 'Fetch one full redacted runtime record by surface and id.', params: { surface: 'string (required)', id: 'string (required)' } },
   { name: 'allen_monitoring_create_evidence_bundle', description: 'Persist the evidence bundle the monitoring agent reviewed.', params: { title: 'string (required)', summary: 'string (required)', record_refs: 'object — array of {surface,id,reason}', evidence: 'object — curated evidence', scan_window: 'object' } },
   { name: 'allen_monitoring_search_incidents', description: 'Search existing monitoring incidents for dedupe and follow-up decisions.', params: { status: 'string', root_cause_area: 'string', source_type: 'string', text: 'string', linear_issue_id: 'string', limit: 'number' } },
-  { name: 'allen_monitoring_upsert_incident', description: 'Create or update a monitoring incident from the agent decision. Does not create Linear tickets.', params: { fingerprint: 'string', title: 'string (required)', summary: 'string (required)', source_type: 'string (required)', root_cause_area: 'string (required)', severity: 'string (required)', confidence: 'number (required)', status: 'string', related_ids: 'object', evidence: 'object', evidence_bundle_id: 'string', agent_decision: 'object' } },
+  { name: 'allen_monitoring_upsert_incident', description: 'Create or update a monitoring incident from the agent decision. Does not create Linear tickets. Returns error if DB write had no effect. Severity: critical=service-down/data-loss, high=degraded-production, medium=isolated-failures, low=minor-impact. Confidence: 0.9+=multiple-corroborating-sources, 0.7-0.9=strong-evidence, 0.5-0.7=moderate, <0.5=noise/needs-more-data.', params: { fingerprint: 'string', title: 'string (required)', summary: 'string (required)', source_type: 'string (required)', root_cause_area: 'string (required)', severity: 'string (required)', confidence: 'number (required)', status: 'string', related_ids: 'object', evidence: 'object', evidence_bundle_id: 'string', agent_decision: 'object' } },
   { name: 'allen_monitoring_update_incident', description: 'Update a monitoring incident after Linear ticketing, routing, bug-fix dispatch, suppression, or resolution.', params: { incident_id: 'string (required)', status: 'string', linear_issue_id: 'string', linear_identifier: 'string', linear_url: 'string', routing_target: 'object', dispatch_execution_id: 'string', agent_decision: 'object', evidence_patch: 'object' } },
   { name: 'allen_monitoring_resolve_repo_path', description: 'Resolve the Allen repo path to pass into bug-fix-by-severity for self-healing incidents.', params: {} },
+
+  // ── Context Quality / Judge ──
+  { name: 'context_quality_trigger_orchestrator', description: 'Trigger the context judge orchestrator to start a new evaluation run. Returns a run record with runId. Pass repoId for repo-scoped runs, global=true for global runs.', params: { repoId: 'string — optional repo id for scoped run', repoIds: 'object — optional array of repo ids', global: 'boolean — default true when no repoId supplied', triggeredBy: 'string — "ui" | "api" | "scheduler" | "manual"' } },
+  { name: 'context_quality_begin_session', description: 'Begin an orchestration session for the context judge agent. Returns sessionId used in all subsequent calls. In dry_run=true mode, findings are NOT persisted to DB. runScope reflects which repos were evaluated (inferred from repoId when not provided). Captures a trace backlog snapshot and optional rootExecutionId for repair/resume and self-trace exclusion.', params: { scope: 'string (required) — "workflow"|"node"|"chat_turn"|"spawned_agent"|"learning"|"cross_repo"|"global"|"user_preference"', runScope: 'string — "repo"|"multi_repo"|"global" (inferred from repoId when not provided)', sourceId: 'string', sourceKind: 'string', repoId: 'string', rootExecutionId: 'string — root execution id for this orchestrator run', agentModel: 'string', agentProvider: 'string', agentRationale: 'string', dry_run: 'boolean — artifact-only mode, no DB writes' } },
+  { name: 'context_quality_log_decision', description: 'Log an agent reasoning step to the orchestration session audit trail.', params: { session_id: 'string (required)', kind: 'string (required) — "discovery"|"classification"|"routing"|"gate_check"|"summary"', detail: 'string (required)', metadata: 'object' } },
+  { name: 'context_quality_submit_findings', description: 'Submit classified findings for a session. Persists to DB in production mode, artifact-only in dry_run mode. Returns { judgeRunId, findingIds, reviewTaskIds, dryRun? }. Each finding may include impactScope (separate from run scope), primarySourceId, executionId, contextAttemptId for source traceability. Human gates use impactScope — a repo run can produce cross_repo/global findings.', params: { session_id: 'string (required)', findings: 'object (required) — array of {classification,fixType,severity,risk,confidence,impactScope?,primarySourceId?,executionId?,contextAttemptId?,sourceRefs?,evidence?,suggestedRemediation?,learningId?}' } },
+  { name: 'context_quality_finalize_session', description: 'Finalize session. Returns DB-derived summary (dbSummary.dbDerivedFindingCount etc). Check these counts — if 0 but findings were submitted, DB writes failed.', params: { session_id: 'string (required)', summary: 'string' } },
+  { name: 'context_quality_get_session', description: 'Get current state of an orchestration session, including live DB-derived summary and stage state.', params: { session_id: 'string (required)' } },
+  { name: 'context_quality_get_stage_state', description: 'Get DB-derived context judge stage state and next required stage for a session.', params: { session_id: 'string (required)' } },
+  { name: 'context_quality_get_repair_state', description: 'Repair/resume helper. Given session_id or root_execution_id/execution_id, returns completed work, unresolved traces, findings lacking remediation mappings, and next required stage.', params: { session_id: 'string', root_execution_id: 'string', execution_id: 'string' } },
+  { name: 'context_quality_list_pending', description: 'Discover unevaluated sources. Use limit=20 for batching. Always use this for source discovery, not raw DB queries. Candidates are returned newest-first. Set allowBackfill=true to ignore the cursor and discover older unevaluated sources (repair/backfill mode).', params: { sourceType: 'string (required) — "workflow_run"|"spawned_agent_run"|"chat_turn"|"context_usage_trace"|"deterministic_warning"|"human_feedback"|"chat_learning"|"stale_finding"', limit: 'number — max 50', repoId: 'string', repoIds: 'object', allowBackfill: 'boolean — ignore cursor, discover older unevaluated sources' } },
+  { name: 'context_quality_list_findings', description: 'List context findings with filters.', params: { judgeRunId: 'string', scope: 'string', status: 'string', limit: 'number — max 100', offset: 'number' } },
+  { name: 'context_quality_log_source_evaluation', description: 'Log a durable source evaluation outcome to the context_source_evaluations ledger. Call this for EVERY evaluated source — both finding_created and no_issue/skipped outcomes. This enables the scheduler to skip already-evaluated sources on future runs. REST: POST /api/context/quality/source-evaluations. Alias for context_quality_submit_source_evaluation — use that for enhanced fields.', params: { session_id: 'string (required)', source_type: 'string (required) — e.g. "context_usage_trace"|"workflow_run"|"chat_turn"', source_id: 'string (required)', decision: 'string (required) — "finding_created"|"no_issue"|"skipped"|"error"', judge_run_id: 'string', repo_id: 'string', context_attempt_id: 'string', execution_id: 'string', flow_kind: 'string', reason: 'string', finding_ids: 'object — array of findingIds (for finding_created)', status: 'string — "completed"|"failed"|"retryable" (default: completed)' } },
+  { name: 'context_quality_submit_source_evaluation', description: 'Submit a durable source evaluation with all enhanced ENG-1760 fields including workerAssignmentId, contextVerdict, contextCorrect, evidence, severity, risk, and remediation hints. Use this instead of context_quality_log_source_evaluation for trace-analysis worker results. REST: POST /api/context/quality/source-evaluations/submit.', params: { session_id: 'string (required)', source_type: 'string (required) — e.g. "context_usage_trace"|"workflow_run"', source_id: 'string (required)', decision: 'string (required) — "finding_created"|"no_issue"|"skipped"|"error"', judge_run_id: 'string', repo_id: 'string', source_kind: 'string', context_attempt_id: 'string', execution_id: 'string', flow_kind: 'string', worker_assignment_id: 'string — trace analysis assignment this evaluation belongs to', status: 'string — "completed"|"failed"|"retryable" (default: completed)', reason: 'string', classification: 'string', fix_type: 'string', confidence: 'number', risk: 'string — "low"|"medium"|"high"|"critical"', severity: 'string — "info"|"warn"|"error"|"critical"', finding_ids: 'object — array of findingIds', context_verdict: 'string — "correct"|"wrong"|"incomplete"|"missing"|"not_needed"|"unjudgeable"', context_correct: 'boolean — was the injected context correct/sufficient?', context_incomplete: 'boolean', context_irrelevant: 'boolean', mandatory_missing: 'boolean', mandatory_incorrect: 'boolean', over_filtered: 'boolean', over_injected: 'boolean', wrong_scope: 'boolean', stale_context: 'boolean', affected_ref_ids: 'object — array of refIds', expected_context_kinds: 'object — array of strings', remediation_hints: 'object — array of strings', evidence: 'object — array of {kind, refId?, snippet?, score?, label?}', notes: 'string — free-text evaluation notes', evidence_summary: 'object', evaluation_version: 'number' } },
+  { name: 'context_quality_list_unevaluated_traces', description: 'List unevaluated context_usage_trace candidates for the exhaustive trace evaluation orchestrator. Returns traces NOT yet in context_source_evaluations (completed) AND NOT in active context_trace_analysis_assignments (non-failed). Excludes judge self-traces when session/root filters are supplied. Limit is capped at 20. REST: GET /api/context/quality/scheduler/unevaluated-traces.', params: { repo_id: 'string — optional repo filter', session_id: 'string — optional session filter', limit: 'number — max 20 (default 20)', cursor: 'string — last contextAttemptId from previous page (exclusive lower bound)', exclude_root_execution_id: 'string', exclude_execution_ids: 'object — array of execution ids to exclude', exclude_agent_names: 'object — array of agent names to exclude' } },
+  { name: 'context_quality_create_trace_analysis_assignment', description: 'Register a batch of context_usage_trace candidates as a single trace analysis assignment. One assignment = one worker batch = at most 20 contextAttemptIds. Workers call this before starting evaluation to prevent duplicate assignment. Pass retryOfAssignmentId when replacing a failed assignment. REST: POST /api/context/quality/trace-analysis-assignments.', params: { session_id: 'string (required)', source_ids: 'object (required) — array of contextAttemptIds (max 20)', repo_id: 'string', worker_agent_name: 'string', retry_of_assignment_id: 'string — failed assignment being retried' } },
+  { name: 'context_quality_create_trace_analysis_wave', description: 'Create the next parallel trace-analysis wave. Returns up to 4 non-overlapping context_trace_analysis_assignments, each with up to 20 contextAttemptIds. Orchestrator must spawn all returned assignments before waiting. REST: POST /api/context/quality/trace-analysis-assignments/wave.', params: { session_id: 'string (required)', repo_id: 'string — optional repo filter', max_assignments: 'number — default 4, hard max 4', limit_per_assignment: 'number — default 20, hard max 20', exclude_root_execution_id: 'string', exclude_execution_ids: 'object — array of execution ids to exclude', exclude_agent_names: 'object — array of agent names to exclude' } },
+  { name: 'context_quality_list_trace_analysis_assignments', description: 'List trace analysis assignments for a session with optional status filter. REST: GET /api/context/quality/trace-analysis-assignments.', params: { session_id: 'string', status: 'string — "queued"|"running"|"completed"|"failed"', limit: 'number', offset: 'number' } },
+  { name: 'context_quality_get_trace_analysis_assignment', description: 'Get a single trace analysis assignment by ID. REST: GET /api/context/quality/trace-analysis-assignments/:assignmentId.', params: { assignment_id: 'string (required)' } },
+  { name: 'context_quality_update_trace_analysis_assignment', description: 'Update trace analysis assignment lifecycle. Workers call this: status="running" when starting, "completed"/"failed" when done. Also updates evaluatedCount, skippedCount, failedCount, findingCount, terminalReason. REST: PATCH /api/context/quality/trace-analysis-assignments/:assignmentId.', params: { assignment_id: 'string (required)', status: 'string — "queued"|"running"|"completed"|"failed"', worker_execution_id: 'string', worker_agent_name: 'string', evaluated_count: 'number', skipped_count: 'number', failed_count: 'number', finding_count: 'number', error: 'string', terminal_reason: 'string — completed|failed_unretried|retried|self_trace_ignored|cancelled' } },
+  { name: 'context_quality_list_source_evaluations', description: 'List source evaluation records for a session. REST: GET /api/context/quality/source-evaluations.', params: { session_id: 'string (required)', source_type: 'string — filter by source type', decision: 'string — filter by decision', limit: 'number' } },
+  { name: 'context_quality_update_worker_assignment', description: 'Update worker assignment status. Workers MUST call this: status="running" when starting, "completed"/"failed" when done. Include workerRole/agentName when available so assignment ownership cannot be overwritten by the wrong worker type.', params: { assignment_id: 'string (required)', status: 'string (required) — "running"|"completed"|"failed"', notes: 'string', result: 'object', agentRunId: 'string', agentExecutionId: 'string', workerRole: 'string', agentName: 'string' } },
+  { name: 'context_quality_create_worker_assignment', description: 'Create worker assignment(s) for auto-remediatable review tasks. Curation fixes are grouped by target entry; one call may return multiple assignments, and same-entry conflicts may be returned as skippedConflicts. In repairMode=true, pass explicit remediationIds to create visible repair assignment(s) for failed/partial remediation rows.', params: { maxBatch: 'number', workerAgentName: 'string', workerRole: 'string', remediationIds: 'object — explicit remediation IDs for repair mode', repairMode: 'boolean', rootExecutionId: 'string', sessionId: 'string' } },
+  { name: 'context_quality_patch_finding', description: 'Update a context quality finding — e.g. set status=in_review, add suggestedRemediation. Returns the updated finding. Primary method for review-triage workers; REST fallback: PATCH /api/context/quality/findings/:findingId.', params: { finding_id: 'string (required)', status: 'string — "open"|"in_review"|"resolved"|"dismissed"', suggestedRemediation: 'string' } },
+  { name: 'context_quality_list_remediation_tasks', description: 'List remediation records for fix/QA workers or repair reporting. REST: GET /api/context/quality/remediation-tasks.', params: { taskId: 'string', remediationId: 'string', workerRole: 'string', status: 'string', limit: 'number', offset: 'number' } },
+  { name: 'context_quality_create_remediation_task', description: 'Create a structured remediation task for an approved finding. REST: POST /api/context/quality/remediation-tasks. Required: taskId, findingId, judgeRunId, actionKind. fixType is also accepted as an alias for actionKind for backwards compatibility.', params: { taskId: 'string (required) — review task ID from the approved context_review_tasks record', findingId: 'string (required)', judgeRunId: 'string (required)', actionKind: 'string (required) — e.g. "curated_entry_edit"|"curated_entry_create"|"ingestion_rerun"|"no_op" etc. Also accepted as fixType.', remediationKind: 'string — curation_metadata_update|mandatory_mapping_update|memory_merge|memory_demote|memory_add|retrieval_policy_fix|code_fix|qa_rejudge|no_op', fixType: 'string — alias for actionKind (backwards compat)', workerRole: 'string', targetEntryId: 'string', targetEntryIds: 'object — array of curated entry ids', targetRefId: 'string', targetRefIds: 'object — array of context ref ids', targetMappingId: 'string', targetMappingIds: 'object — array of mandatory mapping ids', targetRepoId: 'string', sourceEvaluationIds: 'object — array of source evaluation ids supporting this mapping', affectedRefIds: 'object — array of affected Cognee/context refs', proposedPatch: 'object — proposed DB/context metadata patch', retrievalReplayId: 'string', validationPlan: 'string', estimatedRisk: 'string — "low"|"medium"|"high"', humanGateRequired: 'boolean' } },
+  { name: 'context_quality_dispatch_remediation_task', description: 'Dispatch a remediation task for execution. Returns the dispatched task record. REST fallback: POST /api/context/quality/remediation-tasks/:id/dispatch.', params: { task_id: 'string (required)' } },
+  { name: 'context_quality_create_learning_promotion', description: 'Create a LearningPromotion proposal. Server enforces auto-gating: confidence >= 0.65, no high risk, validated source, and no conflict maps to an approved auto-curation remediation; otherwise it remains human-reviewed. Returns the promotion record with promotionId. REST fallback: POST /api/context/quality/learning-promotions.', params: { learningId: 'string (required)', rootExecutionId: 'string', sessionId: 'string', reviewTaskId: 'string', action: 'string (required) — "create_curated_context"|"update_curated_context"|"remediate_curated_context"', targetRepoId: 'string', targetRepoIds: 'object — array of target repo ids', targetEntryId: 'string', targetEntryIds: 'object — array of curated entry ids', targetRefIds: 'object — array of Cognee/context refs', affectedRefIds: 'object — array of affected refs', sourceEvaluationIds: 'object — array of source evaluation ids', proposedPatch: 'object — proposed curation patch with curatedContext/retrievalText/title/category/injectionPolicy where available', confidence: 'number', estimatedRisk: 'string', humanGateRequired: 'boolean — advisory only; server recomputes the gate', sourceValidationStatus: 'string — validated|failed|pending|not_required', conflictStatus: 'string — no_conflict|conflict_detected|conflict_resolved', remediationId: 'string', scope: 'string', suggestedContent: 'string — proposed curated text (DRAFT ONLY)', proposedCuratedText: 'string — proposed injected context text' } },
+  { name: 'context_quality_decide_learning_promotion', description: 'Record a human decision on a LearningPromotion. AGENTS MUST NOT SELF-APPROVE — this is for human-actor use only. Returns the decision record. REST fallback: POST /api/context/quality/learning-promotions/:id/decisions.', params: { promotion_id: 'string (required)', decision: 'string (required) — "approved"|"rejected"', reason: 'string' } },
+  { name: 'context_quality_apply_curated_edit', description: 'Apply an approved curated context edit. Requires LearningPromotion.decision==="approved" or an approved review task when humanGateRequired=true. Returns { revisionId, entryId }. REST fallback: POST /api/context/quality/curated-edits/:repoId/:entryId.', params: { repo_id: 'string (required)', entry_id: 'string (required)', action: 'string (required) — "create"|"update"|"archive"', content: 'string — legacy content replacement only', patch: 'object — structured curation patch', proposedPatch: 'object — structured remediation proposal patch', metadataUpdates: 'object — metadata/policy update fields', sourceReviewTaskId: 'string', sourceLearningId: 'string', sourcePromotionId: 'string', remediationId: 'string', expectedEntryVersionId: 'string — active entryVersionId read immediately before update/archive' } },
+  { name: 'context_quality_get_curated_entry', description: 'Read the current curated context entry before applying a remediation. REST fallback: GET /api/context/quality/curated-entries/:repoId/:entryId.', params: { repo_id: 'string (required)', entry_id: 'string (required)' } },
+  { name: 'context_quality_get_curation_history', description: 'Get revision history for a curated context entry. Returns list of revisions with timestamps. REST fallback: GET /api/context/quality/curated-edits/:repoId/:entryId/history.', params: { repo_id: 'string (required)', entry_id: 'string (required)' } },
+  { name: 'context_quality_revert_curated_edit', description: 'Revert a curated context entry to a specific revision. Returns the new revision record. REST fallback: POST /api/context/quality/curated-edits/:repoId/:entryId/revert/:revisionId.', params: { repo_id: 'string (required)', entry_id: 'string (required)', revision_id: 'string (required)' } },
 
   // ── Knowledge & Data ──
   { name: 'search_learnings', description: 'Search the learning system. Filter by workflow, type, or limit.', params: { workflow_name: 'string', type: 'string', limit: 'number' } },
@@ -552,7 +594,56 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case 'get_node_context_usage': {
       const executionId = String(args.execution_id ?? '');
       if (!executionId) return { error: 'execution_id is required' };
-      return callAPI(`/api/executions/${encodeURIComponent(executionId)}/context-usage`);
+      const params = new URLSearchParams();
+      const view = String(args.view ?? '');
+      if (view) params.set('view', view);
+      const include = Array.isArray(args.include) ? args.include.map(String).filter(Boolean).join(',') : String(args.include ?? '');
+      if (include) params.set('include', include);
+      if (args.refresh === true || args.bypassCache === true) params.set('refresh', 'true');
+      const qs = params.toString();
+      return callAPI(`/api/executions/${encodeURIComponent(executionId)}/context-usage${qs ? `?${qs}` : ''}`);
+    }
+    case 'context_quality_get_attempt_evidence': {
+      const contextAttemptId = String(args.context_attempt_id ?? args.contextAttemptId ?? '');
+      if (!contextAttemptId) return { error: 'context_attempt_id is required' };
+      return callAPI(`/api/context/attempts/${encodeURIComponent(contextAttemptId)}/evidence`);
+    }
+    case 'context_quality_get_attempt_evidence_batch': {
+      const contextAttemptIds = Array.isArray(args.context_attempt_ids)
+        ? args.context_attempt_ids.map(String).filter(Boolean)
+        : Array.isArray(args.contextAttemptIds)
+          ? args.contextAttemptIds.map(String).filter(Boolean)
+          : [];
+      if (!contextAttemptIds.length) return { error: 'context_attempt_ids is required' };
+      return callAPI('/api/context/attempts/evidence/batch', 'POST', { context_attempt_ids: contextAttemptIds });
+    }
+    case 'context_quality_get_usage_trace': {
+      // Fix 2: Unified context usage trace lookup.
+      // Accepts executionId OR contextAttemptId and returns normalized identifiers.
+      const executionId = args.execution_id ? String(args.execution_id) : '';
+      const contextAttemptId = args.context_attempt_id ? String(args.context_attempt_id) : '';
+      const sessionId = args.session_id ? String(args.session_id) : '';
+      if (!executionId && !contextAttemptId && !sessionId) {
+        return { error: 'execution_id, context_attempt_id, or session_id is required' };
+      }
+      const qs: string[] = [];
+      if (executionId) qs.push(`executionId=${encodeURIComponent(executionId)}`);
+      if (contextAttemptId) qs.push(`contextAttemptId=${encodeURIComponent(contextAttemptId)}`);
+      if (sessionId) qs.push(`sessionId=${encodeURIComponent(sessionId)}`);
+      return callAPI(`/api/context/quality/usage-trace?${qs.join('&')}`);
+    }
+    case 'context_quality_replay_usage_trace': {
+      const executionId = args.execution_id ?? args.executionId ? String(args.execution_id ?? args.executionId) : '';
+      const contextAttemptId = args.context_attempt_id ?? args.contextAttemptId ? String(args.context_attempt_id ?? args.contextAttemptId) : '';
+      const sessionId = args.session_id ?? args.sessionId ? String(args.session_id ?? args.sessionId) : '';
+      if (!executionId && !contextAttemptId && !sessionId) {
+        return { error: 'execution_id, context_attempt_id, or session_id is required' };
+      }
+      const qs: string[] = [];
+      if (executionId) qs.push(`executionId=${encodeURIComponent(executionId)}`);
+      if (contextAttemptId) qs.push(`contextAttemptId=${encodeURIComponent(contextAttemptId)}`);
+      if (sessionId) qs.push(`sessionId=${encodeURIComponent(sessionId)}`);
+      return callAPI(`/api/context/quality/usage-trace/replay?${qs.join('&')}`);
     }
     case 'find_repo_for_pr_url': {
       const prUrl = String(args.pr_url ?? '');
@@ -1036,6 +1127,266 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const content = await contentRes.text();
       return { ...meta, content, publicUrl: `${PUBLIC_BASE}/api/artifacts/${encodeURIComponent(id)}/content` };
     }
+    case 'context_quality_trigger_orchestrator':
+      return callAPI('/api/context/quality/orchestrator/trigger', 'POST', {
+        repoId: args.repoId, repoIds: args.repoIds, global: args.global, triggeredBy: args.triggeredBy ?? 'api',
+      });
+    case 'context_quality_begin_session':
+      return callAPI('/api/context/quality/orchestrator/sessions', 'POST', {
+        scope: args.scope, runScope: args.runScope, sourceId: args.sourceId, sourceKind: args.sourceKind, repoId: args.repoId,
+        agentModel: args.agentModel, agentProvider: args.agentProvider, agentRationale: args.agentRationale,
+        rootExecutionId: args.rootExecutionId ?? args.root_execution_id ?? SPAWN_ROOT_EXECUTION_ID,
+        dry_run: args.dry_run,
+      });
+    case 'context_quality_log_decision':
+      return callAPI(`/api/context/quality/orchestrator/sessions/${String(args.session_id)}/decisions`, 'POST', {
+        kind: args.kind, detail: args.detail, metadata: args.metadata,
+      });
+    case 'context_quality_submit_findings':
+      return callAPI(`/api/context/quality/orchestrator/sessions/${String(args.session_id)}/findings`, 'POST', {
+        findings: args.findings,
+      });
+    case 'context_quality_finalize_session':
+      return callAPI(`/api/context/quality/orchestrator/sessions/${String(args.session_id)}/finalize`, 'POST', {
+        summary: args.summary,
+      });
+    case 'context_quality_get_session':
+      return callAPI(`/api/context/quality/orchestrator/sessions/${String(args.session_id)}`);
+    case 'context_quality_get_stage_state':
+      return callAPI(`/api/context/quality/orchestrator/sessions/${String(args.session_id)}/stage-state`);
+    case 'context_quality_get_repair_state':
+      return callAPI('/api/context/quality/orchestrator/repair-state', 'POST', {
+        sessionId: args.session_id ?? args.sessionId,
+        rootExecutionId: args.root_execution_id ?? args.rootExecutionId,
+        executionId: args.execution_id ?? args.executionId,
+      });
+    case 'context_quality_list_pending': {
+      const qs: string[] = [`sourceType=${encodeURIComponent(String(args.sourceType ?? ''))}`];
+      if (args.limit) qs.push(`limit=${Math.min(Number(args.limit), 50)}`);
+      if (args.repoId) qs.push(`repoId=${encodeURIComponent(String(args.repoId))}`);
+      if (args.repoIds) qs.push(`repoIds=${encodeURIComponent(JSON.stringify(args.repoIds))}`);
+      if (args.allowBackfill) qs.push(`allowBackfill=true`);
+      return callAPI(`/api/context/quality/scheduler/pending?${qs.join('&')}`);
+    }
+    case 'context_quality_log_source_evaluation':
+      // Backwards-compatible alias — routes through the enhanced submit endpoint
+      // so all new fields (contextCorrect, evidence, etc.) are preserved when passed.
+      return callAPI('/api/context/quality/source-evaluations/submit', 'POST', {
+        sessionId: args.session_id,
+        judgeRunId: args.judge_run_id,
+        repoId: args.repo_id,
+        sourceType: args.source_type,
+        sourceId: args.source_id,
+        contextAttemptId: args.context_attempt_id,
+        executionId: args.execution_id,
+        flowKind: args.flow_kind,
+        decision: args.decision,
+        status: args.status ?? 'completed',
+        reason: args.reason,
+        findingIds: args.finding_ids,
+      });
+    case 'context_quality_submit_source_evaluation':
+      return callAPI('/api/context/quality/source-evaluations/submit', 'POST', {
+        sessionId: args.session_id ?? args.sessionId,
+        judgeRunId: args.judge_run_id ?? args.judgeRunId,
+        repoId: args.repo_id ?? args.repoId,
+        sourceType: args.source_type ?? args.sourceType,
+        sourceId: args.source_id ?? args.sourceId,
+        sourceKind: args.source_kind ?? args.sourceKind,
+        contextAttemptId: args.context_attempt_id ?? args.contextAttemptId,
+        executionId: args.execution_id ?? args.executionId,
+        flowKind: args.flow_kind ?? args.flowKind,
+        workerAssignmentId: args.worker_assignment_id ?? args.workerAssignmentId,
+        decision: args.decision,
+        status: args.status ?? 'completed',
+        reason: args.reason,
+        classification: args.classification,
+        fixType: args.fix_type ?? args.fixType,
+        confidence: args.confidence,
+        risk: args.risk,
+        severity: args.severity,
+        findingIds: args.finding_ids ?? args.findingIds,
+        contextCorrect: args.context_correct ?? args.contextCorrect,
+        contextVerdict: args.context_verdict ?? args.contextVerdict,
+        contextIncomplete: args.context_incomplete ?? args.contextIncomplete,
+        contextIrrelevant: args.context_irrelevant ?? args.contextIrrelevant,
+        mandatoryMissing: args.mandatory_missing ?? args.mandatoryMissing,
+        mandatoryIncorrect: args.mandatory_incorrect ?? args.mandatoryIncorrect,
+        overFiltered: args.over_filtered ?? args.overFiltered,
+        overInjected: args.over_injected ?? args.overInjected,
+        wrongScope: args.wrong_scope ?? args.wrongScope,
+        staleContext: args.stale_context ?? args.staleContext,
+        affectedRefIds: args.affected_ref_ids ?? args.affectedRefIds,
+        expectedContextKinds: args.expected_context_kinds ?? args.expectedContextKinds,
+        remediationHints: args.remediation_hints ?? args.remediationHints,
+        evidence: args.evidence,
+        notes: args.notes,
+        evidenceSummary: args.evidence_summary ?? args.evidenceSummary,
+        evaluationVersion: args.evaluation_version ?? args.evaluationVersion,
+      });
+    case 'context_quality_list_unevaluated_traces': {
+      const utqs: string[] = [];
+      if (args.repo_id ?? args.repoId) utqs.push(`repoId=${encodeURIComponent(String(args.repo_id ?? args.repoId))}`);
+      if (args.session_id ?? args.sessionId) utqs.push(`sessionId=${encodeURIComponent(String(args.session_id ?? args.sessionId))}`);
+      if (args.limit) utqs.push(`limit=${Math.min(Number(args.limit), 20)}`);
+      if (args.cursor) utqs.push(`cursor=${encodeURIComponent(String(args.cursor))}`);
+      if (args.exclude_root_execution_id ?? args.excludeRootExecutionId) utqs.push(`excludeRootExecutionId=${encodeURIComponent(String(args.exclude_root_execution_id ?? args.excludeRootExecutionId))}`);
+      if (args.exclude_execution_ids ?? args.excludeExecutionIds) utqs.push(`excludeExecutionIds=${encodeURIComponent(JSON.stringify(args.exclude_execution_ids ?? args.excludeExecutionIds))}`);
+      if (args.exclude_agent_names ?? args.excludeAgentNames) utqs.push(`excludeAgentNames=${encodeURIComponent(JSON.stringify(args.exclude_agent_names ?? args.excludeAgentNames))}`);
+      return callAPI(`/api/context/quality/scheduler/unevaluated-traces${utqs.length ? '?' + utqs.join('&') : ''}`);
+    }
+    case 'context_quality_create_trace_analysis_assignment':
+      return callAPI('/api/context/quality/trace-analysis-assignments', 'POST', {
+        sessionId: args.session_id ?? args.sessionId,
+        repoId: args.repo_id ?? args.repoId,
+        sourceIds: args.source_ids ?? args.sourceIds,
+        workerAgentName: args.worker_agent_name ?? args.workerAgentName,
+        retryOfAssignmentId: args.retry_of_assignment_id ?? args.retryOfAssignmentId,
+      });
+    case 'context_quality_create_trace_analysis_wave':
+    case 'context_quality_create_trace_analysis_assignment_wave':
+      return callAPI('/api/context/quality/trace-analysis-assignments/wave', 'POST', {
+        sessionId: args.session_id ?? args.sessionId,
+        repoId: args.repo_id ?? args.repoId,
+        maxAssignments: args.max_assignments ?? args.maxAssignments,
+        limitPerAssignment: args.limit_per_assignment ?? args.limitPerAssignment,
+        excludeRootExecutionId: args.exclude_root_execution_id ?? args.excludeRootExecutionId,
+        excludeExecutionIds: args.exclude_execution_ids ?? args.excludeExecutionIds,
+        excludeAgentNames: args.exclude_agent_names ?? args.excludeAgentNames,
+      });
+    case 'context_quality_list_trace_analysis_assignments': {
+      const taqs: string[] = [];
+      if (args.session_id ?? args.sessionId) taqs.push(`sessionId=${encodeURIComponent(String(args.session_id ?? args.sessionId))}`);
+      if (args.status) taqs.push(`status=${encodeURIComponent(String(args.status))}`);
+      if (args.limit) taqs.push(`limit=${Number(args.limit)}`);
+      if (args.offset) taqs.push(`offset=${Number(args.offset)}`);
+      return callAPI(`/api/context/quality/trace-analysis-assignments${taqs.length ? '?' + taqs.join('&') : ''}`);
+    }
+    case 'context_quality_get_trace_analysis_assignment': {
+      const assignmentId = String(args.assignment_id ?? '');
+      if (!assignmentId) return { error: 'assignment_id is required' };
+      return callAPI(`/api/context/quality/trace-analysis-assignments/${encodeURIComponent(assignmentId)}`);
+    }
+    case 'context_quality_update_trace_analysis_assignment':
+      return callAPI(`/api/context/quality/trace-analysis-assignments/${String(args.assignment_id ?? '')}`, 'PATCH', {
+        status: args.status,
+        workerExecutionId: args.worker_execution_id ?? args.workerExecutionId,
+        workerAgentName: args.worker_agent_name ?? args.workerAgentName,
+        evaluatedCount: args.evaluated_count ?? args.evaluatedCount,
+        skippedCount: args.skipped_count ?? args.skippedCount,
+        failedCount: args.failed_count ?? args.failedCount,
+        findingCount: args.finding_count ?? args.findingCount,
+        error: args.error,
+        terminalReason: args.terminal_reason ?? args.terminalReason,
+      });
+    case 'context_quality_list_source_evaluations': {
+      const seqs: string[] = [];
+      const seSessionId = String(args.session_id ?? args.sessionId ?? '');
+      if (!seSessionId) return { error: 'session_id is required' };
+      seqs.push(`sessionId=${encodeURIComponent(seSessionId)}`);
+      if (args.source_type ?? args.sourceType) seqs.push(`sourceType=${encodeURIComponent(String(args.source_type ?? args.sourceType))}`);
+      if (args.decision) seqs.push(`decision=${encodeURIComponent(String(args.decision))}`);
+      if (args.limit) seqs.push(`limit=${Number(args.limit)}`);
+      return callAPI(`/api/context/quality/source-evaluations?${seqs.join('&')}`);
+    }
+    case 'context_quality_list_findings': {
+      const fqs: string[] = [];
+      if (args.judgeRunId) fqs.push(`judgeRunId=${encodeURIComponent(String(args.judgeRunId))}`);
+      if (args.scope) fqs.push(`scope=${encodeURIComponent(String(args.scope))}`);
+      if (args.status) fqs.push(`status=${encodeURIComponent(String(args.status))}`);
+      if (args.limit) fqs.push(`limit=${Math.min(Number(args.limit), 100)}`);
+      if (args.offset) fqs.push(`offset=${Number(args.offset)}`);
+      return callAPI(`/api/context/quality/findings${fqs.length ? '?' + fqs.join('&') : ''}`);
+    }
+    case 'context_quality_update_worker_assignment':
+      return callAPI(`/api/context/quality/worker-assignments/${String(args.assignment_id)}`, 'PATCH', {
+        status: args.status, notes: args.notes, result: args.result,
+        agentRunId: args.agentRunId, agentExecutionId: args.agentExecutionId,
+        workerRole: args.workerRole ?? args.worker_role,
+        agentName: args.agentName ?? args.agent_name,
+      });
+    case 'context_quality_create_worker_assignment':
+      return callAPI('/api/context/quality/worker-assignments', 'POST', {
+        maxBatch: args.maxBatch, workerAgentName: args.workerAgentName, workerRole: args.workerRole,
+        remediationIds: args.remediationIds ?? args.remediation_ids,
+        repairMode: args.repairMode ?? args.repair_mode,
+        rootExecutionId: args.rootExecutionId ?? args.root_execution_id,
+        sessionId: args.sessionId ?? args.session_id,
+      });
+    case 'context_quality_patch_finding':
+      return callAPI(`/api/context/quality/findings/${String(args.finding_id)}`, 'PATCH', {
+        status: args.status, suggestedRemediation: args.suggestedRemediation,
+      });
+    case 'context_quality_create_remediation_task':
+      return callAPI('/api/context/quality/remediation-tasks', 'POST', {
+        // GAP 6: pass required fields matching the REST route contract
+        taskId: args.taskId,
+        findingId: args.findingId,
+        judgeRunId: args.judgeRunId,
+        // actionKind takes priority; fixType is backwards-compat alias handled by route
+        actionKind: args.actionKind,
+        remediationKind: args.remediationKind,
+        fixType: args.fixType,
+        workerRole: args.workerRole,
+        targetEntryId: args.targetEntryId,
+        targetEntryIds: args.targetEntryIds,
+        targetRefId: args.targetRefId,
+        targetRefIds: args.targetRefIds,
+        targetMappingId: args.targetMappingId,
+        targetMappingIds: args.targetMappingIds,
+        targetRepoId: args.targetRepoId,
+        sourceEvaluationIds: args.sourceEvaluationIds ?? args.source_evaluation_ids,
+        affectedRefIds: args.affectedRefIds ?? args.affected_ref_ids,
+        proposedPatch: args.proposedPatch,
+        retrievalReplayId: args.retrievalReplayId,
+        validationPlan: args.validationPlan,
+        estimatedRisk: args.estimatedRisk,
+        confidence: args.confidence,
+        humanGateRequired: args.humanGateRequired,
+      });
+    case 'context_quality_list_remediation_tasks': {
+      const rqs: string[] = [];
+      if (args.taskId) rqs.push(`taskId=${encodeURIComponent(String(args.taskId))}`);
+      if (args.remediationId) rqs.push(`remediationId=${encodeURIComponent(String(args.remediationId))}`);
+      if (args.workerRole) rqs.push(`workerRole=${encodeURIComponent(String(args.workerRole))}`);
+      if (args.status) rqs.push(`status=${encodeURIComponent(String(args.status))}`);
+      if (args.limit) rqs.push(`limit=${Number(args.limit)}`);
+      if (args.offset) rqs.push(`offset=${Number(args.offset)}`);
+      return callAPI(`/api/context/quality/remediation-tasks${rqs.length ? '?' + rqs.join('&') : ''}`);
+    }
+    case 'context_quality_dispatch_remediation_task':
+      return callAPI(`/api/context/quality/remediation-tasks/${String(args.task_id)}/dispatch`, 'POST', {});
+    case 'context_quality_create_learning_promotion':
+      return callAPI('/api/context/quality/learning-promotions', 'POST', {
+        learningId: args.learningId, rootExecutionId: args.rootExecutionId, sessionId: args.sessionId, reviewTaskId: args.reviewTaskId,
+        action: args.action, targetRepoId: args.targetRepoId, targetEntryId: args.targetEntryId,
+        targetRepoIds: args.targetRepoIds, targetEntryIds: args.targetEntryIds, targetRefIds: args.targetRefIds,
+        affectedRefIds: args.affectedRefIds, sourceEvaluationIds: args.sourceEvaluationIds,
+        proposedPatch: args.proposedPatch, confidence: args.confidence,
+        estimatedRisk: args.estimatedRisk, humanGateRequired: args.humanGateRequired,
+        sourceValidationStatus: args.sourceValidationStatus,
+        conflictStatus: args.conflictStatus,
+        remediationId: args.remediationId, scope: args.scope,
+        suggestedContent: args.suggestedContent,
+        proposedCuratedText: args.proposedCuratedText,
+      });
+    case 'context_quality_decide_learning_promotion':
+      return callAPI(`/api/context/quality/learning-promotions/${String(args.promotion_id)}/decisions`, 'POST', {
+        decision: args.decision, reason: args.reason,
+      });
+    case 'context_quality_apply_curated_edit':
+      return callAPI(`/api/context/quality/curated-edits/${pathSegment(args.repo_id)}/${pathSegment(args.entry_id)}`, 'POST', {
+        action: args.action, content: args.content, patch: args.patch, proposedPatch: args.proposedPatch, metadataUpdates: args.metadataUpdates,
+        sourceReviewTaskId: args.sourceReviewTaskId, sourceLearningId: args.sourceLearningId,
+        sourcePromotionId: args.sourcePromotionId, remediationId: args.remediationId,
+        expectedEntryVersionId: args.expectedEntryVersionId ?? args.expected_entry_version_id,
+      });
+    case 'context_quality_get_curated_entry':
+      return callAPI(`/api/context/quality/curated-entries/${pathSegment(args.repo_id)}/${pathSegment(args.entry_id)}`);
+    case 'context_quality_get_curation_history':
+      return callAPI(`/api/context/quality/curated-edits/${pathSegment(args.repo_id)}/${pathSegment(args.entry_id)}/history`);
+    case 'context_quality_revert_curated_edit':
+      return callAPI(`/api/context/quality/curated-edits/${pathSegment(args.repo_id)}/${pathSegment(args.entry_id)}/revert/${pathSegment(args.revision_id)}`, 'POST', {});
     default: {
       // Fallback dispatcher: forward any tool not handled above to the generic
       // /api/chat/tools/:toolName endpoint, which dispatches via executeChatTool().

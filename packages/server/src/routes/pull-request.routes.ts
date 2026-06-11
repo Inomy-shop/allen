@@ -143,9 +143,8 @@ export function pullRequestRoutes(db: Db): Router {
   });
 
   // POST /api/pull-requests/:id/mark-synced
-  // Called by the resolve-pr-reviews workflow after a successful apply
-  // round. Records which CodeRabbit comment ids have been addressed so
-  // the next sweep skips them and stamps the cooldown timer.
+  // Records which review comment ids have been addressed and stamps the
+  // cooldown timer for any caller that still tracks PR review sync state.
   router.post('/:id/mark-synced', async (req: Request, res: Response) => {
     try {
       const id = p(req, 'id');

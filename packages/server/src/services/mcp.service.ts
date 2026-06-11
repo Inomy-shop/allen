@@ -237,6 +237,28 @@ export const MCP_PRESETS: McpPreset[] = [
     envKeys: ['SLACK_BOT_TOKEN', 'SLACK_TEAM_ID'],
     docsUrl: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/slack',
   },
+  {
+    name: 'posthog',
+    description: 'PostHog — product analytics, insights, feature flags, experiments, errors',
+    type: 'stdio',
+    command: 'npx',
+    // Remote MCP via mcp-remote; mcp-remote expands ${POSTHOG_AUTH_HEADER} in
+    // header args itself. User adds ALLEN_POSTHOG_AUTH_HEADER="Bearer phx_..."
+    // to Allen's root .env; the subprocess sees POSTHOG_AUTH_HEADER.
+    args: ['-y', 'mcp-remote@latest', 'https://mcp.posthog.com/mcp', '--header', 'Authorization:${POSTHOG_AUTH_HEADER}'],
+    envKeys: ['POSTHOG_AUTH_HEADER'],
+    docsUrl: 'https://posthog.com/docs/model-context-protocol',
+  },
+  {
+    name: 'notion',
+    description: 'Notion — search, read, create, and update pages and databases',
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', '@notionhq/notion-mcp-server'],
+    // User adds ALLEN_NOTION_TOKEN to .env; subprocess sees NOTION_TOKEN.
+    envKeys: ['NOTION_TOKEN'],
+    docsUrl: 'https://github.com/makenotion/notion-mcp-server',
+  },
   // {
   //   name: 'memory',
   //   description: 'Knowledge graph — persistent entity & relationship memory',

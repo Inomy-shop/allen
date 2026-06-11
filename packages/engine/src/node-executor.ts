@@ -26,6 +26,18 @@ import { statSync, mkdirSync } from 'node:fs';
  * import from the server package. Never fall back to process.cwd() because
  * that's the server's source tree. */
 const AGENT_FALLBACK_CWD = '/tmp/allen';
+type ClaudeCompatibleAgentProvider = string;
+
+function isClaudeCompatibleAgentProvider(provider: unknown): provider is ClaudeCompatibleAgentProvider {
+  return typeof provider === 'string'
+    && provider !== 'claude'
+    && provider !== 'claude-cli'
+    && provider !== 'codex';
+}
+
+function isAgentProviderOverride(provider: unknown): provider is 'codex' | 'claude-cli' | ClaudeCompatibleAgentProvider {
+  return provider === 'codex' || provider === 'claude-cli' || isClaudeCompatibleAgentProvider(provider);
+}
 
 /**
  * Resolve the session key for a node.
@@ -115,6 +127,14 @@ export interface NodeExecutorDeps {
    * MCP-tool injection (existing behaviour).
    */
   discoverMcpToolNames?: () => Promise<string[]>;
+  /** Resolved Claude Code executable path for CLI-mode workflow agents. */
+  claudeCodeExecutable?: string;
+  /**
+   * Optional provider-specific env builder for Claude-compatible providers.
+   * Server callers use this to resolve desktop/runtime secrets without the
+   * engine package importing server runtime config.
+   */
+  buildClaudeCompatibleEnvOverlay?: (provider: ClaudeCompatibleAgentProvider, model?: string) => Promise<Record<string, string>>;
 }
 
 function resolveExternalMcpServers(
@@ -284,11 +304,13 @@ export async function executeNode(
       // (or vice versa) without mutating the agent document.
       const overrideProvider = nodeDef.agentOverrides?.provider;
       const effectiveProvider =
-        overrideProvider === 'codex' || overrideProvider === 'claude-cli'
+        isAgentProviderOverride(overrideProvider)
           ? overrideProvider
           : role?.provider === 'codex'
             ? 'codex'
-            : 'claude';
+            : isClaudeCompatibleAgentProvider(role?.provider)
+              ? role.provider
+              : 'claude';
       if (effectiveProvider === 'codex') {
         const existingSession = sessions[resolveSessionKey(nodeName, nodeDef, state)];
         return executeCodexNode(
@@ -332,6 +354,15 @@ async function executeAgentNode(
   if (nodeDef.agent && !role) {
     throw new Error(`Role not found: ${nodeDef.agent}`);
   }
+
+  // Detect Claude-compatible API providers so queryViaCli can receive an env
+  // overlay that redirects the Claude Code CLI away from Anthropic.
+  const overrideProviderForAgent = nodeDef.agentOverrides?.provider;
+  const claudeCompatibleProvider = isClaudeCompatibleAgentProvider(overrideProviderForAgent)
+    ? overrideProviderForAgent
+    : isClaudeCompatibleAgentProvider(role?.provider)
+      ? role.provider
+      : undefined;
 
   // Resolve cwd in priority order:
   //   1. worktree_path — set by create-workspace once an isolated git worktree exists.
@@ -795,6 +826,23 @@ ${context}
           console.warn(`[node:${nodeName}] MCP tool discovery failed:`, (err as Error).message);
         }
       }
+      // For Claude-compatible API providers, overlay credentials so the claude
+      // binary redirects requests to the configured provider instead of Anthropic.
+      let claudeCompatibleEnvOverlay: Record<string, string> = {};
+      if (claudeCompatibleProvider) {
+        if (!deps.buildClaudeCompatibleEnvOverlay) {
+          throw new Error(`Claude-compatible provider ${claudeCompatibleProvider} requires buildClaudeCompatibleEnvOverlay`);
+        }
+        claudeCompatibleEnvOverlay = await deps.buildClaudeCompatibleEnvOverlay(claudeCompatibleProvider, resolvedModel);
+      }
+      const resolvedEnv: NodeJS.ProcessEnv = (() => {
+        return {
+          ...process.env,
+          ...spawnContextEnv,
+          ...(deps.claudeCodeExecutable ? { CLAUDE_BIN: deps.claudeCodeExecutable } : {}),
+          ...claudeCompatibleEnvOverlay,
+        };
+      })();
       conv = queryViaCli({
         agent: {
           name: nodeDef.agent ?? 'unknown',
@@ -812,7 +860,7 @@ ${context}
         model: resolvedModel,
         resume: opts.resumeSession,
         permissionMode: resolvedPlanMode ? 'plan' : 'bypassPermissions',
-        env: { ...process.env, ...spawnContextEnv },
+        env: resolvedEnv,
         mcpServers: mcpServers && Object.keys(mcpServers).length > 0 ? (mcpServers as Record<string, unknown>) : undefined,
         abortSignal: deps.abortSignal,
         onMaterializedAgentFile: (metadata) => {

@@ -13,8 +13,9 @@ import { OnboardingShell } from '../components/onboarding/OnboardingShell';
 import { useOnboardingGate } from '../hooks/useOnboardingGate';
 import { system } from '../services/api';
 
-type Provider = 'codex' | 'claude-cli';
+type Provider = 'codex' | 'claude-cli' | (string & {});
 type AgentProvider = '' | Provider;
+type ApiProvider = string;
 
 interface HealthCheck {
   id: string;
@@ -26,6 +27,7 @@ interface HealthSummary {
 }
 
 const CLAUDE_MODELS = [
+  { label: 'fable', value: 'fable', sublabel: 'Latest Claude model for inbuilt agents' },
   { label: 'opus', value: 'opus', sublabel: 'Highest-capability Claude model for inbuilt agents' },
   { label: 'sonnet', value: 'sonnet', sublabel: 'Balanced Claude model for inbuilt agents' },
   { label: 'haiku', value: 'haiku', sublabel: 'Fastest Claude model for inbuilt agents' },
@@ -41,6 +43,52 @@ const CODEX_MODELS = [
   { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini', sublabel: 'Lower-latency Codex agent model' },
 ];
 
+const API_PROVIDER_OPTIONS: Array<{
+  label: string;
+  value: ApiProvider;
+  apiKey: string;
+  defaultModel: string;
+  suggestions: Array<{ label: string; value: string; sublabel: string }>;
+}> = [
+  {
+    label: 'DeepSeek',
+    value: 'deepseek',
+    apiKey: 'ALLEN_DEEPSEEK_API_KEY',
+    defaultModel: 'deepseek-v4-pro[1m]',
+    suggestions: [
+      { label: 'deepseek-v4-pro[1m]', value: 'deepseek-v4-pro[1m]', sublabel: 'High-capability DeepSeek model' },
+      { label: 'deepseek-v4-flash', value: 'deepseek-v4-flash', sublabel: 'Fast DeepSeek model' },
+    ],
+  },
+  {
+    label: 'Xiaomi MiMo',
+    value: 'xiaomi-mimo',
+    apiKey: 'ALLEN_XIAOMI_MIMO_API_KEY',
+    defaultModel: 'mimo-v2.5-pro',
+    suggestions: [
+      { label: 'mimo-v2.5-pro', value: 'mimo-v2.5-pro', sublabel: 'Default Xiaomi MiMo model' },
+    ],
+  },
+  {
+    label: 'Kimi',
+    value: 'kimi',
+    apiKey: 'ALLEN_KIMI_API_KEY',
+    defaultModel: 'kimi-k2.5',
+    suggestions: [
+      { label: 'kimi-k2.6', value: 'kimi-k2.6', sublabel: 'Kimi opus-equivalent model' },
+      { label: 'kimi-k2.5', value: 'kimi-k2.5', sublabel: 'Kimi sonnet and flash model' },
+    ],
+  },
+];
+
+function apiProviderOption(provider: string): (typeof API_PROVIDER_OPTIONS)[number] | undefined {
+  return API_PROVIDER_OPTIONS.find(option => option.value === provider);
+}
+
+function isApiProvider(provider: string): provider is ApiProvider {
+  return Boolean(apiProviderOption(provider));
+}
+
 function checkPassed(summary: HealthSummary | null, id: string): boolean {
   return Boolean(summary?.checks.some(check => check.id === id && check.status === 'pass'));
 }
@@ -48,6 +96,8 @@ function checkPassed(summary: HealthSummary | null, id: string): boolean {
 function defaultAgentModel(provider: AgentProvider): string {
   if (provider === 'claude-cli') return 'opus';
   if (provider === 'codex') return 'gpt-5.5';
+  const apiProvider = apiProviderOption(provider);
+  if (apiProvider) return apiProvider.defaultModel;
   return '';
 }
 
@@ -120,6 +170,12 @@ export default function OnboardingModelDefaultsPage() {
         : 'Disabled until Claude CLI and auth pass health',
       disabled: !providerState.claudeReady,
     },
+    ...API_PROVIDER_OPTIONS.map(option => ({
+      label: option.label,
+      value: option.value,
+      sublabel: `Requires ${option.apiKey} to be configured in Settings > Secrets`,
+      disabled: false,
+    })),
   ];
   const agentProviderOptions = [
     {
@@ -136,16 +192,25 @@ export default function OnboardingModelDefaultsPage() {
         : `Use ${option.label} for all inbuilt agents and workflows`,
     })),
   ];
-  const modelOptions = agentProvider === 'claude-cli' ? CLAUDE_MODELS : CODEX_MODELS;
+  const apiAgentProviderOption = isApiProvider(agentProvider) ? apiProviderOption(agentProvider) : undefined;
+  const modelOptions = agentProvider === 'claude-cli' ? CLAUDE_MODELS : isApiProvider(agentProvider) ? [] : CODEX_MODELS;
+  const apiModelOptions = [
+    ...(apiAgentProviderOption?.suggestions ?? []),
+    ...(apiAgentProviderOption && agentModel && !(apiAgentProviderOption.suggestions ?? []).some(option => option.value === agentModel)
+      ? [{ label: agentModel, value: agentModel, sublabel: 'Custom model ID' }]
+      : []),
+  ];
   const canSave = !loading
     && !saving
-    && (chatProvider === 'codex' ? providerState.codexReady : providerState.claudeReady)
+    && (isApiProvider(chatProvider) ? true : chatProvider === 'codex' ? providerState.codexReady : providerState.claudeReady)
     && (
       agentProvider === ''
         ? providerState.claudeReady && providerState.codexReady
         : agentProvider === 'codex'
           ? providerState.codexReady
-          : providerState.claudeReady
+          : isApiProvider(agentProvider)
+            ? true
+            : providerState.claudeReady
     );
 
   async function saveDefaults() {
@@ -248,7 +313,7 @@ export default function OnboardingModelDefaultsPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <div className={`rounded-md border px-3 py-2 ${providerState.codexReady ? 'border-accent-green/25 bg-accent-green/10' : 'border-accent-yellow/25 bg-accent-yellow/10'}`}>
                 <div className="flex items-center gap-2 text-[12px] font-semibold text-theme-primary">
                   {providerState.codexReady ? <CheckCircle2 className="h-3.5 w-3.5 text-accent-green" /> : <AlertTriangle className="h-3.5 w-3.5 text-accent-yellow" />}
@@ -267,6 +332,17 @@ export default function OnboardingModelDefaultsPage() {
                   {providerState.claudeReady ? 'cli + auth ready' : 'run claude login, then recheck health'}
                 </div>
               </div>
+              {API_PROVIDER_OPTIONS.map((option) => (
+                <div key={option.value} className="rounded-md border border-accent-blue/25 bg-accent-blue/10 px-3 py-2">
+                  <div className="flex items-center gap-2 text-[12px] font-semibold text-theme-primary">
+                    <Circle className="h-3.5 w-3.5 text-accent-blue" />
+                    {option.label}
+                  </div>
+                  <div className="mt-1 font-mono text-[10.5px] text-theme-muted">
+                    configure {option.apiKey} in Settings
+                  </div>
+                </div>
+              ))}
             </div>
 
             <div className="space-y-1.5">
@@ -302,12 +378,23 @@ export default function OnboardingModelDefaultsPage() {
             {agentProvider && (
               <div className="space-y-1.5">
                 <label className="block font-mono text-[11px] font-medium lowercase text-theme-muted">model for inbuilt agents and workflows</label>
-                <Select
-                  value={agentModel}
-                  onChange={setAgentModel}
-                  options={modelOptions}
-                  searchable={false}
-                />
+                {isApiProvider(agentProvider) ? (
+                  <Select
+                    value={agentModel}
+                    onChange={setAgentModel}
+                    searchPlaceholder="Search or enter model ID..."
+                    placeholder={`e.g. ${apiAgentProviderOption?.defaultModel ?? 'provider-model'}`}
+                    options={apiModelOptions}
+                    allowCustomValue
+                  />
+                ) : (
+                  <Select
+                    value={agentModel}
+                    onChange={setAgentModel}
+                    options={modelOptions}
+                    searchable={false}
+                  />
+                )}
                 <p className="text-[11px] leading-4 text-theme-subtle">
                   Used when all inbuilt agents and workflow templates are set to the same provider.
                 </p>

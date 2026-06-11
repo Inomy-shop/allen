@@ -26,6 +26,7 @@ interface SessionOverrides {
 
 export interface ChatInputHandle {
   setValue: (v: string) => void;
+  getValue: () => string;
   focus: () => void;
 }
 
@@ -33,7 +34,9 @@ interface ProviderInfo {
   provider: string;
   label: string;
   models: string[];
+  modelSuggestions?: string[];
   defaultModel: string;
+  open?: boolean;
 }
 
 interface ChatInputProps {
@@ -65,12 +68,16 @@ interface ChatInputProps {
   extraControls?: ReactNode;
   maxVisibleLines?: number;
   fixedVisibleLines?: boolean;
+  placeholder?: string;
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
   codex: 'text-accent-green',
   claude: 'text-accent',
   'claude-cli': 'text-accent',
+  deepseek: 'text-accent-blue',
+  'xiaomi-mimo': 'text-accent-blue',
+  kimi: 'text-accent-blue',
 };
 
 function OpenAIIcon({ className }: SVGProps<SVGSVGElement>) {
@@ -102,9 +109,63 @@ function ClaudeIcon({ className }: SVGProps<SVGSVGElement>) {
   );
 }
 
-function ProviderIcon({ provider, className }: { provider?: string | null; className?: string }) {
+function DeepSeekIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+      <path
+        d="M4.2 12.3c0-4.3 3.4-7.8 7.7-7.8 3.1 0 5.8 1.8 7 4.4.5 1.1.8 2.3.8 3.5 0 4.3-3.4 7.7-7.8 7.7-1.8 0-3.5-.6-4.8-1.6l-2.8.8.8-2.7a7.6 7.6 0 0 1-.9-4.3Z"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7.7 11.5c1.7 1.5 3.4 2.1 5.3 1.8 1.3-.2 2.4-.8 3.3-1.8M8.3 9.2c1.9-.9 3.8-.8 5.7.2M8.8 14.9c1.5.7 3.2.8 5 .2"
+        stroke="currentColor"
+        strokeWidth="1.45"
+        strokeLinecap="round"
+      />
+      <circle cx="8.4" cy="8.7" r="0.85" fill="currentColor" />
+    </svg>
+  );
+}
+
+function XiaomiMimoIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+      <rect x="3.8" y="4.6" width="16.4" height="14.8" rx="3.4" stroke="currentColor" strokeWidth="1.7" />
+      <path
+        d="M7.7 15.5V9.3h2.4l1.9 3.3 1.9-3.3h2.4v6.2M10.1 15.5v-3.2M13.9 15.5v-3.2"
+        stroke="currentColor"
+        strokeWidth="1.45"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function KimiIcon({ className }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.1" stroke="currentColor" strokeWidth="1.65" />
+      <path
+        d="M8.7 7.8v8.4M15.6 8.1l-6.2 5 6.7 3.1M13.2 10.6l3.2-2.8M13.5 13.9l3.1 2.5"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M17.9 5.7 19.2 4.4M6.1 18.3l-1.3 1.3" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function ProviderIcon({ provider, className }: { provider?: string | null; className?: string }) {
   if (provider === 'codex') return <OpenAIIcon className={className} />;
   if (provider === 'claude' || provider === 'claude-cli') return <ClaudeIcon className={className} />;
+  if (provider === 'deepseek') return <DeepSeekIcon className={className} />;
+  if (provider === 'xiaomi-mimo') return <XiaomiMimoIcon className={className} />;
+  if (provider === 'kimi') return <KimiIcon className={className} />;
   return <Sparkles className={className} />;
 }
 
@@ -124,6 +185,15 @@ const effortPickerRowClass = 'flex min-h-9 w-full items-center gap-2 rounded-md 
 
 const TEXTAREA_MIN_HEIGHT = 76;
 const TEXTAREA_MAX_HEIGHT = 200;
+
+export function modelOptionsForProvider(provider: ProviderInfo, currentModel?: string | null): string[] {
+  const fixedModels = Array.isArray(provider.models) ? provider.models : [];
+  const suggestions = Array.isArray(provider.modelSuggestions) ? provider.modelSuggestions : [];
+  const candidates = provider.open
+    ? [currentModel, provider.defaultModel, ...suggestions]
+    : fixedModels;
+  return [...new Set(candidates.filter((model): model is string => Boolean(model?.trim())))];
+}
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -202,6 +272,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     extraControls,
     maxVisibleLines,
     fixedVisibleLines,
+    placeholder,
   },
   ref,
 ) {
@@ -234,6 +305,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         .filter(command => command.name.toLowerCase().includes(slashQuery.toLowerCase()))
         .slice(0, 12)
     : [];
+
+  // Highlight only once the slash token is "committed" — either Tab/picker autocomplete
+  // (which appends a trailing space) or the user manually types a space after the command.
+  // Mid-typing partial tokens like "/cont" stay un-highlighted.
+  const activeSlashCommand: SlashCommandOption | null = (() => {
+    const match = value.trimStart().match(/^(\/[A-Za-z0-9:_-]+)(?=\s)/);
+    if (!match) return null;
+    return slashCommands.find(command => command.name === match[1]) ?? null;
+  })();
 
   // Effective values: override wins, else inherited agent default
   const effectiveEffort = (agentOverrides?.reasoningEffort ?? inheritedEffort) ?? null;
@@ -357,8 +437,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
         if (el) { el.focus(); el.selectionStart = v.length; el.selectionEnd = v.length; }
       }, 0);
     },
+    getValue: () => value,
     focus: () => textareaRef.current?.focus(),
-  }));
+  }), [value]);
 
   // ── File upload ──
   const uploadFiles = useCallback(async (files: FileList | File[]) => {
@@ -585,11 +666,10 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
       />
 
       {slashVisible && (
-        <div className="absolute bottom-full left-0 right-0 z-50 mb-2 overflow-hidden rounded-lg border border-app bg-app-card p-2 shadow-2xl">
-          <div className="px-3 pb-2 pt-1 text-[13px] font-medium text-theme-muted">Commands</div>
+        <div className="absolute bottom-full left-0 right-0 z-50 mb-2 overflow-hidden rounded-[6px] border border-app bg-app-card p-1 shadow-2xl">
           <div className="max-h-72 overflow-y-auto">
             {filteredSlashCommands.length === 0 ? (
-              <div className="px-3 py-5 text-center text-[13px] text-theme-muted">No slash commands found</div>
+              <div className="px-3 py-4 text-center text-[12px] text-theme-muted">No slash commands found</div>
             ) : filteredSlashCommands.map((command, index) => {
               const selected = index === slashSelectedIdx;
               return (
@@ -599,19 +679,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   disabled={!command.dispatchable}
                   onMouseEnter={() => setSlashSelectedIdx(index)}
                   onClick={() => command.dispatchable && handleSlashSelect(command)}
-                  className={`flex min-h-11 w-full items-center gap-3 rounded-md px-3 py-2 text-left text-[14px] transition-colors ${
+                  className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors ${
                     selected ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary hover:bg-app-muted/70'
                   } ${!command.dispatchable ? 'cursor-not-allowed opacity-55' : ''}`}
-                  title={command.unavailableReason}
+                  title={command.unavailableReason ?? command.description}
                 >
-                  <span className="font-mono text-[13px] text-accent">{command.name}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{command.description}</span>
-                    <span className="mt-0.5 block truncate font-mono text-[12px] text-theme-muted">
-                      {command.dispatchable ? `${command.source} · ${command.provider}` : command.unavailableReason}
-                    </span>
+                  <span className="font-mono text-[12px] text-accent shrink-0">{command.name}</span>
+                  <span className="truncate text-[12px] text-theme-muted">
+                    {command.dispatchable ? command.description : (command.unavailableReason ?? command.description)}
                   </span>
-                  {selected && <Check className="h-4 w-4 shrink-0 text-theme-secondary" />}
                 </button>
               );
             })}
@@ -666,19 +742,55 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             <CornerDownLeft className="h-3 w-3" />
           </span>
         </div>
-        {/* Textarea */}
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={CHAT_PLACEHOLDER}
-          disabled={disabled}
-          rows={1}
-          className="w-full resize-none bg-transparent px-2 py-1.5 text-sm text-theme-primary placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ minHeight: `${TEXTAREA_MIN_HEIGHT}px`, maxHeight: `${TEXTAREA_MAX_HEIGHT}px`, overflowY: 'hidden' }}
-        />
+        {/* Textarea with inline slash-command highlight overlay */}
+        <div className="relative">
+          {activeSlashCommand && (() => {
+            const leading = value.length - value.trimStart().length;
+            const prefix = value.slice(0, leading);
+            const rest = value.slice(leading + activeSlashCommand.name.length);
+            return (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words font-body"
+                style={{
+                  padding: '4px 90px 4px 2px',
+                  fontSize: '13px',
+                  lineHeight: 1.55,
+                  color: 'rgb(var(--color-text-primary))',
+                }}
+              >
+                {prefix}
+                <span
+                  style={{
+                    backgroundColor: 'rgb(var(--color-accent) / 0.18)',
+                    color: 'rgb(var(--color-accent))',
+                    borderRadius: '4px',
+                  }}
+                >
+                  {activeSlashCommand.name}
+                </span>
+                {rest}
+              </div>
+            );
+          })()}
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={placeholder ?? CHAT_PLACEHOLDER}
+            disabled={disabled}
+            rows={1}
+            className="relative w-full resize-none bg-transparent px-2 py-1.5 text-sm placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              minHeight: `${TEXTAREA_MIN_HEIGHT}px`,
+              maxHeight: `${TEXTAREA_MAX_HEIGHT}px`,
+              overflowY: 'hidden',
+              ...(activeSlashCommand ? { color: 'transparent', caretColor: 'rgb(var(--color-text-primary))' } : {}),
+            }}
+          />
+        </div>
 
         {/* Bottom bar inside the input — model selector + send button */}
         <div className="chat-input-controls cc-foot !mt-0 !pt-0">
@@ -742,7 +854,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                       <ProviderIcon provider={p.provider} className={`h-3.5 w-3.5 shrink-0 ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`} />
                       <span>{p.label}</span>
                     </div>
-                    {p.models.map((m) => {
+                    {modelOptionsForProvider(p, selectedProvider === p.provider ? selectedModel : undefined).map((m) => {
                       const active = selectedProvider === p.provider && selectedModel === m;
                       return (
                       <button
@@ -752,8 +864,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                           active ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary'
                         }`}
                       >
-                        <ProviderIcon provider={p.provider} className={`h-3.5 w-3.5 shrink-0 ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`} />
-                        <span className="min-w-0 flex-1 truncate">{m}</span>
+                        <span className="min-w-0 flex-1 truncate pl-6">{m}</span>
                         {active && <Check className="h-3.5 w-3.5 shrink-0 text-theme-secondary" />}
                       </button>
                       );

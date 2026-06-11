@@ -122,7 +122,7 @@ type CogneeFileManifest = {
   documents: Array<{ title: string; path?: string; kind?: string; hash: string; dataId: string; entryId?: string; label?: string }>;
 };
 
-type CollectedCogneeDocument = { title: string; path?: string; kind?: string; content: string; hash: string; entryId?: string; label?: string; source?: string };
+type CollectedCogneeDocument = { title: string; path?: string; kind?: string; content: string; hash: string; entryId?: string; entryVersionId?: string; entryVersion?: number; label?: string; source?: string };
 type CogneePayloadDocument = CollectedCogneeDocument & {
   dataId: string;
   externalMetadata: Record<string, unknown>;
@@ -707,6 +707,8 @@ export class CogneeMemoryService {
         datasetName: input.datasetName,
         ingestFormat: COGNEE_INGEST_FORMAT,
         entryId: resultString(document.entryId) ?? resultString(metadata.entryId) ?? resultString(metadata.entry_id),
+        entryVersionId: resultString(document.entryVersionId) ?? resultString(metadata.entryVersionId),
+        entryVersion: resultNumber(document.entryVersion) ?? resultNumber(metadata.entryVersion),
         path,
         title: resultString(document.title) ?? resultString(metadata.title),
         kind: resultString(document.kind) ?? resultString(metadata.kind),
@@ -846,7 +848,7 @@ export class CogneeMemoryService {
     if (entryIds.length) clauses.push({ entryId: { $in: entryIds } });
     if (paths.length) clauses.push({ path: { $in: paths } });
     const entries = await this.db.collection('repo_context_curation_entries')
-      .find({ repoId, $or: clauses })
+      .find({ repoId, active: { $ne: false }, $or: clauses })
       .sort({ updatedAt: -1, createdAt: -1 })
       .toArray()
       .catch(() => []);
@@ -1039,7 +1041,7 @@ export class CogneeMemoryService {
     diagnostics: Array<Record<string, unknown>>;
   }> {
     const rows = await this.db.collection('repo_context_curation_entries')
-      .find({ repoId, inclusion: 'include' }, { sort: { path: 1, updatedAt: -1 } })
+      .find({ repoId, active: { $ne: false }, inclusion: 'include' }, { sort: { path: 1, updatedAt: -1 } })
       .toArray();
     const docs: CollectedCogneeDocument[] = [];
     const diagnostics: Array<Record<string, unknown>> = [];
@@ -1063,6 +1065,8 @@ export class CogneeMemoryService {
       seen.add(entryId);
       docs.push({
         entryId,
+        entryVersionId: resultString(row.entryVersionId),
+        entryVersion: resultNumber(row.version) ?? resultNumber(row.editVersion),
         label: curatedEntryLabel(entryId),
         title: resultString(row.title) ?? resultString(row.path) ?? entryId,
         path: resultString(row.path),
@@ -1386,6 +1390,8 @@ function cogneeExternalMetadata(input: {
     kind: document.kind,
     fileHash: document.hash,
     entryId: document.entryId,
+    entryVersionId: document.entryVersionId,
+    entryVersion: document.entryVersion,
     label: document.label,
     source: document.source ?? 'allen_curated_context_entry',
     ingestFormat: COGNEE_INGEST_FORMAT,

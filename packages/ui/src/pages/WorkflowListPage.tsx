@@ -5,7 +5,7 @@ import {
   GitBranch, Plus, Play, CheckCircle, XCircle,
   RefreshCw, Loader2, Layers, Sparkles,
   ChevronDown, ChevronRight, Tag, FileText, Shield,
-  Search, Pencil, Trash2, Clock3,
+  Search, Pencil, Trash2, Clock3, Download, Upload,
 } from 'lucide-react';
 import WorkflowRunDialog from '../components/workflow/WorkflowRunDialog';
 import { workflowEdges, workflowInput, workflowNodes } from '../utils/workflowShape';
@@ -29,6 +29,36 @@ function shortDescription(description?: string): string {
 function workflowRunCount(workflow: any): number {
   const value = workflow.runCount ?? workflow.executionCount ?? workflow.runs;
   return Number.isFinite(Number(value)) ? Number(value) : 0;
+}
+
+function downloadJsonFile(filename: string, data: unknown): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function pickJsonFile(): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) { reject(new Error('No file selected')); return; }
+      try {
+        resolve(JSON.parse(await file.text()));
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error('Invalid JSON file'));
+      }
+    };
+    input.click();
+  });
 }
 
 // ── Loading Row Skeleton ────────────────────────────────────────────────────
@@ -99,6 +129,29 @@ export default function WorkflowListPage() {
     setExpandedId(prev => (prev === id ? null : id));
   }, []);
 
+  const exportWorkflows = useCallback(async () => {
+    try {
+      const ids = filteredWorkflows.map((wf: any) => String(wf._id)).filter(Boolean);
+      const bundle = await workflowsApi.exportJson(ids);
+      downloadJsonFile('allen-workflows-export.json', bundle);
+      const count = Number(bundle.workflows?.length ?? 0);
+      toast.success(`Exported ${count} workflow${count === 1 ? '' : 's'}.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to export workflows');
+    }
+  }, [filteredWorkflows, toast]);
+
+  const importWorkflowJson = useCallback(async () => {
+    try {
+      const bundle = await pickJsonFile();
+      const result = await workflowsApi.importJson(bundle);
+      toast.success(`Imported ${result.created.length} workflow${result.created.length === 1 ? '' : 's'}; skipped ${result.skipped.length}.`);
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to import workflows');
+    }
+  }, [refresh, toast]);
+
   const deleteWorkflow = useCallback(async () => {
     if (!deletingWorkflow?._id) return;
     try {
@@ -140,6 +193,12 @@ export default function WorkflowListPage() {
           <IconTooltipButton label="Refresh" onClick={refresh} className="h-9 w-9 rounded-md border border-app bg-app-card">
             <RefreshCw className="h-4 w-4" />
           </IconTooltipButton>
+          <button className="btn btn-secondary btn-sm h-9" onClick={() => { void exportWorkflows(); }}>
+            <Upload className="h-3.5 w-3.5" /> Export
+          </button>
+          <button className="btn btn-secondary btn-sm h-9" onClick={() => { void importWorkflowJson(); }}>
+            <Download className="h-3.5 w-3.5" /> Import JSON
+          </button>
           <Link to="/workflows/new" className="btn btn-primary btn-sm h-9">
             <Plus className="h-3.5 w-3.5" /> New workflow
           </Link>
@@ -353,7 +412,7 @@ export default function WorkflowListPage() {
                           <div className="flex flex-wrap gap-1.5">
                             {inputKeys.map((key: string) => {
                               const schema = input[key];
-                              const required = schema?.required !== false;
+                              const required = schema?.required === true;
                               return (
                                 <span key={key} className="badge" style={{ background: 'rgb(var(--color-accent-soft))', color: 'rgb(var(--color-accent))' }}>
                                   <FileText className="h-2.5 w-2.5" />

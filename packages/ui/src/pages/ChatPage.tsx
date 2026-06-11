@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useChat, type SpawnedAgent } from '../hooks/useChat';
-import ChatInput, { type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
+import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
@@ -11,8 +11,28 @@ import { ToolCallLog } from '../components/common/ToolCallLog';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, type ChatQueueItem } from '../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
 import WorkspaceChatTabs, { type WorkspaceChatTab, getTabKey } from '../components/chat/WorkspaceChatTabs';
-import { BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Terminal, X } from 'lucide-react';
+import { AppWindow, BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Server, Terminal, X } from 'lucide-react';
 import { XTerminal } from '../components/workspace/XTerminal';
+import WorkspaceServersTab from '../components/workspace/WorkspaceServersTab';
+
+export interface ChatPageConfig {
+  /** Override base path for session navigation. Default: 'chat'. */
+  routeBase?: string;
+  /** Force this agent for all new messages. Hides agent picker. */
+  forcedAgent?: string | null;
+  /** Custom placeholder for ChatInput. */
+  placeholder?: string;
+  /** When true, hides the diff summary pill, resource rail, and run sidebar. */
+  designMode?: boolean;
+  /** Called when activeSessionId changes (e.g., after creating a new session). */
+  onActiveSessionIdChange?: (sessionId: string | null) => void;
+  /** Called when the effective linked workspace id changes (e.g., for DesignPage's preview panel). */
+  onActiveWorkspaceIdChange?: (workspaceId: string | null) => void;
+  /** When true, disables the chat input (e.g. design repo not set up). */
+  disabled?: boolean;
+  /** Reason shown in the ChatInput disabled banner. */
+  disabledReason?: string;
+}
 
 type PendingSendOptions = {
   provider?: string | null;
@@ -24,7 +44,39 @@ type PendingSendOptions = {
   };
 };
 
+type ExternalIdeId = 'vscode' | 'cursor';
+
+type IdeOption = {
+  id: ExternalIdeId;
+  label: string;
+  icon: () => JSX.Element;
+};
+
 type ChatPullRequest = NonNullable<NonNullable<SpawnedAgent['runContext']>['pullRequest']>;
+
+function VsCodeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="chat-ide-option-icon">
+      <path fill="#22a7f2" d="M19.3 3.1 9.6 12l9.7 8.9c.6.5 1.7.1 1.7-.7V3.8c0-.8-1.1-1.2-1.7-.7Z" />
+      <path fill="#007acc" d="m8.4 8.7-4-3.1c-.4-.3-.9-.3-1.2.1l-1 1c-.3.3-.3.8.1 1.1L6.6 12l-4.3 4.2c-.4.3-.4.8-.1 1.1l1 1c.3.4.8.4 1.2.1l4-3.1 3.7 2.9c.5.4 1.2 0 1.2-.6V6.4c0-.6-.7-1-1.2-.6L8.4 8.7Z" />
+    </svg>
+  );
+}
+
+function CursorIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="chat-ide-option-icon">
+      <path fill="currentColor" d="M4 2.8 20.5 12 4 21.2V2.8Z" />
+      <path fill="rgb(var(--color-card))" d="m7.2 7 8.6 5-8.6 5V7Z" />
+      <path fill="currentColor" d="m9.4 10.5 3.4 1.5-3.4 1.5v-3Z" />
+    </svg>
+  );
+}
+
+const IDE_OPTIONS: IdeOption[] = [
+  { id: 'vscode', label: 'VS Code', icon: VsCodeIcon },
+  { id: 'cursor', label: 'Cursor', icon: CursorIcon },
+];
 
 function humanLabel(value?: string | null): string {
   if (!value) return '';
@@ -138,7 +190,9 @@ function workspaceChatToTab(chat: any): WorkspaceChatTab {
   };
 }
 
-export default function ChatPage() {
+export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
+  const routeBase = config?.routeBase ?? 'chat';
+  const isDesignMode = Boolean(config?.designMode);
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -154,7 +208,7 @@ export default function ChatPage() {
   const [providers, setProviders] = useState<any[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('codex');
   const [selectedModel, setSelectedModel] = useState('');
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(config?.forcedAgent ?? null);
   const [selectedAgentCwd, setSelectedAgentCwd] = useState<string | null>(null);
   const [allAgents, setAllAgents] = useState<any[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
@@ -172,7 +226,7 @@ export default function ChatPage() {
     reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
     planMode?: boolean | null;
   }>({});
-  const chatInputRef = useRef<{ setValue: (v: string) => void; focus: () => void } | null>(null);
+  const chatInputRef = useRef<ChatInputHandle | null>(null);
   const processedDeepLinkRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<ChatQueueItem[]>([]);
   const editingQueuedIdRef = useRef<string | null>(null);
@@ -180,6 +234,7 @@ export default function ChatPage() {
   const wsLoadedForSessionRef = useRef<string | null>(null);
   const pendingWorkspaceTempTabRef = useRef<{ workspaceId: string; tab: WorkspaceChatTab } | null>(null);
   const workspaceTabsWorkspaceIdRef = useRef<string | null>(null);
+  const ideMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Workspace mode state
   const [activeWorkspace, setActiveWorkspace] = useState<any | null>(null);
@@ -189,6 +244,7 @@ export default function ChatPage() {
   const [activeWorkspaceTabKey, setActiveWorkspaceTabKey] = useState<string | null>(null);
   const [tempTabCounter, setTempTabCounter] = useState(0);
   const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null);
+  const [ideMenuOpen, setIdeMenuOpen] = useState(false);
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
@@ -196,7 +252,8 @@ export default function ChatPage() {
     spawnedAgents, pendingUserQuestion, answerUserQuestion, answerWorkflowIntervention,
     loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
-    refresh: refreshSessions,
+    restoredDraft, clearRestoredDraft,
+    refresh: refreshSessions, refreshActiveSession,
   } = useChat();
 
   const activeSession = sessions.find(s => s._id === activeSessionId);
@@ -204,8 +261,43 @@ export default function ChatPage() {
   const pullRequests = collectPullRequests(spawnedAgents);
   const floatingPullRequest = !sidePanelOpen ? pullRequests[0] ?? null : null;
 
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('allen:active-chat-conversation', { detail: { sessionId: activeSessionId ?? null } }));
+  }, [activeSessionId]);
+
   useEffect(() => { queuedMessagesRef.current = queuedMessages; }, [queuedMessages]);
   useEffect(() => { editingQueuedIdRef.current = editingQueuedId; }, [editingQueuedId]);
+
+  useEffect(() => {
+    if (!ideMenuOpen) return undefined;
+
+    function onPointerDown(event: PointerEvent) {
+      if (ideMenuRef.current?.contains(event.target as Node)) return;
+      setIdeMenuOpen(false);
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setIdeMenuOpen(false);
+    }
+
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [ideMenuOpen]);
+
+  useEffect(() => {
+    if (!restoredDraft?.trim()) return;
+    if (chatInputRef.current?.getValue().trim()) {
+      clearRestoredDraft();
+      return;
+    }
+    chatInputRef.current?.setValue(restoredDraft);
+    chatInputRef.current?.focus();
+    clearRestoredDraft();
+  }, [restoredDraft, clearRestoredDraft]);
 
   useEffect(() => {
     chatApi.providers().then(p => {
@@ -279,8 +371,11 @@ export default function ChatPage() {
     if (activeSession?.activeAgent) {
       setSelectedAgent(activeSession.activeAgent);
     } else if (activeSessionId && activeSession) {
-      setSelectedAgent(null);
-      setSelectedAgentCwd(null);
+      // Only reset to null when no forced agent is configured
+      if (!config?.forcedAgent) {
+        setSelectedAgent(null);
+        setSelectedAgentCwd(null);
+      }
     }
   }, [activeSessionId, activeSession?.activeAgent]);
 
@@ -316,8 +411,14 @@ export default function ChatPage() {
   useEffect(() => {
     if (activeSessionId && activeSessionId !== urlSessionId) {
       // Active session changed (e.g., after creating a new session) — update URL
-      navigate(`/chat/${activeSessionId}`, { replace: true });
+      navigate(`/${routeBase}/${activeSessionId}`, { replace: true });
     }
+  }, [activeSessionId]);
+
+  // Notify parent when activeSessionId changes (e.g., for DesignPage's preview panel)
+  useEffect(() => {
+    config?.onActiveSessionIdChange?.(activeSessionId ?? null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
 
   // ── Workspace mode: primary bootstrap (triggered by ?workspaceId in URL) ──
@@ -345,6 +446,7 @@ export default function ChatPage() {
         let restoredActiveId: string | null = null;
         let restoredActiveTabKey: string | null = null;
         let restoredTerminalOpen = false;
+        let restoredServersOpen = false;
         try {
           const stored = localStorage.getItem(`allen-ws-chat-tabs:${urlWorkspaceId}`);
           if (stored) {
@@ -356,6 +458,7 @@ export default function ChatPage() {
             restoredActiveId = typeof parsed.activeSessionId === 'string' ? parsed.activeSessionId : null;
             restoredActiveTabKey = typeof parsed.activeTabKey === 'string' ? parsed.activeTabKey : null;
             restoredTerminalOpen = parsed.openTerminal === true && parsed.terminalWorkspaceId === urlWorkspaceId;
+            restoredServersOpen = parsed.openServers === true && parsed.serversWorkspaceId === urlWorkspaceId && (ws.services?.length ?? 0) > 0;
           }
         } catch {}
 
@@ -365,6 +468,10 @@ export default function ChatPage() {
         const restoredTerminalTab: WorkspaceChatTab | null = restoredTerminalOpen
           ? { id: { kind: 'terminal' }, title: 'Terminal', isTemp: false }
           : null;
+        const restoredServersTab: WorkspaceChatTab | null = restoredServersOpen
+          ? { id: { kind: 'servers' }, title: 'Servers', isTemp: false }
+          : null;
+        const restoredUtilityTabs = [restoredTerminalTab, restoredServersTab].filter((tab): tab is WorkspaceChatTab => Boolean(tab));
 
         if (chats.length === 0) {
           const tempTab: WorkspaceChatTab = pendingTemp ?? {
@@ -373,13 +480,14 @@ export default function ChatPage() {
             isTemp: true,
             tempIndex: 0,
           };
-          const tabs = restoredTerminalTab && getTabKey(tempTab) !== 'terminal'
-            ? [tempTab, restoredTerminalTab]
-            : [tempTab];
+          const tabs = [
+            tempTab,
+            ...restoredUtilityTabs.filter(tab => getTabKey(tab) !== getTabKey(tempTab)),
+          ];
           const activeKey = pendingTemp
             ? getTabKey(pendingTemp)
-            : restoredActiveTabKey === 'terminal' && restoredTerminalTab
-              ? 'terminal'
+            : restoredActiveTabKey && tabs.some(tab => getTabKey(tab) === restoredActiveTabKey)
+              ? restoredActiveTabKey
               : getTabKey(tempTab);
           workspaceTabsWorkspaceIdRef.current = urlWorkspaceId;
           setOpenWorkspaceTabs(tabs);
@@ -398,13 +506,13 @@ export default function ChatPage() {
 
           const finalTabs = tabs.length > 0 ? tabs : [workspaceChatToTab(chats[0])];
 
-          const tabsWithTerminal = restoredTerminalTab && !finalTabs.some(t => getTabKey(t) === 'terminal')
-            ? [...finalTabs, restoredTerminalTab]
-            : finalTabs;
+          const tabsWithUtility = restoredUtilityTabs.reduce<WorkspaceChatTab[]>((acc, tab) => (
+            acc.some(item => getTabKey(item) === getTabKey(tab)) ? acc : [...acc, tab]
+          ), finalTabs);
 
-          const tabsWithPending = pendingTemp && !tabsWithTerminal.some(t => getTabKey(t) === getTabKey(pendingTemp))
-            ? [...tabsWithTerminal, pendingTemp]
-            : tabsWithTerminal;
+          const tabsWithPending = pendingTemp && !tabsWithUtility.some(t => getTabKey(t) === getTabKey(pendingTemp))
+            ? [...tabsWithUtility, pendingTemp]
+            : tabsWithUtility;
 
           if (tabsWithPending.length === 0) {
             const recentTab = workspaceChatToTab(chats[0]);
@@ -502,6 +610,7 @@ export default function ChatPage() {
         let hasStoredTabState = false;
         let restoredOpenIds: string[] = [];
         let restoredTerminalOpen = false;
+        let restoredServersOpen = false;
         try {
           const stored = localStorage.getItem(`allen-ws-chat-tabs:${wsId}`);
           if (stored) {
@@ -511,6 +620,7 @@ export default function ChatPage() {
               restoredOpenIds = parsed.openSessionIds;
             }
             restoredTerminalOpen = parsed.openTerminal === true && parsed.terminalWorkspaceId === wsId;
+            restoredServersOpen = parsed.openServers === true && parsed.serversWorkspaceId === wsId && (ws.services?.length ?? 0) > 0;
           }
         } catch {}
 
@@ -530,6 +640,9 @@ export default function ChatPage() {
 
         if (restoredTerminalOpen && !tabs.some(t => getTabKey(t) === 'terminal')) {
           tabs.push({ id: { kind: 'terminal' as const }, title: 'Terminal', isTemp: false });
+        }
+        if (restoredServersOpen && !tabs.some(t => getTabKey(t) === 'servers')) {
+          tabs.push({ id: { kind: 'servers' as const }, title: 'Servers', isTemp: false });
         }
 
         workspaceTabsWorkspaceIdRef.current = wsId;
@@ -588,6 +701,7 @@ export default function ChatPage() {
       .map(t => (t.id as { kind: 'session'; sessionId: string }).sessionId);
     const activeSessionIdForStorage = (openWorkspaceTabs.find(t => getTabKey(t) === activeWorkspaceTabKey)?.id as any)?.sessionId ?? null;
     const openTerminal = openWorkspaceTabs.some(t => t.id.kind === 'terminal');
+    const openServers = openWorkspaceTabs.some(t => t.id.kind === 'servers');
     try {
       localStorage.setItem(`allen-ws-chat-tabs:${activeWorkspaceId}`, JSON.stringify({
         openSessionIds,
@@ -595,6 +709,8 @@ export default function ChatPage() {
         activeTabKey: activeWorkspaceTabKey,
         openTerminal,
         terminalWorkspaceId: openTerminal ? activeWorkspaceId : null,
+        openServers,
+        serversWorkspaceId: openServers ? activeWorkspaceId : null,
       }));
     } catch {}
   }, [activeWorkspaceId, openWorkspaceTabs, activeWorkspaceTabKey]);
@@ -606,7 +722,12 @@ export default function ChatPage() {
     }
     try {
       const items = await chatApi.getQueue(sessionId);
-      setQueuedMessages(items ?? []);
+      const allActiveItems = items ?? [];
+      const visibleItems = allActiveItems.filter(item => item.status !== 'running');
+      setQueuedMessages(visibleItems);
+      if (allActiveItems.some(item => item.status === 'running') && !streaming) {
+        refreshActiveSession();
+      }
     } catch (err) {
       console.warn('Failed to load chat queue:', err);
     }
@@ -643,7 +764,7 @@ export default function ChatPage() {
         (options?.repoId ?? selectedRepo?._id) || undefined,
         wsIdToLink || undefined, // NEW: workspace linkage
       );
-      navigate(`/chat/${session._id}`, { replace: true });
+      navigate(`/${routeBase}/${session._id}`, { replace: true });
 
       // If we were in a temp tab, replace it with the real session tab
       if (isActiveTempTab && activeTab) {
@@ -787,16 +908,11 @@ export default function ChatPage() {
     setCmdPaletteAnchor(null);
   }
 
-  function handleSlashCommand(command: SlashCommandOption, raw: string): boolean {
+  function handleSlashCommand(command: SlashCommandOption, _raw: string): boolean {
     if (command.name === '/clear') {
       switchSession('');
-      navigate('/chat', { replace: true });
+      navigate(`/${routeBase}`, { replace: true });
       return true;
-    }
-    if (command.name === '/help') {
-      setCmdPaletteAnchor(null);
-      setCmdPaletteOpen(true);
-      return command.provider === 'codex';
     }
     if (!command.dispatchable) return true;
     return false;
@@ -849,6 +965,12 @@ export default function ChatPage() {
       }
       switchSession('');
       navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+    } else if (tab.id.kind === 'servers') {
+      if (activeWorkspaceId) {
+        pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab };
+      }
+      switchSession('');
+      navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
     } else {
       // Temp tab: clear active session (blank chat)
       switchSession('');
@@ -857,6 +979,9 @@ export default function ChatPage() {
   }
 
   function handleWorkspaceTabClose(key: string) {
+    if (key === 'servers' && activeWorkspaceId) {
+      window.dispatchEvent(new CustomEvent('allen:workspace-servers-stop', { detail: { workspaceId: activeWorkspaceId } }));
+    }
     const next = openWorkspaceTabs.filter(t => getTabKey(t) !== key);
     if (next.length === 0) {
       const recentChat = workspaceChats[0];
@@ -894,6 +1019,22 @@ export default function ChatPage() {
         navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
       }
     }
+  }
+
+  function handleWorkspaceTabReorder(dragKey: string, targetKey: string, position: 'before' | 'after') {
+    if (dragKey === targetKey) return;
+    setOpenWorkspaceTabs(prev => {
+      const fromIndex = prev.findIndex(tab => getTabKey(tab) === dragKey);
+      const targetIndex = prev.findIndex(tab => getTabKey(tab) === targetKey);
+      if (fromIndex < 0 || targetIndex < 0) return prev;
+
+      const next = [...prev];
+      const [dragged] = next.splice(fromIndex, 1);
+      let insertIndex = targetIndex + (position === 'after' ? 1 : 0);
+      if (fromIndex < insertIndex) insertIndex -= 1;
+      next.splice(insertIndex, 0, dragged);
+      return next;
+    });
   }
 
   function handleWorkspaceNewTab() {
@@ -947,7 +1088,42 @@ export default function ChatPage() {
     navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
   }
 
+  function handleWorkspaceServersTab() {
+    if (!activeWorkspaceId || (activeWorkspace?.services?.length ?? 0) === 0) return;
+    const serversTab: WorkspaceChatTab = {
+      id: { kind: 'servers' },
+      title: 'Servers',
+      isTemp: false,
+    };
+    pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab: serversTab };
+    setOpenWorkspaceTabs(prev => prev.some(tab => getTabKey(tab) === 'servers') ? prev : [...prev, serversTab]);
+    setActiveWorkspaceTabKey('servers');
+    switchSession('');
+    navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+  }
+
+  async function handleOpenWorkspaceIde(ide: ExternalIdeId) {
+    if (!activeWorkspaceId || !window.allenDesktop?.openWorkspaceIde) return;
+    setIdeMenuOpen(false);
+    const result = await window.allenDesktop.openWorkspaceIde(activeWorkspaceId, ide);
+    if (!result.ok) {
+      window.alert(result.error ?? 'Could not open workspace in IDE');
+    }
+  }
+
   const linkedWorkspaceId = activeWorkspaceId ?? activeSession?.workspaceId ?? null;
+  // Also check spawned agents for a workspace id (covers the case where the workspace is
+  // visible in runContext but not yet DB-linked to the chatSession).
+  const spawnedWorkspaceId =
+    spawnedAgents.find((a) => a.runContext?.workspace?.id)?.runContext?.workspace?.id ?? null;
+  const effectiveLinkedWorkspaceId = linkedWorkspaceId ?? spawnedWorkspaceId;
+
+  // Notify parent (e.g., DesignPage) when the effective linked workspace id changes
+  useEffect(() => {
+    config?.onActiveWorkspaceIdChange?.(effectiveLinkedWorkspaceId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveLinkedWorkspaceId]);
+
   const linkedWorkspaceBrowseSource = linkedWorkspaceId
     ? {
       id: linkedWorkspaceId,
@@ -993,7 +1169,7 @@ export default function ChatPage() {
     const refreshDiffSummary = async () => {
       const parts = await Promise.all(workspaceRefs.map(async ref => {
         try {
-          const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode });
+          const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode, anchor: 'creation' });
           const files = ((result.files ?? []) as DiffSummaryFile[])
             .filter(hasChangedDiffMetadata);
           return files;
@@ -1065,6 +1241,10 @@ export default function ChatPage() {
   });
   const activeWorkspaceTab = openWorkspaceTabs.find(tab => getTabKey(tab) === activeWorkspaceTabKey) ?? null;
   const workspaceTerminalActive = activeWorkspaceTab?.id.kind === 'terminal';
+  const workspaceServersActive = activeWorkspaceTab?.id.kind === 'servers';
+  const workspaceServersTabOpen = openWorkspaceTabs.some(tab => tab.id.kind === 'servers');
+  const workspaceUtilityTabActive = workspaceTerminalActive || workspaceServersActive;
+  const canOpenWorkspaceIde = Boolean(activeWorkspaceId && window.allenDesktop?.openWorkspaceIde);
   const archivedWorkspace = activeSession?.archivedWorkspace;
   const repoBrowseSource = archivedWorkspace?.repoId
     ? { id: archivedWorkspace.repoId, name: archivedWorkspace.repoName ?? archivedWorkspace.name, path: archivedWorkspace.repoPath }
@@ -1084,6 +1264,7 @@ export default function ChatPage() {
           activeTabKey={activeWorkspaceTabKey}
           onSelect={handleWorkspaceTabSelect}
           onClose={handleWorkspaceTabClose}
+          onReorder={handleWorkspaceTabReorder}
           onNewTab={handleWorkspaceNewTab}
           availablePreviousChats={availablePreviousChats}
           onRestore={handleWorkspaceTabRestore}
@@ -1102,17 +1283,62 @@ export default function ChatPage() {
         <div className="flex-1 min-h-0">
           <XTerminal workspaceId={activeWorkspaceId} terminalId={`chat-tab-${activeWorkspaceId}`} className="h-full" />
         </div>
-      ) : loadingMessages && messages.length === 0 && !streaming ? (
-        <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
-      ) : messages.length === 0 && !activeSessionId && !streaming ? (
-        <div className="chat-empty-stream" aria-label="New conversation" />
       ) : (
-        <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentReports={agentReports} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} />
+        <>
+        {workspaceServersTabOpen && activeWorkspaceId && (
+          <div className={`${workspaceServersActive ? 'flex-1 min-h-0' : 'fixed -left-[10000px] top-0 h-[720px] w-[1100px] pointer-events-none opacity-0'}`}>
+          <WorkspaceServersTab
+            workspaceId={activeWorkspaceId}
+            services={activeWorkspace?.services ?? []}
+          />
+          </div>
+        )}
+        {!workspaceServersActive && (
+          loadingMessages && messages.length === 0 && !streaming ? (
+            <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
+          ) : messages.length === 0 && !activeSessionId && !streaming ? (
+            isDesignMode ? (
+              <div className="flex flex-col items-center justify-center flex-1 px-8 py-12 text-center gap-4" aria-label="Design empty state">
+                <div className="flex flex-col items-center gap-2 mb-2">
+                  <h2 className="text-[18px] font-semibold text-theme-primary">Design with Allen</h2>
+                  <p className="text-[13px] text-theme-muted max-w-sm">
+                    Describe what you'd like to design or build. Allen will generate specs, prototypes, and iterate with you.
+                  </p>
+                </div>
+                <div className="flex flex-wrap justify-center gap-2">
+                  {[
+                    'Design a dashboard for analytics',
+                    'Build a login/signup flow',
+                    'Create a responsive landing page',
+                    'Design a mobile settings screen',
+                  ].map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() => handleSuggestionClick(prompt)}
+                      className="rounded-full border border-app bg-app-card px-3 py-1.5 text-[12px] text-theme-secondary hover:bg-app-muted transition-colors"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-theme-subtle mt-2">
+                  Use the <strong>Preview</strong> panel on the right to set up your design repo and live preview.
+                </p>
+              </div>
+            ) : (
+              <div className="chat-empty-stream" aria-label="New conversation" />
+            )
+          ) : (
+            <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentReports={agentReports} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} />
+          )
+        )}
+        </>
       )}
       {floatingPullRequest && <FloatingPullRequestCard pullRequest={floatingPullRequest} />}
 
       {/* Input */}
-      {!workspaceTerminalActive && <div className="chat-input-dock">
+      {!workspaceUtilityTabActive && <div className="chat-input-dock">
         {archivedWorkspace && (
           <div className="chat-archived-workspace-note">
             <div>
@@ -1131,7 +1357,7 @@ export default function ChatPage() {
             )}
           </div>
         )}
-        {chatDiffSummary && hiddenDiffSignature !== diffSourceSignature && (
+        {!isDesignMode && chatDiffSummary && hiddenDiffSignature !== diffSourceSignature && (
           <div className="chat-code-summary-wrap">
             <button
               type="button"
@@ -1262,8 +1488,14 @@ export default function ChatPage() {
         )}
         <ChatInput
           ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming}
-          disabled={activeSession?.source === 'slack'}
-          disabledReason={activeSession?.source === 'slack' ? 'This conversation is managed via Slack. Reply in the Slack thread to continue.' : undefined}
+          disabled={activeSession?.source === 'slack' || Boolean(config?.disabled)}
+          disabledReason={
+            config?.disabled && config?.disabledReason
+              ? config.disabledReason
+              : activeSession?.source === 'slack'
+              ? 'This conversation is managed via Slack. Reply in the Slack thread to continue.'
+              : undefined
+          }
           providers={providers}
           selectedProvider={activeSession?.provider ?? selectedProvider}
           selectedModel={activeSession?.model ?? selectedModel}
@@ -1289,7 +1521,8 @@ export default function ChatPage() {
           inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
           onAgentOverridesChanged={handleOverridesChange}
           maxVisibleLines={4}
-          extraControls={(() => {
+          placeholder={config?.placeholder}
+          extraControls={config?.forcedAgent ? null : (() => {
             const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
             return (
               <AgentChatDropdown
@@ -1333,7 +1566,7 @@ export default function ChatPage() {
         </div>
       )}
       </div>
-      {showResourceRail && !sidePanelOpen && (
+      {!isDesignMode && showResourceRail && !sidePanelOpen && (
         <nav className="chat-resource-rail" aria-label="Chat resources">
           <button
             type="button"
@@ -1358,24 +1591,65 @@ export default function ChatPage() {
               <Terminal className="h-4 w-4" />
             </button>
           )}
+          {canOpenWorkspaceIde && (
+            <div className={`chat-ide-menu-wrap ${ideMenuOpen ? 'expanded' : ''}`} ref={ideMenuRef}>
+              <button
+                type="button"
+                className={ideMenuOpen ? 'active' : ''}
+                onClick={() => setIdeMenuOpen(value => !value)}
+                title="Open workspace in IDE"
+                data-tooltip="Open in IDE"
+                aria-haspopup="menu"
+                aria-expanded={ideMenuOpen}
+              >
+                <AppWindow className="h-4 w-4" />
+              </button>
+              <div className="chat-ide-inline-options" role="menu" aria-label="Open workspace in IDE">
+                {IDE_OPTIONS.map((option) => {
+                  const Icon = option.icon;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="menuitem"
+                      className="chat-ide-option-button"
+                      title={`Open in ${option.label}`}
+                      data-tooltip={option.label}
+                      aria-label={`Open workspace in ${option.label}`}
+                      onClick={() => void handleOpenWorkspaceIde(option.id)}
+                    >
+                      <Icon />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {activeWorkspaceId && (activeWorkspace?.services?.length ?? 0) > 0 && (
+            <button type="button" className={activeWorkspaceTabKey === 'servers' ? 'active' : ''} onClick={handleWorkspaceServersTab} title="Servers" data-tooltip="Servers">
+              <Server className="h-4 w-4" />
+            </button>
+          )}
           <button type="button" className={sidePanelOpen && sidePanelTab === 'context' ? 'active' : ''} onClick={() => openSidePanel('context')} title="Context" data-tooltip="Context">
             <BookOpen className="h-4 w-4" />
           </button>
         </nav>
       )}
-      <ChatRunSidebar
-        runs={spawnedAgents}
-        rootType="chat"
-        rootId={activeSessionId}
-        workspaceBrowseSource={linkedWorkspaceBrowseSource}
-        repoBrowseSource={repoBrowseSource}
-        open={sidePanelOpen}
-        activeTab={sidePanelTab}
-        onTabChange={handleSidePanelTabChange}
-        filesViewRequest={filesViewRequest}
-        onAnswerWorkflowIntervention={answerWorkflowIntervention}
-        onClose={() => setSidePanelOpen(false)}
-      />
+      {!isDesignMode && (
+        <ChatRunSidebar
+          runs={spawnedAgents}
+          rootType="chat"
+          rootId={activeSessionId}
+          workspaceBrowseSource={linkedWorkspaceBrowseSource}
+          repoBrowseSource={repoBrowseSource}
+          open={sidePanelOpen}
+          activeTab={sidePanelTab}
+          onTabChange={handleSidePanelTabChange}
+          filesViewRequest={filesViewRequest}
+          onAnswerWorkflowIntervention={answerWorkflowIntervention}
+          onClose={() => setSidePanelOpen(false)}
+        />
+      )}
     </div>
   );
 }

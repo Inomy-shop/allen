@@ -4,6 +4,9 @@ import { Play, Square } from 'lucide-react';
 export default function TerminalNode({ data, id }: NodeProps) {
   const isStart = id === 'START';
   const Icon = isStart ? Play : Square;
+  // `START` stays the reserved node id the engine/YAML use; only the label
+  // shown on the canvas reads "INPUT" (the workflow's entry / input node).
+  const label = isStart ? 'INPUT' : id;
 
   return (
     <div className="px-5 py-2 rounded-full border-2 border-app-strong bg-[#f4f5f7] dark:bg-[#202229] shadow-md
@@ -11,7 +14,7 @@ export default function TerminalNode({ data, id }: NodeProps) {
     >
       <Icon className="w-3.5 h-3.5 text-theme-secondary" />
       <span className="text-xs font-heading font-semibold text-theme-primary uppercase tracking-wider">
-        {id}
+        {label}
       </span>
 
       {isStart ? (

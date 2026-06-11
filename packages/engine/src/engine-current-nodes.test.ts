@@ -96,4 +96,218 @@ describe('AllenEngine currentNodes persistence', () => {
       completedNodes: ['finish'],
     });
   });
+
+  it('allows a milestone-style pass edge to revisit an already-completed selector when opted in', async () => {
+    const db = new MemoryDb();
+    let selectRuns = 0;
+    let implementRuns = 0;
+    let validatorRuns = 0;
+    const selectNext: BuiltInFunction = async () => {
+      selectRuns += 1;
+      return {
+        milestone_selection_status: selectRuns < 3 ? 'pending' : 'all_complete',
+      };
+    };
+    const implement: BuiltInFunction = async () => {
+      implementRuns += 1;
+      return {
+        implementer_status: 'ready_for_validation',
+      };
+    };
+    const validate: BuiltInFunction = async () => {
+      validatorRuns += 1;
+      return {
+        milestone_validation_passed: true,
+      };
+    };
+    const workflow: WorkflowDef = {
+      name: 'allow-revisit-selector-test',
+      version: 1,
+      nodes: {
+        select_next_milestone: { type: 'code', function: 'selectNext' },
+        milestone_implementer: { type: 'code', function: 'implement' },
+        milestone_validator: { type: 'code', function: 'validate' },
+      },
+      edges: [
+        { from: 'START', to: 'select_next_milestone' },
+        {
+          from: 'select_next_milestone',
+          to: 'milestone_implementer',
+          condition: "milestone_selection_status == 'pending'",
+          allow_revisit: true,
+        },
+        {
+          from: 'select_next_milestone',
+          to: 'END',
+          condition: "milestone_selection_status == 'all_complete'",
+        },
+        {
+          from: 'milestone_implementer',
+          to: 'milestone_validator',
+          condition: "implementer_status == 'ready_for_validation'",
+          allow_revisit: true,
+        },
+        {
+          from: 'milestone_validator',
+          to: 'select_next_milestone',
+          condition: 'milestone_validation_passed == true',
+          allow_revisit: true,
+        },
+      ],
+    };
+    const engine = new AllenEngine({
+      db: db as unknown as any,
+      agents: {},
+      builtIns: { selectNext, implement, validate },
+      workflows: {},
+      emitter: { emit: () => {} },
+    });
+
+    await engine.run(workflow, {}, 0, { executionId: 'exec-allow-revisit-selector' });
+
+    const execution = await db.collection('executions').findOne({ id: 'exec-allow-revisit-selector' });
+    expect(selectRuns).toBe(3);
+    expect(implementRuns).toBe(2);
+    expect(validatorRuns).toBe(2);
+    expect(execution).toMatchObject({
+      status: 'completed',
+      currentNodes: [],
+      completedNodes: [
+        'select_next_milestone',
+        'milestone_implementer',
+        'milestone_validator',
+        'select_next_milestone',
+        'milestone_implementer',
+        'milestone_validator',
+        'select_next_milestone',
+      ],
+    });
+  });
+
+  it('skips stale plain edges to completed targets when allow_revisit is not set', async () => {
+    const db = new MemoryDb();
+    let targetRuns = 0;
+    const source: BuiltInFunction = async () => ({
+      stale_condition: true,
+      continue_condition: true,
+    });
+    const target: BuiltInFunction = async () => {
+      targetRuns += 1;
+      return { target_done: true };
+    };
+    const after: BuiltInFunction = async () => ({ after_done: true });
+    const workflow: WorkflowDef = {
+      name: 'stale-plain-edge-skip-test',
+      version: 1,
+      nodes: {
+        source: { type: 'code', function: 'source' },
+        target: { type: 'code', function: 'target' },
+        after: { type: 'code', function: 'after' },
+      },
+      edges: [
+        { from: 'START', to: 'target' },
+        { from: 'target', to: 'source' },
+        { from: 'source', to: 'target', condition: 'stale_condition == true' },
+        { from: 'source', to: 'after', condition: 'continue_condition == true' },
+        { from: 'after', to: 'END' },
+      ],
+    };
+    const engine = new AllenEngine({
+      db: db as unknown as any,
+      agents: {},
+      builtIns: { source, target, after },
+      workflows: {},
+      emitter: { emit: () => {} },
+    });
+
+    await engine.run(workflow, {}, 0, { executionId: 'exec-stale-plain-edge-skip' });
+
+    const execution = await db.collection('executions').findOne({ id: 'exec-stale-plain-edge-skip' });
+    expect(targetRuns).toBe(1);
+    expect(execution).toMatchObject({
+      status: 'completed',
+      completedNodes: ['target', 'source', 'after'],
+    });
+  });
+
+  it('keeps retry counters, retry_context, and retry exhaustion behavior unchanged', async () => {
+    const db = new MemoryDb();
+    const retryingEvents: Record<string, unknown>[] = [];
+    const implementRetryContexts: unknown[] = [];
+    let validatorRuns = 0;
+    const implement: BuiltInFunction = async (_config, state) => {
+      implementRetryContexts.push(state.retry_context);
+      return { implementer_status: 'ready_for_validation' };
+    };
+    const validate: BuiltInFunction = async () => {
+      validatorRuns += 1;
+      return {
+        validation_passed: false,
+        failure: `failure-${validatorRuns}`,
+      };
+    };
+    const escalation: BuiltInFunction = async () => ({ escalated: true });
+    const workflow: WorkflowDef = {
+      name: 'retry-behavior-unchanged-test',
+      version: 1,
+      nodes: {
+        implement: { type: 'code', function: 'implement' },
+        validate: { type: 'code', function: 'validate' },
+        escalation: { type: 'code', function: 'escalation' },
+      },
+      edges: [
+        { from: 'START', to: 'implement' },
+        {
+          from: 'implement',
+          to: 'validate',
+          condition: "implementer_status == 'ready_for_validation'",
+        },
+        {
+          from: 'validate',
+          to: 'implement',
+          condition: 'validation_passed != true',
+          max_retries: 2,
+          retry_context: 'Retry because {{failure}}',
+        },
+        {
+          from: 'validate',
+          to: 'escalation',
+          condition: "validation_passed != true AND __retry_exhausted_from == 'validate'",
+        },
+        { from: 'escalation', to: 'END' },
+      ],
+    };
+    const engine = new AllenEngine({
+      db: db as unknown as any,
+      agents: {},
+      builtIns: { implement, validate, escalation },
+      workflows: {},
+      emitter: {
+        emit: (event) => {
+          if (event.event === 'node_retrying') retryingEvents.push(event.data);
+        },
+      },
+    });
+
+    await engine.run(workflow, {}, 0, { executionId: 'exec-retry-unchanged' });
+
+    const execution = await db.collection('executions').findOne({ id: 'exec-retry-unchanged' });
+    expect(validatorRuns).toBe(3);
+    expect(implementRetryContexts).toEqual([
+      undefined,
+      'Retry because failure-1',
+      'Retry because failure-2',
+    ]);
+    expect(retryingEvents).toHaveLength(2);
+    expect(execution).toMatchObject({
+      status: 'completed',
+      retryCounts: { 'validate→implement': 2 },
+      state: {
+        __retry_exhausted_from: 'validate',
+        escalated: true,
+      },
+      completedNodes: ['implement', 'implement', 'implement', 'validate', 'escalation'],
+    });
+    expect((execution?.state as Record<string, unknown>).retry_context).toBeUndefined();
+  });
 });

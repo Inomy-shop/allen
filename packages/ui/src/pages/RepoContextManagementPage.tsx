@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ReactFlowProvider } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
   ArrowLeft,
   BookOpenCheck,
+  ClipboardCheck,
   Database,
   Info,
   Loader2,
@@ -34,6 +35,7 @@ import {
 import { repos as repoApi } from '../services/api';
 import { useToast } from '../components/common/Toast';
 import Select from '../components/common/Select';
+import ContextReviewTab from '../components/context/ContextReviewTab';
 
 type Repo = {
   _id: string;
@@ -121,11 +123,12 @@ const CONTEXT_FIELD_INFO = {
 export default function RepoContextManagementPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const toast = useToast();
   const [repo, setRepo] = useState<Repo | null>(null);
   const [state, setState] = useState<ContextManagementState | null>(null);
   const [cogneeStatus, setCogneeStatus] = useState<CogneeStatus | null>(null);
-  const [activeTab, setActiveTab] = useState<'playground' | 'graph' | 'curated' | 'mandatory'>('graph');
+  const [activeTab, setActiveTab] = useState<'playground' | 'graph' | 'curated' | 'mandatory' | 'review'>('graph');
   const [loading, setLoading] = useState(true);
   const [stoppingBuild, setStoppingBuild] = useState(false);
   const [graph, setGraph] = useState<ContextGraph | undefined>();
@@ -164,6 +167,10 @@ export default function RepoContextManagementPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (searchParams.get('tab') === 'review') setActiveTab('review');
+  }, [searchParams]);
 
   const stopContextBuild = useCallback(async () => {
     if (!id) return;
@@ -301,6 +308,7 @@ export default function RepoContextManagementPage() {
               ['curated', BookOpenCheck, 'Curated Context'],
               ['mandatory', ShieldCheck, 'Mandatory Context'],
               ['playground', Search, 'Playground'],
+              ['review', ClipboardCheck, 'Context Review'],
             ] as Array<[typeof activeTab, LucideIcon, string]>).map(([tab, Icon, label]) => (
               <button
                 key={String(tab)}
@@ -335,6 +343,7 @@ export default function RepoContextManagementPage() {
           )}
           {activeTab === 'curated' && <CuratedContextSection repoId={id} entries={state?.allEntries ?? state?.entries ?? []} onChanged={load} />}
           {activeTab === 'mandatory' && <MandatoryContextSection repoId={id} agents={state?.agents ?? []} mappings={state?.mandatoryMappings ?? []} onChanged={load} />}
+          {activeTab === 'review' && <ContextReviewTab repoId={id} initialTaskId={searchParams.get('taskId') ?? undefined} />}
         </div>
       )}
     </div>

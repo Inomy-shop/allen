@@ -732,7 +732,8 @@ edges:
 
   # ── select_next_milestone outgoing ────────────────────────────────────
   - { from: select_next_milestone, to: milestone_implementer,
-      condition: "milestone_selection_status == 'pending'" }
+      condition: "milestone_selection_status == 'pending'",
+      allow_revisit: true }
   - { from: select_next_milestone, to: final_implementation_validator,
       condition: "milestone_selection_status == 'all_complete'" }
   - { from: select_next_milestone, to: milestone_escalation_review,
@@ -744,9 +745,11 @@ edges:
   #   'normal'       → milestone_validator (per-milestone validation).
   #   'final_repair' → final_implementation_validator (re-check global).
   - { from: milestone_implementer, to: milestone_validator,
-      condition: "implementer_status == 'ready_for_validation' AND current_milestone_kind != 'final_repair'" }
+      condition: "implementer_status == 'ready_for_validation' AND current_milestone_kind != 'final_repair'",
+      allow_revisit: true }
   - { from: milestone_implementer, to: final_implementation_validator,
-      condition: "implementer_status == 'ready_for_validation' AND current_milestone_kind == 'final_repair'" }
+      condition: "implementer_status == 'ready_for_validation' AND current_milestone_kind == 'final_repair'",
+      allow_revisit: true }
   - { from: milestone_implementer, to: milestone_escalation_review,
       condition: "implementer_status == 'blocked'" }
 
@@ -755,7 +758,8 @@ edges:
   # Pass: validator itself marked current milestone complete in
   # milestone_state. Loop to select_next_milestone.
   - { from: milestone_validator, to: select_next_milestone,
-      condition: "milestone_validation_passed == true" }
+      condition: "milestone_validation_passed == true",
+      allow_revisit: true }
   - from: milestone_validator
     to: milestone_implementer
     condition: "milestone_validation_passed != true"
@@ -823,10 +827,12 @@ edges:
 
   # force_continue — skip the failed stage.
   - { from: milestone_escalation_review, to: select_next_milestone,
-      condition: "human.milestone_escalation_review.latest.decision == 'force_continue' AND __retry_exhausted_from == 'milestone_validator'" }
+      condition: "human.milestone_escalation_review.latest.decision == 'force_continue' AND __retry_exhausted_from == 'milestone_validator'",
+      allow_revisit: true }
   - { from: milestone_escalation_review, to: pr_creator,
       condition: "human.milestone_escalation_review.latest.decision == 'force_continue' AND __retry_exhausted_from == 'final_implementation_validator'" }
   - { from: milestone_escalation_review, to: final_implementation_validator,
       condition: "human.milestone_escalation_review.latest.decision == 'force_continue' AND milestone_selection_status == 'blocked'" }
   - { from: milestone_escalation_review, to: select_next_milestone,
-      condition: "human.milestone_escalation_review.latest.decision == 'force_continue' AND implementer_status == 'blocked'" }
+      condition: "human.milestone_escalation_review.latest.decision == 'force_continue' AND implementer_status == 'blocked'",
+      allow_revisit: true }

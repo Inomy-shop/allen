@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { normalizeCodexUsage, type TokenUsageInfo } from '@allen/engine';
 import { AGENT_FALLBACK_CWD, type ChatProvider } from './chat-providers.js';
 import { toCodexArgs } from './agent-settings.js';
 import { buildControlledMcpConfig } from './chat-controlled-mcp.js';
@@ -27,6 +28,8 @@ type ActiveTurn = {
   sentAt: number;
   text: string;
   thinking: string;
+  tokenUsage: TokenUsageInfo | null;
+  tokenUsageSnapshot?: Record<string, unknown>;
   trace: ChatTraceEvent[];
   pendingTools: Map<string, PendingTool>;
   resolve: (result: RuntimeTurnResult) => void;
@@ -76,6 +79,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
         sentAt: Date.now(),
         text: '',
         thinking: '',
+        tokenUsage: null,
         trace,
         pendingTools: new Map(),
         resolve,
@@ -119,6 +123,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
         sentAt: Date.now(),
         text: '',
         thinking: '',
+        tokenUsage: null,
         trace,
         pendingTools: new Map(),
         resolve,
@@ -385,7 +390,9 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
 
     if (method === 'thread/tokenUsage/updated') {
       if (!params.threadId || params.threadId === this.threadId) {
-        this.latestTokenUsage = asRecord(params.tokenUsage);
+        const tokenUsage = asRecord(params.tokenUsage);
+        this.latestTokenUsage = tokenUsage;
+        if (turn) turn.tokenUsageSnapshot = tokenUsage;
       }
       return;
     }
@@ -447,6 +454,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
       const done = this.currentTurn;
       if (!done) return;
       this.currentTurn = undefined;
+      done.tokenUsage = normalizeCodexRuntimeUsage(params.usage ?? params.tokenUsage ?? done.tokenUsageSnapshot);
       if (!done.text.trim()) {
         const fallback = slashCommandFallback(done.slashCommand);
         if (fallback) this.handleAgentMessage(done, fallback);
@@ -466,6 +474,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
         costUsd: 0,
         sessionId: this.threadId,
         trace: done.trace,
+        tokenUsage: done.tokenUsage,
       });
     }
 
@@ -850,6 +859,17 @@ function tokenCount(value: Record<string, unknown> | undefined): number | undefi
     if (typeof item === 'number') sum += item;
   }
   return sum > 0 ? sum : undefined;
+}
+
+export function normalizeCodexRuntimeUsage(value: unknown): TokenUsageInfo | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const turn = objectValue(record.last) ?? record;
+  return normalizeCodexUsage({
+    input_tokens: turn.input_tokens ?? turn.inputTokens,
+    output_tokens: turn.output_tokens ?? turn.outputTokens,
+    cached_input_tokens: turn.cached_input_tokens ?? turn.cachedInputTokens,
+  });
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

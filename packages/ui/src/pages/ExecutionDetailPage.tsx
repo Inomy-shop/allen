@@ -7,7 +7,7 @@ import {
   ArrowRight, AlertTriangle, Save, Activity,
   MessageSquare, FileText, FolderGit2, GitPullRequest, ExternalLink, Cpu,
   BookOpen,
-  Copy, Check,
+  Copy, Check, Loader2,
 } from 'lucide-react';
 import { useExecution, type TimelineEvent, type NodeState } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
@@ -29,6 +29,7 @@ import CheckpointsPanel from '../components/execution/CheckpointsPanel';
 import { WorkflowInterventionDialog, type WorkflowInterventionSubmit } from '../components/execution/WorkflowInterventionAction';
 import { ToolCallRow, type ToolCall } from '../components/common/ToolCallLog';
 import { buildTracesForTimeline } from '../utils/executionState';
+import { workspaceChatPath } from '../lib/workspace-routes';
 
 type ExecutionRightPanelView = 'node' | 'rerun' | 'artifacts';
 
@@ -1043,6 +1044,13 @@ export function agentTraceContextCount(trace: any): number | null {
 
 export function agentContextAttemptCount(contextAttempt: any): number | null {
   if (!contextAttempt) return null;
+  const summaryCounts = [
+    Number(contextAttempt.injectedCount ?? 0),
+    Number(contextAttempt.selectedCount ?? contextAttempt.preselectedCount ?? 0),
+    Number(contextAttempt.filteredCount ?? 0),
+    Number(contextAttempt.candidateCount ?? 0),
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  if (summaryCounts.length > 0) return summaryCounts[0];
   const groups = groupContextRefs(contextAttempt);
   if (groups.injected.length > 0) return groups.injected.length;
   if (groups.selected.length > 0) return groups.selected.length;
@@ -1055,7 +1063,9 @@ export function findAgentContextAttempt(report: any, agentName: string, selected
     ? report.nodeAttempts
     : Array.isArray(report?.packets)
       ? report.packets
-      : [];
+      : Array.isArray(report?.nodeSummaries)
+        ? report.nodeSummaries
+        : [];
   const named = attempts.filter((attempt: any) => {
     const nodeName = String(attempt?.nodeName ?? attempt?.node ?? attempt?.agent ?? '');
     return nodeName === agentName;
@@ -1359,7 +1369,7 @@ function RunContextPanel({
               icon={<FolderGit2 className="w-3.5 h-3.5" />}
               label="Workspace"
               value={`${runContext.workspace.repoName ?? runContext.workspace.name ?? 'workspace'} · ${runContext.workspace.branch ?? 'branch'}`}
-              href={runContext.workspace.id ? `/workspaces/${runContext.workspace.id}` : undefined}
+              href={runContext.workspace.id ? workspaceChatPath(runContext.workspace.id) : undefined}
             />
           )}
           {runContext?.pullRequest && (
@@ -1974,10 +1984,12 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   useEffect(() => {
     if (!id || !contextEngineEnabled) return;
     let alive = true;
-    const fetchContextReport = async () => {
+    const running = execution.status === 'running' || execution.status === 'waiting_for_input';
+    const view = agentContextOpen ? 'full' : 'summary';
+    const fetchContextReport = async (refresh = false) => {
       setAgentContextLoading(true);
       try {
-        const report = await api.contextUsage(id);
+        const report = await api.contextUsage(id, { view, refresh });
         if (!alive) return;
         setAgentContextReport(report);
         setAgentContextError(null);
@@ -1988,16 +2000,22 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         if (alive) setAgentContextLoading(false);
       }
     };
-    const poll = async () => {
+    const run = async () => {
+      await fetchContextReport(false);
+      if (!running) {
+        await new Promise(r => setTimeout(r, 2500));
+        if (alive) await fetchContextReport(true);
+        return;
+      }
+      if (!agentContextOpen) return;
       while (alive) {
-        await fetchContextReport();
-        if (execution.status !== 'running' && execution.status !== 'waiting_for_input') break;
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 10000));
+        if (alive) await fetchContextReport(false);
       }
     };
-    poll();
+    run();
     return () => { alive = false; };
-  }, [id, execution.status, contextEngineEnabled]);
+  }, [id, execution.status, contextEngineEnabled, agentContextOpen]);
 
   // Build the Activity Log stream. Order of precedence:
   //   1. persisted execution_logs rows (liveLogs)
@@ -2343,7 +2361,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
                   icon={<FolderGit2 className="h-3.5 w-3.5" />}
                   title={runContext.workspace.name ?? runContext.workspace.branch ?? 'workspace'}
                   subtitle={runContext.workspace.repoName ?? undefined}
-                  href={runContext.workspace.id ? `/workspaces/${runContext.workspace.id}` : undefined}
+                  href={runContext.workspace.id ? workspaceChatPath(runContext.workspace.id) : undefined}
                 />
               )}
               {matchedRepo ? (
@@ -2448,7 +2466,7 @@ export default function ExecutionDetailPage() {
   const {
     execution, workflow, traces, timeline, nodeStates,
     logs, logFilter, setLogFilter,
-    loading, connected, isLive, refresh,
+    loading, connected, isLive, refresh, markExecutionRunning,
     children, descendantsMode, toggleDescendants,
     liveToolCallsByNode,
   } = useExecution(id);
@@ -2516,15 +2534,15 @@ export default function ExecutionDetailPage() {
         });
     };
     loadArtifacts();
-    if (execution?.status === 'running' || execution?.status === 'waiting_for_input' || execution?.status === 'queued') {
-      const timer = window.setInterval(loadArtifacts, 3000);
+    if (rightPanelView === 'artifacts' && (execution?.status === 'running' || execution?.status === 'waiting_for_input' || execution?.status === 'queued')) {
+      const timer = window.setInterval(loadArtifacts, 10000);
       return () => {
         cancelled = true;
         window.clearInterval(timer);
       };
     }
     return () => { cancelled = true; };
-  }, [id, execution?.status, execution?.completedNodes?.length]);
+  }, [id, execution?.status, execution?.completedNodes?.length, rightPanelView]);
 
   useEffect(() => {
     if (!id) return;
@@ -2536,7 +2554,7 @@ export default function ExecutionDetailPage() {
     };
     loadContext();
     if (execution?.status === 'running' || execution?.status === 'waiting_for_input' || execution?.status === 'queued') {
-      const timer = window.setInterval(loadContext, 3000);
+      const timer = window.setInterval(loadContext, 10000);
       return () => {
         cancelled = true;
         window.clearInterval(timer);
@@ -2705,15 +2723,17 @@ export default function ExecutionDetailPage() {
     setResumeBusy(true);
     setResumePickerOpen(false);
     try {
+      markExecutionRunning(node);
       await api.retryFrom(id, node);
-      refresh();
+      window.setTimeout(() => { void refresh(); }, 750);
     } catch (err) {
       // Surface failures inline — the operator should see why resume didn't start.
       alert(`Failed to resume from ${node}: ${(err as Error).message}`);
+      await refresh();
     } finally {
       setResumeBusy(false);
     }
-  }, [id, refresh]);
+  }, [id, refresh, markExecutionRunning]);
 
   const handleRerunContextEvaluation = useCallback(async () => {
     if (!id || !contextEngineEnabled) return;
@@ -2970,10 +2990,14 @@ export default function ExecutionDetailPage() {
           {execution.status === 'failed' && execution.failedNode && (
             <button
               onClick={() => handleRetryFrom(execution.failedNode)}
-              className="btn-ghost text-xs text-accent-yellow"
+              disabled={resumeBusy}
+              className="btn-ghost text-xs text-accent-yellow disabled:cursor-not-allowed disabled:opacity-50"
               title="Retry from failed node"
             >
-              <RotateCcw className="w-3.5 h-3.5 mr-1" /> Retry
+              {resumeBusy
+                ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                : <RotateCcw className="w-3.5 h-3.5 mr-1" />}
+              {resumeBusy ? 'Starting…' : 'Retry'}
             </button>
           )}
           {isLive && (
@@ -2991,11 +3015,14 @@ export default function ExecutionDetailPage() {
           with the error shown, the failing node called out, and a picker
           to rewind further back than the failure point if needed. */}
       {execution.status === 'failed' && execution.failedNode && (
-        <div className="flex items-start gap-4 px-6 py-3 border-b border-accent-red/30 bg-accent-red/10">
-          <AlertTriangle className="w-5 h-5 text-accent-red shrink-0 mt-0.5" />
+        <div className={`flex items-start gap-4 px-6 py-4 border-b ${resumeBusy ? 'border-accent-blue/30 bg-accent-blue/10' : 'border-accent-red/30 bg-accent-red/10'}`}>
+          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border ${resumeBusy ? 'border-accent-blue/30 bg-accent-blue/10 text-accent-blue' : 'border-accent-red/30 bg-accent-red/10 text-accent-red'}`}>
+            {resumeBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <AlertTriangle className="h-5 w-5" />}
+          </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-heading font-semibold text-theme-primary">
-              FAILED AT <span className="font-mono text-accent-red">{execution.failedNode}</span>
+            <div className="flex flex-wrap items-center gap-2 text-xs font-heading font-semibold text-theme-primary">
+              <span className="tracking-wide">{resumeBusy ? 'STARTING RERUN FROM' : 'FAILED AT'}</span>
+              <span className={`rounded-md border px-1.5 py-0.5 font-mono ${resumeBusy ? 'border-accent-blue/25 bg-accent-blue/10 text-accent-blue' : 'border-accent-red/25 bg-accent-red/10 text-accent-red'}`}>{execution.failedNode}</span>
               {(() => {
                 // Surface the failing tool call from the failed node's trace.
                 const failedTrace = (traces ?? []).find(
@@ -3011,7 +3038,7 @@ export default function ExecutionDetailPage() {
               })()}
               <button
                 onClick={() => { inspectNode(execution.failedNode); }}
-                className="ml-3 text-[10px] font-mono underline text-theme-muted hover:text-theme-primary"
+                className="text-[10px] font-mono underline text-theme-muted hover:text-theme-primary"
                 title="Jump to failed node + Inspector tab for state-at-failure"
               >
                 Inspect →
@@ -3029,19 +3056,22 @@ export default function ExecutionDetailPage() {
                 </pre>
               </details>
             )}
-            <div className="text-[10px] font-mono text-theme-subtle mt-1">
-              Resume rewinds state to the checkpoint taken before the selected node and re-enters the graph from there. Upstream outputs and agent sessions are preserved.
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-mono text-theme-subtle">
+              <span className="rounded-full border border-app bg-app-card px-2 py-0.5">Checkpoint rewind</span>
+              <span className="rounded-full border border-app bg-app-card px-2 py-0.5">Preserves upstream output</span>
+              <span className="rounded-full border border-app bg-app-card px-2 py-0.5">Reuses agent sessions</span>
+              {resumeBusy && <span className="text-accent-blue">Updating this run now…</span>}
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 relative">
             <button
               onClick={() => handleRetryFrom(execution.failedNode)}
               disabled={resumeBusy}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-red text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono bg-accent-red text-white shadow-sm shadow-accent-red/20 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
               title={`Resume execution from ${execution.failedNode}`}
             >
-              <RotateCcw className="w-3 h-3" />
-              {resumeBusy ? 'Resuming…' : `Continue from ${execution.failedNode}`}
+              {resumeBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+              {resumeBusy ? 'Starting…' : `Continue from ${execution.failedNode}`}
             </button>
             {execution.completedNodes && execution.completedNodes.length > 0 && (
               <>
@@ -3208,6 +3238,7 @@ export default function ExecutionDetailPage() {
                     agentNodeNames={agentNodeNames}
                     onFeedbackCreated={(entries) => setFeedbackEntries((prev) => [...prev, ...entries])}
                     onRefreshExecution={refresh}
+                    onResumeStarted={(node) => markExecutionRunning(node)}
                   />
                 </div>
               ) : rightPanelView === 'artifacts' ? (

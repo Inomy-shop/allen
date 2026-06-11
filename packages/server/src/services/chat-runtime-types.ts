@@ -1,4 +1,5 @@
 import type { Db } from 'mongodb';
+import type { TokenUsageInfo } from '@allen/engine';
 import type { ChatLLMMessage, ChatTraceEvent } from './chat-llm.js';
 import type { ChatProvider, ProviderCallbacks } from './chat-providers.js';
 import type { ResolvedSettings } from './agent-settings.js';
@@ -22,6 +23,7 @@ export interface RuntimeTurnResult {
   costUsd: number;
   sessionId?: string;
   trace: ChatTraceEvent[];
+  tokenUsage?: TokenUsageInfo | null;
 }
 
 export interface RuntimeSlashCommand {
@@ -37,6 +39,7 @@ export interface PersistentChatRuntime {
   readonly provider: ChatProvider;
   readonly key: string;
   sendTurn(input: RuntimeTurnInput): Promise<RuntimeTurnResult>;
+  sendSlashCommand?(input: RuntimeTurnInput, command: RuntimeSlashCommand): Promise<RuntimeTurnResult>;
   close(reason: string): Promise<void>;
 }
 

@@ -11,11 +11,12 @@ import {
   type MessageBoxOptions,
   type OpenDialogOptions,
 } from 'electron';
-import electronUpdater from 'electron-updater';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
   chmodSync,
+  createWriteStream,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -26,19 +27,41 @@ import {
 } from 'node:fs';
 import { arch, platform, release } from 'node:os';
 import { dirname, resolve } from 'node:path';
+import { ObjectId } from 'mongodb';
+import { Readable } from 'node:stream';
+import { finished } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import type { AllenServerHandle } from '@allen/server/server';
 import { defaultUiDistDir, setupDesktopRuntime } from './runtime-config.js';
 import { startManagedMongo, type ManagedMongoRuntime } from './managed-mongo.js';
+import { isAllowedExternalUrl } from './url-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const { autoUpdater } = electronUpdater;
-
 let mainWindow: BrowserWindow | null = null;
+const trustedPopupWindows = new Set<BrowserWindow>();
 let serverHandle: AllenServerHandle | null = null;
 let mongoHandle: ManagedMongoRuntime | null = null;
 let isQuitting = false;
 let logsDir: string | null = null;
+
+
+interface UpdateMetadata {
+  version: string;
+  url: string;
+}
+
+interface AutoUpdatePreferences {
+  autoUpdateEnabled: boolean;
+}
+
+type UpdateCheckResult =
+  | { status: 'disabled'; currentVersion: string }
+  | { status: 'not-available'; currentVersion: string; latestVersion: string }
+  | { status: 'update-available'; currentVersion: string; latestVersion: string; url: string; opened: boolean };
+
+type UpdatePromptAction = 'update-now' | 'update-later';
+
+const DEFAULT_UPDATE_FEED_URL = 'https://askallen.build/download/latest.json';
 
 interface SupportBundleResult {
   ok: boolean;
@@ -47,6 +70,19 @@ interface SupportBundleResult {
   bytes?: number;
   error?: string;
 }
+
+type ExternalIdeId = 'vscode' | 'cursor';
+
+interface OpenWorkspaceIdeResult {
+  ok: boolean;
+  ide: ExternalIdeId;
+  error?: string;
+}
+
+const EXTERNAL_IDE_CONFIG: Record<ExternalIdeId, { label: string; cli: string; macAppName: string }> = {
+  vscode: { label: 'Visual Studio Code', cli: 'code', macAppName: 'Visual Studio Code' },
+  cursor: { label: 'Cursor', cli: 'cursor', macAppName: 'Cursor' },
+};
 
 function isSmokeMode(): boolean {
   return process.env.ALLEN_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
@@ -212,18 +248,6 @@ function isTrustedAppUrl(raw: string): boolean {
   return Boolean(url && origin && url.origin === origin && /^https?:$/.test(url.protocol));
 }
 
-function isLoopbackHostname(hostname: string): boolean {
-  return hostname === 'localhost'
-    || hostname === '127.0.0.1'
-    || hostname === '::1'
-    || hostname.endsWith('.localhost');
-}
-
-function isAllowedExternalUrl(raw: string): boolean {
-  const url = parseUrl(raw);
-  return Boolean(url && url.protocol === 'https:' && !isLoopbackHostname(url.hostname));
-}
-
 async function openExternalUrl(raw: string): Promise<boolean> {
   const url = parseUrl(raw);
   if (!url || !isAllowedExternalUrl(url.toString())) {
@@ -232,6 +256,55 @@ async function openExternalUrl(raw: string): Promise<boolean> {
   }
   await shell.openExternal(url.toString());
   return true;
+}
+
+function installTrustedNavigationGuards(win: BrowserWindow, openTrustedUrl: (targetUrl: string) => void): void {
+  win.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    if (isTrustedAppUrl(targetUrl)) {
+      openTrustedUrl(targetUrl);
+    } else {
+      void openExternalUrl(targetUrl);
+    }
+    return { action: 'deny' };
+  });
+
+  win.webContents.on('will-navigate', (event, targetUrl) => {
+    if (isTrustedAppUrl(targetUrl)) return;
+    event.preventDefault();
+    void openExternalUrl(targetUrl);
+  });
+}
+
+function createTrustedPopupWindow(parent: BrowserWindow, targetUrl: string): void {
+  const popup = new BrowserWindow({
+    width: 1120,
+    height: 820,
+    minWidth: 720,
+    minHeight: 520,
+    title: 'Allen',
+    parent,
+    modal: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#0b1020',
+    webPreferences: {
+      preload: preloadPath(),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+    },
+  });
+
+  trustedPopupWindows.add(popup);
+  popup.on('closed', () => {
+    trustedPopupWindows.delete(popup);
+  });
+
+  installTrustedNavigationGuards(popup, (trustedTargetUrl) => {
+    createTrustedPopupWindow(popup, trustedTargetUrl);
+  });
+  void popup.loadURL(targetUrl);
 }
 
 function navigateTo(path: string): void {
@@ -255,6 +328,80 @@ async function openDirectory(path: string | null | undefined): Promise<void> {
       title: 'Allen could not open the folder',
       message: result,
     });
+  }
+}
+
+function isExternalIdeId(value: unknown): value is ExternalIdeId {
+  return value === 'vscode' || value === 'cursor';
+}
+
+function execFileQuiet(command: string, args: string[]): Promise<void> {
+  return new Promise((resolveExec, rejectExec) => {
+    execFile(command, args, { timeout: 8_000 }, (error) => {
+      if (error) rejectExec(error);
+      else resolveExec();
+    });
+  });
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function launchIde(ide: ExternalIdeId, workspacePath: string): Promise<void> {
+  const config = EXTERNAL_IDE_CONFIG[ide];
+  try {
+    await execFileQuiet(config.cli, [workspacePath]);
+    return;
+  } catch (cliErr) {
+    if (process.platform !== 'darwin') throw cliErr;
+  }
+
+  await execFileQuiet('open', ['-a', config.macAppName, workspacePath]);
+}
+
+async function openWorkspaceInIde(workspaceId: unknown, ide: unknown): Promise<OpenWorkspaceIdeResult> {
+  const selectedIde: ExternalIdeId = isExternalIdeId(ide) ? ide : 'vscode';
+  const config = EXTERNAL_IDE_CONFIG[selectedIde];
+
+  try {
+    if (typeof workspaceId !== 'string' || !ObjectId.isValid(workspaceId)) {
+      return { ok: false, ide: selectedIde, error: 'Invalid workspace id' };
+    }
+    if (!serverHandle) {
+      return { ok: false, ide: selectedIde, error: 'Allen desktop server is not ready yet' };
+    }
+
+    const workspace = await serverHandle.db.collection('workspaces').findOne(
+      { _id: new ObjectId(workspaceId) },
+      { projection: { worktreePath: 1, status: 1, name: 1 } },
+    );
+    if (!workspace || workspace.status === 'archived') {
+      return { ok: false, ide: selectedIde, error: 'Workspace is not available' };
+    }
+
+    const worktreePath = typeof workspace.worktreePath === 'string' ? workspace.worktreePath.trim() : '';
+    if (!worktreePath || !existsSync(worktreePath) || !isDirectory(worktreePath)) {
+      return { ok: false, ide: selectedIde, error: 'Workspace folder is missing' };
+    }
+
+    await launchIde(selectedIde, worktreePath);
+    return { ok: true, ide: selectedIde };
+  } catch (err) {
+    console.warn('[desktop] failed to open workspace IDE', {
+      ide: selectedIde,
+      workspaceId: typeof workspaceId === 'string' ? workspaceId : null,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return {
+      ok: false,
+      ide: selectedIde,
+      error: `Could not open ${config.label}. Make sure it is installed.`,
+    };
   }
 }
 
@@ -633,19 +780,8 @@ function createWindow(url: string): BrowserWindow {
     },
   });
 
-  win.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    if (isTrustedAppUrl(targetUrl)) {
-      void win.loadURL(targetUrl);
-    } else {
-      void openExternalUrl(targetUrl);
-    }
-    return { action: 'deny' };
-  });
-
-  win.webContents.on('will-navigate', (event, targetUrl) => {
-    if (isTrustedAppUrl(targetUrl)) return;
-    event.preventDefault();
-    void openExternalUrl(targetUrl);
+  installTrustedNavigationGuards(win, (targetUrl) => {
+    createTrustedPopupWindow(win, targetUrl);
   });
 
   win.webContents.on('render-process-gone', (_event, details) => {
@@ -725,6 +861,10 @@ ipcMain.handle('allen:open-external', async (_event, url: string) => {
   return openExternalUrl(url);
 });
 
+ipcMain.handle('allen:open-workspace-ide', async (_event, payload: { workspaceId?: unknown; ide?: unknown }) => (
+  openWorkspaceInIde(payload?.workspaceId, payload?.ide)
+));
+
 ipcMain.handle('allen:open-logs-directory', async () => {
   if (!logsDir) return false;
   await shell.openPath(logsDir);
@@ -741,15 +881,183 @@ ipcMain.handle('allen:export-support-bundle', async (_event, targetPath?: string
   exportSupportBundle(typeof targetPath === 'string' ? targetPath : undefined)
 ));
 
+ipcMain.handle('allen:update-settings-get', () => ({
+  ...readAutoUpdatePreferences(),
+  currentVersion: app.getVersion(),
+}));
+
+ipcMain.handle('allen:update-settings-set-auto-enabled', (_event, enabled: boolean) => ({
+  ...writeAutoUpdatePreferences({ autoUpdateEnabled: enabled === true }),
+  currentVersion: app.getVersion(),
+}));
+
+ipcMain.handle('allen:update-check-now', async () => checkForProductionUpdate({ manual: true }));
+
+function autoUpdatePreferencesPath(): string {
+  const dir = resolve(desktopDataDir(), 'allen-preferences');
+  mkdirSync(dir, { recursive: true });
+  return resolve(dir, 'auto-update.json');
+}
+
+function readAutoUpdatePreferences(): AutoUpdatePreferences {
+  const path = autoUpdatePreferencesPath();
+  if (!existsSync(path)) return { autoUpdateEnabled: true };
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    return {
+      autoUpdateEnabled: parsed?.autoUpdateEnabled !== false,
+    };
+  } catch {
+    return { autoUpdateEnabled: true };
+  }
+}
+
+function writeAutoUpdatePreferences(preferences: AutoUpdatePreferences): AutoUpdatePreferences {
+  const normalized = { autoUpdateEnabled: preferences.autoUpdateEnabled !== false };
+  const path = autoUpdatePreferencesPath();
+  writeFileSync(path, `${JSON.stringify(normalized, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return normalized;
+}
+
+function parseUpdateMetadata(raw: unknown, feedUrl: string): UpdateMetadata | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const data = raw as Record<string, unknown>;
+  const rawUrl = data.url ?? data.downloadUrl ?? data.download_url ?? data.link;
+  if (typeof rawUrl !== 'string' || rawUrl.trim() === '') return null;
+
+  let url: URL;
+  try {
+    url = new URL(rawUrl, feedUrl);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:') return null;
+  if (url.origin !== new URL(feedUrl).origin) return null;
+
+  const rawVersion = data.version;
+  const versionFromMetadata = typeof rawVersion === 'string' ? rawVersion.trim().replace(/^v/i, '') : '';
+  const versionFromUrl = url.pathname.match(/Allen-([0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?)-/)?.[1] ?? '';
+  const version = versionFromMetadata || versionFromUrl;
+  if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) return null;
+
+  return { version, url: url.toString() };
+}
+
+function compareReleaseVersions(left: string, right: string): number {
+  const parse = (value: string) => value
+    .replace(/^v/i, '')
+    .split(/[+-]/, 1)[0]
+    .split('.')
+    .map((part) => Number.parseInt(part, 10));
+  const leftParts = parse(left);
+  const rightParts = parse(right);
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (leftParts[i] || 0) - (rightParts[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function updateInstallerPath(update: UpdateMetadata): string {
+  const updatesDir = resolve(desktopDataDir(), 'updates');
+  mkdirSync(updatesDir, { recursive: true });
+  const url = new URL(update.url);
+  const filename = (url.pathname.split('/').pop() || `Allen-${update.version}.dmg`)
+    .replace(/[^A-Za-z0-9._-]/g, '_');
+  return resolve(updatesDir, filename);
+}
+
+async function downloadAndOpenUpdateInstaller(update: UpdateMetadata): Promise<void> {
+  const outputPath = updateInstallerPath(update);
+  rmSync(outputPath, { force: true });
+
+  const response = await fetch(update.url, { headers: { 'Cache-Control': 'no-cache' } });
+  if (!response.ok) throw new Error(`Update download returned HTTP ${response.status}`);
+  if (!response.body) throw new Error('Update download did not return a readable body');
+
+  await finished(Readable.fromWeb(response.body as never).pipe(createWriteStream(outputPath, { mode: 0o600 })));
+  chmodSync(outputPath, 0o600);
+
+  const openError = await shell.openPath(outputPath);
+  if (openError) throw new Error(openError);
+}
+
+async function showUpdateAvailablePrompt(update: UpdateMetadata, currentVersion: string): Promise<UpdatePromptAction> {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    console.info('[updates] renderer window unavailable; postponing update prompt', { latestVersion: update.version });
+    return 'update-later';
+  }
+
+  return new Promise((resolvePrompt) => {
+    const requestId = randomUUID();
+    const timeout = setTimeout(() => {
+      ipcMain.off('allen:update-prompt-response', onResponse);
+      resolvePrompt('update-later');
+    }, 5 * 60_000);
+    timeout.unref();
+
+    const onResponse = (_event: Electron.IpcMainEvent, response: unknown) => {
+      const payload = response as { requestId?: unknown; action?: unknown };
+      if (payload?.requestId !== requestId) return;
+      clearTimeout(timeout);
+      ipcMain.off('allen:update-prompt-response', onResponse);
+      resolvePrompt(payload.action === 'update-now' ? 'update-now' : 'update-later');
+    };
+
+    ipcMain.on('allen:update-prompt-response', onResponse);
+    mainWindow!.webContents.send('allen:update-prompt', {
+      requestId,
+      currentVersion,
+      latestVersion: update.version,
+    });
+  });
+}
+
+async function checkForProductionUpdate(options: { manual?: boolean } = {}): Promise<UpdateCheckResult> {
+  const currentVersion = app.getVersion();
+  if (process.env.ALLEN_DISABLE_AUTO_UPDATE === '1') {
+    return { status: 'disabled', currentVersion };
+  }
+  if (!options.manual && (!app.isPackaged || !readAutoUpdatePreferences().autoUpdateEnabled)) {
+    return { status: 'disabled', currentVersion };
+  }
+
+  const feedUrl = process.env.ALLEN_UPDATE_FEED_URL || DEFAULT_UPDATE_FEED_URL;
+  console.info('[updates] checking feed', { feedUrl, manual: options.manual === true });
+
+  const response = await fetch(feedUrl, { headers: { 'Cache-Control': 'no-cache' } });
+  if (!response.ok) throw new Error(`Update feed returned HTTP ${response.status}`);
+
+  const metadata = parseUpdateMetadata(await response.json(), feedUrl);
+  if (!metadata) throw new Error('Update feed did not include a valid version and HTTPS download URL');
+
+  if (compareReleaseVersions(metadata.version, currentVersion) <= 0) {
+    console.info('[updates] no update available', { currentVersion, latestVersion: metadata.version });
+    return { status: 'not-available', currentVersion, latestVersion: metadata.version };
+  }
+
+  console.info('[updates] update available', { currentVersion, latestVersion: metadata.version, url: metadata.url });
+  const choice = await showUpdateAvailablePrompt(metadata, currentVersion);
+
+  if (choice !== 'update-now') {
+    console.info('[updates] user postponed update', { latestVersion: metadata.version });
+    return { status: 'update-available', currentVersion, latestVersion: metadata.version, url: metadata.url, opened: false };
+  }
+
+  await downloadAndOpenUpdateInstaller(metadata);
+  return { status: 'update-available', currentVersion, latestVersion: metadata.version, url: metadata.url, opened: true };
+}
+
 function setupAutoUpdates(): void {
   if (!app.isPackaged || process.env.ALLEN_DISABLE_AUTO_UPDATE === '1') return;
-  autoUpdater.autoDownload = false;
-  autoUpdater.on('error', (err) => console.warn('[updates] check failed', err.message));
-  autoUpdater.on('update-available', (info) => console.info('[updates] update available', info.version));
-  autoUpdater.on('update-not-available', () => console.info('[updates] no update available'));
+  if (!readAutoUpdatePreferences().autoUpdateEnabled) {
+    console.info('[updates] automatic update checks disabled by user preference');
+    return;
+  }
   setTimeout(() => {
-    void autoUpdater.checkForUpdates().catch((err) => {
-      console.warn('[updates] check crashed', err instanceof Error ? err.message : String(err));
+    void checkForProductionUpdate().catch((err) => {
+      console.warn('[updates] check failed', err instanceof Error ? err.message : String(err));
     });
   }, 10_000).unref();
 }

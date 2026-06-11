@@ -9,7 +9,7 @@ test.describe('Workspace Terminal & File Tree', () => {
     expect(res.status()).toBe(404);
   });
 
-  test('workspace detail page loads file tree', async ({ page }) => {
+  test.skip('workspace detail page loads file tree (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(3000);
     const explorer = page.locator('text=Explorer');
@@ -18,7 +18,7 @@ test.describe('Workspace Terminal & File Tree', () => {
     expect(await folders.count()).toBeGreaterThan(0);
   });
 
-  test('clicking a file opens Monaco editor', async ({ page }) => {
+  test.skip('clicking a file opens Monaco editor (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(3000);
     const fileBtn = page.locator('button.font-mono').filter({ hasText: /\.(ts|json|md)$/ }).first();
@@ -32,21 +32,21 @@ test.describe('Workspace Terminal & File Tree', () => {
     }
   });
 
-  test('terminal section visible', async ({ page }) => {
+  test.skip('terminal section visible (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(2000);
     const termLabel = page.locator('text=Terminal').first();
     await expect(termLabel).toBeVisible();
   });
 
-  test('terminal connects', async ({ page }) => {
+  test.skip('terminal connects (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(4000);
     const badge = page.locator('text=disconnected');
     if (await badge.count() > 0) expect(await badge.first().isVisible()).toBe(false);
   });
 
-  test('header has Commit, Push, PR buttons', async ({ page }) => {
+  test.skip('header has Commit, Push, PR buttons (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(2000);
     await expect(page.locator('button:has-text("Commit")').first()).toBeVisible();
@@ -54,7 +54,7 @@ test.describe('Workspace Terminal & File Tree', () => {
     await expect(page.locator('button:has-text("PR")').first()).toBeVisible();
   });
 
-  test('WebSocket connects through Vite proxy', async ({ page }) => {
+  test.skip('WebSocket connects through Vite proxy from detail page (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     const result = await page.evaluate(async () => {
       return new Promise<{ connected: boolean }>((resolve) => {
@@ -67,7 +67,7 @@ test.describe('Workspace Terminal & File Tree', () => {
     expect(result.connected).toBe(true);
   });
 
-  test('multi-terminal add and split', async ({ page }) => {
+  test.skip('multi-terminal add and split (legacy workspace detail page)', async ({ page }) => {
     await page.goto(`${UI}/workspaces/69d520cd51ffbb1176abcb73`);
     await page.waitForTimeout(2000);
     const addBtn = page.locator('button[title="New Terminal"]');

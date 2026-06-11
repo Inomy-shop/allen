@@ -17,6 +17,7 @@ import {
   UserRound,
 } from 'lucide-react';
 import { agents as agentsApi, chat as chatApi, executions, interventions, linear as linearApi, repos as reposApi, system as systemApi } from '../services/api';
+import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import { chatCodeDiffs, pullRequests } from '../services/workspaceService';
 import { useAuthStore } from '../stores/authStore';
 import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
@@ -204,11 +205,20 @@ function localGreeting(date = new Date()): string {
 }
 
 function isActiveRun(run: ExecutionItem): boolean {
-  return ['running', 'queued', 'waiting_for_input'].includes(run.status);
+  return ['running', 'queued', 'waiting_for_input', 'waiting_for_human'].includes(run.status);
+}
+
+function canNeedHumanInput(run?: ExecutionItem): boolean {
+  if (!run) return false;
+  return !['completed', 'failed', 'cancelled', 'canceled'].includes(run.status);
+}
+
+function isWaitingForHumanInput(run: ExecutionItem): boolean {
+  return run.status === 'waiting_for_input' || run.status === 'waiting_for_human';
 }
 
 function statusLabel(status: string): string {
-  if (status === 'waiting_for_input') return 'Waiting';
+  if (status === 'waiting_for_input' || status === 'waiting_for_human') return 'Waiting';
   if (status === 'completed') return 'Done';
   return humanizeLabel(status);
 }
@@ -224,7 +234,7 @@ function humanizeLabel(value?: string): string {
 }
 
 function stepLabel(run: ExecutionItem): string | null {
-  if (run.status === 'waiting_for_input') return 'waiting on you';
+  if (isWaitingForHumanInput(run)) return 'waiting on you';
   if (run.status === 'queued') return 'queued';
   if (run.status === 'failed') return run.failedNode ? `${humanizeLabel(run.failedNode)} failed` : 'failed';
   const current = Array.isArray(run.currentNodes)
@@ -706,6 +716,7 @@ export default function DashboardPage() {
   const [selectedRepo, setSelectedRepo] = useState<RepoOption | null>(null);
   const [githubConnected, setGithubConnected] = useState(false);
   const [linearConnected, setLinearConnected] = useState(false);
+  const [connectPreset, setConnectPreset] = useState<'github' | 'linear' | null>(null);
   const [agentOverrides, setAgentOverrides] = useState<{
     reasoningEffort?: ReasoningEffortValue | null;
     planMode?: boolean | null;
@@ -925,15 +936,20 @@ export default function DashboardPage() {
       .slice(0, 8);
   }, [allPullRequests, chatDiffSummaries, chatSessionById, chatSessions, runningConversationIds, runs]);
   const humanApprovals = useMemo(
-    () => dedupeApprovals([
-      ...pendingInterventions.map((item) => approvalItemFromIntervention(
-        item,
-        runs.find((run) => run.id === item.workflow_run_id),
-      )),
-      ...runs
-        .filter((run) => run.status === 'waiting_for_input')
-        .map(approvalItemFromWaitingRun),
-    ]).sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()),
+    () => {
+      const runById = new Map(runs.map((run) => [run.id, run]));
+      return dedupeApprovals([
+        ...pendingInterventions
+          .map((item) => {
+            const run = runById.get(item.workflow_run_id);
+            return canNeedHumanInput(run) ? approvalItemFromIntervention(item, run) : null;
+          })
+          .filter((item): item is HumanApprovalItem => Boolean(item)),
+        ...runs
+          .filter(isWaitingForHumanInput)
+          .map(approvalItemFromWaitingRun),
+      ]).sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
+    },
     [pendingInterventions, runs],
   );
   const firstName = (user?.name || user?.email?.split('@')[0] || 'there').split(/\s+/)[0];
@@ -969,7 +985,8 @@ export default function DashboardPage() {
       icon: Github,
       done: githubConnected,
       action: githubConnected ? (reviewPrs.length ? 'Review' : 'Open') : 'Connect',
-      href: githubConnected ? '/pull-requests' : '/settings/mcp',
+      href: githubConnected ? '/pull-requests' : null,
+      onAction: githubConnected ? undefined : () => setConnectPreset('github'),
     },
     {
       title: 'Linear',
@@ -979,7 +996,8 @@ export default function DashboardPage() {
       icon: TicketCheck,
       done: linearConnected,
       action: linearConnected ? 'Open' : 'Connect',
-      href: linearConnected ? '/tickets' : '/settings/mcp',
+      href: linearConnected ? '/tickets' : null,
+      onAction: linearConnected ? undefined : () => setConnectPreset('linear'),
     },
     {
       title: 'Add repository',
@@ -1065,7 +1083,10 @@ export default function DashboardPage() {
                   key={item.title}
                   to={item.href ?? '#'}
                   onClick={(event) => {
-                    if (!item.href) {
+                    if (item.onAction) {
+                      event.preventDefault();
+                      item.onAction();
+                    } else if (!item.href) {
                       event.preventDefault();
                       chatInputRef.current?.focus();
                     }
@@ -1249,6 +1270,17 @@ export default function DashboardPage() {
           </>
         )}
       </div>
+      {connectPreset && (
+        <McpPresetConnectModal
+          presetName={connectPreset}
+          onClose={() => setConnectPreset(null)}
+          onConnected={() => {
+            if (connectPreset === 'github') setGithubConnected(true);
+            else if (connectPreset === 'linear') setLinearConnected(true);
+            setConnectPreset(null);
+          }}
+        />
+      )}
     </div>
   );
 }

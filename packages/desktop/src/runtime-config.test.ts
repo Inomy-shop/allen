@@ -70,13 +70,21 @@ describe('desktop runtime config', () => {
     heldServers = [];
   });
 
-  async function holdPort(port: number): Promise<void> {
-    const server = createServer();
-    await new Promise<void>((resolveListen, rejectListen) => {
-      server.once('error', rejectListen);
-      server.listen(port, '127.0.0.1', () => resolveListen());
-    });
-    heldServers.push(server);
+  async function holdAvailablePort(start: number, end: number): Promise<number> {
+    for (let port = start; port <= end; port++) {
+      const server = createServer();
+      const listening = await new Promise<boolean>((resolveListen) => {
+        server.once('error', () => resolveListen(false));
+        server.listen(port, '127.0.0.1', () => resolveListen(true));
+      });
+
+      if (listening) {
+        heldServers.push(server);
+        return port;
+      }
+    }
+
+    throw new Error(`No available test port in range ${start}-${end}`);
   }
 
   it('creates stable local runtime secrets and isolated defaults', async () => {
@@ -159,18 +167,18 @@ describe('desktop runtime config', () => {
   it('reassigns sticky desktop ports when the saved port is busy', async () => {
     const configDir = resolve(tmp!, 'config');
     await mkdir(configDir, { recursive: true });
+    const heldApiPort = await holdAvailablePort(48100, 48199);
+    const heldMongoPort = await holdAvailablePort(48300, 48399);
     await writeFile(resolve(configDir, 'desktop-runtime.json'), JSON.stringify({
-      DESKTOP_API_PORT: '48100',
-      DESKTOP_MONGO_PORT: '48300',
+      DESKTOP_API_PORT: String(heldApiPort),
+      DESKTOP_MONGO_PORT: String(heldMongoPort),
     }));
-    await holdPort(48100);
-    await holdPort(48300);
 
     const runtime = await setupDesktopRuntime(tmp!, { secretStore: secrets });
     const config = JSON.parse(await readFile(runtime.configPath, 'utf8')) as Record<string, string>;
 
-    expect(runtime.apiPort).not.toBe(48100);
-    expect(runtime.mongoPort).not.toBe(48300);
+    expect(runtime.apiPort).not.toBe(heldApiPort);
+    expect(runtime.mongoPort).not.toBe(heldMongoPort);
     expect(runtime.apiPort).toBeGreaterThanOrEqual(48100);
     expect(runtime.mongoPort).toBeGreaterThanOrEqual(48300);
     expect(config.DESKTOP_API_PORT).toBe(String(runtime.apiPort));

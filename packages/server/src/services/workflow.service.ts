@@ -2,7 +2,7 @@ import yaml from 'js-yaml';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Collection, Db } from 'mongodb';
+import { ObjectId, type Collection, type Db } from 'mongodb';
 import { validateWorkflow, loadAgents, getBuiltIns, generateMermaid } from '@allen/engine';
 import type { WorkflowDef, ValidationResult } from '@allen/engine';
 
@@ -290,4 +290,60 @@ export class WorkflowService {
     if (!doc) throw new Error('Workflow not found');
     return doc.yaml as string;
   }
+
+  async exportAsJson(ids: string[]): Promise<Record<string, unknown>> {
+    const filter = ids.length > 0
+      ? { _id: { $in: ids.map((id) => new ObjectId(id)) } }
+      : { archived: { $ne: true } };
+    const docs = await this.col.find(filter).sort({ name: 1 }).toArray();
+    return {
+      kind: 'allen-workflows-bundle',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      workflows: docs.map((doc) => {
+        const copy = { ...doc } as Record<string, unknown>;
+        delete copy._id;
+        delete copy.createdAt;
+        delete copy.updatedAt;
+        copy.createdBy = 'import';
+        return copy;
+      }),
+    };
+  }
+
+  async importFromJsonBundle(bundle: unknown): Promise<Record<string, unknown>> {
+    const input = (bundle ?? {}) as { workflows?: Record<string, unknown>[] };
+    const workflows = Array.isArray(input.workflows) ? input.workflows : [];
+    if (workflows.length === 0) throw new Error('workflows must be a non-empty array');
+
+    const created: string[] = [];
+    const skipped: { name: string; reason: string }[] = [];
+    for (const item of workflows) {
+      const yamlContent = typeof item.yaml === 'string' ? item.yaml : '';
+      const parsed = item.parsed as WorkflowDef | undefined;
+      const name = typeof item.name === 'string' ? item.name : parsed?.name;
+      if (!name || (!yamlContent && !parsed)) {
+        skipped.push({ name: name ?? '(missing)', reason: 'invalid-workflow' });
+        continue;
+      }
+      const existing = await this.col.findOne({ name });
+      if (existing) {
+        skipped.push({ name, reason: 'already-exists' });
+        continue;
+      }
+      try {
+        const createdDoc = await this.create({
+          yaml: yamlContent || undefined,
+          parsed: yamlContent ? undefined : parsed,
+          createdBy: 'import',
+          tags: Array.isArray(item.tags) ? item.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+        });
+        created.push(String(createdDoc.name));
+      } catch (err) {
+        skipped.push({ name, reason: (err as Error).message });
+      }
+    }
+    return { created, skipped };
+  }
+
 }

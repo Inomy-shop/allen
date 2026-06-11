@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Collection, Db } from 'mongodb';
+import { ObjectId, type Collection, type Db } from 'mongodb';
 import type { KnowledgeCandidateRef, RepoContextPacket } from '../core/repo-context-engine.js';
 import type { PreviouslyInjectedContextRef, WorkflowContextInjection } from '../core/workflow-context-injection-adapter.js';
 import { firstString, isRecord } from '../common/context-utils.js';
@@ -47,6 +47,22 @@ type StoredAttempt = Record<string, unknown> & {
   attempt: number;
 };
 
+export type ContextUsageReportView = 'full' | 'summary' | 'normalized';
+
+export type ContextUsageReportOptions = {
+  view?: ContextUsageReportView;
+  includeFlags?: string[];
+  bypassCache?: boolean;
+};
+
+type ContextUsageCacheEntry = {
+  expiresAt: number;
+  promise: Promise<Record<string, unknown>>;
+};
+
+const MAX_EVIDENCE_INLINE_CHARS = 1_000_000;
+const contextUsageReportCache = new Map<string, ContextUsageCacheEntry>();
+
 export class ContextLifecycleStore {
   private attempts: Collection;
   private refs: Collection<StoredRef>;
@@ -55,6 +71,10 @@ export class ContextLifecycleStore {
   private evaluations: Collection;
   private traces: Collection;
   private executions: Collection;
+  private chatSessions: Collection;
+  private chatMessages: Collection;
+  private sourceEvaluations: Collection;
+  private findings: Collection;
 
   constructor(private readonly db: Db) {
     this.attempts = db.collection('context_attempts');
@@ -64,6 +84,10 @@ export class ContextLifecycleStore {
     this.evaluations = db.collection('context_evaluations');
     this.traces = db.collection('execution_traces');
     this.executions = db.collection('executions');
+    this.chatSessions = db.collection('chat_sessions');
+    this.chatMessages = db.collection('chat_messages');
+    this.sourceEvaluations = db.collection('context_source_evaluations');
+    this.findings = db.collection('context_findings');
   }
 
   async recordAttemptBuildStarted(input: {
@@ -641,13 +665,38 @@ export class ContextLifecycleStore {
     return this.evaluations.findOne({ executionId, scope: 'workflow', active: true });
   }
 
-  async getExecutionContextUsageReport(executionId: string): Promise<Record<string, unknown>> {
+  async getExecutionContextUsageReport(executionId: string, options: ContextUsageReportOptions = {}): Promise<Record<string, unknown>> {
+    const view = normalizeContextUsageView(options.view);
+    const includeFlags = Array.from(new Set((options.includeFlags ?? []).map(String).filter(Boolean))).sort();
+    const cacheKey = `${this.db.databaseName}:${executionId}:${view}:${includeFlags.join(',')}`;
+    const now = Date.now();
+    const cached = contextUsageReportCache.get(cacheKey);
+    if (!options.bypassCache && cached && cached.expiresAt > now) return cached.promise;
+
+    const promise = this.buildExecutionContextUsageReport(executionId, { view, includeFlags })
+      .then((report) => {
+        const ttlMs = isTerminalContextUsageReport(report) ? 60_000 : 3_000;
+        contextUsageReportCache.set(cacheKey, { promise: Promise.resolve(report), expiresAt: Date.now() + ttlMs });
+        return report;
+      })
+      .catch((err) => {
+        const current = contextUsageReportCache.get(cacheKey);
+        if (current?.promise === promise) contextUsageReportCache.delete(cacheKey);
+        throw err;
+      });
+    contextUsageReportCache.set(cacheKey, { promise, expiresAt: now + 5_000 });
+    return promise;
+  }
+
+  private async buildExecutionContextUsageReport(executionId: string, options: Required<Pick<ContextUsageReportOptions, 'view' | 'includeFlags'>>): Promise<Record<string, unknown>> {
+    if (options.view === 'summary') return this.buildExecutionContextUsageSummary(executionId);
+
     const descendants = await this.executions.find(
       { $or: [{ parentExecutionId: executionId }, { rootExecutionId: executionId }] },
       { projection: { id: 1 } },
     ).toArray();
     const executionIds = Array.from(new Set([executionId, ...descendants.map((row) => String(row.id)).filter(Boolean)]));
-    const [attempts, refs, events, evaluations, traces, workflowSemanticEvaluation] = await Promise.all([
+    const [attempts, refs, events, evaluations, traces, workflowSemanticEvaluation, executionRows] = await Promise.all([
       this.attempts.find({ executionId: { $in: executionIds } }).sort({ createdAt: 1 }).toArray(),
       this.refs.find({ executionId: { $in: executionIds } }).sort({ rank: 1, createdAt: 1 }).toArray(),
       this.events.find({
@@ -660,6 +709,7 @@ export class ContextLifecycleStore {
       this.evaluations.find({ executionId: { $in: executionIds }, active: true }).sort({ createdAt: 1 }).toArray(),
       this.traces.find({ executionId: { $in: executionIds }, type: 'agent' }).sort({ startedAt: 1 }).toArray(),
       this.getWorkflowEvaluation(executionId),
+      this.executions.find({ id: { $in: executionIds } }, { projection: { id: 1, status: 1 } }).toArray(),
     ]);
     const artifactsByHash = await this.loadArtifactsByHash(contentArtifactHashes(refs, events));
     const refsByAttempt = groupBy(refs, (row) => String(row.contextAttemptId));
@@ -698,13 +748,16 @@ export class ContextLifecycleStore {
         diagnostics: diagnosticsForAttempt(attempt, attemptEvents, refRows),
       };
     });
-    return {
+    const report = {
       executionId,
       executionIds,
+      view: 'full',
+      executionStatuses: Object.fromEntries(executionRows.map((row) => [String(row.id), String(row.status ?? '')])),
       attempts,
       refs,
       events,
       evaluations,
+      artifactsByHash: artifactHandleMap(artifactsByHash),
       packets: attempts.map((attempt) => this.packetViewFromRows(
         attempt,
         refsByAttempt.get(String(attempt.contextAttemptId)) ?? [],
@@ -718,27 +771,8 @@ export class ContextLifecycleStore {
       )),
       nodeAttempts,
       nodeSummaries: nodeAttempts.map((attempt) => ({
-        executionId: attempt.executionId,
-        executionTraceId: attempt.executionTraceId,
-        nodeName: attempt.nodeName,
-        nodeRole: attempt.nodeRole,
-        attempt: attempt.attempt,
-        packetId: attempt.contextAttemptId,
-        contextAttemptId: attempt.contextAttemptId,
-        usageTraceId: firstString((attempt.lifecycle.find((event) => event.usageTraceId) as Record<string, unknown> | undefined)?.usageTraceId),
+        ...nodeSummaryFromAttempt(attempt),
         contextInjection: attempt.contextInjection,
-        contextQuery: attempt.contextQuery,
-        contextEvaluation: attempt.contextEvaluation,
-        status: attempt.status,
-        error: attempt.error,
-        startedAt: attempt.startedAt,
-        completedAt: attempt.completedAt,
-        durationMs: attempt.durationMs,
-        preselectedCount: attempt.refs.filter((ref) => ref.lifecycleStatus === 'selected' || ref.isInjected).length,
-        loadedCount: attempt.refs.filter((ref) => ref.lifecycleStatus === 'loaded').length,
-        appliedCount: attempt.refs.filter((ref) => ref.lifecycleStatus === 'applied').length,
-        skippedCount: attempt.refs.filter((ref) => ref.lifecycleStatus === 'skipped').length,
-        diagnostics: attempt.diagnostics.map((diag) => diag.code).filter(Boolean),
       })),
       diagnostics: nodeAttempts.flatMap((attempt) => attempt.diagnostics),
       contextPreselected: refs.filter((ref) => hasEvent(events, ref, 'selected')),
@@ -761,6 +795,454 @@ export class ContextLifecycleStore {
       })),
       evaluationSummary: rollup(evaluations.filter((row) => row.scope !== 'workflow')),
     };
+    if (options.view === 'normalized') return normalizeContextUsageReport(report);
+    return report;
+  }
+
+  private async buildExecutionContextUsageSummary(executionId: string): Promise<Record<string, unknown>> {
+    const descendants = await this.executions.find(
+      { $or: [{ parentExecutionId: executionId }, { rootExecutionId: executionId }] },
+      { projection: { id: 1 } },
+    ).toArray();
+    const executionIds = Array.from(new Set([executionId, ...descendants.map((row) => String(row.id)).filter(Boolean)]));
+    const [attempts, refs, events, evaluations, workflowSemanticEvaluation, executionRows] = await Promise.all([
+      this.attempts.find(
+        { executionId: { $in: executionIds } },
+        {
+          projection: {
+            contextAttemptId: 1,
+            executionId: 1,
+            executionTraceId: 1,
+            workflowName: 1,
+            nodeName: 1,
+            nodeRole: 1,
+            attempt: 1,
+            repoId: 1,
+            repoName: 1,
+            status: 1,
+            error: 1,
+            startedAt: 1,
+            completedAt: 1,
+            durationMs: 1,
+            contextQuerySummary: 1,
+            renderedContextQueryHash: 1,
+            renderedContextQueryArtifactHash: 1,
+            contextQueryIntentHash: 1,
+            contextQueryIntentArtifactHash: 1,
+            semanticContextQueryHash: 1,
+            semanticContextQueryArtifactHash: 1,
+          },
+        },
+      ).sort({ createdAt: 1 }).toArray(),
+      this.refs.find(
+        { executionId: { $in: executionIds } },
+        {
+          projection: {
+            contextAttemptId: 1,
+            refId: 1,
+            providerId: 1,
+            mandatory: 1,
+            contentAvailable: 1,
+            filterReason: 1,
+            filterStage: 1,
+          },
+        },
+      ).sort({ rank: 1, createdAt: 1 }).toArray(),
+      this.events.find(
+        {
+          $or: [
+            { executionId: { $in: executionIds } },
+            { parentExecutionId: executionId },
+            { rootExecutionId: executionId },
+          ],
+        },
+        {
+          projection: {
+            contextAttemptId: 1,
+            refId: 1,
+            type: 1,
+            usageTraceId: 1,
+            evaluationId: 1,
+            reason: 1,
+            stage: 1,
+            score: 1,
+            createdAt: 1,
+          },
+        },
+      ).sort({ createdAt: 1 }).toArray(),
+      this.evaluations.find(
+        { executionId: { $in: executionIds }, active: true },
+        {
+          projection: {
+            contextAttemptId: 1,
+            executionId: 1,
+            scope: 1,
+            traceId: 1,
+            evaluationId: 1,
+            status: 1,
+            scores: 1,
+            diagnostics: 1,
+            feedbackEvidence: 1,
+            version: 1,
+            createdAt: 1,
+          },
+        },
+      ).sort({ createdAt: 1 }).toArray(),
+      this.getWorkflowEvaluation(executionId),
+      this.executions.find({ id: { $in: executionIds } }, { projection: { id: 1, status: 1 } }).toArray(),
+    ]);
+    const refsByAttempt = groupBy(refs as StoredRef[], (row) => String(row.contextAttemptId));
+    const eventsByAttempt = groupBy(events, (row) => String(row.contextAttemptId));
+    const evaluationsByAttempt = new Map(evaluations.filter((row) => row.scope !== 'workflow').map((row) => [String(row.contextAttemptId), row]));
+    const nodeSummaries = attempts.map((attempt) => {
+      const contextAttemptId = String(attempt.contextAttemptId);
+      const attemptEvents = eventsByAttempt.get(contextAttemptId) ?? [];
+      const refRows = (refsByAttempt.get(contextAttemptId) ?? []).map((ref) => lifecycleRefReadModel(ref, attemptEvents));
+      const evaluation = evaluationsByAttempt.get(contextAttemptId);
+      const diagnostics = diagnosticsForAttempt(attempt, attemptEvents, refRows);
+      return nodeSummaryFromAttempt({
+        ...attempt,
+        contextQuery: contextQueryReadModel(attempt),
+        contextEvaluation: evaluation ? summarizeEvaluation(evaluation) : undefined,
+        refs: refRows,
+        lifecycle: attemptEvents.map((event) => lifecycleEventReadModel(event)),
+        diagnostics,
+      });
+    });
+    const report = {
+      executionId,
+      executionIds,
+      view: 'summary',
+      executionStatuses: Object.fromEntries(executionRows.map((row) => [String(row.id), String(row.status ?? '')])),
+      counts: {
+        attempts: attempts.length,
+        refs: refs.length,
+        events: events.length,
+        evaluations: evaluations.length,
+        nodes: nodeSummaries.length,
+      },
+      nodeSummaries,
+      nodeAttempts: nodeSummaries,
+      diagnostics: nodeSummaries.flatMap((attempt) => normalizeUsageArray(attempt.diagnosticCodes).map((code) => ({
+        code,
+        contextAttemptId: attempt.contextAttemptId,
+      }))),
+      workflowSemanticEvaluation,
+      evaluationSummary: rollup(evaluations.filter((row) => row.scope !== 'workflow')),
+    };
+    return report;
+  }
+
+  async getAttemptEvidence(contextAttemptId: string): Promise<Record<string, unknown> | null> {
+    const [attempt, refs, events, evaluations] = await Promise.all([
+      this.attempts.findOne({ contextAttemptId }),
+      this.refs.find({ contextAttemptId }).sort({ rank: 1, createdAt: 1 }).toArray(),
+      this.events.find({ contextAttemptId }).sort({ createdAt: 1 }).toArray(),
+      this.evaluations.find({ contextAttemptId, active: true }).sort({ createdAt: 1 }).toArray(),
+    ]);
+    if (!attempt) return null;
+
+    const traceIds = Array.from(new Set([
+      firstString(attempt.executionTraceId),
+      ...events.map((event) => firstString(event.executionTraceId)),
+    ].filter((value): value is string => Boolean(value))));
+    const usageTraceIds = Array.from(new Set(events.map((event) => firstString(event.usageTraceId)).filter((value): value is string => Boolean(value))));
+    const traces = await this.traces.find({
+      $or: [
+        { contextAttemptId },
+        { executionTraceId: { $in: traceIds } },
+        { contextUsageTraceId: { $in: usageTraceIds } },
+      ],
+    }).sort({ startedAt: 1 }).toArray();
+    const execution = await this.executions.findOne(
+      { id: firstString(attempt.executionId) },
+      { projection: { _id: 0, id: 1, status: 1, source: 1, input: 1, meta: 1, rootExecutionId: 1, parentExecutionId: 1, startedAt: 1, completedAt: 1, createdAt: 1 } },
+    ).catch(() => null);
+    const chatEvidence = await this.buildChatEvidence(attempt, traces, execution);
+    const artifactsByHash = await this.loadArtifactsByHash(evidenceArtifactHashes(attempt, refs, events, evaluations));
+    const packet = this.packetViewFromRows(attempt, refs, events, artifactsByHash);
+    const usage = this.usageViewFromRows(attempt, refs, events);
+    const refRows = refs.map((ref) => lifecycleRefReadModel(ref, events));
+    const [sourceEvaluations, priorFindings] = await Promise.all([
+      this.sourceEvaluations.find({
+        $or: [
+          { contextAttemptId },
+          { context_attempt_id: contextAttemptId },
+          { sourceId: contextAttemptId },
+          { source_id: contextAttemptId },
+        ],
+      }).sort({ createdAt: -1 }).limit(20).toArray(),
+      this.findings.find({
+        $or: [
+          { contextAttemptId },
+          { context_attempt_id: contextAttemptId },
+          { primarySourceId: contextAttemptId },
+          { primary_source_id: contextAttemptId },
+          { sourceId: contextAttemptId },
+          { source_id: contextAttemptId },
+        ],
+      }).sort({ createdAt: -1 }).limit(20).toArray(),
+    ]);
+    const traceEvidence = traces.map(traceEvidenceReadModel);
+    const promptAvailable = traces.some(hasPromptPayload);
+    const rawResponseAvailable = traces.some(hasResponsePayload);
+    const toolPayloadsAvailable = traces.some(hasToolPayloads);
+    const fullArtifactBodiesAvailable = artifactsByHash.size > 0;
+    const refContentById = refContentEvidenceMap(refs, events, artifactsByHash);
+    const artifactsWithBodies = artifactBodyMap(artifactsByHash);
+
+    return {
+      contextAttemptId,
+      packetId: contextAttemptId,
+      executionId: attempt.executionId,
+      executionTraceId: attempt.executionTraceId,
+      workflowName: attempt.workflowName,
+      nodeName: attempt.nodeName,
+      nodeRole: attempt.nodeRole,
+      attempt: attempt.attempt,
+      repoId: attempt.repoId,
+      repoName: attempt.repoName,
+      status: attempt.status,
+      task: pruneUndefined({
+        taskPrompt: attempt.taskPrompt,
+        currentFiles: attempt.currentFiles,
+        targetRole: attempt.targetRole,
+        callerRole: attempt.callerRole,
+        executionKind: attempt.executionKind,
+      }),
+      lifecycle: events.map((event) => lifecycleEventReadModel(event)),
+      injectedContext: packet.contextInjection,
+      contextQuery: packet.contextQuery,
+      refs: refRows,
+      refContentById,
+      views: {
+        candidateRefs: packet.candidateRefs,
+        selectedRefs: packet.selectedRefs,
+        injectableRefs: packet.injectableRefs,
+        injectedRefs: isRecord(packet.contextInjection) ? packet.contextInjection.injectedRefs : undefined,
+        skippedRefs: isRecord(packet.contextInjection) ? packet.contextInjection.skippedRefs : undefined,
+        rejectedRefs: packet.rejectedRefs,
+        filteredRefs: packet.filteredRefs,
+      },
+      usage,
+      evaluations: evaluations.map((evaluation) => evidenceEvaluationReadModel(evaluation)),
+      sourceEvaluations: sourceEvaluations.map((evaluation) => truncateEvidencePayload(evaluation)),
+      priorFindings: priorFindings.map((finding) => truncateEvidencePayload(finding)),
+      traceEvidence,
+      chatEvidence,
+      traceLinkage: traces.map((trace) => pruneUndefined({
+        executionId: trace.executionId,
+        executionTraceId: trace.executionTraceId,
+        node: trace.node,
+        agent: trace.agent,
+        attempt: trace.attempt,
+        contextAttemptId: trace.contextAttemptId,
+        contextUsageTraceId: trace.contextUsageTraceId,
+        startedAt: trace.startedAt,
+        completedAt: trace.completedAt,
+        promptAvailable: hasPromptPayload(trace),
+        rawResponseAvailable: hasResponsePayload(trace),
+        toolPayloadsAvailable: hasToolPayloads(trace),
+      })),
+      artifactsByHash: artifactHandleMap(artifactsByHash),
+      artifactBodiesByHash: artifactsWithBodies,
+      handles: {
+        refContentBaseUrl: `/api/context/attempts/${encodeURIComponent(contextAttemptId)}/refs/{refId}/content`,
+        artifactContentBaseUrl: '/api/context/artifacts/{hash}',
+        renderedContextQueryUrl: isRecord(packet.contextQuery) ? packet.contextQuery.renderedQueryUrl : undefined,
+        queryIntentUrl: isRecord(packet.contextQuery) ? packet.contextQuery.queryIntentUrl : undefined,
+        semanticQueryUrl: isRecord(packet.contextQuery) ? packet.contextQuery.semanticQueryUrl : undefined,
+        nodeTraceTool: 'get_node_trace',
+        chatMessagesTool: chatEvidence?.handles,
+      },
+      completeness: {
+        injectedContextIncluded: true,
+        chatEvidenceIncluded: Boolean(chatEvidence?.messagesIncluded),
+        chatEvidenceAvailable: Boolean(chatEvidence?.messagesAvailable),
+        chatEvidencePartial: Boolean(chatEvidence?.partial),
+        fullRenderedPromptIncluded: promptAvailable,
+        fullRenderedPromptAvailable: promptAvailable,
+        rawResponseIncluded: rawResponseAvailable,
+        rawResponseAvailable,
+        fullArtifactBodiesIncluded: fullArtifactBodiesAvailable,
+        fullArtifactBodiesAvailable,
+        toolPayloadsIncluded: toolPayloadsAvailable,
+        toolPayloadsAvailable,
+        sourceEvaluationsIncluded: true,
+        priorFindingsIncluded: true,
+        largeValuesMayBeTruncated: evidenceContainsTruncation({
+          traceEvidence,
+          refContentById,
+          artifactsWithBodies,
+          sourceEvaluations,
+          priorFindings,
+        }),
+        inlineCharLimit: MAX_EVIDENCE_INLINE_CHARS,
+      },
+    };
+  }
+
+  private async buildChatEvidence(
+    attempt: Record<string, unknown>,
+    traces: Array<Record<string, unknown>>,
+    execution: Record<string, unknown> | null,
+  ): Promise<Record<string, unknown> | null> {
+    const executionMeta = isRecord(execution?.meta) ? execution?.meta : {};
+    const executionInput = isRecord(execution?.input) ? execution?.input : {};
+    const traceInputs = traces.map((trace) => isRecord(trace.inputState) ? trace.inputState : {});
+    const sessionId = firstString(
+      attempt.chatSessionId,
+      attempt.sessionId,
+      executionMeta.chatSessionId,
+      executionInput.chatSessionId,
+      executionInput.sessionId,
+      executionInput.chat_session_id,
+      ...traceInputs.flatMap((input) => [input.chatSessionId, input.sessionId, input.chat_session_id]),
+    );
+    const parentMessageId = firstString(
+      attempt.parentMessageId,
+      executionMeta.parentMessageId,
+      executionInput.parentMessageId,
+      executionInput.parent_message_id,
+      ...traceInputs.flatMap((input) => [input.parentMessageId, input.parent_message_id]),
+    );
+
+    if (!sessionId) {
+      return pruneUndefined({
+        sessionId: null,
+        messagesIncluded: false,
+        messagesAvailable: false,
+        reason: 'No chat session linkage was available on the context attempt, execution, or traces.',
+      });
+    }
+
+    const session = ObjectId.isValid(sessionId)
+      ? await this.chatSessions.findOne(
+        { _id: new ObjectId(sessionId) },
+        { projection: { _id: 1, title: 1, source: 1, provider: 1, model: 1, activeAgent: 1, repoId: 1, repoName: 1, repoPath: 1, workspaceId: 1, lastMessageAt: 1, messageCount: 1, ownerUserId: 1, createdAt: 1, updatedAt: 1 } },
+      ).catch(() => null)
+      : null;
+
+    let anchorMessage: Record<string, unknown> | null = null;
+    if (parentMessageId && ObjectId.isValid(parentMessageId)) {
+      anchorMessage = await this.chatMessages.findOne(
+        { _id: new ObjectId(parentMessageId), sessionId },
+        { projection: chatMessageEvidenceProjection() },
+      ).catch(() => null);
+    }
+
+    const totalMessages = await this.chatMessages.countDocuments({ sessionId }).catch(() => 0);
+    const beforeLimit = 40;
+    const afterLimit = 10;
+    let messageRows: Array<Record<string, unknown>> = [];
+    let windowStart: unknown;
+    let windowEnd: unknown;
+
+    if (anchorMessage?.createdAt) {
+      const before = await this.chatMessages.find(
+        { sessionId, createdAt: { $lte: anchorMessage.createdAt } },
+        { projection: chatMessageEvidenceProjection() },
+      ).sort({ createdAt: -1 }).limit(beforeLimit).toArray().catch(() => []);
+      const after = await this.chatMessages.find(
+        { sessionId, createdAt: { $gt: anchorMessage.createdAt } },
+        { projection: chatMessageEvidenceProjection() },
+      ).sort({ createdAt: 1 }).limit(afterLimit).toArray().catch(() => []);
+      const byId = new Map<string, Record<string, unknown>>();
+      for (const message of [...before.reverse(), ...after]) byId.set(String(message._id ?? ''), message);
+      messageRows = [...byId.values()].sort((a, b) => (dateMs(a.createdAt) ?? 0) - (dateMs(b.createdAt) ?? 0));
+      windowStart = messageRows[0]?.createdAt;
+      windowEnd = messageRows[messageRows.length - 1]?.createdAt;
+    } else {
+      messageRows = await this.chatMessages.find(
+        { sessionId },
+        { projection: chatMessageEvidenceProjection() },
+      ).sort({ createdAt: -1 }).limit(beforeLimit + afterLimit).toArray().catch(() => []);
+      messageRows.reverse();
+      windowStart = messageRows[0]?.createdAt;
+      windowEnd = messageRows[messageRows.length - 1]?.createdAt;
+    }
+
+    const messages = messageRows.map((message) => chatMessageEvidenceReadModel(message));
+    const partial = totalMessages > messages.length;
+    return truncateEvidencePayload(pruneUndefined({
+      sessionId,
+      parentMessageId,
+      executionId: firstString(attempt.executionId),
+      executionSource: execution?.source,
+      rootExecutionId: execution?.rootExecutionId,
+      parentExecutionId: execution?.parentExecutionId,
+      session: session ? chatSessionEvidenceReadModel(session) : undefined,
+      anchorMessageId: anchorMessage ? String(anchorMessage._id ?? '') : undefined,
+      messages,
+      messagesIncluded: messages.length > 0,
+      messagesAvailable: messages.length > 0,
+      totalMessages,
+      includedMessages: messages.length,
+      partial,
+      window: pruneUndefined({
+        beforeLimit,
+        afterLimit,
+        start: windowStart,
+        end: windowEnd,
+        strategy: anchorMessage ? 'anchor_message_window' : 'latest_messages',
+      }),
+      handles: pruneUndefined({
+        chatSessionTool: 'get_chat_session',
+        chatSessionArgs: { session_id: sessionId },
+        chatSessionUrl: `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
+        chatMessagesTool: 'get_chat_messages',
+        chatMessagesArgs: { session_id: sessionId, limit: beforeLimit + afterLimit },
+        chatMessagesUrl: `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages?limit=${beforeLimit + afterLimit}`,
+        messageContentHandles: messages.map((message) => isRecord(message.contentHandle) ? message.contentHandle : undefined).filter(Boolean),
+      }),
+    }));
+  }
+
+  async getAttemptEvidenceBatch(contextAttemptIds: string[]): Promise<Record<string, unknown>> {
+    const uniqueIds = Array.from(new Set(contextAttemptIds.map(String).filter(Boolean)));
+    const rows = await Promise.all(uniqueIds.map(async (id) => {
+      try {
+        return [id, await this.getAttemptEvidence(id), undefined] as const;
+      } catch (err: unknown) {
+        return [id, null, { error: (err as Error).message }] as const;
+      }
+    }));
+    const errorsByAttemptId = Object.fromEntries(rows
+      .filter(([, , error]) => error)
+      .map(([id, , error]) => [id, error]));
+    const missingContextAttemptIds = rows
+      .filter(([, evidence, error]) => !evidence && !error)
+      .map(([id]) => id);
+    return {
+      contextAttemptIds: uniqueIds,
+      evidenceByAttemptId: Object.fromEntries(rows.filter(([, evidence]) => evidence).map(([id, evidence]) => [id, evidence])),
+      missingContextAttemptIds,
+      errorsByAttemptId,
+      counts: {
+        requested: uniqueIds.length,
+        found: rows.filter(([, evidence]) => evidence).length,
+        missing: missingContextAttemptIds.length,
+        errors: Object.keys(errorsByAttemptId).length,
+      },
+    };
+  }
+
+  async getArtifactByHash(hash: string): Promise<Record<string, unknown> | null> {
+    if (!hash) return null;
+    const artifact = await this.artifacts.findOne(
+      { hash },
+      { projection: { _id: 0 } },
+    );
+    if (!artifact) return null;
+    return pruneUndefined({
+      hash,
+      artifactId: artifact.artifactId,
+      kind: artifact.kind,
+      contentType: artifact.contentType,
+      sizeBytes: artifact.sizeBytes,
+      metadata: artifact.metadata,
+      content: artifact.content,
+    });
   }
 
   async getChatContextUsageReport(sessionId: string): Promise<Record<string, unknown>> {
@@ -1259,6 +1741,341 @@ function eventsByType(events: Array<Record<string, unknown>>): Map<ContextRefEve
   return map;
 }
 
+function normalizeContextUsageView(view: unknown): ContextUsageReportView {
+  if (view === 'summary' || view === 'normalized' || view === 'full') return view;
+  return 'full';
+}
+
+function nodeSummaryFromAttempt(attempt: Record<string, unknown>): Record<string, unknown> {
+  const refs = normalizeUsageArray(attempt.refs);
+  const lifecycle = normalizeUsageArray(attempt.lifecycle);
+  const diagnostics = normalizeUsageArray(attempt.diagnostics);
+  return pruneUndefined({
+    executionId: attempt.executionId,
+    executionTraceId: attempt.executionTraceId,
+    nodeName: attempt.nodeName,
+    nodeRole: attempt.nodeRole,
+    attempt: attempt.attempt,
+    packetId: attempt.contextAttemptId,
+    contextAttemptId: attempt.contextAttemptId,
+    usageTraceId: firstString((lifecycle.find((event) => event.usageTraceId) as Record<string, unknown> | undefined)?.usageTraceId),
+    contextQuery: attempt.contextQuery,
+    contextEvaluation: attempt.contextEvaluation,
+    status: attempt.status,
+    error: attempt.error,
+    startedAt: attempt.startedAt,
+    completedAt: attempt.completedAt,
+    durationMs: attempt.durationMs,
+    preselectedCount: refs.filter((ref) => ref.lifecycleStatus === 'selected' || ref.isInjected).length,
+    loadedCount: refs.filter((ref) => ref.lifecycleStatus === 'loaded').length,
+    appliedCount: refs.filter((ref) => ref.lifecycleStatus === 'applied').length,
+    skippedCount: refs.filter((ref) => ref.lifecycleStatus === 'skipped').length,
+    injectedCount: refs.filter((ref) => ref.isInjected).length,
+    filteredCount: refs.filter((ref) => ref.isFiltered).length,
+    candidateCount: refs.filter((ref) => ref.lifecycleStatus === 'candidate').length,
+    diagnosticCodes: diagnostics.map((diag) => diag.code).filter(Boolean),
+  });
+}
+
+function normalizeContextUsageReport(report: Record<string, unknown>): Record<string, unknown> {
+  const attempts = normalizeUsageArray(report.attempts);
+  const refs = normalizeUsageArray(report.refs);
+  const events = normalizeUsageArray(report.events);
+  const evaluations = normalizeUsageArray(report.evaluations);
+  const traces = normalizeUsageArray(report.traces);
+  const refsById = Object.fromEntries(refs.map((ref) => [scopedRefKey(ref), ref]));
+  const eventsById = Object.fromEntries(events.map((event, index) => [firstString(event.eventId) ?? `${event.contextAttemptId ?? 'event'}:${index}`, event]));
+  const evaluationsById = Object.fromEntries(evaluations.map((evaluation, index) => [
+    firstString(evaluation.evaluationId, evaluation.traceId) ?? `${evaluation.contextAttemptId ?? 'evaluation'}:${index}`,
+    evaluation,
+  ]));
+  return {
+    executionId: report.executionId,
+    executionIds: report.executionIds,
+    view: 'normalized',
+    executionStatuses: report.executionStatuses,
+    attemptsById: Object.fromEntries(attempts.map((attempt) => [String(attempt.contextAttemptId), attempt])),
+    refsById,
+    eventsById,
+    evaluationsById,
+    tracesById: Object.fromEntries(traces.map((trace, index) => [
+      firstString(trace.executionTraceId) ?? `${trace.executionId ?? 'trace'}:${trace.node ?? index}`,
+      trace,
+    ])),
+    artifactsByHash: isRecord(report.artifactsByHash) ? report.artifactsByHash : {},
+    views: {
+      byNode: groupRecordsByKey(attempts, (attempt) => `${String(attempt.executionId)}:${String(attempt.nodeName)}:${String(attempt.attempt ?? '')}`),
+      byAttempt: Object.fromEntries(attempts.map((attempt) => {
+        const id = String(attempt.contextAttemptId);
+        return [id, {
+          refIds: refs.filter((ref) => String(ref.contextAttemptId) === id).map(scopedRefKey),
+          eventIds: events
+            .filter((event) => String(event.contextAttemptId) === id)
+            .map((event, index) => firstString(event.eventId) ?? `${id}:event:${index}`),
+          evaluationIds: evaluations
+            .filter((evaluation) => String(evaluation.contextAttemptId) === id)
+            .map((evaluation, index) => firstString(evaluation.evaluationId, evaluation.traceId) ?? `${id}:evaluation:${index}`),
+        }];
+      })),
+      injectedRefs: refs.filter((ref) => hasEvent(events, ref, 'injected_full')).map(scopedRefKey),
+      skippedRefs: refs.filter((ref) => hasEvent(events, ref, 'skipped')).map(scopedRefKey),
+      rejectedRefs: refs.filter((ref) => hasEvent(events, ref, 'rejected')).map(scopedRefKey),
+      selectedRefs: refs.filter((ref) => hasEvent(events, ref, 'selected')).map(scopedRefKey),
+    },
+    nodeSummaries: report.nodeSummaries,
+    diagnostics: report.diagnostics,
+    workflowSemanticEvaluation: report.workflowSemanticEvaluation,
+    evaluationSummary: report.evaluationSummary,
+  };
+}
+
+function artifactHandleMap(artifactsByHash: Map<string, Record<string, unknown>>): Record<string, unknown> {
+  return Object.fromEntries(Array.from(artifactsByHash.entries()).map(([hash, artifact]) => [hash, pruneUndefined({
+    hash,
+    artifactId: artifact.artifactId,
+    kind: artifact.kind,
+    contentType: artifact.contentType,
+    sizeBytes: artifact.sizeBytes,
+    contentIncluded: false,
+    contentAvailable: typeof artifact.content === 'string',
+  })]));
+}
+
+function artifactBodyMap(artifactsByHash: Map<string, Record<string, unknown>>): Record<string, unknown> {
+  return Object.fromEntries(Array.from(artifactsByHash.entries()).map(([hash, artifact]) => [hash, truncateEvidencePayload(pruneUndefined({
+    hash,
+    artifactId: artifact.artifactId,
+    kind: artifact.kind,
+    contentType: artifact.contentType,
+    sizeBytes: artifact.sizeBytes,
+    contentHandle: {
+      url: `/api/context/artifacts/${encodeURIComponent(hash)}`,
+      tool: 'query_database',
+      args: {
+        collection: 'context_artifacts',
+        filter: { hash },
+        projection: { _id: 0 },
+        limit: 1,
+      },
+    },
+    content: artifact.content,
+    metadata: artifact.metadata,
+  }))]));
+}
+
+function refContentEvidenceMap(
+  refs: Array<Record<string, unknown>>,
+  events: Array<Record<string, unknown>>,
+  artifactsByHash: Map<string, Record<string, unknown>>,
+): Record<string, unknown> {
+  const eventsByRef = groupBy(events, (event) => String(event.refId));
+  return Object.fromEntries(refs.map((ref) => {
+    const refId = String(ref.refId);
+    const contentHash = firstString(
+      ref.contentArtifactHash,
+      ...(eventsByRef.get(refId) ?? []).map((event) => firstString(event.contentArtifactHash)),
+    );
+    const artifact = contentHash ? artifactsByHash.get(contentHash) : undefined;
+    return [refId, truncateEvidencePayload(pruneUndefined({
+      refId,
+      title: ref.title,
+      path: ref.path,
+      providerId: ref.providerId,
+      contentHash,
+      contentAvailable: typeof artifact?.content === 'string',
+      content: artifact?.content,
+      contentType: artifact?.contentType,
+      sizeBytes: artifact?.sizeBytes,
+    }))];
+  }));
+}
+
+function chatMessageEvidenceProjection(): Record<string, 1> {
+  return {
+    _id: 1,
+    sessionId: 1,
+    role: 1,
+    content: 1,
+    status: 1,
+    senderUserId: 1,
+    senderName: 1,
+    senderEmail: 1,
+    senderSource: 1,
+    toolCalls: 1,
+    thinkingText: 1,
+    tokenUsage: 1,
+    costUsd: 1,
+    durationMs: 1,
+    error: 1,
+    createdAt: 1,
+    completedAt: 1,
+  };
+}
+
+function chatSessionEvidenceReadModel(session: Record<string, unknown>): Record<string, unknown> {
+  return pruneUndefined({
+    sessionId: String(session._id ?? ''),
+    title: session.title,
+    source: session.source,
+    provider: session.provider,
+    model: session.model,
+    activeAgent: session.activeAgent,
+    repoId: session.repoId,
+    repoName: session.repoName,
+    repoPath: session.repoPath,
+    workspaceId: session.workspaceId,
+    lastMessageAt: session.lastMessageAt,
+    messageCount: session.messageCount,
+    ownerUserId: session.ownerUserId,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  });
+}
+
+function chatMessageEvidenceReadModel(message: Record<string, unknown>): Record<string, unknown> {
+  const sessionId = firstString(message.sessionId);
+  const messageId = String(message._id ?? '');
+  return truncateEvidencePayload(pruneUndefined({
+    messageId,
+    sessionId: message.sessionId,
+    role: message.role,
+    contentHandle: sessionId ? {
+      tool: 'get_chat_messages',
+      args: { session_id: sessionId, before: messageId, limit: 1 },
+      url: `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages?before=${encodeURIComponent(messageId)}&limit=1`,
+    } : undefined,
+    content: message.content,
+    status: message.status,
+    senderUserId: message.senderUserId,
+    senderName: message.senderName,
+    senderEmail: message.senderEmail,
+    senderSource: message.senderSource,
+    toolCalls: message.toolCalls,
+    thinkingText: message.thinkingText,
+    tokenUsage: message.tokenUsage,
+    costUsd: message.costUsd,
+    durationMs: message.durationMs,
+    error: message.error,
+    createdAt: message.createdAt,
+    completedAt: message.completedAt,
+  }));
+}
+
+function traceEvidenceReadModel(trace: Record<string, unknown>): Record<string, unknown> {
+  const inputState = isRecord(trace.inputState) ? trace.inputState : undefined;
+  const renderedPrompt = firstString(trace.renderedPrompt, trace.prompt, trace.inputPrompt, inputState?.prompt);
+  const rawResponse = firstString(trace.rawResponse, trace.response);
+  const finalResponse = firstString(trace.finalResponse);
+  return truncateEvidencePayload(pruneUndefined({
+    executionId: trace.executionId,
+    executionTraceId: trace.executionTraceId,
+    node: trace.node,
+    agent: trace.agent,
+    attempt: trace.attempt,
+    status: trace.status,
+    contextAttemptId: trace.contextAttemptId,
+    contextUsageTraceId: trace.contextUsageTraceId,
+    startedAt: trace.startedAt,
+    completedAt: trace.completedAt,
+    renderedPrompt,
+    systemPrompt: firstString(trace.systemPrompt),
+    inputPrompt: firstString(trace.inputPrompt),
+    rawResponse,
+    finalResponse,
+    output: trace.output,
+    toolCalls: normalizeUsageArray(trace.toolCalls).length ? trace.toolCalls : normalizeUsageArray(trace.tool_calls),
+    toolsAvailable: trace.toolsAvailable,
+    activity: trace.activity,
+    inputState: trace.inputState,
+    promptIncluded: Boolean(renderedPrompt),
+    responseIncluded: Boolean(rawResponse || finalResponse || trace.output !== undefined),
+    toolPayloadsIncluded: hasToolPayloads(trace),
+  }));
+}
+
+function evidenceEvaluationReadModel(row: Record<string, unknown>): Record<string, unknown> {
+  return truncateEvidencePayload(pruneUndefined({
+    ...summarizeEvaluation(row),
+    contextAttemptId: row.contextAttemptId,
+    executionId: row.executionId,
+    scope: row.scope,
+    semantic: row.semantic,
+    diagnostics: row.diagnostics,
+    feedbackEvidence: row.feedbackEvidence,
+    artifactHashes: row.artifactHashes,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
+}
+
+function truncateEvidencePayload(value: unknown, limit = MAX_EVIDENCE_INLINE_CHARS): Record<string, unknown> {
+  const truncated: Array<Record<string, unknown>> = [];
+  const payload = truncateDeep(value, limit, '$', truncated);
+  if (isRecord(payload)) {
+    return truncated.length ? { ...payload, _truncatedEvidence: truncated } : payload;
+  }
+  return truncated.length ? { value: payload, _truncatedEvidence: truncated } : { value: payload };
+}
+
+function truncateDeep(value: unknown, limit: number, path: string, truncated: Array<Record<string, unknown>>): unknown {
+  if (typeof value === 'string') {
+    if (value.length <= limit) return value;
+    truncated.push({ path, originalChars: value.length, includedChars: limit });
+    return value.slice(0, limit);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => truncateDeep(item, limit, `${path}[${index}]`, truncated));
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key,
+      truncateDeep(item, limit, `${path}.${key}`, truncated),
+    ]));
+  }
+  return value;
+}
+
+function evidenceContainsTruncation(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(evidenceContainsTruncation);
+  if (!isRecord(value)) return false;
+  if (Array.isArray(value._truncatedEvidence) && value._truncatedEvidence.length > 0) return true;
+  return Object.values(value).some(evidenceContainsTruncation);
+}
+
+function scopedRefKey(ref: Record<string, unknown>): string {
+  return `${String(ref.contextAttemptId)}:${String(ref.refId)}`;
+}
+
+function groupRecordsByKey(rows: Array<Record<string, unknown>>, key: (row: Record<string, unknown>) => string): Record<string, string[]> {
+  const grouped: Record<string, string[]> = {};
+  for (const row of rows) {
+    const groupKey = key(row);
+    grouped[groupKey] = grouped[groupKey] ?? [];
+    grouped[groupKey].push(String(row.contextAttemptId ?? row.id ?? ''));
+  }
+  return grouped;
+}
+
+function isTerminalContextUsageReport(report: Record<string, unknown>): boolean {
+  const statuses = isRecord(report.executionStatuses) ? Object.values(report.executionStatuses).map((value) => String(value)) : [];
+  return statuses.length > 0 && statuses.every((status) => ['completed', 'failed', 'cancelled'].includes(status));
+}
+
+function hasPromptPayload(trace: Record<string, unknown>): boolean {
+  const inputState = isRecord(trace.inputState) ? trace.inputState : undefined;
+  return Boolean(firstString(trace.prompt, trace.systemPrompt, trace.renderedPrompt, trace.inputPrompt, inputState?.prompt));
+}
+
+function hasResponsePayload(trace: Record<string, unknown>): boolean {
+  return Boolean(firstString(trace.response, trace.rawResponse, trace.finalResponse) || trace.output !== undefined);
+}
+
+function hasToolPayloads(trace: Record<string, unknown>): boolean {
+  return normalizeUsageArray(trace.toolCalls).length > 0
+    || normalizeUsageArray(trace.tool_calls).length > 0
+    || normalizeUsageArray(trace.tools).length > 0;
+}
+
 function diagnosticsForAttempt(
   attempt: Record<string, unknown>,
   events: Array<Record<string, unknown>>,
@@ -1330,6 +2147,28 @@ function contentArtifactHashes(refs: Array<Record<string, unknown>>, events: Arr
   return Array.from(new Set([
     ...refs.map((ref) => firstString(ref.contentArtifactHash)),
     ...events.map((event) => firstString(event.contentArtifactHash)),
+  ].filter((value): value is string => Boolean(value))));
+}
+
+function evidenceArtifactHashes(
+  attempt: Record<string, unknown>,
+  refs: Array<Record<string, unknown>>,
+  events: Array<Record<string, unknown>>,
+  evaluations: Array<Record<string, unknown>>,
+): string[] {
+  const evaluationHashes = evaluations.flatMap((evaluation) => {
+    const artifactHashes = isRecord(evaluation.artifactHashes) ? evaluation.artifactHashes : {};
+    return Object.values(artifactHashes).map((value) => firstString(value));
+  });
+  return Array.from(new Set([
+    ...contentArtifactHashes(refs, events),
+    firstString(attempt.diagnosticsArtifactHash),
+    firstString(attempt.promptBlockArtifactHash),
+    firstString(attempt.systemPromptBlockArtifactHash),
+    firstString(attempt.contextQueryIntentArtifactHash),
+    firstString(attempt.renderedContextQueryArtifactHash),
+    firstString(attempt.semanticContextQueryArtifactHash),
+    ...evaluationHashes,
   ].filter((value): value is string => Boolean(value))));
 }
 

@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { seedDefaultWorkflows, seedDefaultSkills } from './seed.js';
+import { listDefaultWorkflowNames, seedDefaultWorkflows, seedDefaultSkills } from './seed.js';
+import { seedCronJobs } from './services/cron-seed.service.js';
 
 function makeDb(seed: Record<string, Record<string, unknown>[]> = {}): any {
   const store: Record<string, Record<string, unknown>[]> = {
     agents: [],
     workflows: [],
     skills: [],
+    cron_jobs: [],
     agent_conversations: [],
     ...seed,
   };
@@ -32,6 +34,13 @@ function makeDb(seed: Record<string, Record<string, unknown>[]> = {}): any {
           store[name][idx] = { ...store[name][idx], ...(update as any).$set };
         }
         return { matchedCount: idx >= 0 ? 1 : 0, modifiedCount: idx >= 0 ? 1 : 0 };
+      },
+      deleteOne: async (query: Record<string, unknown>) => {
+        const idx = (store[name] ?? []).findIndex((doc) => matches(doc, query));
+        if (idx >= 0) {
+          store[name].splice(idx, 1);
+        }
+        return { deletedCount: idx >= 0 ? 1 : 0 };
       },
       createIndex: async () => undefined,
     }),
@@ -139,6 +148,15 @@ describe('seedDefaultWorkflows SEED_OVERRIDE policy', () => {
     expect(workflow.description).toBe('custom description');
   });
 
+  it('does not seed the PR review workflow', async () => {
+    const db = makeDb();
+
+    await seedDefaultWorkflows(db);
+
+    expect(db.store.workflows.find((w: any) => w.name === 'resolve-pr-reviews')).toBeUndefined();
+    expect(listDefaultWorkflowNames()).not.toContain('resolve-pr-reviews');
+  });
+
   it('overwrites an existing system workflow when SEED_OVERRIDE=true', async () => {
     process.env.SEED_OVERRIDE = 'true';
     const db = makeDb({
@@ -158,5 +176,38 @@ describe('seedDefaultWorkflows SEED_OVERRIDE policy', () => {
     const workflow = db.store.workflows.find((w: any) => w.name === 'allen-self-healing-monitor-hourly');
     expect(workflow.yaml).not.toBe('custom yaml');
     expect(workflow.description).not.toBe('custom description');
+  });
+});
+
+describe('seedCronJobs', () => {
+  it('seeds non-PR-review built-in schedules only', async () => {
+    const db = makeDb();
+
+    await seedCronJobs(db);
+
+    const names = (db.store.cron_jobs ?? []).map((job: any) => job.name);
+    expect(names).toContain('repo-scan-daily');
+    expect(names).toContain('repo-pull-30min');
+    expect(names).toContain('pr-sync-30min');
+    expect(names).toContain('mcp-bundle-cleanup-hourly');
+    expect(names).toContain('allen-self-healing-monitor-hourly');
+    expect(names).not.toContain('coderabbit-sweep-15min');
+  });
+
+  it('removes retired PR-review schedules from existing seed databases', async () => {
+    const db = makeDb({
+      cron_jobs: [
+        { name: 'coderabbit-sweep-15min', displayName: 'CodeRabbit Review Sweep', isBuiltIn: true, createdBy: 'seed' },
+        { name: 'coderabbit-sweep', displayName: 'CodeRabbit Review Sweep', isBuiltIn: true, createdBy: 'seed' },
+        { name: 'custom-review-sweep', displayName: 'Custom Review Sweep', isBuiltIn: false, createdBy: 'user' },
+      ],
+    });
+
+    await seedCronJobs(db);
+
+    const names = (db.store.cron_jobs ?? []).map((job: any) => job.name);
+    expect(names).not.toContain('coderabbit-sweep-15min');
+    expect(names).not.toContain('coderabbit-sweep');
+    expect(names).toContain('custom-review-sweep');
   });
 });

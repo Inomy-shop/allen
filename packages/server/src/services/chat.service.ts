@@ -7,9 +7,10 @@
 
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
+import type { TokenUsageInfo } from '@allen/engine';
 import type { Response } from 'express';
 import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
-import { getDefaultChatProvider, getProvidersInDefaultOrder, getTitleGenProviderModel } from './chat-providers.js';
+import { getDefaultChatModel, getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getTitleGenProviderModel, isClaudeCompatibleProvider, isClaudeFamilyProvider } from './chat-providers.js';
 import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
 import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
@@ -18,7 +19,7 @@ import { buildOrgContextBlock } from './org-context.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { ExecutionService } from './execution.service.js';
 import { LinearService } from './linear.service.js';
-import { runPersistentCodexSlashCommand } from './chat-runtime-manager.js';
+import { runPersistentChatSlashCommand } from './chat-runtime-manager.js';
 import { listSlashCommands, type SlashCommandInfo } from './slash-commands.js';
 import type { RuntimeSlashCommand } from './chat-runtime-types.js';
 import { ChatContextPacketService } from './context/core/chat-context-packet.service.js';
@@ -49,6 +50,7 @@ export interface ChatSession {
   _id?: ObjectId;
   title: string;
   titleSource?: 'default' | 'auto' | 'user';
+  titleRefreshedAt?: Date;
   status: 'active' | 'archived';
   messageCount: number;
   lastMessageAt: Date;
@@ -91,6 +93,7 @@ export interface ChatMessage {
   senderSource?: 'ui' | 'slack' | 'system';
   costUsd?: number;
   durationMs?: number;
+  tokenUsage?: TokenUsageInfo | null;
   numTurns?: number;
   error?: string;
   toolCalls?: ToolCallRecord[];
@@ -436,6 +439,18 @@ IMPORTANT RULES:
     if (repos.length > 0) {
       reposBlock = `\n\nAvailable repos: ${repos.map((r: any) => `${r.name} (${r.path})`).join(', ')}. User references with @repo-name.`;
     }
+    // Surface the default design repo regardless of status (active, registered,
+    // placeholder, etc.) — only archived repos are excluded.  This block has
+    // different semantics from Available Repositories and it is intentionally OK
+    // for the same repo to appear in both sections.
+    const defaultDesignRepo = await db.collection('repos').findOne({
+      isDefaultDesignRepo: true,
+      path: { $exists: true, $ne: '' },
+      status: { $ne: 'archived' },
+    }) as { name: string; path: string } | null;
+    if (defaultDesignRepo) {
+      reposBlock += `\n\nDefault design repo: ${defaultDesignRepo.name} at ${defaultDesignRepo.path} (use this path for design workflow \`repo_path\`/\`design_repo_path\` inputs).`;
+    }
   } catch {}
 
   // Single unified tail for both providers — keeps tool guidance,
@@ -488,6 +503,8 @@ For code tasks: direct specialist spawns need an Allen workspace first; workflow
 interface ActiveQuery {
   sessionId: string;
   messageId: string;
+  userMessage: string;
+  llmSessionId?: string;
   currentText: string;
   currentThinking: string;
   toolCalls: ToolCallRecord[];
@@ -548,6 +565,9 @@ export interface ChatCancelResult {
   sessionId: string;
   messageId?: string;
   content?: string;
+  userMessage?: string;
+  resumableSessionAvailable?: boolean;
+  restoreDraft?: string;
   cancelledExecutions: CancelledExecutionInfo[];
 }
 
@@ -578,7 +598,7 @@ function compactChatTitle(value: unknown): string | null {
   return trimmed;
 }
 
-function deterministicSessionTaskTitle(userMessage: string): string | null {
+export function deterministicSessionTaskTitle(userMessage: string): string | null {
   const linearTitleMatch = userMessage.match(/Linear title:\s*([^\n]+)/i)
     ?? userMessage.match(/Ticket title:\s*([^\n]+)/i)
     ?? userMessage.match(/Issue title:\s*([^\n]+)/i);
@@ -589,8 +609,7 @@ function deterministicSessionTaskTitle(userMessage: string): string | null {
   const dispatchTitle = compactChatTitle(dispatchMatch?.[2]);
   if (dispatchTitle && !/^through allen$/i.test(dispatchTitle)) return dispatchTitle;
 
-  const assignMatch = userMessage.match(/\b(?:assign|work on|fix|implement|review|debug|investigate)\b(?:\s+this)?(?:\s+task|\s+ticket|\s+issue)?[:\-–—]?\s+([^\n]+)/i);
-  return compactChatTitle(assignMatch?.[1]) ?? null;
+  return null;
 }
 
 export function sanitizeChatTitle(candidate: unknown): string | null {
@@ -624,15 +643,44 @@ export function sanitizeChatTitle(candidate: unknown): string | null {
   return title || null;
 }
 
-function fallbackTitleFromUserMessage(userMessage: string): string {
-  const cleaned = userMessage
+export function fallbackTitleFromUserMessage(userMessage: string): string {
+  let cleaned = userMessage
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/https?:\/\/\S+/g, '')
+    // Strip "For Allen," / "Hey Allen," / "Hi Allen," / "Hello Allen," prefixes (case-insensitive)
+    .replace(/^(for|hey|hi|hello)\s+allen\b[,.]?\s*/i, '')
+    // Strip standalone "Hi," / "Hey," / "Hello," starters
+    .replace(/^(for|hey|hi|hello)[,.]?\s+/i, '')
+    // Normalize common typos
+    .replace(/\bi\s+wan\s+to\b/gi, 'i want to')
+    .replace(/\bi\s+wanna\b/gi, 'i want to')
+    // Strip filler phrases
     .replace(/\b(can you|could you|please|do one thing|i want to|we need to)\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+  // Capitalize first letter
+  cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+
+  // Prepend "About " if the result starts with no action verb (likely a noun phrase)
+  const startsWithActionVerb = /^(fix|build|debug|review|find|add|improve|analyse|analyze|investigate|create|update|delete|check|run|generate|write|test|implement|deploy|migrate|refactor|explore|configure|manage|plan|design|optimize|show|help|assist|identify|evaluate|propose|research|compare|summarize|list|get|set|use)\b/i.test(cleaned);
+  if (!startsWithActionVerb && cleaned.length > 0) {
+    cleaned = 'About ' + cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+  }
+
   return sanitizeChatTitle(cleaned) ?? 'New conversation';
+}
+
+function looksLikeFallbackTitle(title: string | undefined): boolean {
+  if (!title) return true;
+  const words = title.split(/\s+/);
+  if (words.length >= CHAT_TITLE_MAX_WORDS) return true;
+  if (title.length >= CHAT_TITLE_MAX_CHARS) return true;
+  if (/^(for|hey|hi|hello)\s+allen\b/i.test(title)) return true;
+  const startsWithActionVerb = /^(fix|build|debug|review|find|add|improve|analyse|analyze|investigate|create|update|delete|check|run|generate|write|test|implement|deploy|migrate|refactor|explore|configure|manage|plan|design|optimize|show|help|assist|identify|evaluate|propose|research|compare|summarize|list|get|set|use|about)\b/i.test(title);
+  if (!startsWithActionVerb) return true;
+  return false;
 }
 
 export function normalizeGeneratedChatTitle(candidate: unknown, userMessage: string): string {
@@ -715,8 +763,8 @@ function sanitizeChatMessagesForDisplay(messages: ChatMessage[]): ChatMessage[] 
 
 interface VerifiedTitle {
   title: string;
-  isValid: boolean;
-  reason?: string;
+  confidence: number;  // 0.0–1.0; any value > 0 from a non-empty title is accepted
+  notes?: string;
 }
 
 /**
@@ -739,8 +787,8 @@ function parseTitleVerification(raw: string): VerifiedTitle | null {
       if (parsed && typeof parsed === 'object' && typeof parsed.final_title === 'string') {
         return {
           title: parsed.final_title,
-          isValid: parsed.is_valid !== false,
-          reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+          confidence: typeof parsed.confidence === 'number' ? parsed.confidence : (parsed.is_valid !== false ? 0.7 : 0.1),
+          notes: typeof parsed.notes === 'string' ? parsed.notes : (typeof parsed.reason === 'string' ? parsed.reason : undefined),
         };
       }
     } catch {}
@@ -833,12 +881,12 @@ async function interruptedTaskContext(db: Db, sessionId: string): Promise<string
  *
  * This is an INTERRUPT, not just a stop:
  *   1. Kills the claude-cli / codex subprocess (SIGTERM via AbortController)
- *   2. Clears the stale llmSessionId so the next message starts a fresh
- *      thread instead of trying to resume the dead one (which fails with
- *      "no rollout found" on Codex)
+ *   2. Preserves any captured llmSessionId so the next message can resume
+ *      when the provider session was already created
  *   3. Marks the in-flight assistant message as cancelled
  *   4. Removes the session from activeQueries so it's not "busy"
- *   5. Broadcasts a cancel event to any SSE listeners
+ *   5. Broadcasts a cancel event to any SSE listeners, including restoreDraft
+ *      when no resumable provider session was captured
  *
  * After cancel, the user can immediately send a new message.
  */
@@ -846,6 +894,19 @@ export async function cancelChatSession(sessionId: string, db?: Db): Promise<Cha
   const entry = activeQueries.get(sessionId);
   let cancelledExecutions: CancelledExecutionInfo[] = [];
   let cancelledContent: string | undefined;
+
+  const userMessage = entry?.userMessage;
+  // Do not use chat_sessions.llmSessionId here: that can belong to a prior
+  // turn. Draft restore depends on whether this interrupted turn reached the
+  // provider, so only current-turn signals count.
+  const resumableSessionAvailable = Boolean(
+    entry?.llmSessionId
+    || entry?.currentText
+    || entry?.currentThinking
+    || (entry?.pendingToolCalls.size ?? 0) > 0
+    || (entry?.toolCalls.length ?? 0) > 0,
+  );
+  const restoreDraft = !resumableSessionAvailable ? userMessage : undefined;
 
   // 1. Kill the subprocess for THIS turn only
   if (entry) {
@@ -883,14 +944,29 @@ export async function cancelChatSession(sessionId: string, db?: Db): Promise<Cha
 
   // 5. Broadcast cancel event so UI updates immediately
   if (entry) {
-    broadcastToListeners(entry, 'cancelled', { messageId: entry.messageId, cancelledExecutions });
+    broadcastToListeners(entry, 'cancelled', {
+      messageId: entry.messageId,
+      cancelledExecutions,
+      userMessage,
+      resumableSessionAvailable,
+      restoreDraft,
+    });
     closeStreamListeners(entry);
   }
 
   // 6. Remove from active queries so the user can send the next message
   if (entry) activeQueries.delete(sessionId);
 
-  return { cancelled: Boolean(entry), sessionId, messageId: entry?.messageId, content: cancelledContent, cancelledExecutions };
+  return {
+    cancelled: Boolean(entry),
+    sessionId,
+    messageId: entry?.messageId,
+    content: cancelledContent,
+    userMessage,
+    resumableSessionAvailable,
+    restoreDraft,
+    cancelledExecutions,
+  };
 }
 
 function broadcastToListeners(entry: ActiveQuery, event: string, data: unknown): void {
@@ -929,7 +1005,7 @@ export class ChatService {
   private get messages() { return this.db.collection('chat_messages'); }
   private get messageQueue() { return this.db.collection('chat_message_queue'); }
 
-  getProviders() { return getProvidersInDefaultOrder(); }
+  getProviders() { return getEnabledProvidersInDefaultOrder(); }
 
   async createSession(
     provider: ChatProvider = getDefaultChatProvider(),
@@ -941,6 +1017,7 @@ export class ChatService {
     owner?: { userId?: string; name?: string; email?: string },
   ): Promise<ChatSession> {
     const now = new Date();
+    const effectiveModel = model ?? getDefaultChatModel(provider);
     let repoPath: string | undefined;
     let repoName: string | undefined;
     if (repoId) {
@@ -956,7 +1033,7 @@ export class ChatService {
     }
     const doc: ChatSession = {
       title: 'New Conversation', titleSource: 'default', status: 'active', messageCount: 0,
-      lastMessageAt: now, totalCostUsd: 0, provider, model,
+      lastMessageAt: now, totalCostUsd: 0, provider, model: effectiveModel,
       source,
       ...(slackContext ? { slackContext } : {}),
       ...(repoId && repoPath ? { repoId, repoPath, repoName } : {}),
@@ -1263,7 +1340,7 @@ export class ChatService {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
 
     const entry: ActiveQuery = {
-      sessionId, messageId: assistantMsgId, currentText: '', currentThinking: '', toolCalls: [],
+      sessionId, messageId: assistantMsgId, userMessage: content, currentText: '', currentThinking: '', toolCalls: [],
       pendingToolCalls: new Map(), listeners: new Set([res]), aborted: false, abortController: new AbortController(),
     };
     activeQueries.set(sessionId, entry);
@@ -1309,7 +1386,7 @@ export class ChatService {
 
     // ActiveQuery with no SSE listeners — UI can still subscribe via GET /stream
     const entry: ActiveQuery = {
-      sessionId, messageId: assistantMsgId, currentText: '', currentThinking: '', toolCalls: [],
+      sessionId, messageId: assistantMsgId, userMessage: content, currentText: '', currentThinking: '', toolCalls: [],
       pendingToolCalls: new Map(),
       listeners: new Set(), aborted: false, abortController: new AbortController(),
       ...(onEvent ? { eventHandlers: new Set([onEvent]) } : {}),
@@ -1430,22 +1507,31 @@ export class ChatService {
           onToolStart: () => {},
           onToolResult: () => {},
         });
-        return parseTitleVerification(result.text.trim());
+        const parsed = parseTitleVerification(result.text.trim());
+        if (!parsed) {
+          console.log('[chat_title_llm_parse_failed] Could not parse LLM title response');
+        }
+        return parsed;
       } catch (err) {
-        console.error('LLM title generation failed:', err instanceof Error ? err.message : err);
+        console.log('[chat_title_llm_threw] LLM title generation threw:', err instanceof Error ? err.message : err);
         return null;
       }
     };
 
     const first = await callOnce(prompt);
-    if (first?.isValid && first.title) {
+    // Accept any non-empty title from the first call, regardless of confidence
+    if (first?.title) {
+      if (first.confidence < 0.2) {
+        console.log('[chat_title_llm_invalid] Low-confidence title accepted as best-effort:', first.confidence, first.notes);
+      }
       return normalizeGeneratedChatTitle(first.title, userMessage);
     }
 
-    const feedback = first?.reason || 'The previous draft did not meet the rules. Produce a corrected title.';
-    const retryPrompt = `${prompt}\n\nYour previous attempt failed self-verification with reason: ${feedback}\nProduce a fully verified title that passes every rule.`;
+    // Only retry when first call produced no title at all
+    const feedback = first?.notes || 'No title was produced. Generate a best-effort title even if imperfect.';
+    const retryPrompt = `${prompt}\n\nYour previous attempt produced no title. Produce any best-effort title now. Reason: ${feedback}`;
     const second = await callOnce(retryPrompt);
-    if (second?.isValid && second.title) {
+    if (second?.title) {
       return normalizeGeneratedChatTitle(second.title, userMessage);
     }
 
@@ -1478,10 +1564,9 @@ Self-verification (the model MUST do this internally before answering):
 - Confirm the final title actually summarises what the user is trying to accomplish.
 
 Output format — RETURN ONLY this JSON object on a single line, nothing else:
-{"final_title":"<the verified title>","is_valid":true,"reason":""}
+{"final_title":"<the best title you can produce>","confidence":0.9,"notes":""}
 
-If you cannot produce a title that passes every check, return:
-{"final_title":"","is_valid":false,"reason":"<short explanation>"}
+Always return a best-effort title even if it is imperfect. Use a lower confidence (0.3–0.6) if you are uncertain. Never return an empty final_title.
 
 Good examples (the title field):
 - Fix visual search failure in image embeddings
@@ -1508,10 +1593,9 @@ Self-verification (the model MUST do this internally before answering):
 - Confirm the final title actually summarises what the user is trying to accomplish.
 
 Output format — RETURN ONLY this JSON object on a single line, nothing else:
-{"final_title":"<the verified title>","is_valid":true,"reason":""}
+{"final_title":"<the best title you can produce>","confidence":0.9,"notes":""}
 
-If you cannot produce a title that passes every check, return:
-{"final_title":"","is_valid":false,"reason":"<short explanation>"}
+Always return a best-effort title even if it is imperfect. Use a lower confidence (0.3–0.6) if you are uncertain. Never return an empty final_title.
 
 Good examples (the title field):
 - Fix visual search failure in image embeddings
@@ -1524,7 +1608,14 @@ User: ${userMessage.slice(0, 500)}`;
 
     const verified = await this.runVerifiedTitleLLM(prompt, userMessage);
     if (verified) return verified;
-    return deterministicSessionTaskTitle(userMessage) ?? fallbackTitleFromUserMessage(userMessage);
+    const deterministicResult = deterministicSessionTaskTitle(userMessage);
+    if (deterministicResult) {
+      const branch = /linear title:|ticket title:|issue title:/i.test(userMessage) ? 'deterministic-linear' : 'deterministic-dispatch';
+      console.log(`[chat_title_fallback_used] branch=${branch}`);
+      return deterministicResult;
+    }
+    console.log('[chat_title_fallback_used] branch=raw-truncation');
+    return fallbackTitleFromUserMessage(userMessage);
   }
 
   /**
@@ -1648,7 +1739,7 @@ User: ${userMessage.slice(0, 500)}`;
 
       // Build message history
       let llmMessages: ChatLLMMessage[];
-      const hasSessionResume = (provider === 'claude-cli' || provider === 'codex') && resumeSessionId;
+      const hasSessionResume = (provider === 'claude-cli' || provider === 'codex' || isClaudeCompatibleProvider(provider)) && resumeSessionId;
       if (hasSessionResume) {
         // CLI providers use session resume — only send new message
         llmMessages = [{ role: 'user', content: enrichedContent }];
@@ -1772,6 +1863,7 @@ User: ${userMessage.slice(0, 500)}`;
           }
         },
         onSessionId: (sid: string) => {
+          entry.llmSessionId = sid;
           // Save session ID to DB immediately so auto-retry can resume even if the process times out
           this.sessions.updateOne(
             { _id: new ObjectId(sessionId) },
@@ -1782,16 +1874,22 @@ User: ${userMessage.slice(0, 500)}`;
 
       const effectiveProvider = (resolvedSettings?.provider as ChatProvider) ?? provider;
       const effectiveModel = resolvedSettings?.model || model || PROVIDERS.find(p => p.provider === effectiveProvider)?.defaultModel || 'gpt-5.5';
-      const codexSlashCommand = effectiveProvider === 'codex'
-        ? resolveSlashCommand(content, listSlashCommands('codex', workspaceCwd))
-        : null;
+      const slashCommand = (() => {
+        if (effectiveProvider === 'codex') {
+          return resolveSlashCommand(content, listSlashCommands('codex', workspaceCwd));
+        }
+        if (isClaudeFamilyProvider(effectiveProvider)) {
+          return resolveSlashCommand(content, listSlashCommands('claude-cli', workspaceCwd));
+        }
+        return null;
+      })();
 
-      const result = codexSlashCommand
+      const result = slashCommand
         ? {
-            ...(await runPersistentCodexSlashCommand({
+            ...(await runPersistentChatSlashCommand({
               db: this.db,
               chatSessionId: sessionId,
-              provider: 'codex',
+              provider: effectiveProvider,
               model: effectiveModel,
               resolvedSettings,
               systemPrompt,
@@ -1800,7 +1898,7 @@ User: ${userMessage.slice(0, 500)}`;
               skipTools: undefined,
               cwd: workspaceCwd,
               callbacks,
-            }, codexSlashCommand)),
+            }, slashCommand)),
             durationMs: Date.now() - startMs,
             model: effectiveModel,
             provider: effectiveProvider,
@@ -1823,12 +1921,13 @@ User: ${userMessage.slice(0, 500)}`;
       clearInterval(saveInterval);
       const durationMs = Date.now() - startMs;
       const costUsd = result.costUsd;
+      const tokenUsage = result.tokenUsage ?? null;
       const visibleResponseText = sanitizeChatAssistantResponse(result.text);
       entry.currentText = visibleResponseText;
 
       await this.messages.updateOne(
         { _id: new ObjectId(assistantMsgId) },
-        { $set: { content: visibleResponseText, status: 'completed', costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+        { $set: { content: visibleResponseText, status: 'completed', costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
       );
 
       // Save execution trace to chat_logs (fire-and-forget)
@@ -1840,6 +1939,7 @@ User: ${userMessage.slice(0, 500)}`;
         assistantResponse: visibleResponseText.slice(0, 2000),
         model: result.model,
         costUsd,
+        tokenUsage,
         durationMs,
         toolCalls: entry.toolCalls,
         trace: result.trace,
@@ -1869,7 +1969,7 @@ User: ${userMessage.slice(0, 500)}`;
       );
 
       broadcastToListeners(entry, 'message_complete', {
-        messageId: assistantMsgId, text: visibleResponseText, costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking,
+        messageId: assistantMsgId, text: visibleResponseText, costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking,
       });
 
       // Auto-title strategy: fire exactly once on turn 1, using only the
@@ -1881,9 +1981,9 @@ User: ${userMessage.slice(0, 500)}`;
       const priorCount = (session?.messageCount as number) ?? 0;
       const prevSource = session?.titleSource;
       const shouldAutoTitle = priorCount <= 2 && prevSource !== 'user' && prevSource !== 'auto';
+      const responseText = visibleResponseText.trim() || undefined;
 
       if (shouldAutoTitle) {
-        const responseText = visibleResponseText.trim() || undefined;
         const deterministicTitle = deterministicSessionTaskTitle(content);
         Promise.resolve(deterministicTitle ?? this.generateTitleWithLLM(content, responseText))
           .then(async (generatedTitle) => {
@@ -1893,6 +1993,40 @@ User: ${userMessage.slice(0, 500)}`;
             }
           })
           .catch((err) => console.error('Failed to generate session title', err.message));
+      }
+
+      // One-shot title refresh after the conversation has more context.
+      // Fires at most once per session (titleRefreshedAt guards against repeats).
+      const refreshThreshold = 8; // messageCount >= 8 = >= 4 turns
+      const shouldRefreshTitle =
+        priorCount >= refreshThreshold &&
+        prevSource === 'auto' &&
+        !(session?.titleRefreshedAt) &&
+        looksLikeFallbackTitle(session?.title as string | undefined);
+
+      if (shouldRefreshTitle) {
+        (async () => {
+          try {
+            // Fetch first user + first assistant messages for richer context
+            const firstMessages = await this.messages
+              .find({ sessionId, role: { $in: ['user', 'assistant'] } })
+              .sort({ createdAt: 1 })
+              .limit(4)
+              .toArray();
+            const firstUser = (firstMessages.find(m => m.role === 'user')?.content as string | undefined) ?? content;
+            const firstAssistant = (firstMessages.find(m => m.role === 'assistant')?.content as string | undefined) ?? responseText ?? '';
+            const refreshedTitle = await this.generateTitleWithLLM(firstUser, firstAssistant || undefined);
+            if (refreshedTitle) {
+              await this.sessions.updateOne(
+                { _id: new ObjectId(sessionId) },
+                { $set: { title: refreshedTitle, titleSource: 'auto', titleRefreshedAt: new Date(), updatedAt: new Date() } },
+              );
+              broadcastToListeners(entry, 'session_update', { title: refreshedTitle });
+            }
+          } catch (err) {
+            console.error('[chat-title] one-shot refresh failed:', (err as Error).message);
+          }
+        })();
       }
     } catch (error) {
       clearInterval(saveInterval);
@@ -1921,6 +2055,38 @@ User: ${userMessage.slice(0, 500)}`;
               }
             })
             .catch(() => {});
+        }
+
+        // One-shot title refresh — mirrors the success path refresh block.
+        const refreshThresholdAbort = 8;
+        const shouldRefreshTitleOnAbort =
+          priorCount >= refreshThresholdAbort &&
+          prevSource === 'auto' &&
+          !(session?.titleRefreshedAt) &&
+          looksLikeFallbackTitle(session?.title as string | undefined);
+
+        if (shouldRefreshTitleOnAbort) {
+          (async () => {
+            try {
+              const firstMessages = await this.messages
+                .find({ sessionId, role: { $in: ['user', 'assistant'] } })
+                .sort({ createdAt: 1 })
+                .limit(4)
+                .toArray();
+              const firstUser = (firstMessages.find(m => m.role === 'user')?.content as string | undefined) ?? content;
+              const firstAssistant = (firstMessages.find(m => m.role === 'assistant')?.content as string | undefined) ?? (entry.currentText.trim() || undefined);
+              const refreshedTitle = await this.generateTitleWithLLM(firstUser, firstAssistant || undefined);
+              if (refreshedTitle) {
+                await this.sessions.updateOne(
+                  { _id: new ObjectId(sessionId) },
+                  { $set: { title: refreshedTitle, titleSource: 'auto', titleRefreshedAt: new Date(), updatedAt: new Date() } },
+                );
+                broadcastToListeners(entry, 'session_update', { title: refreshedTitle });
+              }
+            } catch (err) {
+              console.error('[chat-title] one-shot refresh failed (abort):', (err as Error).message);
+            }
+          })();
         }
         return;
       }
@@ -2024,16 +2190,17 @@ User: ${userMessage.slice(0, 500)}`;
 
           // Save successful retry result
           const durationMs = Date.now() - startMs;
+          const tokenUsage = retryResult.tokenUsage ?? null;
           const visibleRetryText = sanitizeChatAssistantResponse(retryResult.text);
           entry.currentText = visibleRetryText;
           await this.messages.updateOne(
             { _id: new ObjectId(assistantMsgId) },
-            { $set: { content: visibleRetryText, status: 'completed', costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+            { $set: { content: visibleRetryText, status: 'completed', costUsd: retryResult.costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
           );
           if (retryResult.sessionId) {
             await this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set: { llmSessionId: retryResult.sessionId } });
           }
-          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: visibleRetryText, costUsd: retryResult.costUsd, durationMs, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
+          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: visibleRetryText, costUsd: retryResult.costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
           return; // success — skip error handling below
         } catch (retryErr) {
           console.error('Auto-retry also failed:', retryErr instanceof Error ? retryErr.message : retryErr);
@@ -2160,6 +2327,23 @@ RULES:
       if (repos.length > 0) {
         const repoList = repos.map((r: any) => `- ${r.name}: ${r.path} (${(r.detected?.language ?? []).join(', ')})`).join('\n');
         parts.push(`\n## Available Repositories\n${repoList}\nUser references repos with @repo-name. Only ask which repo if the task requires code changes and it's ambiguous.`);
+      }
+      // Surface the default design repo regardless of status (active, registered,
+      // placeholder, etc.) — only archived repos are excluded.  Having a usable
+      // path is the key requirement.  This block has different semantics from
+      // Available Repositories; it is intentionally OK for the same repo to appear
+      // in both sections.  The "do not ask" instruction below is what matters here.
+      const defaultDesignRepo = await this.db.collection('repos').findOne({
+        isDefaultDesignRepo: true,
+        path: { $exists: true, $ne: '' },
+        status: { $ne: 'archived' },
+      }) as { name: string; path: string } | null;
+      if (defaultDesignRepo) {
+        parts.push(
+          `\n## Default Design Repository\nThe default design output repo is **${defaultDesignRepo.name}** at \`${defaultDesignRepo.path}\`. ` +
+          `Use this path as \`repo_path\`/\`design_repo_path\` for design workflow inputs unless the user explicitly provides a different path. ` +
+          `Do NOT ask the user which design repo to use when this default is set.`,
+        );
       }
     } catch {}
 

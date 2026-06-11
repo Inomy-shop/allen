@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Check, ChevronDown, ChevronRight, Copy, ExternalLink, FileText, FolderGit2, GitBranch,
   GitPullRequest, Loader2, MessageSquare, Play, Plus, RefreshCw, RotateCw,
@@ -13,10 +13,12 @@ import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import IconTooltipButton from '../components/common/IconTooltipButton';
 import Select from '../components/common/Select';
 import { WorkspaceConfigEditor } from '../components/workspace/WorkspaceConfigEditor';
+import { WorkspaceCreateDialog, type WorkspaceCreateRepo } from '../components/workspace/WorkspaceCreateDialog';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 import { EmbeddedChat } from '../components/workspace/EmbeddedChat';
 import { XTerminal } from '../components/workspace/XTerminal';
 import { getMonacoTheme, setupMonaco } from '../lib/monaco-theme';
+import { workspaceChatPath } from '../lib/workspace-routes';
 
 type Workspace = {
   _id: string;
@@ -329,8 +331,73 @@ function WorkspaceFileTreeNode({
   );
 }
 
+function toWorkspaceCreateRepo(repo: any): WorkspaceCreateRepo {
+  return {
+    _id: repo._id,
+    name: repo.name ?? repo.path ?? 'Repository',
+    path: repo.path,
+    branch: repo.branch,
+    defaultBranch: repo.defaultBranch,
+    detected: repo.detected,
+  };
+}
+
+function WorkspaceRepoPickerDialog({
+  repos,
+  loading,
+  onClose,
+  onSelect,
+}: {
+  repos: WorkspaceCreateRepo[];
+  loading: boolean;
+  onClose: () => void;
+  onSelect: (repo: WorkspaceCreateRepo) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-sm" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="w-full max-w-[560px] overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)]" onClick={event => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4 border-b border-app px-6 py-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app bg-app text-accent">
+              <FolderGit2 className="h-[18px] w-[18px]" />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-[16px] font-semibold text-theme-primary">New workspace</h2>
+              <p className="mt-1 text-[12px] text-theme-muted">Choose a repository to create the workspace in.</p>
+            </div>
+          </div>
+          <IconTooltipButton label="Close" onClick={onClose} className="h-9 w-9">
+            <X className="h-4 w-4" />
+          </IconTooltipButton>
+        </div>
+
+        <div className="max-h-[360px] overflow-y-auto px-3 py-3">
+          {loading ? (
+            <div className="px-3 py-8 text-center text-[13px] text-theme-muted">Loading repositories...</div>
+          ) : repos.length === 0 ? (
+            <div className="px-3 py-8 text-center text-[13px] text-theme-muted">No repositories are available.</div>
+          ) : repos.map(repo => (
+            <button
+              key={repo._id}
+              type="button"
+              onClick={() => onSelect(repo)}
+              className="flex w-full min-w-0 items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors hover:bg-app-muted"
+            >
+              <FolderGit2 className="h-4 w-4 shrink-0 text-theme-muted" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13px] font-medium text-theme-primary">{repo.name}</span>
+                {repo.path ? <span className="block truncate font-mono text-[10.5px] text-theme-subtle">{repo.path}</span> : null}
+              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-theme-subtle" />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function WorkspaceListPage() {
-  const { id: routeWorkspaceId } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [repos, setRepos] = useState<any[]>([]);
@@ -360,6 +427,8 @@ export default function WorkspaceListPage() {
   const [configRepoId, setConfigRepoId] = useState<string | null>(null);
   const [deletingWorkspace, setDeletingWorkspace] = useState<{ id: string; name: string } | null>(null);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const [repoPickerOpen, setRepoPickerOpen] = useState(false);
+  const [workspaceCreateRepo, setWorkspaceCreateRepo] = useState<WorkspaceCreateRepo | null>(null);
   const createRequested = searchParams.get('create') === '1';
   const createRepoId = searchParams.get('repoId') ?? '';
 
@@ -401,18 +470,20 @@ export default function WorkspaceListPage() {
 
   useEffect(() => {
     if (!createRequested) return;
-    setCreating(true);
-    setActiveTab('diff');
-    if (!createRepoId) return;
-
-    const repo = repos.find(r => r._id === createRepoId);
-    setForm(f => ({
-      ...f,
-      repoId: createRepoId,
-      repoPath: repo?.path ?? f.repoPath,
-      repoName: repo?.name ?? f.repoName,
-    }));
-  }, [createRepoId, createRequested, repos]);
+    if (createRepoId) {
+      const repo = repos.find(r => r._id === createRepoId);
+      if (!repo) return;
+      setWorkspaceCreateRepo(toWorkspaceCreateRepo(repo));
+      navigate('/workspaces', { replace: true });
+      return;
+    }
+    if (repos.length === 1) {
+      setWorkspaceCreateRepo(toWorkspaceCreateRepo(repos[0]));
+    } else {
+      setRepoPickerOpen(true);
+    }
+    navigate('/workspaces', { replace: true });
+  }, [createRepoId, createRequested, navigate, repos]);
 
   function showWorkspaceTab(tab: string) {
     setActiveTab(tab);
@@ -442,7 +513,7 @@ export default function WorkspaceListPage() {
     selectWorkspace(workspaceId);
     setActiveTab('diff');
     patchWorkspaceUi(workspaceId, { activeTab: 'diff' });
-    navigate(`/workspaces/${workspaceId}`);
+    navigate(workspaceChatPath(workspaceId));
   }
 
   function openWorkspace(workspaceId: string) {
@@ -450,9 +521,16 @@ export default function WorkspaceListPage() {
   }
 
   function startCreateWorkspace(repoId?: string) {
-    setCreating(true);
-    setActiveTab('diff');
-    navigate(`/workspaces?create=1${repoId ? `&repoId=${encodeURIComponent(repoId)}` : ''}`);
+    const repo = repoId ? repos.find(r => r._id === repoId) : null;
+    if (repo) {
+      setWorkspaceCreateRepo(toWorkspaceCreateRepo(repo));
+      return;
+    }
+    if (repos.length === 1) {
+      setWorkspaceCreateRepo(toWorkspaceCreateRepo(repos[0]));
+      return;
+    }
+    setRepoPickerOpen(true);
   }
 
   function cancelCreateWorkspace() {
@@ -475,15 +553,13 @@ export default function WorkspaceListPage() {
       setRepos(repoList);
       setWorkspaceList(wsList);
       setActiveId(prev => {
-        if (routeWorkspaceId && wsList.some((ws: Workspace) => ws._id === routeWorkspaceId)) return routeWorkspaceId;
-        if (!routeWorkspaceId) return '';
         if (prev && wsList.some((ws: Workspace) => ws._id === prev)) return prev;
         return '';
       });
     } finally {
       setLoading(false);
     }
-  }, [routeWorkspaceId]);
+  }, []);
 
   useEffect(() => { loadWorkspaces(); }, [loadWorkspaces]);
 
@@ -618,6 +694,10 @@ export default function WorkspaceListPage() {
     setWorkspaceChats(chats as ChatSessionSummary[]);
   }
 
+  function prependWorkspace(workspace: Workspace) {
+    setWorkspaceList(prev => [workspace, ...prev.filter(item => item._id !== workspace._id)]);
+  }
+
   async function openExplorerFile(path: string) {
     if (!activeId) return;
     if (fileDirty && !window.confirm('Discard unsaved changes?')) return;
@@ -701,7 +781,7 @@ export default function WorkspaceListPage() {
     try {
       await workspaces.archive(workspaceId);
       setWorkspaceList(prev => prev.filter(ws => ws._id !== workspaceId));
-      if (activeId === workspaceId || routeWorkspaceId === workspaceId) {
+      if (activeId === workspaceId) {
         setActiveId('');
         navigate('/workspaces');
       }
@@ -732,7 +812,8 @@ export default function WorkspaceListPage() {
 
   const activeChatId = activeTab.startsWith('chat:') ? activeTab.slice(5) : null;
   const availablePreviousChats = workspaceChats.filter(chat => !openChatIds.includes(chat._id));
-  const showWorkspaceDetail = Boolean(routeWorkspaceId) || creating;
+  const showWorkspaceDetail = false;
+  const createRepos = repos.map(toWorkspaceCreateRepo);
 
   const listContent = (
     <div className="content h-full overflow-y-auto !p-0 scroll-hide bg-app" data-screen-label="workspaces">
@@ -892,10 +973,34 @@ export default function WorkspaceListPage() {
       <div className="ws-shell ws-list-shell" data-screen-label="workspaces">
         {listContent}
         {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
+        {repoPickerOpen && (
+          <WorkspaceRepoPickerDialog
+            repos={createRepos}
+            loading={loading}
+            onClose={() => setRepoPickerOpen(false)}
+            onSelect={(repo) => {
+              setRepoPickerOpen(false);
+              setWorkspaceCreateRepo(repo);
+            }}
+          />
+        )}
+        {workspaceCreateRepo && (
+          <WorkspaceCreateDialog
+            repo={workspaceCreateRepo}
+            onClose={() => setWorkspaceCreateRepo(null)}
+            onCreatedPending={(workspace) => prependWorkspace(workspace as Workspace)}
+            onCreated={(workspace) => {
+              prependWorkspace(workspace as Workspace);
+              setWorkspaceCreateRepo(null);
+              void loadWorkspaces();
+              navigate(workspaceChatPath(workspace._id));
+            }}
+          />
+        )}
         {pendingWsId && (
           <SetupProgressDialog
             workspaceId={pendingWsId}
-            onComplete={(ws) => { setPendingWsId(null); setActiveId(ws._id); loadWorkspaces(); navigate(`/workspaces/${ws._id}`); }}
+            onComplete={(ws) => { setPendingWsId(null); setActiveId(ws._id); loadWorkspaces(); navigate(workspaceChatPath(ws._id)); }}
             onFailed={() => { setPendingWsId(null); loadWorkspaces(); }}
           />
         )}
@@ -1245,7 +1350,7 @@ export default function WorkspaceListPage() {
       {pendingWsId && (
         <SetupProgressDialog
           workspaceId={pendingWsId}
-          onComplete={(ws) => { setPendingWsId(null); setActiveId(ws._id); loadWorkspaces(); navigate(`/workspaces/${ws._id}`); }}
+          onComplete={(ws) => { setPendingWsId(null); setActiveId(ws._id); loadWorkspaces(); navigate(workspaceChatPath(ws._id)); }}
           onFailed={() => { setPendingWsId(null); loadWorkspaces(); }}
         />
       )}

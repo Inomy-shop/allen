@@ -30,7 +30,7 @@ export default function ChatContextPanel({ sessionId }: { sessionId?: string | n
       }
     };
     void load(true);
-    const interval = window.setInterval(() => { void load(false); }, 5000);
+    const interval = window.setInterval(() => { void load(false); }, 30000);
     return () => {
       cancelled = true;
       window.clearInterval(interval);

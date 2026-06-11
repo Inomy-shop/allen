@@ -363,16 +363,13 @@ export class PullRequestService {
 
   // ── CodeRabbit resolution support ────────────────────────────────
 
-  /** Find a PR by its full GitHub URL (the primary identifier used by
-   *  the resolve-pr-reviews workflow's entry point). */
+  /** Find a PR by its full GitHub URL. */
   async findByPrUrl(url: string): Promise<PullRequest | null> {
     return this.col.findOne({ url }) as Promise<PullRequest | null>;
   }
 
-  /** Given a PR URL, return the workspace that was used to create it
-   *  (Flow A). Returns null if the PR isn't tracked or has no
-   *  workspaceId yet — caller should fall back to Flow B
-   *  (create-workspace-for-review) in that case. */
+  /** Given a PR URL, return the workspace that was used to create it.
+   *  Returns null if the PR isn't tracked or has no workspaceId yet. */
   async findWorkspaceByPrUrl(url: string): Promise<Record<string, unknown> | null> {
     const pr = await this.findByPrUrl(url);
     if (!pr?.workspaceId) return null;

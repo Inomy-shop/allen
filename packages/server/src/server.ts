@@ -43,13 +43,18 @@ import { createPrSyncAllAction } from './services/pull-request.service.js';
 import { createMcpBundleCleanupAction } from './services/mcp-bundle.service.js';
 import { createSelfHealingMonitorScanAction } from './services/self-healing-monitor.service.js';
 import { runTrustBootstrap } from './services/trust-bootstrap.service.js';
+import { seedContextQuality } from './services/context/judge/context-quality-seed.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
 import { designDocRoutes } from './routes/design-doc.routes.js';
+import { designRoutes } from './routes/design.routes.js';
+import { designReposRoutes, createDesignRepoPreviewHandler } from './routes/design-repos.routes.js';
+import { DesignRepoPreviewManager } from './services/design-repo-preview-manager.js';
 import { interventionRoutes } from './routes/intervention.routes.js';
 import { linearRoutes } from './routes/linear.routes.js';
 import { monitoringRoutes } from './routes/monitoring.routes.js';
 import { internalContextEvaluationRoutes } from './routes/context-evaluation.routes.js';
 import { contextRoutes } from './routes/context.routes.js';
+import { contextQualityRoutes } from './routes/context-quality.routes.js';
 import { authRoutes } from './routes/auth.routes.js';
 import { systemRoutes } from './routes/system.routes.js';
 import { userRoutes } from './routes/users.routes.js';
@@ -125,8 +130,6 @@ async function registerCronActions(db: Db, cronService: CronService): Promise<vo
   cronService.registerSystemAction(createPrSyncAllAction(db));
   cronService.registerSystemAction(createMcpBundleCleanupAction(db));
   cronService.registerSystemAction(createSelfHealingMonitorScanAction(db));
-  const { createCodeRabbitSweepAction } = await import('./services/coderabbit-sweep.service.js');
-  cronService.registerSystemAction(createCodeRabbitSweepAction(db));
 }
 
 async function runBootTasks(db: Db, cronService: CronService): Promise<void> {
@@ -139,6 +142,15 @@ async function runBootTasks(db: Db, cronService: CronService): Promise<void> {
     logger.info('[mcp] Initial Codex sync complete', { component: 'mcp' });
   } catch (err) {
     logger.error('[mcp] Initial Codex sync failed', { component: 'mcp', error: (err as Error).message });
+  }
+
+  try {
+    await seedContextQuality(db);
+  } catch (err) {
+    logger.error('[context-quality-seed] Startup seed failed — continuing boot', {
+      component: 'context-quality-seed',
+      error: (err as Error).message,
+    });
   }
 
   await new OrgSeedService(db).seed();
@@ -214,6 +226,8 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
   app.use('/api/workspaces', publicWorkspaceRoutes(db));
   app.use('/api/workspaces/:id/preview', createWorkspaceProxy(db));
 
+  app.use('/api/design/repos/:repoId/preview', createDesignRepoPreviewHandler(db));
+
   app.use('/api', requireAuth, blockIfMustReset);
 
   app.use('/api/users', userRoutes(db));
@@ -221,6 +235,7 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
   app.use('/api/skills', skillRoutes(db));
   app.use('/api/executions', executionRoutes(db));
   app.use('/api/context', contextRoutes(db));
+  app.use('/api/context/quality', contextQualityRoutes(db));
   app.use('/api/agents', agentRoutes(db));
   app.use('/api/teams', teamRoutes(db));
   app.use('/api/dashboard', dashboardRoutes(db));
@@ -234,6 +249,8 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
   app.use('/api/pull-requests', pullRequestRoutes(db));
   app.use('/api/crons', cronRoutes(db, cronService));
   app.use('/api/design-docs', designDocRoutes(db));
+  app.use('/api/design', designRoutes(db));
+  app.use('/api/design', designReposRoutes(db));
   app.use('/api/interventions', interventionRoutes(db));
   app.use('/api/linear', linearRoutes(db));
   app.use('/api/monitoring', monitoringRoutes(db));
@@ -356,6 +373,7 @@ export async function startAllenServer(options: StartAllenServerOptions = {}): P
       await collect(() => orphanSweeperHandle?.stop());
       await collect(() => stopMcpHealthMonitor());
       await collect(() => cronService.stop());
+      await collect(() => DesignRepoPreviewManager.stopAll());
       await collect(() => closeHttpServer(httpServer));
       await collect(() => stalePidCleanup);
       if (shouldManageDb) await collect(() => disconnectDB());

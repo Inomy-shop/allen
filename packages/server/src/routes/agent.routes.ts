@@ -9,8 +9,71 @@ import {
 } from '../services/claude-agents-importer.js';
 import { executeChatTool } from '../services/chat-tools.js';
 import { getAgentDefaults } from '../services/llm-defaults.js';
+import { PROVIDERS, type ChatProvider } from '../services/chat-providers.js';
 
 const ALLOWED_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max']);
+const PROVIDER_IDS = new Set(PROVIDERS.map((provider) => provider.provider));
+const BULK_MODEL_CLEARABLE_CODES = new Set([
+  'plan_mode_claude_only',
+  'effort_max_claude_only',
+  'effort_max_requires_opus',
+]);
+
+type BulkModelSkipped = {
+  name: string;
+  reason: 'not-found' | 'incompatible-settings';
+  code?: string;
+  message?: string;
+};
+
+type BulkModelRequest = {
+  agentNames: string[];
+  provider: ChatProvider;
+  model: string;
+  clearIncompatibleSettings: boolean;
+};
+
+type AgentBundle = {
+  version?: number;
+  kind?: string;
+  exportedAt?: string;
+  agents?: Record<string, unknown>[];
+  teams?: Record<string, unknown>[];
+};
+
+function sanitizePortableAgent(agent: Record<string, unknown>): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...agent };
+  delete copy._id;
+  delete copy.createdAt;
+  delete copy.updatedAt;
+  delete copy.sourceRepoId;
+  delete copy.sourceRepoPath;
+  delete copy.sourceFile;
+  delete copy.sourceSha;
+  copy.isBuiltIn = false;
+  copy.createdBy = 'import';
+  return copy;
+}
+
+function sanitizePortableTeam(team: Record<string, unknown>): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...team };
+  delete copy._id;
+  delete copy.createdAt;
+  delete copy.updatedAt;
+  copy.isBuiltIn = false;
+  copy.createdBy = 'import';
+  return copy;
+}
+
+function parseAgentNames(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : [];
+  return [...new Set(raw.map((name) => typeof name === 'string' ? name.trim() : '').filter(Boolean))];
+}
+
 
 function titleFromAgentSlug(slug: string): string {
   return slug
@@ -43,9 +106,205 @@ function validateAgentSettingsFields(body: Record<string, unknown>): void {
   resolveAgentSettings(probe);
 }
 
+function validateBulkModelRequest(body: unknown): BulkModelRequest {
+  const input = (body ?? {}) as Record<string, unknown>;
+  if (!Array.isArray(input.agentNames) || input.agentNames.length === 0) {
+    throw Object.assign(
+      new Error('agentNames must be a non-empty array of unique non-empty strings'),
+      { code: 'invalid_agent_names' },
+    );
+  }
+
+  const agentNames: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of input.agentNames) {
+    if (typeof raw !== 'string' || !raw.trim()) {
+      throw Object.assign(
+        new Error('agentNames must be a non-empty array of unique non-empty strings'),
+        { code: 'invalid_agent_names' },
+      );
+    }
+    const name = raw.trim();
+    if (seen.has(name)) {
+      throw Object.assign(new Error('agentNames must be unique'), { code: 'duplicate_agent_names' });
+    }
+    seen.add(name);
+    agentNames.push(name);
+  }
+
+  if (typeof input.provider !== 'string' || !PROVIDER_IDS.has(input.provider as ChatProvider)) {
+    throw Object.assign(
+      new Error(`provider must be one of: ${[...PROVIDER_IDS].join(', ')}`),
+      { code: 'invalid_provider' },
+    );
+  }
+
+  if (typeof input.model !== 'string' || !input.model.trim()) {
+    throw Object.assign(new Error('model must be a non-empty string'), { code: 'invalid_model' });
+  }
+
+  if (input.clearIncompatibleSettings !== undefined && typeof input.clearIncompatibleSettings !== 'boolean') {
+    throw Object.assign(
+      new Error('clearIncompatibleSettings must be a boolean'),
+      { code: 'invalid_clear_incompatible_settings' },
+    );
+  }
+
+  return {
+    agentNames,
+    provider: input.provider as ChatProvider,
+    model: input.model.trim(),
+    clearIncompatibleSettings: input.clearIncompatibleSettings === true,
+  };
+}
+
+function validateBulkModelCandidate(
+  existing: Record<string, unknown>,
+  provider: ChatProvider,
+  model: string,
+  unsetFields: Set<'planMode' | 'reasoningEffort'>,
+): void {
+  const candidate: Record<string, unknown> = { ...existing, provider, model };
+  for (const field of unsetFields) {
+    delete candidate[field];
+  }
+  validateAgentSettingsFields(candidate);
+}
+
+function markClearableBulkModelField(
+  err: AgentSettingsValidationError,
+  existing: Record<string, unknown>,
+  unsetFields: Set<'planMode' | 'reasoningEffort'>,
+): boolean {
+  if (!BULK_MODEL_CLEARABLE_CODES.has(err.code)) return false;
+
+  if (err.code === 'plan_mode_claude_only' && !unsetFields.has('planMode')) {
+    unsetFields.add('planMode');
+    return true;
+  }
+
+  if (
+    (err.code === 'effort_max_claude_only' || err.code === 'effort_max_requires_opus') &&
+    existing.reasoningEffort === 'max' &&
+    !unsetFields.has('reasoningEffort')
+  ) {
+    unsetFields.add('reasoningEffort');
+    return true;
+  }
+
+  return false;
+}
+
 export function agentRoutes(db: Db): Router {
   const router = Router();
   const col = db.collection('agents');
+
+  // POST /api/agents/export — portable JSON bundle for selected/all agents.
+  router.post('/export', async (req: Request, res: Response) => {
+    try {
+      const agentNames = parseAgentNames(req.body?.agentNames);
+      const filter = agentNames.length > 0 ? { name: { $in: agentNames } } : {};
+      const rows = await col.find(filter).sort({ name: 1 }).toArray();
+      const exportedAgents = rows.map((agent) => sanitizePortableAgent(agent as Record<string, unknown>));
+      const teamNames = [...new Set(exportedAgents
+        .map((agent) => typeof agent.teamName === 'string' ? agent.teamName : '')
+        .filter(Boolean))];
+      const teams = teamNames.length > 0
+        ? await db.collection('teams').find({ name: { $in: teamNames } }).sort({ name: 1 }).toArray()
+        : [];
+
+      res.json({
+        kind: 'allen-agents-bundle',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        agents: exportedAgents,
+        teams: teams.map((team) => sanitizePortableTeam(team as Record<string, unknown>)),
+      });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/agents/import/json — import agents exported by /agents/export.
+  router.post('/import/json', async (req: Request, res: Response) => {
+    try {
+      const bundle = (req.body ?? {}) as AgentBundle;
+      const incomingAgents = Array.isArray(bundle.agents) ? bundle.agents : [];
+      const incomingTeams = Array.isArray(bundle.teams) ? bundle.teams : [];
+      if (incomingAgents.length === 0) {
+        return res.status(400).json({ error: 'agents must be a non-empty array' });
+      }
+
+      const createdTeams: string[] = [];
+      const skippedTeams: { name: string; reason: string }[] = [];
+      for (const rawTeam of incomingTeams) {
+        const name = typeof rawTeam.name === 'string' ? rawTeam.name.trim() : '';
+        const displayName = typeof rawTeam.displayName === 'string' ? rawTeam.displayName.trim() : '';
+        const leadAgentName = typeof rawTeam.leadAgentName === 'string' ? rawTeam.leadAgentName.trim() : '';
+        if (!name || !displayName || !leadAgentName) {
+          skippedTeams.push({ name: name || '(missing)', reason: 'invalid-team' });
+          continue;
+        }
+        const existing = await db.collection('teams').findOne({ name });
+        if (existing) {
+          skippedTeams.push({ name, reason: 'already-exists' });
+          continue;
+        }
+        const teamDoc = {
+          ...sanitizePortableTeam(rawTeam),
+          name,
+          displayName,
+          leadAgentName,
+          description: typeof rawTeam.description === 'string' ? rawTeam.description : '',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        await db.collection('teams').insertOne(teamDoc);
+        createdTeams.push(name);
+      }
+
+      const created: string[] = [];
+      const skipped: { name: string; reason: string }[] = [];
+      for (const rawAgent of incomingAgents) {
+        const name = typeof rawAgent.name === 'string' ? rawAgent.name.trim() : '';
+        if (!name) {
+          skipped.push({ name: '(missing)', reason: 'invalid-agent' });
+          continue;
+        }
+        const existing = await col.findOne({ name });
+        if (existing) {
+          skipped.push({ name, reason: 'already-exists' });
+          continue;
+        }
+
+        const agentDoc = {
+          ...sanitizePortableAgent(rawAgent),
+          name,
+          displayName: typeof rawAgent.displayName === 'string' && rawAgent.displayName.trim()
+            ? rawAgent.displayName.trim()
+            : titleFromAgentSlug(name),
+          teamName: typeof rawAgent.teamName === 'string' && rawAgent.teamName.trim() ? rawAgent.teamName.trim() : 'unassigned',
+          teamRole: rawAgent.teamRole === 'lead' ? 'lead' : 'member',
+          provider: typeof rawAgent.provider === 'string' ? rawAgent.provider : getAgentDefaults().provider,
+          model: typeof rawAgent.model === 'string' ? rawAgent.model : getAgentDefaults().model,
+          isBuiltIn: false,
+          createdBy: 'import',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        validateAgentSettingsFields(agentDoc);
+        await col.insertOne(agentDoc);
+        created.push(name);
+      }
+
+      res.status(201).json({ created, skipped, createdTeams, skippedTeams });
+    } catch (err: unknown) {
+      if (err instanceof AgentSettingsValidationError) {
+        return res.status(400).json({ error: err.message, code: err.code });
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
   // GET /api/agents
   router.get('/', async (_req: Request, res: Response) => {
@@ -393,6 +652,83 @@ export function agentRoutes(db: Db): Router {
 
       res.json({ moved, skipped, autoWireSpawnTargets: autoWire });
     } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/agents/bulk-model  { agentNames, provider, model, clearIncompatibleSettings? }
+  // Update provider/model for selected agents. Missing or semantically incompatible
+  // agents are skipped so compatible selected agents can still be updated.
+  router.post('/bulk-model', async (req: Request, res: Response) => {
+    try {
+      const { agentNames, provider, model, clearIncompatibleSettings } = validateBulkModelRequest(req.body);
+      const updated: string[] = [];
+      const skipped: BulkModelSkipped[] = [];
+
+      for (const name of agentNames) {
+        const existing = await col.findOne({ name });
+        if (!existing) {
+          skipped.push({ name, reason: 'not-found' });
+          continue;
+        }
+
+        const unsetFields = new Set<'planMode' | 'reasoningEffort'>();
+        let validationError: AgentSettingsValidationError | null = null;
+
+        for (let attempt = 0; attempt <= 2; attempt += 1) {
+          try {
+            validateBulkModelCandidate(existing, provider, model, unsetFields);
+            validationError = null;
+            break;
+          } catch (err) {
+            if (!(err instanceof AgentSettingsValidationError)) throw err;
+            validationError = err;
+            if (!clearIncompatibleSettings || !markClearableBulkModelField(err, existing, unsetFields)) {
+              break;
+            }
+          }
+        }
+
+        if (validationError) {
+          skipped.push({
+            name,
+            reason: 'incompatible-settings',
+            code: validationError.code,
+            message: validationError.message,
+          });
+          continue;
+        }
+
+        const update: {
+          $set: { provider: ChatProvider; model: string; updatedAt: Date };
+          $unset?: Partial<Record<'planMode' | 'reasoningEffort', ''>>;
+        } = {
+          $set: { provider, model, updatedAt: new Date() },
+        };
+        if (unsetFields.size > 0) {
+          update.$unset = {};
+          for (const field of unsetFields) {
+            update.$unset[field] = '';
+          }
+        }
+
+        const result = await col.updateOne({ name }, update);
+        if (result.matchedCount === 0) {
+          skipped.push({ name, reason: 'not-found' });
+          continue;
+        }
+        updated.push(name);
+      }
+
+      res.json({ updated, skipped });
+    } catch (err: unknown) {
+      if (err instanceof AgentSettingsValidationError) {
+        return res.status(400).json({ error: err.message, code: err.code });
+      }
+      const codedError = err as Error & { code?: string };
+      if (codedError.code) {
+        return res.status(400).json({ error: codedError.message, code: codedError.code });
+      }
       res.status(500).json({ error: (err as Error).message });
     }
   });

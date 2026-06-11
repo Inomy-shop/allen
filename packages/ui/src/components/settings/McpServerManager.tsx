@@ -1306,9 +1306,9 @@ function TabButton({ active, onClick, icon, children }: { active: boolean; onCli
 
 // ── Preset picker ───────────────────────────────────────────────────────────
 
-function AddFromPreset({ onAdded, onClose }: { onAdded: () => void; onClose: () => void }) {
+function AddFromPreset({ onAdded, onClose, initialPresetName }: { onAdded: () => void; onClose: () => void; initialPresetName?: string }) {
   const [presets, setPresets] = useState<McpPreset[]>([]);
-  const [configuringName, setConfiguringName] = useState<string | null>(null);
+  const [configuringName, setConfiguringName] = useState<string | null>(initialPresetName ?? null);
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [missing, setMissing] = useState<string[] | null>(null);
@@ -1337,6 +1337,23 @@ function AddFromPreset({ onAdded, onClose }: { onAdded: () => void; onClose: () 
   }, [presets, query]);
 
   const configuringPreset = presets.find((preset) => preset.name === configuringName) ?? null;
+
+  // When opened directly for a specific preset, show a loading spinner until the
+  // presets list resolves, then jump straight to the configure form.
+  if (initialPresetName && !configuringPreset) {
+    if (presets.length === 0 && !error) {
+      return (
+        <div className="flex items-center justify-center gap-2 py-12 font-mono text-[12px] text-theme-muted">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading preset…
+        </div>
+      );
+    }
+    return (
+      <div className="rounded-md border border-accent-red/30 bg-accent-red/10 px-4 py-4 text-[12px] text-accent-red">
+        Preset &quot;{initialPresetName}&quot; not found.
+      </div>
+    );
+  }
 
   function presetCredentialKeys(preset: McpPreset): string[] {
     return [...preset.envKeys, ...(preset.argKeys ?? [])];
@@ -1546,7 +1563,12 @@ function AddFromPreset({ onAdded, onClose }: { onAdded: () => void; onClose: () 
             type="button"
             onClick={() => {
               if (!busy) {
-                setConfiguringName(null);
+                if (initialPresetName) {
+                  // Opened directly for a preset — Back closes the modal.
+                  onClose();
+                } else {
+                  setConfiguringName(null);
+                }
                 setMissing(null);
                 setError(null);
                 setConnectResult(null);
@@ -2080,6 +2102,38 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       </label>
       {children}
     </div>
+  );
+}
+
+// ── Direct preset connect modal ────────────────────────────────────────────
+
+/**
+ * Opens the preset connect flow directly for the given preset (e.g. 'linear', 'github').
+ * Skips the preset picker grid and jumps straight to the credential form.
+ * Used by disconnected-state cards on TicketsPage, PullRequestListPage, and DashboardPage.
+ */
+export function McpPresetConnectModal({
+  presetName,
+  onClose,
+  onConnected,
+}: {
+  presetName: string;
+  onClose: () => void;
+  onConnected: () => void;
+}) {
+  return (
+    <McpServerModalShell
+      title={`Connect ${presetName}`}
+      description={`Provide the required credentials to connect Allen to ${presetName}.`}
+      onClose={onClose}
+      maxWidth="max-w-2xl"
+    >
+      <AddFromPreset
+        onAdded={onConnected}
+        onClose={onClose}
+        initialPresetName={presetName}
+      />
+    </McpServerModalShell>
   );
 }
 

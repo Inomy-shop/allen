@@ -579,7 +579,6 @@ Return selected route, scope classification, required inputs, and whether human 
     excludes: ['build feature from scratch'],
     priority: 78,
     allowedRoutes: ['direct_answer', 'spawn_agent', 'run_workflow'],
-    relatedWorkflows: ['resolve-pr-reviews'],
     relatedAgents: ['code-reviewer', 'qa-lead', 'test-planner', 'test-writer', 'pr-review-bot'],
     body: `# Review Routing
 
@@ -594,7 +593,7 @@ Inspect PR URL, diff, comments, existing workspace, tests, and review bot state.
 
 ## Routing
 - Read-only review: spawn code-reviewer or answer with checked evidence.
-- Resolve review comments on a PR: run resolve-pr-reviews.
+- Resolve review comments on a PR: spawn pr-review-bot with the PR URL and checked review context.
 - Review reveals bigger bug/feature work: route through bug-fix-routing or feature-routing.
 
 ## Output

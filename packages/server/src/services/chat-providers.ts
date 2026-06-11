@@ -9,11 +9,13 @@ import type { Db } from 'mongodb';
 import type { ChatTraceEvent } from './chat-llm.js';
 import { resolve, dirname } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
-import type { BuildMcpConfigOptions } from '@allen/engine';
+import { aggregateTokenUsage, normalizeCodexUsage, type BuildMcpConfigOptions, type TokenUsageInfo } from '@allen/engine';
 import {
   getRuntimeApiBaseUrl,
+  getRuntimeConfigProvider,
   getRuntimeJwtAccessSecret,
   getRuntimePublicBaseUrl,
+  getRuntimeSecretsProvider,
 } from '../runtime/config.js';
 import { buildMcpSourceEnvForServer } from '../runtime/mcp-credentials.js';
 
@@ -37,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 
 // ── Shared Types ──
 
-export type ChatProvider = 'codex' | 'claude-cli';
+export type ChatProvider = 'codex' | 'claude-cli' | (string & {});
 
 export interface ProviderMessage {
   role: 'user' | 'assistant' | 'system';
@@ -61,6 +63,7 @@ export interface ProviderResult {
   costUsd: number;
   sessionId?: string;
   trace: ChatTraceEvent[];
+  tokenUsage?: TokenUsageInfo | null;
 }
 
 export interface ProviderConfig {
@@ -72,6 +75,90 @@ export interface ProviderConfig {
   supportsMcp: boolean;
   supportsStreaming: boolean;
   supportsSessionResume: boolean;
+  /** Whether this provider uses an open (user-supplied) model string. */
+  open?: boolean;
+  /** Suggested model strings for open providers. */
+  modelSuggestions?: string[];
+}
+
+export interface ClaudeCompatibleProviderConfig {
+  provider: string;
+  label: string;
+  apiKeyEnv: string;
+  baseUrlEnv: string;
+  modelEnv: string;
+  opusModelEnv?: string;
+  flashModelEnv: string;
+  defaultBaseUrl: string;
+  defaultModel: string;
+  defaultOpusModel?: string;
+  defaultFlashModel: string;
+  modelSuggestions: string[];
+  apiKeyPlaceholder: string;
+  baseUrlDescription: string;
+}
+
+export const CLAUDE_COMPATIBLE_PROVIDER_CONFIGS: ClaudeCompatibleProviderConfig[] = [
+  {
+    provider: 'deepseek',
+    label: 'DeepSeek',
+    apiKeyEnv: 'ALLEN_DEEPSEEK_API_KEY',
+    baseUrlEnv: 'ALLEN_DEEPSEEK_BASE_URL',
+    modelEnv: 'ALLEN_DEEPSEEK_MODEL',
+    flashModelEnv: 'ALLEN_DEEPSEEK_FLASH_MODEL',
+    defaultBaseUrl: 'https://api.deepseek.com/anthropic',
+    defaultModel: 'deepseek-v4-pro[1m]',
+    defaultFlashModel: 'deepseek-v4-flash',
+    modelSuggestions: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
+    apiKeyPlaceholder: 'sk-...',
+    baseUrlDescription: 'Leave blank to use the default DeepSeek Claude Code endpoint (https://api.deepseek.com/anthropic).',
+  },
+  {
+    provider: 'xiaomi-mimo',
+    label: 'Xiaomi MiMo',
+    apiKeyEnv: 'ALLEN_XIAOMI_MIMO_API_KEY',
+    baseUrlEnv: 'ALLEN_XIAOMI_MIMO_BASE_URL',
+    modelEnv: 'ALLEN_XIAOMI_MIMO_MODEL',
+    flashModelEnv: 'ALLEN_XIAOMI_MIMO_FLASH_MODEL',
+    defaultBaseUrl: 'https://api.xiaomimimo.com/anthropic',
+    defaultModel: 'mimo-v2.5-pro',
+    defaultFlashModel: 'mimo-v2.5-pro',
+    modelSuggestions: ['mimo-v2.5-pro'],
+    apiKeyPlaceholder: 'xm-...',
+    baseUrlDescription: 'Leave blank to use the default MiMo Anthropic-compatible endpoint (https://api.xiaomimimo.com/anthropic). Token Plan users can enter their subscription base URL.',
+  },
+  {
+    provider: 'kimi',
+    label: 'Kimi',
+    apiKeyEnv: 'ALLEN_KIMI_API_KEY',
+    baseUrlEnv: 'ALLEN_KIMI_BASE_URL',
+    modelEnv: 'ALLEN_KIMI_MODEL',
+    opusModelEnv: 'ALLEN_KIMI_OPUS_MODEL',
+    flashModelEnv: 'ALLEN_KIMI_FLASH_MODEL',
+    defaultBaseUrl: 'https://api.moonshot.ai/anthropic',
+    defaultModel: 'kimi-k2.5',
+    defaultOpusModel: 'kimi-k2.6',
+    defaultFlashModel: 'kimi-k2.5',
+    modelSuggestions: ['kimi-k2.6', 'kimi-k2.5'],
+    apiKeyPlaceholder: 'sk-...',
+    baseUrlDescription: 'Leave blank to use the default Kimi Anthropic-compatible endpoint (https://api.moonshot.ai/anthropic).',
+  },
+];
+
+const CLAUDE_COMPATIBLE_PROVIDER_BY_ID = new Map(
+  CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config) => [config.provider, config] as const),
+);
+
+export function isClaudeCompatibleProvider(provider: unknown): provider is string {
+  return CLAUDE_COMPATIBLE_PROVIDER_BY_ID.has(provider as ClaudeCompatibleProviderConfig['provider']);
+}
+
+export function getClaudeCompatibleProviderConfig(provider: unknown): ClaudeCompatibleProviderConfig | undefined {
+  return CLAUDE_COMPATIBLE_PROVIDER_BY_ID.get(provider as ClaudeCompatibleProviderConfig['provider']);
+}
+
+export function isClaudeFamilyProvider(provider: unknown): boolean {
+  return provider === 'claude-cli' || isClaudeCompatibleProvider(provider);
 }
 
 // ── Provider Registry ──
@@ -90,13 +177,25 @@ export const PROVIDERS: ProviderConfig[] = [
   {
     provider: 'claude-cli',
     label: 'Claude (CLI)',
-    models: ['sonnet', 'opus', 'haiku'],
+    models: ['fable', 'sonnet', 'opus', 'haiku'],
     defaultModel: 'sonnet',
     requiresKey: null,
     supportsMcp: true,
     supportsStreaming: true,
     supportsSessionResume: true,
   },
+  ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config): ProviderConfig => ({
+    provider: config.provider,
+    label: config.label,
+    models: [],
+    modelSuggestions: config.modelSuggestions,
+    open: true,
+    defaultModel: config.defaultModel,
+    requiresKey: config.apiKeyEnv,
+    supportsMcp: true,
+    supportsStreaming: true,
+    supportsSessionResume: true,
+  })),
 ];
 
 /**
@@ -112,17 +211,51 @@ export function getDefaultChatProvider(): ChatProvider {
   return 'codex';
 }
 
+export function getDefaultChatModel(provider: ChatProvider = getDefaultChatProvider()): string {
+  const cfg = PROVIDERS.find((p) => p.provider === provider);
+  const fallback = cfg?.defaultModel ?? 'gpt-5.5';
+  const raw = process.env.ALLEN_DEFAULT_CHAT_MODEL?.trim();
+  if (!raw) return fallback;
+  if (cfg?.open) return raw;
+  return cfg?.models.includes(raw) ? raw : fallback;
+}
+
 /**
  * Return the registered providers with the env-configured default first, so
  * UI consumers that pick the head of the list naturally honor the setting.
  */
 export function getProvidersInDefaultOrder(): ProviderConfig[] {
   const def = getDefaultChatProvider();
-  return [...PROVIDERS].sort((a, b) => {
+  const defaultChatModel = getDefaultChatModel(def);
+  return [...PROVIDERS].map((provider) => (
+    provider.provider === def ? { ...provider, defaultModel: defaultChatModel } : provider
+  )).sort((a, b) => {
     if (a.provider === def && b.provider !== def) return -1;
     if (b.provider === def && a.provider !== def) return 1;
     return 0;
   });
+}
+
+async function isProviderEnabled(provider: ProviderConfig): Promise<boolean> {
+  if (!provider.requiresKey) return true;
+  const configValue = getRuntimeConfigProvider().get(provider.requiresKey);
+  if (configValue) return true;
+  const secretValue = await getRuntimeSecretsProvider().getSecret(provider.requiresKey).catch(() => undefined);
+  return Boolean(secretValue);
+}
+
+/**
+ * Return only providers that are enabled in runtime settings. CLI-backed
+ * providers are always available; API providers are enabled by having their
+ * configured secret/config key present.
+ */
+export async function getEnabledProvidersInDefaultOrder(): Promise<ProviderConfig[]> {
+  const ordered = getProvidersInDefaultOrder();
+  const enabled = await Promise.all(ordered.map(async (provider) => ({
+    provider,
+    enabled: await isProviderEnabled(provider),
+  })));
+  return enabled.filter((item) => item.enabled).map((item) => item.provider);
 }
 
 /**
@@ -420,6 +553,7 @@ export async function runCodexCLI(
     let rawResponse = '';
     let threadId: string | undefined = resumeSessionId;
     let lineBuffer = '';
+    let tokenUsage: TokenUsageInfo | null = null;
 
     // Codex emits `item.started` and `item.completed` separately for
     // MCP tools and shell commands. Pair them by item.id so duration
@@ -542,6 +676,10 @@ export async function runCodexCLI(
             callbacks.onToolResult('Bash', result, id, durationMs);
             pendingStarts.delete(id);
           }
+
+          if (event.type === 'turn.completed' && event.usage) {
+            tokenUsage = aggregateTokenUsage(tokenUsage, normalizeCodexUsage(event.usage));
+          }
         } catch { /* skip non-JSON */ }
       }
     });
@@ -568,7 +706,72 @@ export async function runCodexCLI(
         reject(new Error(errMsg));
         return;
       }
-      resolve({ text: rawResponse, costUsd: 0, sessionId: threadId, trace });
+      resolve({ text: rawResponse, costUsd: 0, sessionId: threadId, trace, tokenUsage });
     });
   });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Claude-compatible API providers (via Claude Code env overlay)
+// ════════════════════════════════════════════════════════════════════════════
+
+const DEEPSEEK_ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic';
+
+export function normalizeDeepSeekAnthropicBaseUrl(value?: string): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return DEEPSEEK_ANTHROPIC_BASE_URL;
+  const normalized = trimmed.replace(/\/+$/, '');
+  if (normalized === 'https://api.deepseek.com' || normalized === 'https://api.deepseek.com/v1') {
+    return DEEPSEEK_ANTHROPIC_BASE_URL;
+  }
+  return trimmed;
+}
+
+/**
+ * Build a process-env overlay that redirects Claude Code SDK / CLI requests to
+ * a registered Anthropic-compatible API provider. Adding a new provider should
+ * only require a CLAUDE_COMPATIBLE_PROVIDER_CONFIGS entry and UI copy.
+ */
+export async function buildClaudeCompatibleEnvOverlay(provider: string, model?: string): Promise<Record<string, string>> {
+  const config = getClaudeCompatibleProviderConfig(provider);
+  if (!config) throw new Error(`Provider ${provider} is not a Claude-compatible API provider.`);
+  const runtimeConfig = getRuntimeConfigProvider();
+  const runtimeSecrets = getRuntimeSecretsProvider();
+  const apiKey = await runtimeSecrets.getSecret(config.apiKeyEnv)
+    ?? runtimeConfig.get(config.apiKeyEnv)
+    ?? process.env[config.apiKeyEnv]
+    ?? '';
+  const configuredBaseUrl = runtimeConfig.get(config.baseUrlEnv) ?? process.env[config.baseUrlEnv] ?? config.defaultBaseUrl;
+  const baseUrl = provider === 'deepseek'
+    ? normalizeDeepSeekAnthropicBaseUrl(configuredBaseUrl)
+    : configuredBaseUrl;
+  const defaultModel = runtimeConfig.get(config.modelEnv) ?? process.env[config.modelEnv] ?? config.defaultModel;
+  const opusModel = config.opusModelEnv
+    ? runtimeConfig.get(config.opusModelEnv) ?? process.env[config.opusModelEnv] ?? config.defaultOpusModel ?? defaultModel
+    : defaultModel;
+  const flashModel = runtimeConfig.get(config.flashModelEnv) ?? process.env[config.flashModelEnv] ?? config.defaultFlashModel;
+  const effectiveModel = model && model !== 'default' ? model : defaultModel;
+  if (!apiKey) throw new Error(`${config.apiKeyEnv} is not set. Configure this secret in Allen Settings > Secrets.`);
+  return {
+    ANTHROPIC_BASE_URL: baseUrl,
+    ANTHROPIC_AUTH_TOKEN: apiKey,
+    ANTHROPIC_MODEL: effectiveModel,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: config.opusModelEnv ? opusModel : effectiveModel,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: effectiveModel,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: flashModel,
+    CLAUDE_CODE_SUBAGENT_MODEL: flashModel,
+    CLAUDE_CODE_EFFORT_LEVEL: 'max',
+  };
+}
+
+export function buildDeepSeekEnvOverlay(model?: string): Promise<Record<string, string>> {
+  return buildClaudeCompatibleEnvOverlay('deepseek', model);
+}
+
+export function buildXiaomiMimoEnvOverlay(model?: string): Promise<Record<string, string>> {
+  return buildClaudeCompatibleEnvOverlay('xiaomi-mimo', model);
+}
+
+export function buildKimiEnvOverlay(model?: string): Promise<Record<string, string>> {
+  return buildClaudeCompatibleEnvOverlay('kimi', model);
 }

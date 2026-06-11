@@ -164,6 +164,18 @@ export default function WorkflowDetailPage() {
     setSearchParams(params);
   }
 
+  // Edit mode is a full-bleed surface: the embedded builder (which carries its
+  // own toolbar + back button) fills the entire content area with no
+  // detail-page chrome or padding around it. Returned before the loading guard
+  // so the builder — which fetches its own workflow by id — shows immediately.
+  if (isEditing) {
+    return (
+      <div className="h-full w-full overflow-hidden">
+        <WorkflowBuilderPage embedded onBack={() => setTab('runs')} />
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="page-shell">
@@ -422,7 +434,7 @@ export default function WorkflowDetailPage() {
                 <div className="flex flex-wrap gap-1.5">
                   {inputKeys.map(key => (
                     <span key={key} className="badge">
-                      {key}{input[key]?.required !== false ? ' *' : ''}
+                      {key}{input[key]?.required === true ? ' *' : ''}
                     </span>
                   ))}
                 </div>
@@ -431,12 +443,6 @@ export default function WorkflowDetailPage() {
               )}
             </div>
           </aside>
-        </div>
-      )}
-
-      {tab === 'edit' && (
-        <div className="mt-3 h-[calc(100vh-220px)] min-h-[720px] min-w-0 overflow-hidden rounded-lg border border-app bg-app-card">
-          <WorkflowBuilderPage embedded onBack={() => setTab('runs')} />
         </div>
       )}
 

@@ -6,7 +6,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useChat } from '../../hooks/useChat';
-import ChatInput from '../chat/ChatInput';
+import ChatInput, { type ChatInputHandle } from '../chat/ChatInput';
 import ChatMessageList from '../chat/ChatMessageList';
 import AgentChatDropdown from '../chat/AgentChatDropdown';
 import { workspaces as wsApi } from '../../services/workspaceService';
@@ -23,7 +23,14 @@ interface EmbeddedChatProps {
   onLinkedSession?: (sessionId: string) => void;
 }
 
-export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedSessionId, onClose, onLinkedSession }: EmbeddedChatProps) {
+export function EmbeddedChat({
+  workspaceId,
+  workspaceName,
+  worktreePath,
+  linkedSessionId,
+  onClose,
+  onLinkedSession,
+}: EmbeddedChatProps) {
   const navigate = useNavigate();
   const {
     sessions, activeSessionId, messages, streaming, streamText,
@@ -31,6 +38,7 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
     pendingUserQuestion, answerUserQuestion,
     spawnedAgents, loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
+    restoredDraft, clearRestoredDraft,
   } = useChat();
 
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
@@ -42,7 +50,7 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
   const [selectedModel, setSelectedModel] = useState('');
   const [initialized, setInitialized] = useState(false);
   const [forcedNew, setForcedNew] = useState(false);
-  const chatInputRef = useRef<{ setValue: (v: string) => void; focus: () => void } | null>(null);
+  const chatInputRef = useRef<ChatInputHandle | null>(null);
 
   // Load agents and providers
   useEffect(() => {
@@ -68,6 +76,17 @@ export function EmbeddedChat({ workspaceId, workspaceName, worktreePath, linkedS
   useEffect(() => {
     if (activeSession?.activeAgent) setSelectedAgent(activeSession.activeAgent);
   }, [activeSession?.activeAgent]);
+
+  useEffect(() => {
+    if (!restoredDraft?.trim()) return;
+    if (chatInputRef.current?.getValue().trim()) {
+      clearRestoredDraft();
+      return;
+    }
+    chatInputRef.current?.setValue(restoredDraft);
+    chatInputRef.current?.focus();
+    clearRestoredDraft();
+  }, [restoredDraft, clearRestoredDraft]);
 
   const createAndLink = useCallback(async () => {
     const session = await createSession(selectedProvider, selectedModel || undefined);

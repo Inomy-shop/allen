@@ -48,7 +48,7 @@ export type OutputsSpec = Record<string, string>;
  * equivalent to omitting the field.
  */
 export interface AgentOverrides {
-  provider?: 'claude-cli' | 'codex' | null;
+  provider?: 'claude-cli' | 'codex' | (string & {}) | null;
   model?: string | null;
   reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
   planMode?: boolean | null;
@@ -281,6 +281,7 @@ export interface EdgeDef {
   merge?: Record<string, MergeStrategy>;
   max_retries?: number;
   retry_context?: string;
+  allow_revisit?: boolean;
 }
 
 // ── Workflow ────────────────────────────────────────────────────────────────
@@ -365,7 +366,7 @@ export interface WorkflowDef {
 
 // ── Agent ───────────────────────────────────────────────────────────────────
 
-export type AgentProvider = 'claude' | 'codex';
+export type AgentProvider = 'claude' | 'codex' | (string & {});
 
 export interface AgentDef {
   system: string;

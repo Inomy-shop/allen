@@ -11,6 +11,7 @@ import { ObjectId, type Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { listSlashCommands, type SlashCommandProvider } from '../services/slash-commands.js';
+import { isClaudeFamilyProvider } from '../services/chat-providers.js';
 import { buildHumanResumeInput, type HumanInterventionPayload } from '@allen/engine';
 import { ChatContextPacketService } from '../services/context/core/chat-context-packet.service.js';
 
@@ -249,20 +250,29 @@ export function chatRoutes(db: Db): Router {
   });
 
   // GET /api/chat/providers — List available LLM providers
-  router.get('/providers', (_req: Request, res: Response) => {
-    res.json(chatService.getProviders());
+  router.get('/providers', async (_req: Request, res: Response) => {
+    try {
+      res.json(await chatService.getProviders());
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   router.get('/slash-commands', async (req: Request, res: Response) => {
     try {
-      const provider = String(req.query.provider ?? 'codex') === 'claude-cli' ? 'claude-cli' : 'codex';
+      const rawProvider = String(req.query.provider ?? 'codex');
+      let family: SlashCommandProvider | null = null;
+      if (rawProvider === 'codex') family = 'codex';
+      else if (isClaudeFamilyProvider(rawProvider)) family = 'claude-cli';
+      if (!family) return res.json([]);
+
       const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
       let cwd = typeof req.query.cwd === 'string' ? req.query.cwd : undefined;
       if (!cwd && sessionId) {
         const session = await db.collection('chat_sessions').findOne({ _id: new ObjectId(sessionId) });
         cwd = typeof session?.repoPath === 'string' ? session.repoPath : undefined;
       }
-      res.json(listSlashCommands(provider as SlashCommandProvider, cwd));
+      res.json(listSlashCommands(family, cwd));
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

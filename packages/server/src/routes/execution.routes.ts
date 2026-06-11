@@ -7,6 +7,7 @@ import { param } from '../types.js';
 import type { Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
+import { PROVIDERS, type ChatProvider } from '../services/chat-providers.js';
 
 export function executionRoutes(db: Db): Router {
   const router = Router();
@@ -20,8 +21,8 @@ export function executionRoutes(db: Db): Router {
     try {
       const { workflowId, input, agentProvider } = req.body;
       if (!workflowId) return res.status(400).json({ error: 'workflowId is required' });
-      const provider = agentProvider === 'claude-cli' || agentProvider === 'codex'
-        ? agentProvider
+      const provider = typeof agentProvider === 'string' && PROVIDERS.some((item) => item.provider === agentProvider)
+        ? agentProvider as ChatProvider
         : undefined;
       const execution = await service.start(workflowId, input ?? {}, { agentProvider: provider });
       const chatSessionId = req.header('x-allen-chat-session-id');
@@ -164,7 +165,12 @@ export function executionRoutes(db: Db): Router {
     try {
       if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
       const executionId = param(req, 'id');
-      res.json(await repoKnowledge.getExecutionContextUsageReport(executionId));
+      const view = typeof req.query.view === 'string' ? req.query.view : undefined;
+      const includeFlags = typeof req.query.include === 'string'
+        ? req.query.include.split(',').map((flag) => flag.trim()).filter(Boolean)
+        : [];
+      const bypassCache = req.query.refresh === 'true' || req.query.bypassCache === 'true';
+      res.json(await repoKnowledge.getExecutionContextUsageReport(executionId, { view: view as any, includeFlags, bypassCache }));
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

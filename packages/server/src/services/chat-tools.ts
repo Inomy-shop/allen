@@ -19,6 +19,7 @@ import { RepoContextPacketService } from './context/core/repo-context-packet.ser
 import { ContextEvaluationService } from './context/evaluation/context-evaluation.service.js';
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
+import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
 import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload, type MaterializedAgentFileMetadata, normalizeClaudeUsage, normalizeCodexUsage, aggregateTokenUsage, type TokenUsageInfo } from '@allen/engine';
 import {
   getRuntimeApiBaseUrl,
@@ -1963,6 +1964,21 @@ async function runSpawnInBackground(
           disabledMcpToolNames: disallowedMcpToolNames,
         },
       });
+      // For Claude-compatible API providers: build the per-spawn env overlay so
+      // the Claude binary is redirected to the provider endpoint. Isolated to
+      // this child process only.
+      let claudeCompatibleEnvOverlay: Record<string, string> = {};
+      try {
+        const { buildClaudeCompatibleEnvOverlay, isClaudeCompatibleProvider } = await import('./chat-providers.js');
+        if (isClaudeCompatibleProvider(provider)) {
+          claudeCompatibleEnvOverlay = await buildClaudeCompatibleEnvOverlay(provider, model as string);
+        }
+      } catch (err) {
+        // Fail loudly so the agent errors with a useful message rather than
+        // silently calling Anthropic with no API key.
+        throw new Error(`${provider} env overlay failed: ${(err as Error).message}`);
+      }
+
       const sdkOptions: Record<string, unknown> = {
         model, permissionMode: 'bypassPermissions',
         // Pin cwd so the SDK doesn't implicitly inherit the server's own
@@ -1971,10 +1987,14 @@ async function runSpawnInBackground(
         // Also set env on the claude-cli subprocess itself, so any logic
         // inside the CLI (or tools that fall back to process.env) can see
         // the spawn tree. Merged on top of parent env.
-        env: { ...process.env, ...spawnContextEnv },
+        env: { ...process.env, ...spawnContextEnv, ...claudeCompatibleEnvOverlay },
         ...(disallowedMcpToolNames.length > 0 ? { disallowedTools: disallowedMcpToolNames } : {}),
         ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
       };
+      const claudeCodeExecutable = resolveClaudeCodeExecutable();
+      if (claudeCodeExecutable) {
+        sdkOptions.pathToClaudeCodeExecutable = claudeCodeExecutable;
+      }
       if (currentResumeSession) sdkOptions.resume = currentResumeSession;
       else {
         // ALLEN_SYSTEM_PROMPT_MODE: 'append' (default) preserves Claude

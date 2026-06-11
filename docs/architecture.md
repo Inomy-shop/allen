@@ -63,10 +63,10 @@ Important files:
 - `src/clarify-synthesizer.ts` - clarification gate handling for human checkpoints.
 - `src/orphan-sweeper.ts` - background sweep of orphaned MCP child processes.
 - `src/paths.ts` - resolves `ALLEN_HOME` and `WORKSPACE_BASE_DIR`.
-- `src/model-alias.ts` - resolves `ALLEN_MODEL_HAIKU/SONNET/OPUS` overrides.
+- `src/model-alias.ts` - resolves `ALLEN_MODEL_HAIKU/SONNET/OPUS/FABLE` overrides.
 - `src/validator.ts` and `src/types.ts` - workflow YAML schema and types.
 - `src/token-usage.ts` - normalized token usage type (`TokenUsageInfo`), provider normalization helpers (`normalizeCodexUsage`, `normalizeClaudeUsage`), null-aware aggregation (`aggregateTokenUsage`), and child-execution rollup marker helpers (`attachChildTokenUsageMarkers`, `tokenUsageFromChildMarkers`). Central module imported by the executors, engine, and server. Values are independently nullable per sub-field — `null` means "provider did not report", never `0`.
-- `workflows/*.yml` - eight runnable workflows: `feature-plan-and-implement`, `bug-fix-by-severity`, `tdd-design-by-severity`, `milestone-implementation-from-prd-tdd`, `resolve-pr-reviews`, `self-healing-incident-triage`, `allen-self-healing-monitor-hourly`, `multi-repo-change-orchestration`.
+- `workflows/*.yml` - eight runnable workflows: `feature-plan-and-implement`, `bug-fix-by-severity`, `tdd-design-by-severity`, `milestone-implementation-from-prd-tdd`, `self-healing-incident-triage`, `allen-self-healing-monitor-hourly`, `multi-repo-change-orchestration`, `source-prd-to-ui-designs-variations` (Design tab: accepts `output_mode: 'spec_only' | 'prototype'`, `design_session_id`, and `design_repo_path`; when `output_mode='spec_only'` (default) prototype-generation nodes are skipped and only UX options/specs are produced).
 
 ### `packages/server`
 
@@ -108,6 +108,8 @@ Routes (registered in `packages/server/src/app.ts`):
 - `/api/alerts` - operator alerts.
 - `/api/crons` - scheduled jobs.
 - `/api/design-docs` - design documents.
+- `/api/design` - design sessions, messages, and run dispatch. `GET /sessions` lists design sessions; `POST /sessions` creates one; `POST /sessions/:id/run` resolves routing (full workflow or fast agent), dispatches, and returns `{ designSessionId, messageId, routingDecision, executionId?, agentRunId?, status }`.
+- `/api/design/repos` - design repo registry. `GET /repos` lists repos with design roles; `GET /repos/default` returns the default design repo; `POST /repos/onboard` onboards an existing repo; `POST /repos/bootstrap-ui-designs` bootstraps a local `ui-designs` template repo; `PUT/GET /repos/:id/preview-config` manages preview configuration; `POST /repos/:id/preview-config/test` validates preview startup.
 - `/api/interventions` - human checkpoint queue.
 
 Important server files:
@@ -146,11 +148,24 @@ Responsibilities:
 - Workspace list/detail, terminal, file preview, service preview. Clicking a workspace in the sidebar opens `ChatPage` in workspace mode (`/chat?workspaceId=…`) rather than the workspace IDE page, giving a browser-style chat tab strip scoped to that workspace.
 - Repo manager.
 - Ticket and PR views.
+- **Design tab** (`/design`, `/design/:designSessionId`): design-session list, active conversation, composer, routing selector, design/source repo selectors, run-progress panel, artifact list, and optional preview panel. When no design repo is configured, shows a setup panel with options to onboard an existing repo or bootstrap a `ui-designs` template.
 - Settings for agents, MCP (including preset and repo-based registration with Python MCP support), integrations, and users.
 
 Key activity page components:
 
-- `src/pages/ExecutionListPage.tsx` - Activity page. Renders the paginated execution list. Exports the `paginationViewModel({ page, total, pageSize })` pure function that computes UI-state (`visible`, `pageCount`, `currentPageLabel`, `prevDisabled`, `nextDisabled`) with no DOM dependency so it can be tested in isolation.
+- `src/pages/ExecutionListPage.tsx` - Activity page. Renders the paginated execution list. Exports the `paginationViewModel({ page, total, pageSize })` pure function that computes UI-state (`visible`, `pageCount`, `currentPageLabel`, `prevDisabled`, `nextDisabled`) with no DOM dependency so it can be tested in isolation. A **Source** filter chip group (`All | Chat | Workflow | Design`) filters on `executions.meta.sourceSurface`; design-tab runs carry `sourceSurface='design_tab'`.
+- `src/pages/DesignPage.tsx` - Design tab entry point routed at `/design` and `/design/:designSessionId`. Hosts the session list, active conversation, composer, run panel, and routing selector. Renders `DesignSetupPanel` when no design repo is configured.
+
+Key design UI components:
+
+- `src/components/design/DesignSetupPanel.tsx` - empty-state panel with "Onboard existing design/prototyping repo" and "Create from ui-designs template" actions.
+- `src/components/design/DesignConversationList.tsx` - left rail listing the user's design sessions.
+- `src/components/design/DesignComposer.tsx` - input box and Run button; sends to `POST /api/design/sessions/:id/run`.
+- `src/components/design/DesignRoutingSelector.tsx` - shows resolved mode, runner, and reason with a `Change ▾` override menu (`auto | full_workflow | fast_frontend | design_refinement | design_review`). Displays the workflow as `Full design workflow` in the UI without changing the internal name.
+- `src/components/design/DesignRepoSelector.tsx` - design repo (required, defaults to `isDefaultDesignRepo`) and source repo (optional) selectors.
+- `src/components/design/DesignPreviewConfigForm.tsx` - preview config form; validates working directory, startCommand, portMode, and fixedPort; calls `PUT /preview-config` then optionally `POST /preview-config/test`.
+- `src/components/design/DesignRunPanel.tsx` - streams the active run via the existing execution SSE, shows artifacts, and surfaces retry/error options.
+- `src/services/designService.ts` - thin `request<T>` wrappers around `/api/design/*`.
 
 Key chat UI components:
 
@@ -192,7 +207,8 @@ MongoDB stores all operational state. Collections are created and indexed by ser
 - **Workflows & executions** — `workflows`, `executions`, `execution_traces`, `execution_logs`, `execution_failure_reports`, `checkpoints`. Both `executions` and `execution_traces` rows carry an optional `tokenUsage: { inputCachedTokens, inputNonCachedTokens, outputTokens }` field (each sub-field is `number | null`) that is populated when the provider reports usage data. Old rows without this field render and behave normally.
 - **Chat** — `chat_sessions` (automation sessions carry a sparse-unique `automationKey`; the linked `_id` is stored as `cron_jobs.linkedChatSessionId` and never overwritten by seed updates; workspace-linked sessions carry `workspaceId` plus snapshot fields `workspaceName`, `workspaceRepoId`, `workspaceRepoName`, `workspaceBranch`, `workspaceBaseBranch`, `workspacePrNumber`, `workspacePrUrl` written by `WorkspaceManager.linkChat`), `chat_messages`, `agent_conversations` (delegation threads), `agent_activity` (7-day TTL).
 - **Docs & checkpoints** — `design_docs` (PRD/HLD/TDD), `workflow_interventions`.
-- **Repos & workspaces** — `repos`, `repo_contexts`, `pull_requests`, `workspaces`, `workspace_configs`.
+- **Design tab** — `design_sessions` (`kind='design'`, `sourceSurface='design_tab'`; carries `designRepoId`, optional `sourceRepoId`/`workspaceId`, `status`, `routingDecision`, `lastExecutionId`, `hasExistingOutputs`, and `outputMode`), `design_messages` (per-session messages with optional `routingDecision`, `executionId`, `agentRunId`, and `artifacts`). Design sessions are separate from `chat_sessions` so normal chat history excludes design conversations by default.
+- **Repos & workspaces** — `repos` (extended with optional `roles: RepoRole[]`, `isDefaultDesignRepo?: boolean`, and `designPreviewConfig?: DesignPreviewConfig` for design-tab support), `repo_contexts`, `pull_requests`, `workspaces`, `workspace_configs`.
 - **MCP & secrets** — `mcp_servers`, `secrets`.
 - **Scheduling & alerts** — `cron_jobs`, `cron_runs` (90-day TTL), `alerts`.
 - **Learning** — `learnings`, `memory_injection_audits`.
@@ -302,7 +318,7 @@ No agent-targeted automation jobs ship as built-ins. Users can author their own 
 
 ### Built-in cron jobs
 
-`cron-seed.service.ts` seeds six system jobs:
+`cron-seed.service.ts` seeds five system jobs:
 
 | Name | Schedule | Purpose |
 |---|---|---|
@@ -310,7 +326,6 @@ No agent-targeted automation jobs ship as built-ins. Users can author their own 
 | `repo-pull-30min` | `*/30 * * * *` | `git pull` origin for registered repos. |
 | `pr-sync-30min` | `*/30 * * * *` | Sync PR list via `gh pr list`. |
 | `mcp-bundle-cleanup-hourly` | `0 * * * *` | Delete orphaned uploaded MCP bundles >24h old. |
-| `coderabbit-sweep-15min` | `*/15 * * * *` | Resolve outstanding CodeRabbit PR comments. |
 | `allen-self-healing-monitor-hourly` | `17 * * * *` | Launch the hourly self-healing monitor workflow. |
 
 ## Runtime Ports

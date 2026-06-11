@@ -1,9 +1,6 @@
 /**
  * Cron seed — idempotent startup migration that ensures built-in cron jobs exist.
  *
- * Currently seeds one job: "repo-scan-daily" which runs at 5 AM UTC daily and
- * re-scans repos whose base-branch HEAD has changed.
- *
  * Existing rows are only updated when SEED_OVERRIDE=true. Never deletes
  * user-created jobs. Safe to call on every startup.
  */
@@ -15,6 +12,7 @@ import { getSelfHealingLinearConfig } from './self-healing-env.js';
 import { isSeedOverrideEnabled } from './seed-policy.js';
 
 const selfHealingLinearConfig = getSelfHealingLinearConfig();
+const RETIRED_BUILT_IN_JOB_NAMES = ['coderabbit-sweep-15min', 'coderabbit-sweep'];
 
 const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatus' | 'lastRunError' | 'lastRunExecutionId' | 'runCount' | 'runStatus' | 'createdAt' | 'updatedAt'>[] = [
   {
@@ -78,21 +76,6 @@ const SEED_JOBS: Omit<CronJob, '_id' | 'nextRunAt' | 'lastRunAt' | 'lastRunStatu
     createdBy: 'seed',
   },
   {
-    name: 'coderabbit-sweep-15min',
-    displayName: 'CodeRabbit Review Sweep',
-    description:
-      'Every 15 minutes, scans open workflow-owned PRs for unresolved CodeRabbit comments and triggers the resolve-pr-reviews workflow. External PRs (not created by a workflow) are skipped — trigger those manually from the Pull Requests page.',
-    enabled: true,
-    schedule: '*/15 * * * *',
-    timezone: 'UTC',
-    target: {
-      type: 'system',
-      systemAction: 'coderabbit-sweep',
-    },
-    isBuiltIn: true,
-    createdBy: 'seed',
-  },
-  {
     name: 'allen-self-healing-monitor-hourly',
     displayName: 'Allen Self-Healing Monitor',
     description:
@@ -146,6 +129,14 @@ export async function seedCronJobs(db: Db): Promise<number> {
   const col = db.collection('cron_jobs');
   const override = isSeedOverrideEnabled();
   let created = 0;
+
+  for (const name of RETIRED_BUILT_IN_JOB_NAMES) {
+    const existing = await col.findOne({ name });
+    if (existing && (existing.isBuiltIn === true || existing.createdBy === 'seed')) {
+      await col.deleteOne({ name });
+      console.log(`[cron] removed retired built-in job: ${name}`);
+    }
+  }
 
   for (const baseSeed of SEED_JOBS) {
     const seed = baseSeed;

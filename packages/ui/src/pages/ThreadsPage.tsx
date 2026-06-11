@@ -33,6 +33,7 @@ interface ChatSessionItem {
   ownerUserId?: string | null;
   ownerName?: string | null;
   ownerEmail?: string | null;
+  activeAgent?: string | null;
 }
 
 type ThreadItem =
@@ -165,7 +166,9 @@ export default function ThreadsPage() {
 
   const filteredSessions = useMemo(() => {
     // Owner filter is applied server-side; only do client-side text search here.
-    return chatSessions.filter((s) => {
+    return chatSessions
+      .filter(s => s.activeAgent !== 'design-assistant')
+      .filter((s) => {
       if (!query.trim()) return true;
       const q = query.toLowerCase();
       return (

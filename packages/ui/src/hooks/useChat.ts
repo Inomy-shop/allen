@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { chat as api, executions as executionsApi, interventions as interventionsApi, authHeaders, type RunStatus } from '../services/api';
+import { chat as api, executions as executionsApi, interventions as interventionsApi, authHeaders, type RunStatus, type TokenUsageInfo } from '../services/api';
 import { useAuthStore, type AuthUser } from '../stores/authStore';
 
 /** Maximum number of automatic reconnect attempts on a transient stream error. */
@@ -69,7 +69,7 @@ export interface ChatSession {
   activeAgent?: string | null;
   /** Session-level overrides for the agent's model / reasoning effort / plan mode. */
   agentOverrides?: {
-    provider?: 'claude-cli' | 'codex' | null;
+    provider?: 'claude-cli' | 'codex' | (string & {}) | null;
     model?: string | null;
     reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
     planMode?: boolean | null;
@@ -122,6 +122,7 @@ export interface ChatMessage {
   senderSource?: 'ui' | 'slack' | 'system';
   costUsd?: number;
   durationMs?: number;
+  tokenUsage?: TokenUsageInfo | null;
   error?: string;
   toolCalls?: ToolCallRecord[];
   thinkingText?: string;
@@ -183,6 +184,13 @@ export interface AgentReport {
   message: string;
   status: string;
   timestamp: string;
+}
+
+interface ChatCancelResponse {
+  messageId?: string;
+  content?: string;
+  restoreDraft?: string;
+  cancelledExecutions?: Array<{ id?: string; workflowName?: string; status?: string }>;
 }
 
 function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>, 'executionId'> & { executionId: string }): SpawnedAgent[] {
@@ -314,21 +322,6 @@ function runsFromMessages(messages: ChatMessage[]): SpawnedAgent[] {
       run.sourceMessageId = message._id;
       runs.push(run);
     }
-    if (!message.content) continue;
-    const matches = message.content.matchAll(/\/executions\/([A-Za-z0-9_-]+)/g);
-    for (const match of matches) {
-      const executionId = match[1];
-      if (!executionId || seen.has(executionId)) continue;
-      seen.add(executionId);
-      runs.push({
-        executionId,
-        sourceMessageId: message._id,
-        agent: 'Routed run',
-        prompt: message.content.split('\n').find(Boolean) ?? '',
-        status: 'running',
-        activity: [],
-      });
-    }
   }
   return runs;
 }
@@ -356,8 +349,8 @@ function runsFromPersistedExecutions(items: Array<{
     .map(item => ({
       executionId: item.executionId,
       sourceMessageId: item.sourceMessageId ?? item.runContext?.chat?.parentMessageId ?? undefined,
-      parentExecutionId: item.runContext?.execution.parentExecutionId ?? undefined,
-      spawnDepth: item.runContext?.execution.spawnDepth ?? undefined,
+      parentExecutionId: item.runContext?.execution?.parentExecutionId ?? undefined,
+      spawnDepth: item.runContext?.execution?.spawnDepth ?? undefined,
       agent: item.agent ?? item.runContext?.title ?? 'Routed run',
       prompt: item.prompt ?? item.runContext?.io?.input ?? '',
       status: (item.runContext?.status ?? item.status ?? 'running') as SpawnedAgent['status'],
@@ -379,9 +372,12 @@ export function useChat() {
   /** Pending question from an agent to the user (ask_user) */
   const [pendingUserQuestion, setPendingUserQuestion] = useState<{ question: string; fromAgent: string } | null>(null);
   const [spawnedAgents, setSpawnedAgents] = useState<SpawnedAgent[]>([]);
+  const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [messageReloadNonce, setMessageReloadNonce] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  const clearRestoredDraft = useCallback(() => setRestoredDraft(null), []);
 
   const spawnedRunSignature = spawnedAgents
     .map(s => `${s.executionId}:${s.status}:${s.runContext?.progress?.phase ?? ''}:${s.runContext?.progress?.percent ?? ''}`)
@@ -412,8 +408,8 @@ export function useChat() {
             status: update.context.status as SpawnedAgent['status'],
             runContext: update.context,
             sourceMessageId: update.context.chat?.parentMessageId ?? run.sourceMessageId,
-            parentExecutionId: update.context.execution.parentExecutionId ?? run.parentExecutionId,
-            spawnDepth: update.context.execution.spawnDepth ?? run.spawnDepth,
+            parentExecutionId: update.context.execution?.parentExecutionId ?? run.parentExecutionId,
+            spawnDepth: update.context.execution?.spawnDepth ?? run.spawnDepth,
           };
         });
         return changed ? next : prev;
@@ -423,7 +419,7 @@ export function useChat() {
     refreshContexts();
     const hasActive = spawnedAgents.some(s => !terminal.has(s.runContext?.status ?? s.status));
     if (!hasActive) return () => { cancelled = true; };
-    const timer = window.setInterval(refreshContexts, 3000);
+    const timer = window.setInterval(refreshContexts, 10000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -583,7 +579,7 @@ export function useChat() {
         void streamReader.cancel().catch(() => {});
       }
     };
-  }, [activeSessionId]);
+  }, [activeSessionId, messageReloadNonce]);
 
   // Centralized SSE event handler
   const handleSSEEvent = useCallback((event: string, data: any, sessionId: string) => {
@@ -621,6 +617,7 @@ export function useChat() {
             status: 'completed',
             costUsd: data.costUsd,
             durationMs: data.durationMs,
+            tokenUsage: (data.tokenUsage ?? null) as TokenUsageInfo | null,
             toolCalls: data.toolCalls,
             thinkingText: data.thinkingText ?? thinkingText,
             createdAt: new Date().toISOString(),
@@ -706,6 +703,12 @@ export function useChat() {
       case 'stream_inactive':
         setStreaming(false);
         setActiveToolCalls([]);
+        break;
+
+      case 'cancelled':
+        if (typeof data.restoreDraft === 'string' && data.restoreDraft.trim()) {
+          setRestoredDraft(data.restoreDraft);
+        }
         break;
 
       case 'error':
@@ -910,6 +913,7 @@ export function useChat() {
                       status: 'completed',
                       costUsd: data.costUsd,
                       durationMs: data.durationMs,
+                      tokenUsage: (data.tokenUsage ?? null) as TokenUsageInfo | null,
                       toolCalls: data.toolCalls || collectedToolCalls,
                       thinkingText: data.thinkingText ?? assistantThinking,
                       createdAt: new Date().toISOString(),
@@ -1127,6 +1131,11 @@ export function useChat() {
     }
   }, [activeSessionId, streaming, loadSessions]);
 
+  const refreshActiveSession = useCallback(() => {
+    if (!activeSessionId) return;
+    setMessageReloadNonce(n => n + 1);
+  }, [activeSessionId]);
+
   const cancelStream = useCallback(() => {
     // 1. Abort the frontend SSE fetch so the UI stops receiving chunks.
     if (abortRef.current) {
@@ -1142,7 +1151,10 @@ export function useChat() {
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
       })
         .then(res => res.ok ? res.json() : null)
-        .then((result: { messageId?: string; content?: string; cancelledExecutions?: Array<{ id?: string; workflowName?: string; status?: string }> } | null) => {
+        .then((result: ChatCancelResponse | null) => {
+          if (typeof result?.restoreDraft === 'string' && result.restoreDraft.trim()) {
+            setRestoredDraft(result.restoreDraft);
+          }
           if (!result?.messageId) return;
           const fallbackContent = result.cancelledExecutions?.length
             ? `Interrupted by user. Cancelled linked tasks: ${result.cancelledExecutions.map(exec => exec.id).filter(Boolean).join(', ')}. If you want to rerun, choose fresh start or resume.`
@@ -1271,6 +1283,9 @@ export function useChat() {
     generateSessionTitle,
     switchSession,
     cancelStream,
+    restoredDraft,
+    clearRestoredDraft,
     refresh: loadSessions,
+    refreshActiveSession,
   };
 }

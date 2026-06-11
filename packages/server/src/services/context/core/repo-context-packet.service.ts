@@ -38,7 +38,7 @@ import {
 import { firstString, isRecord } from '../common/context-utils.js';
 import { ContextEvaluationService } from '../evaluation/context-evaluation.service.js';
 import { ContextWorkflowEvaluationService } from '../evaluation/context-workflow-evaluation.service.js';
-import { ContextLifecycleStore } from '../lifecycle/context-lifecycle-store.js';
+import { ContextLifecycleStore, type ContextUsageReportOptions } from '../lifecycle/context-lifecycle-store.js';
 import {
   configuredContextProvider,
   contextProviderDisabledError,
@@ -351,8 +351,16 @@ export class RepoContextPacketService {
     };
   }
 
-  async getExecutionContextUsageReport(executionId: string): Promise<Record<string, unknown>> {
-    return this.lifecycle.getExecutionContextUsageReport(executionId);
+  async getExecutionContextUsageReport(executionId: string, options: ContextUsageReportOptions = {}): Promise<Record<string, unknown>> {
+    return this.lifecycle.getExecutionContextUsageReport(executionId, options);
+  }
+
+  async getAttemptEvidence(contextAttemptId: string): Promise<Record<string, unknown> | null> {
+    return this.lifecycle.getAttemptEvidence(contextAttemptId);
+  }
+
+  async getAttemptEvidenceBatch(contextAttemptIds: string[]): Promise<Record<string, unknown>> {
+    return this.lifecycle.getAttemptEvidenceBatch(contextAttemptIds);
   }
 
   async getSkillBody(input: {

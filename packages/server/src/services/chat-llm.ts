@@ -6,19 +6,22 @@
  */
 
 import type { Db } from 'mongodb';
-import { MCP_SERVER_NAME, normalizeModelAlias, getAllenMcpConfig } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias, getAllenMcpConfig, normalizeClaudeUsage, type TokenUsageInfo } from '@allen/engine';
 import {
   type ChatProvider,
   type ProviderCallbacks,
   PROVIDERS,
   runCodexCLI,
   AGENT_FALLBACK_CWD,
+  buildClaudeCompatibleEnvOverlay,
+  isClaudeCompatibleProvider,
 } from './chat-providers.js';
 import { loadExternalMcpServers } from './chat-mcp.js';
 import {
   toClaudeSdkOptions,
   type ResolvedSettings,
 } from './agent-settings.js';
+import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
 import { persistentChatRuntimeEnabled, runPersistentChatTurn } from './chat-runtime-manager.js';
 
 // ── Types ──
@@ -82,6 +85,7 @@ export interface ChatLLMResult {
   provider: ChatProvider;
   sessionId?: string;
   trace: ChatTraceEvent[];
+  tokenUsage?: TokenUsageInfo | null;
 }
 
 // ── Logger ──
@@ -104,7 +108,7 @@ async function runClaudeCLI(
   cwd?: string,
   resolved?: ResolvedSettings,
   chatSessionId?: string,
-): Promise<{ text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] }> {
+): Promise<{ text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[]; tokenUsage?: TokenUsageInfo | null }> {
   const { query } = await import('@anthropic-ai/claude-code');
 
   // Build MCP servers: Allen + external
@@ -159,6 +163,10 @@ async function runClaudeCLI(
     permissionMode: 'bypassPermissions',
     cwd: resolvedCwd,
   };
+  const claudeCodeExecutable = resolveClaudeCodeExecutable();
+  if (claudeCodeExecutable) {
+    sdkOptions.pathToClaudeCodeExecutable = claudeCodeExecutable;
+  }
 
   // Apply resolved agent settings (effort / planMode / model) if present.
   // - model / planMode map to native SDK options.
@@ -188,6 +196,7 @@ async function runClaudeCLI(
 
   let fullText = '';
   let costUsd = 0;
+  let tokenUsage: TokenUsageInfo | null = null;
   const conversation = query({ prompt: lastUserMsg, options: sdkOptions as any });
 
   for await (const message of conversation) {
@@ -241,6 +250,7 @@ async function runClaudeCLI(
 
     if (message.type === 'result') {
       costUsd = (message as any).total_cost_usd ?? 0;
+      tokenUsage = normalizeClaudeUsage((message as any).usage ?? null);
       if ((message as any).subtype === 'success' && (message as any).result) {
         const rt = (message as any).result;
         if (rt !== fullText) { fullText = rt; callbacks.onText(fullText); }
@@ -249,7 +259,36 @@ async function runClaudeCLI(
     }
   }
 
-  return { text: fullText, costUsd, sessionId: llmSessionId, trace };
+  return { text: fullText, costUsd, sessionId: llmSessionId, trace, tokenUsage };
+}
+
+async function runClaudeCompatibleChatCLI(
+  provider: ChatProvider,
+  db: Db,
+  systemPrompt: string,
+  messages: ChatLLMMessage[],
+  model: string,
+  callbacks: ProviderCallbacks,
+  resumeSessionId?: string,
+  skipTools?: boolean,
+  cwd?: string,
+  resolved?: ResolvedSettings,
+  chatSessionId?: string,
+): Promise<{ text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[]; tokenUsage?: TokenUsageInfo | null }> {
+  const overlay = await buildClaudeCompatibleEnvOverlay(provider, model);
+  const saved: Record<string, string | undefined> = {};
+  for (const key of Object.keys(overlay)) {
+    saved[key] = process.env[key];
+    process.env[key] = overlay[key];
+  }
+  try {
+    return await runClaudeCLI(db, systemPrompt, messages, model, callbacks, resumeSessionId, skipTools, cwd, resolved, chatSessionId);
+  } finally {
+    for (const key of Object.keys(overlay)) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
 }
 
 // ── Main Router ──
@@ -264,7 +303,7 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
   log(`Prompt: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
   const usePersistentRuntime = persistentChatRuntimeEnabled()
     && options.chatSessionId
-    && (provider === 'codex' || provider === 'claude-cli');
+    && (provider === 'codex' || provider === 'claude-cli' || isClaudeCompatibleProvider(provider));
   if (options.resumeSessionId) {
     log(usePersistentRuntime
       ? `Provider session: ${options.resumeSessionId.slice(0, 8)}...`
@@ -282,7 +321,7 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
     signal: options.signal,
   };
 
-  let result: { text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[] };
+  let result: { text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[]; tokenUsage?: TokenUsageInfo | null };
 
   const resolved = options.resolvedSettings;
   if (resolved) {
@@ -314,7 +353,9 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
         result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
         break;
       default:
-        throw new Error(`Unknown provider: ${provider}`);
+        if (!isClaudeCompatibleProvider(provider)) throw new Error(`Unknown provider: ${provider}`);
+        result = await runClaudeCompatibleChatCLI(provider, db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
+        break;
     }
   }
 

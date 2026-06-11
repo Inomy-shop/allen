@@ -17,12 +17,14 @@
  *   ALLEN_MODEL_HAIKU=claude-haiku-4-5-20251001
  *   ALLEN_MODEL_SONNET=claude-sonnet-4-6
  *   ALLEN_MODEL_OPUS=claude-opus-4-7
+ *   ALLEN_MODEL_FABLE=claude-fable-5
  */
 
 const DEFAULTS: Record<string, string> = {
   haiku:  'claude-haiku-4-5-20251001',
   sonnet: 'claude-sonnet-4-6',
   opus:   'claude-opus-4-7',
+  fable:  'claude-fable-5',
 };
 
 export function normalizeModelAlias(model: string | undefined): string | undefined {

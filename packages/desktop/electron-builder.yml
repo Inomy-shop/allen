@@ -59,6 +59,7 @@ asar: true
 asarUnpack:
   - node_modules/node-pty/**/*
   - node_modules/bcrypt/**/*
+  - node_modules/@anthropic-ai/claude-code/**/*
   - node_modules/@xenova/transformers/**/*
 
 mac:
@@ -95,4 +96,4 @@ dmg:
 
 publish:
   - provider: generic
-    url: https://askallen.build/releases
+    url: https://askallen.build/download

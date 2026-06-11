@@ -60,14 +60,10 @@ test.describe('Workspace Management', () => {
     });
   });
 
-  test.describe('UI - Workspace Detail Page', () => {
-    test('shows loading then content for invalid workspace', async ({ page }) => {
+  test.describe('UI - Legacy Workspace Detail Route', () => {
+    test('redirects legacy workspace detail URLs to workspace chat', async ({ page }) => {
       await page.goto('/workspaces/000000000000000000000000');
-      // Should show loader initially or error state
-      await page.waitForTimeout(2000);
-      // Page should still be accessible (no crash)
-      const url = page.url();
-      expect(url).toContain('workspaces');
+      await expect(page).toHaveURL(/\/chat\?workspaceId=000000000000000000000000/);
     });
   });
 
@@ -102,7 +98,7 @@ test.describe('Workspace Management', () => {
   });
 
   test.describe('UI - Commit Bar & PR Button', () => {
-    test('workspace detail has Push and PR buttons in commit bar', async ({ page }) => {
+    test('workspace list loads while commit bar coverage is handled elsewhere', async ({ page }) => {
       // We need a real workspace for this — test the page structure with a mock approach
       // Navigate to list first
       await page.goto('/workspaces');
