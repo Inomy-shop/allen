@@ -31,10 +31,11 @@
  *   and which option the user picked at the prompt.
  */
 
+import type { Db } from 'mongodb';
 import { isClaudeCompatibleProvider, PROVIDERS, type ChatProvider } from './chat-providers.js';
 
-const FALLBACK_PROVIDER: ChatProvider = 'claude-cli';
-const FALLBACK_MODEL = 'sonnet';
+const FALLBACK_PROVIDER: ChatProvider = 'claude';
+const FALLBACK_MODEL = 'claude-sonnet-4-6';
 
 function readEnvProvider(): ChatProvider | undefined {
   const raw = process.env.ALLEN_DEFAULT_AGENT_PROVIDER?.trim();
@@ -101,39 +102,35 @@ export function getRequiredProviders(): { claude: boolean; codex: boolean } {
   const agentProvider = agentRaw as ChatProvider;
 
   return {
-    claude: chatProvider === 'claude-cli' || agentProvider === 'claude-cli' || isClaudeCompatibleProvider(chatProvider) || isClaudeCompatibleProvider(agentProvider),
+    claude: chatProvider === 'claude' || agentProvider === 'claude' || isClaudeCompatibleProvider(chatProvider) || isClaudeCompatibleProvider(agentProvider),
     codex: chat === 'codex' || agentRaw === 'codex',
   };
 }
 
 /**
  * Strip workflow-node `agentOverrides` fields that don't belong on the active
- * provider. Used at workflow seed time so a YAML node like
+ * provider. Now validates against the model_registry collection instead of the
+ * static PROVIDERS.models arrays (FR-4.2).
  *
- *   agentOverrides: { model: sonnet, reasoningEffort: high, planMode: true }
- *
- * doesn't force Codex agents to try `sonnet` (which Codex rejects) on a
- * codex-only install.
+ * @param overrides — The node's agentOverrides object from a workflow YAML node.
+ * @param db — MongoDB handle, REQUIRED for the registry lookup.
+ * @returns A new overrides object with non-applicable fields removed; undefined
+ *   if all fields were stripped or the input was null/empty.
  *
  * Rules:
- *   - Preserve mode (env unset, "Both") → return overrides unchanged. The
- *     user opted into the seed's mix; YAML intent stays.
+ *   - Preserve mode (env unset, "Both") → return overrides unchanged.
  *   - Flatten mode (env set):
- *       * `model` is dropped if it's a recognized model belonging to the
- *         OTHER provider. `'default'` and unknown strings are left alone.
- *       * `planMode: true` is dropped when env provider ≠ claude-cli.
- *       * `reasoningEffort: 'max'` is dropped when env provider ≠ claude-cli.
- *       * Everything else (other reasoningEffort values, mcp toggles, etc.)
- *         passes through.
- *
- * Never swaps values (e.g. won't translate `sonnet` → `gpt-5.5`). When a
- * field is dropped the merged spawn settings fall back to the agent's stored
- * default — which `OrgSeedService` has already set to the env-chosen
- * provider+model — so the node runs on the install's available CLI.
+ *       * `model` is dropped if it's a recognized fullId belonging to the
+ *         OTHER provider. `'default'` and unknown strings pass through.
+ *       * `planMode: true` dropped when env provider ≠ claude-cli and not
+ *         a claude-compatible provider.
+ *       * `reasoningEffort: 'max'` dropped when env provider ≠ claude-cli
+ *         and not a claude-compatible provider.
  */
-export function normalizeNodeOverridesForProvider(
+export async function normalizeNodeOverridesForProvider(
   overrides: Record<string, unknown> | undefined | null,
-): Record<string, unknown> | undefined {
+  db: Db,
+): Promise<Record<string, unknown> | undefined> {
   if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
     return overrides === null ? undefined : overrides as Record<string, unknown> | undefined;
   }
@@ -142,17 +139,26 @@ export function normalizeNodeOverridesForProvider(
   // Preserve mode: keep YAML intent exactly.
   if (!envProvider) return overrides;
 
-  // Build the union "model X belongs to provider Y" lookup once.
-  const modelOwner: Record<string, ChatProvider> = {};
-  for (const p of PROVIDERS) {
-    for (const m of p.models) modelOwner[m] = p.provider;
+  // Build model→provider lookup from the registry (FR-4.2).
+  const modelOwner: Record<string, string> = {};
+  try {
+    const registryEntries = await db.collection('model_registry')
+      .find({ isActive: true }, { projection: { fullId: 1, provider: 1 } })
+      .toArray();
+    for (const entry of registryEntries) {
+      modelOwner[entry.fullId as string] = entry.provider as string;
+    }
+  } catch {
+    // Registry unavailable — fall back to static PROVIDERS lookup (best-effort).
+    for (const p of PROVIDERS) {
+      for (const m of p.models) modelOwner[m] = p.provider;
+    }
   }
 
   const out: Record<string, unknown> = { ...overrides };
 
-  // model: drop only when it's a recognized model belonging to the OTHER
-  // provider. 'default' and unknown strings are not in modelOwner so they
-  // pass through.
+  // model: drop only recognized fullIds belonging to the OTHER provider.
+  // 'default' and unknown strings are NOT in modelOwner and pass through.
   if (typeof out.model === 'string') {
     const owner = modelOwner[out.model];
     if (owner && owner !== envProvider) {
@@ -160,14 +166,13 @@ export function normalizeNodeOverridesForProvider(
     }
   }
 
-  // planMode is a claude-cli-only feature.
-  if (out.planMode === true && envProvider !== 'claude-cli') {
+  // planMode: claude-cli (and claude-compatible) only.
+  if (out.planMode === true && envProvider !== 'claude' && !isClaudeCompatibleProvider(envProvider)) {
     delete out.planMode;
   }
 
-  // reasoningEffort 'max' requires claude (and Opus); other levels work on
-  // both providers.
-  if (out.reasoningEffort === 'max' && envProvider !== 'claude-cli') {
+  // reasoningEffort 'max': claude-cli (and compatible) only.
+  if (out.reasoningEffort === 'max' && envProvider !== 'claude' && !isClaudeCompatibleProvider(envProvider)) {
     delete out.reasoningEffort;
   }
 

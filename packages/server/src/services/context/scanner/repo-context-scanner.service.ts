@@ -18,7 +18,8 @@
  */
 
 import type { Collection, Db, ObjectId } from 'mongodb';
-import { MCP_SERVER_NAME, withArtifactsGuidance, withNonInteractiveGuidance } from '@allen/engine';
+import { MCP_SERVER_NAME, withArtifactsGuidance, withNonInteractiveGuidance, normalizeClaudeUsage, type TokenUsageInfo } from '@allen/engine';
+import { resolveCostUsd } from '../../model-cost.service.js';
 import {
   getRuntimeApiBaseUrl,
   getRuntimeJwtAccessSecret,
@@ -133,10 +134,11 @@ export class RepoContextScannerService {
     let headSha: string | undefined;
     let contextMarkdown = '';
     let costUsd = 0;
+    let scanTokenUsage: TokenUsageInfo | null = null;
     let error: string | undefined;
     let prompt = '';
     let model = 'sonnet';
-    let provider: 'claude-cli' | 'codex' = 'claude-cli';
+    let provider: 'claude' | 'codex' = 'claude';
     let toolCalls: { tool: string; args: Record<string, unknown> }[] = [];
     const branchNotes: string[] = [];
     let contextArtifact: { artifactId: string; relativePath: string; content: string } | null = null;
@@ -286,6 +288,7 @@ export class RepoContextScannerService {
             }
             if (msg.type === 'result') {
               costUsd = (msg as any).total_cost_usd ?? 0;
+              scanTokenUsage = normalizeClaudeUsage((msg as any).usage ?? null);
               if ((msg as any).subtype === 'success' && (msg as any).result) {
                 finalText = (msg as any).result;
               }
@@ -322,6 +325,11 @@ export class RepoContextScannerService {
 
     const scanDurationMs = Date.now() - startMs;
 
+    // Authoritative cost: registry per-MTok prices × token usage; the
+    // provider-reported figure is only a fallback (REQ-022).
+    const resolvedScanCost = await resolveCostUsd(this.db, model, scanTokenUsage, costUsd);
+    costUsd = resolvedScanCost.amount;
+
     // Persist execution result
     await this.db.collection('executions').updateOne(
       { id: executionId },
@@ -330,7 +338,7 @@ export class RepoContextScannerService {
           status: error ? 'failed' : 'completed',
           completedNodes: error ? [] : ['repo-scanner'],
           currentNodes: [],
-          cost: { actual: costUsd, estimated: costUsd },
+          cost: { actual: costUsd, estimated: 0 },
           durationMs: scanDurationMs,
           completedAt: new Date(),
           ...(error ? { errorMessage: error } : {}),
@@ -352,7 +360,8 @@ export class RepoContextScannerService {
       output: error ? { error } : { response: contextMarkdown, contextChars: contextMarkdown.length },
       toolCalls,
       activity: toolCalls.map(tc => ({ type: 'tool_call' as const, tool: tc.tool, timestamp: new Date(), content: tc.tool })),
-      cost: { actual: costUsd, estimated: costUsd, model, method: 'sdk_reported' as const },
+      cost: { actual: costUsd, estimated: 0, model, method: resolvedScanCost.method },
+      tokenUsage: scanTokenUsage ?? null,
       durationMs: scanDurationMs,
       startedAt: new Date(startMs),
       completedAt: new Date(),
@@ -601,8 +610,8 @@ async function runGit(cwd: string, args: string[]): Promise<{ stdout: string; st
   });
 }
 
-function normalizeAgentProvider(provider?: string): 'claude-cli' | 'codex' {
-  return provider === 'codex' ? 'codex' : 'claude-cli';
+function normalizeAgentProvider(provider?: string): 'claude' | 'codex' {
+  return provider === 'codex' ? 'codex' : 'claude';
 }
 
 async function runCodexRepoScanner(opts: {

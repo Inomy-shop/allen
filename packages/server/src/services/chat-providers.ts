@@ -39,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 
 // ── Shared Types ──
 
-export type ChatProvider = 'codex' | 'claude-cli' | (string & {});
+export type ChatProvider = 'codex' | 'claude' | (string & {});
 
 export interface ProviderMessage {
   role: 'user' | 'assistant' | 'system';
@@ -158,16 +158,20 @@ export function getClaudeCompatibleProviderConfig(provider: unknown): ClaudeComp
 }
 
 export function isClaudeFamilyProvider(provider: unknown): boolean {
-  return provider === 'claude-cli' || isClaudeCompatibleProvider(provider);
+  return provider === 'claude' || isClaudeCompatibleProvider(provider);
 }
 
 // ── Provider Registry ──
 
 export const PROVIDERS: ProviderConfig[] = [
+  // NOTE: `models` below are offline fallbacks only — the live list is patched
+  // from the model_registry collection in getEnabledProvidersFromRegistry().
+  // Keep in sync with SEED_MODELS in model-registry.service.ts (which cannot
+  // be imported here without creating an import cycle).
   {
     provider: 'codex',
-    label: 'Codex (CLI)',
-    models: ['gpt-5.5', 'gpt-5.4', 'o3', 'o4-mini', 'codex-mini'],
+    label: 'Codex',
+    models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini', 'o3', 'o4-mini', 'codex-mini'],
     defaultModel: 'gpt-5.5',
     requiresKey: null,
     supportsMcp: true,
@@ -175,10 +179,10 @@ export const PROVIDERS: ProviderConfig[] = [
     supportsSessionResume: true,
   },
   {
-    provider: 'claude-cli',
-    label: 'Claude (CLI)',
-    models: ['fable', 'sonnet', 'opus', 'haiku'],
-    defaultModel: 'sonnet',
+    provider: 'claude',
+    label: 'Claude',
+    models: ['claude-fable-5', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'],
+    defaultModel: 'claude-sonnet-4-6',
     requiresKey: null,
     supportsMcp: true,
     supportsStreaming: true,
@@ -216,8 +220,11 @@ export function getDefaultChatModel(provider: ChatProvider = getDefaultChatProvi
   const fallback = cfg?.defaultModel ?? 'gpt-5.5';
   const raw = process.env.ALLEN_DEFAULT_CHAT_MODEL?.trim();
   if (!raw) return fallback;
-  if (cfg?.open) return raw;
-  return cfg?.models.includes(raw) ? raw : fallback;
+  // The model registry is the source of truth for selectable models and may
+  // contain models beyond the static PROVIDERS list. The settings save path
+  // validates the value against the registry, so accept it here rather than
+  // silently discarding registry-added models.
+  return raw;
 }
 
 /**
@@ -256,6 +263,59 @@ export async function getEnabledProvidersInDefaultOrder(): Promise<ProviderConfi
     enabled: await isProviderEnabled(provider),
   })));
   return enabled.filter((item) => item.enabled).map((item) => item.provider);
+}
+
+/**
+ * Registry-aware version of getEnabledProvidersInDefaultOrder.
+ * Returns enabled providers with their model options patched from the
+ * model_registry collection (REQ-014).
+ *
+ * For closed providers (claude-cli, codex): patches the `models` array.
+ * For open providers (all others): patches the `modelSuggestions` array.
+ * Falls back to static arrays when the registry is empty/unavailable.
+ */
+export async function getEnabledProvidersFromRegistry(db: Db): Promise<ProviderConfig[]> {
+  const ordered = getProvidersInDefaultOrder();
+  const enabled = await Promise.all(ordered.map(async (provider) => ({
+    provider,
+    enabled: await isProviderEnabled(provider),
+  })));
+  // Clone so registry patches below never mutate the static PROVIDERS entries.
+  const enabledProviders = enabled.filter((item) => item.enabled).map((item) => ({ ...item.provider }));
+
+  // Patch model lists (and default models) from registry
+  const envChatModel = process.env.ALLEN_DEFAULT_CHAT_MODEL?.trim();
+  const defaultChatProvider = getDefaultChatProvider();
+  for (const p of enabledProviders) {
+    try {
+      const registryModels = await db.collection('model_registry')
+        .find({ provider: p.provider, isActive: true })
+        .sort({ sortOrder: 1 })
+        .project({ fullId: 1, tier: 1, providerDisplayName: 1 })
+        .toArray();
+      if (registryModels.length === 0) continue;
+      // Provider display name is DB-driven too (REQ-001).
+      const providerDisplayName = registryModels.find((m) => typeof m.providerDisplayName === 'string' && m.providerDisplayName.trim())?.providerDisplayName?.trim() as string | undefined;
+      if (providerDisplayName) p.label = providerDisplayName;
+      const fullIds = registryModels.map((m) => m.fullId as string);
+      if (p.open) {
+        p.modelSuggestions = fullIds;
+      } else {
+        p.models = fullIds;
+      }
+      // Default model: explicit env setting (applied upstream for the default
+      // chat provider) wins; otherwise use the registry's tier-default entry.
+      const tierDefault = registryModels.find((m) => m.tier === 'default') ?? registryModels[0];
+      const envWins = Boolean(envChatModel) && p.provider === defaultChatProvider;
+      if (!envWins && tierDefault) {
+        p.defaultModel = tierDefault.fullId as string;
+      }
+    } catch {
+      // Registry unavailable — keep static defaults
+    }
+  }
+
+  return enabledProviders;
 }
 
 /**
@@ -728,11 +788,46 @@ export function normalizeDeepSeekAnthropicBaseUrl(value?: string): string {
 }
 
 /**
+ * Resolve model for a given tier using registry lookup between env override and
+ * static default (REQ-019, NFR-001).
+ * Priority: env override > registry tier model > static default.
+ */
+async function resolveModelForTier(
+  db: Db | undefined,
+  provider: string,
+  tier: 'default' | 'opus' | 'flash',
+  envOverride: string | undefined,
+  staticDefault: string,
+): Promise<string> {
+  if (envOverride) return envOverride;
+  if (db) {
+    try {
+      const registryModel = await db.collection('model_registry').findOne(
+        { provider, tier, isActive: true },
+        { sort: { sortOrder: 1 } },
+      );
+      if (registryModel) return registryModel.fullId as string;
+    } catch {
+      // Registry unavailable — fall through to static default
+    }
+  }
+  return staticDefault;
+}
+
+/**
  * Build a process-env overlay that redirects Claude Code SDK / CLI requests to
  * a registered Anthropic-compatible API provider. Adding a new provider should
  * only require a CLAUDE_COMPATIBLE_PROVIDER_CONFIGS entry and UI copy.
+ *
+ * Accepts an optional `db` parameter. When provided, tier-based model defaults
+ * (default/opus/flash) are resolved from the model_registry with env override
+ * taking highest precedence and static config as fallback (REQ-019, NFR-001).
  */
-export async function buildClaudeCompatibleEnvOverlay(provider: string, model?: string): Promise<Record<string, string>> {
+export async function buildClaudeCompatibleEnvOverlay(
+  provider: string,
+  model?: string,
+  db?: Db,
+): Promise<Record<string, string>> {
   const config = getClaudeCompatibleProviderConfig(provider);
   if (!config) throw new Error(`Provider ${provider} is not a Claude-compatible API provider.`);
   const runtimeConfig = getRuntimeConfigProvider();
@@ -745,11 +840,26 @@ export async function buildClaudeCompatibleEnvOverlay(provider: string, model?: 
   const baseUrl = provider === 'deepseek'
     ? normalizeDeepSeekAnthropicBaseUrl(configuredBaseUrl)
     : configuredBaseUrl;
-  const defaultModel = runtimeConfig.get(config.modelEnv) ?? process.env[config.modelEnv] ?? config.defaultModel;
+
+  // Tier-based model resolution: env override > registry > static default
+  const defaultModel = await resolveModelForTier(
+    db, provider, 'default',
+    runtimeConfig.get(config.modelEnv) ?? process.env[config.modelEnv],
+    config.defaultModel,
+  );
   const opusModel = config.opusModelEnv
-    ? runtimeConfig.get(config.opusModelEnv) ?? process.env[config.opusModelEnv] ?? config.defaultOpusModel ?? defaultModel
+    ? await resolveModelForTier(
+        db, provider, 'opus',
+        runtimeConfig.get(config.opusModelEnv) ?? process.env[config.opusModelEnv],
+        config.defaultOpusModel ?? defaultModel,
+      )
     : defaultModel;
-  const flashModel = runtimeConfig.get(config.flashModelEnv) ?? process.env[config.flashModelEnv] ?? config.defaultFlashModel;
+  const flashModel = await resolveModelForTier(
+    db, provider, 'flash',
+    runtimeConfig.get(config.flashModelEnv) ?? process.env[config.flashModelEnv],
+    config.defaultFlashModel,
+  );
+
   const effectiveModel = model && model !== 'default' ? model : defaultModel;
   if (!apiKey) throw new Error(`${config.apiKeyEnv} is not set. Configure this secret in Allen Settings > Secrets.`);
   return {

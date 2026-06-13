@@ -95,6 +95,9 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('execution_traces').createIndex({ executionTraceId: 1 }, { sparse: true });
   await db.collection('execution_traces').createIndex({ executionId: 1, startedAt: 1 });
   await db.collection('execution_traces').createIndex({ executionId: 1, type: 1, startedAt: 1 });
+  // Usage dashboard range scans — traces are the per-LLM-run cost source of
+  // truth, aggregated by time window across all executions.
+  await db.collection('execution_traces').createIndex({ startedAt: 1 });
 
   // Checkpoints
   await db.collection('checkpoints').createIndex({ executionId: 1, createdAt: -1 });
@@ -170,10 +173,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Versioned curated context entries. Runtime paths must use active rows only;
   // inactive rows are retained for audit/history.
   await db.collection('repo_context_curation_entries').createIndex({ entryVersionId: 1 }, { unique: true, sparse: true });
-  await db.collection('repo_context_curation_entries').createIndex(
-    { repoId: 1, entryId: 1, version: 1 },
-    { unique: true, partialFilterExpression: { version: { $exists: true } } },
-  );
+  await db.collection('repo_context_curation_entries').dropIndex('repoId_1_entryId_1_version_1').catch(ignoreMissingIndex);
   await db.collection('repo_context_curation_entries').createIndex(
     { repoId: 1, entryId: 1, active: 1 },
     { unique: true, partialFilterExpression: { active: true } },
@@ -225,26 +225,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Scheduler cursors are scoped; sourceType alone is not unique anymore.
   // Drop the legacy unique index defensively so boot does not fail on DBs that
   // already have multiple scoped chat_learning cursor rows.
-  await db.collection('context_judge_scheduler_state').dropIndex('sourceType_1').catch((err: unknown) => {
-    // Best-effort cleanup of a legacy index — tolerate "index doesn't exist" and
-    // "collection doesn't exist" on any DB. On real MongoDB the server sets
-    // `codeName` (IndexNotFound / NamespaceNotFound); Amazon DocumentDB returns the
-    // same conditions WITHOUT a `codeName` — "ns not found" (code 26) when the
-    // collection is missing, and "Cannot drop index: index not found." when only the
-    // named index is missing. So we accept the codeName, the known numeric codes, or
-    // the message text, and only re-throw on a genuinely unexpected error.
-    const e = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : undefined;
-    const codeName = e?.['codeName'];
-    const code = e?.['code'];
-    const message = typeof e?.['message'] === 'string' ? (e['message'] as string) : '';
-    const isMissing =
-      codeName === 'IndexNotFound' ||
-      codeName === 'NamespaceNotFound' ||
-      code === 26 || // NamespaceNotFound
-      code === 27 || // IndexNotFound
-      /index not found|ns not found/i.test(message);
-    if (!isMissing) throw err;
-  });
+  await db.collection('context_judge_scheduler_state').dropIndex('sourceType_1').catch(ignoreMissingIndex);
   await db.collection('context_judge_scheduler_state').createIndex(
     { sourceType: 1, scopeType: 1, scopeKey: 1 },
     { unique: true, sparse: true },
@@ -278,12 +259,22 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   // Chat Messages
   await db.collection('chat_messages').createIndex({ sessionId: 1, createdAt: 1 });
+  // Usage dashboard range scans over assistant turns across all sessions.
+  await db.collection('chat_messages').createIndex({ createdAt: 1 });
   // Sparse compound index to support owner lookups in listSessions() aggregation
   // (senderUserId is only populated on user-sent messages, sparse avoids indexing nulls)
   await db.collection('chat_messages').createIndex(
     { senderUserId: 1, sessionId: 1, createdAt: 1 },
     { name: 'idx_msg_sender_session_created', sparse: true },
   );
+
+  // Model Registry
+  await db.collection('model_registry').dropIndex('provider_1_alias_1').catch(() => {});
+  await db.collection('model_registry').createIndex({ provider: 1, fullId: 1 }, { unique: true });
+  await db.collection('model_registry').createIndex({ provider: 1, isActive: 1, sortOrder: 1 });
+  await db.collection('model_registry').createIndex({ isActive: 1 });
+  // Chat sessions model index for migration updateMany performance
+  await db.collection('chat_sessions').createIndex({ model: 1 });
 
   // Historical agent conversations
   await db.collection('agent_conversations').createIndex({ chatSessionId: 1, startedAt: -1 });
@@ -518,5 +509,65 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('design_messages').createIndex({ executionId: 1 }, { sparse: true });
   await db.collection('design_messages').createIndex({ agentRunId: 1 }, { sparse: true });
 
+  // repo_context_setup_runs
+  await db.collection('repo_context_setup_runs').createIndex({ setupRunId: 1 }, { unique: true, name: 'idx_setup_run_id' });
+  await db.collection('repo_context_setup_runs').createIndex({ repoId: 1, status: 1, updatedAt: -1 }, { name: 'idx_setup_repo_status' });
+  await db.collection('repo_context_setup_runs').createIndex(
+    { repoId: 1 },
+    { unique: true, partialFilterExpression: { status: { $in: ['running', 'partial'] } }, name: 'idx_setup_active_per_repo' },
+  );
+  await db.collection('repo_context_setup_runs').createIndex({ status: 1, updatedAt: -1 }, { name: 'idx_setup_status_updated' });
+
+  // mandatory_context_proposals
+  // Partial unique index: only final assembled proposal docs carry both proposalId AND mappings.
+  // Staged rows have no proposalId, so they must NOT participate in this constraint — a broad
+  // unique index on { proposalId: 1 } treats all missing/null proposalId values as a single key
+  // and causes E11000 when more than one staged row exists.
+  // NOTE: if the old broad unique index still exists from a prior server version, drop it manually:
+  //   db.mandatory_context_proposals.dropIndex('idx_proposal_id')
+  // then restart so this partial index is created in its place.
+  await db.collection('mandatory_context_proposals').createIndex(
+    { proposalId: 1 },
+    {
+      unique: true,
+      partialFilterExpression: { proposalId: { $exists: true }, mappings: { $exists: true } },
+      name: 'idx_proposal_id',
+    },
+  );
+  await db.collection('mandatory_context_proposals').createIndex(
+    { setupRunId: 1 },
+    { unique: true, partialFilterExpression: { status: 'proposed' }, name: 'idx_proposal_active_per_run' },
+  );
+  await db.collection('mandatory_context_proposals').createIndex({ setupRunId: 1, status: 1, createdAt: -1 }, { name: 'idx_proposal_run_status' });
+  await db.collection('mandatory_context_proposals').createIndex(
+    { setupRunId: 1, agentName: 1, title: 1, sourcePath: 1 },
+    { unique: true, partialFilterExpression: { status: 'staged' }, name: 'idx_proposal_staged_key' },
+  );
+  await db.collection('mandatory_context_proposals').createIndex({ createdAt: 1 }, { expireAfterSeconds: 604800, name: 'idx_proposal_ttl' });
+
+  // repo_mandatory_context_mappings — hot lookup for runtime injection and deactivation
+  await db.collection('repo_mandatory_context_mappings').createIndex(
+    { repoId: 1, agentName: 1, enabled: 1 },
+    { sparse: true, name: 'idx_mandatory_repo_agent_enabled' },
+  );
+
   console.log('Database indexes ensured');
+}
+
+function ignoreMissingIndex(err: unknown): void {
+  const e = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : undefined;
+  const codeName = e?.['codeName'];
+  const code = e?.['code'];
+  const message = String(e?.['message'] ?? '');
+  if (
+    codeName === 'IndexNotFound' ||
+    codeName === 'NamespaceNotFound' ||
+    code === 26 ||
+    code === 27 ||
+    /index not found/i.test(message) ||
+    /ns not found/i.test(message)
+  ) {
+    return;
+  }
+  throw err;
 }

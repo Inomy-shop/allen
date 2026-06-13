@@ -5,10 +5,10 @@ import RoleIcon from './RoleIcon';
 import { renderMarkdown } from '../chat/ChatMessageList';
 import { mcp as mcpApi, type McpToolGroup } from '../../services/api';
 import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
-import { useEnabledProvidersStatus, type EnabledProvider } from '../../hooks/useEnabledProviders';
+import { useEnabledProvidersStatus, isProviderSelectable } from '../../hooks/useEnabledProviders';
+import { useModelRegistry, getModelDisplay } from '../../hooks/useModelRegistry';
+import { buildModelOptionsForProvider } from '../../lib/model-catalog';
 
-const CLAUDE_MODELS = ['fable', 'sonnet', 'opus', 'haiku'];
-const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'];
 const TOOLS = ['filesystem', 'terminal', 'git', 'web-search', 'web-fetch', 'database'];
 const EFFORT_LEVELS = [
   { value: '', label: '(CLI default)' },
@@ -38,24 +38,11 @@ const TOOL_LABELS: Record<string, string> = {
   database: 'Database',
 };
 
-function getModelsForProvider(provider: string, enabledProviders: EnabledProvider[]): string[] {
-  if (provider === 'codex') return CODEX_MODELS;
-  if (enabledProviders.some((item) => item.provider === provider && item.open)) return [];
-  return CLAUDE_MODELS;
-}
-
-// Backend stores `provider` as 'claude-cli' (for Claude agents), 'codex', or API provider IDs.
-// The dropdown offers 'claude' | 'codex' | API provider IDs. Normalize on load so the Select matches.
+// Provider ids are stored canonically ('claude', 'codex', API provider ids).
+// 'claude-cli' is the pre-rename legacy id — accept it when loading old agents.
 function normalizeProviderForUi(p: unknown): string {
-  if (p === 'codex') return 'codex';
-  if (typeof p === 'string' && p !== 'claude-cli' && p !== 'claude') return p;
+  if (typeof p === 'string' && p) return p === 'claude-cli' ? 'claude' : p;
   return 'claude';
-}
-
-// Map the UI provider value back to the backend-expected value.
-function providerToBackendValue(uiProvider: string): string {
-  if (uiProvider === 'claude') return 'claude-cli';
-  return uiProvider; // 'codex' and API provider IDs pass through as-is
 }
 
 function withConfiguredMcpGroups(
@@ -104,22 +91,24 @@ export default function RoleDialog({
 }: RoleDialogProps) {
   const isEdit = !!role;
   const { providers: enabledProviders, loaded: enabledProvidersLoaded } = useEnabledProvidersStatus();
-  const availableUiProviders = useMemo(() => new Set([
-    ...enabledProviders.map((item) => item.provider === 'claude-cli' ? 'claude' : item.provider),
-  ]), [enabledProviders]);
-  const openProviderModelSuggestions = useMemo(() => Object.fromEntries(
-    enabledProviders
-      .filter((item) => item.open)
-      .map((item) => [item.provider, item.modelSuggestions && item.modelSuggestions.length > 0
-        ? item.modelSuggestions
-        : [item.defaultModel]]),
-  ) as Record<string, string[]>, [enabledProviders]);
+  const { getModelsForProvider: registryGetModelsForProvider, getDefaultModelForProvider } = useModelRegistry();
+  // Selectable = enabled, and for CLI providers (claude/codex) also logged in.
+  const selectableProviders = useMemo(
+    () => enabledProviders.filter(isProviderSelectable),
+    [enabledProviders],
+  );
+  const availableUiProviders = useMemo(
+    () => new Set(selectableProviders.map((item) => item.provider)),
+    [selectableProviders],
+  );
 
   const [name, setName] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [system, setSystem] = useState('');
   const [provider, setProvider] = useState('claude');
-  const [model, setModel] = useState('sonnet');
+  const [model, setModel] = useState(() => getDefaultModelForProvider('claude'));
+  const [isOtherModel, setIsOtherModel] = useState(false);
+  const [customModel, setCustomModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState('');
   const [planMode, setPlanMode] = useState('');
   const [tools, setTools] = useState<string[]>([]);
@@ -142,7 +131,7 @@ export default function RoleDialog({
       setDisplayName((role.displayName as string) ?? '');
       setSystem((role.system as string) ?? '');
       setProvider(normalizeProviderForUi(role.provider));
-      setModel((role.model as string) ?? 'sonnet');
+      setModel((role.model as string) ?? getDefaultModelForProvider(normalizeProviderForUi(role.provider)));
       setReasoningEffort((role.reasoningEffort as string) ?? '');
       setPlanMode(
         role.planMode === true ? 'on' : role.planMode === false ? 'off' : '',
@@ -167,12 +156,14 @@ export default function RoleDialog({
       setShowPreviousPrompt(false);
       setEditorMode('edit');
       setExpandedMcpServers(new Set(Object.keys(configuredDisabled)));
+      setIsOtherModel(false);
+      setCustomModel('');
     } else if (open) {
       setName('');
       setDisplayName('');
       setSystem('');
       setProvider('claude');
-      setModel('sonnet');
+      setModel(getDefaultModelForProvider('claude'));
       setReasoningEffort('');
       setPlanMode('');
       setTools([]);
@@ -185,16 +176,29 @@ export default function RoleDialog({
       setShowPreviousPrompt(false);
       setEditorMode('edit');
       setExpandedMcpServers(new Set());
+      setIsOtherModel(false);
+      setCustomModel('');
     }
     setError('');
   }, [open, role, initialTeamName]);
 
   useEffect(() => {
     if (!open || !enabledProvidersLoaded || availableUiProviders.has(provider)) return;
-    setProvider('claude');
-    setModel('sonnet');
+    const fallback = selectableProviders[0]?.provider;
+    if (!fallback) return;
+    setProvider(fallback);
+    setModel(getDefaultModelForProvider(fallback));
     setPlanMode('');
-  }, [availableUiProviders, enabledProvidersLoaded, open, provider]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableUiProviders, selectableProviders, enabledProvidersLoaded, open, provider]);
+
+  // The registry may finish loading after the open-reset above ran — backfill
+  // the default model once it's available instead of leaving the field empty.
+  useEffect(() => {
+    if (!open || model || isOtherModel || isEdit) return;
+    const def = getDefaultModelForProvider(provider);
+    if (def) setModel(def);
+  }, [open, model, isOtherModel, isEdit, provider, getDefaultModelForProvider]);
 
   useEffect(() => {
     if (!open) return;
@@ -228,13 +232,11 @@ export default function RoleDialog({
 
   function handleProviderChange(val: string) {
     setProvider(val);
-    const openSuggestions = openProviderModelSuggestions[val];
-    if (openSuggestions) {
-      setModel(openSuggestions[0] ?? '');
-    } else {
-      const models = getModelsForProvider(val, enabledProviders);
-      setModel(models[0] ?? '');
-    }
+    setIsOtherModel(false);
+    setCustomModel('');
+    const models = buildModelOptionsForProvider(val, enabledProviders, registryGetModelsForProvider(val));
+    const firstModel = models.find((option) => option.value !== '__other__');
+    setModel(firstModel?.value ?? '');
   }
 
   function toggleTool(tool: string) {
@@ -277,7 +279,7 @@ export default function RoleDialog({
         name: name.trim(),
         displayName: displayName.trim() || name.trim(),
         system: system.trim(),
-        provider: providerToBackendValue(provider),
+        provider,
         model,
         reasoningEffort: reasoningEffort || undefined,
         planMode: planMode === '' ? undefined : planMode === 'on',
@@ -306,7 +308,7 @@ export default function RoleDialog({
         name: role.name as string,
         system: role.previousSystemPrompt as string,
         previousSystemPrompt: null,
-        provider: providerToBackendValue(provider),
+        provider,
         model,
         tools,
         icon,
@@ -321,24 +323,20 @@ export default function RoleDialog({
     }
   }
 
+  // Hooks must run on every render — keep this above the `!open` early
+  // return or the hook count changes when the dialog opens (React #310).
+  const registryModelsForProvider = useMemo(() => registryGetModelsForProvider(provider), [registryGetModelsForProvider, provider]);
+
   if (!open) return null;
 
-  const modelOptions = getModelsForProvider(provider, enabledProviders).map(m => ({ value: m, label: m }));
-  const openModelSuggestions = openProviderModelSuggestions[provider];
-  const openModelOptions = [
-    ...(openModelSuggestions ?? []).map((model) => ({ value: model, label: model })),
-    ...(openModelSuggestions && model && !openModelSuggestions.includes(model)
-      ? [{ value: model, label: model, sublabel: 'Custom model ID' }]
-      : []),
-  ];
-  const providerOptions = [
-    ...(availableUiProviders.has('claude') ? ['claude'] : []),
-    ...(availableUiProviders.has('codex') ? ['codex'] : []),
-    ...enabledProviders.filter((item) => item.open).map((item) => item.provider),
-  ].filter((p, index, all) => all.indexOf(p) === index).map(p => ({
-    value: p,
-    label: p === 'deepseek' ? 'DeepSeek' : p === 'xiaomi-mimo' ? 'Xiaomi MiMo' : p === 'kimi' ? 'Kimi' : p,
-  }));
+  const modelOptions = buildModelOptionsForProvider(provider, enabledProviders, registryModelsForProvider, model);
+  const providerOptions = selectableProviders
+    .map((item) => item.provider)
+    .filter((p, index, all) => all.indexOf(p) === index)
+    .map(p => ({
+      value: p,
+      label: getModelDisplay(p).providerLabel,
+    }));
   const iconOptions = ICONS.map(i => ({ value: i, label: i }));
   const typeOptions = AGENT_TYPES.map(t => ({ value: t.value, label: t.label }));
   const teamOptions = teams.map(team => ({
@@ -459,17 +457,24 @@ export default function RoleDialog({
                   </div>
                   <div>
                     <label className="mb-1.5 block overline">Model</label>
-                    {openModelSuggestions ? (
-                      <Select
-                        value={model}
-                        onChange={setModel}
-                        searchPlaceholder="Search or enter model ID..."
-                        placeholder={`e.g. ${openModelSuggestions[0] ?? 'provider-model'}`}
-                        options={openModelOptions}
-                        allowCustomValue
+                    {isOtherModel ? (
+                      <input
+                        type="text"
+                        value={customModel}
+                        onChange={(e) => { setCustomModel(e.target.value); setModel(e.target.value); }}
+                        placeholder="Enter model ID..."
+                        className="input w-full h-9 text-[13px]"
+                        autoFocus
                       />
                     ) : (
-                      <Select value={model} onChange={setModel} options={modelOptions} />
+                      <Select
+                        value={model}
+                        onChange={(val) => {
+                          if (val === '__other__') { setIsOtherModel(true); setCustomModel(''); return; }
+                          setModel(val);
+                        }}
+                        options={modelOptions}
+                      />
                     )}
                   </div>
                   <div>

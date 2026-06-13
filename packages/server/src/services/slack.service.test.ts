@@ -408,6 +408,172 @@ describe('SlackService ALLEN_SLACK_PROGRESS_POSTS flag', () => {
   });
 });
 
+// ── Inline text / markdown file tests ──
+
+describe('SlackService inline text/markdown file handling', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(global, 'fetch');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // ── Test: text/markdown mimetype is fetched and inlined ──
+
+  it('text-markdown-attachment: text/markdown file is fetched from Slack and inlined as labelled fenced block, not as a /api/files/ link', async () => {
+    const { service } = makeService();
+    const markdownContent = '# Hello World\n\nThis is **markdown** content.';
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      if (url.includes('files.slack.com')) {
+        // fetchSlackTextContent calls resp.text() — return a response with that method.
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(markdownContent),
+        } as unknown as Response);
+      }
+      // Slack API calls (reactions.add/remove, chat.postMessage)
+      return Promise.resolve(fakeResponse({ ok: true }));
+    });
+
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> review this file',
+      user: 'U456',
+      channel: 'C789',
+      ts: '555.001',
+      files: [
+        {
+          id: 'FMD1',
+          name: 'notes.md',
+          mimetype: 'text/markdown',
+          url_private: 'https://files.slack.com/files-pri/aaa/notes.md',
+          size: Buffer.byteLength(markdownContent, 'utf8'),
+        },
+      ],
+    };
+
+    await service.handleNewThread('T001', 'C789', '555.001', event);
+
+    const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    const messageArg: string = sendCalls[0][1];
+
+    // Filename label and fenced block must be present
+    expect(messageArg).toContain('**File: notes.md**');
+    expect(messageArg).toContain('```markdown');
+    expect(messageArg).toContain('# Hello World');
+    // Must NOT produce a binary download link
+    expect(messageArg).not.toContain('/api/files/');
+  });
+
+  // ── Test: application/octet-stream + .md extension triggers MIME fallback ──
+
+  it('octet-stream-md-extension: application/octet-stream with .md filename is inlined via MIME fallback, not as a /api/files/ link', async () => {
+    const { service } = makeService();
+    const markdownContent = '## Architecture\n\nThis file has an `application/octet-stream` MIME type.';
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      if (url.includes('files.slack.com')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(markdownContent),
+        } as unknown as Response);
+      }
+      return Promise.resolve(fakeResponse({ ok: true }));
+    });
+
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> explain this',
+      user: 'U456',
+      channel: 'C789',
+      ts: '555.002',
+      files: [
+        {
+          id: 'FOS1',
+          name: 'README.md',
+          mimetype: 'application/octet-stream',
+          url_private: 'https://files.slack.com/files-pri/bbb/README.md',
+          size: Buffer.byteLength(markdownContent, 'utf8'),
+        },
+      ],
+    };
+
+    await service.handleNewThread('T001', 'C789', '555.002', event);
+
+    const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    const messageArg: string = sendCalls[0][1];
+
+    // octet-stream + .md extension → inlined as fenced markdown block, not a download link
+    expect(messageArg).toContain('**File: README.md**');
+    expect(messageArg).toContain('```markdown');
+    expect(messageArg).toContain('## Architecture');
+    expect(messageArg).not.toContain('/api/files/');
+  });
+
+  // ── Test: content exceeding 8 KB is truncated with a notice ──
+
+  it('truncation: text/markdown content >8 KB is capped at 8 KB and a truncation notice is appended; trailing content is absent', async () => {
+    const { service } = makeService();
+    // Build content that just exceeds the 8 KB (8 192-byte) inline cap.
+    // The first 8 192 bytes are ASCII 'a'; the sentinel that follows must NOT appear in the output.
+    const bodyPart = 'a'.repeat(8192);
+    const sentinel = 'SENTINEL_TRAILING_CONTENT_MUST_NOT_APPEAR';
+    const bigContent = bodyPart + sentinel; // total > 8 192 bytes → triggers truncation
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      if (url.includes('files.slack.com')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(bigContent),
+        } as unknown as Response);
+      }
+      return Promise.resolve(fakeResponse({ ok: true }));
+    });
+
+    const event = {
+      type: 'app_mention',
+      text: '<@U123> summarize this big file',
+      user: 'U456',
+      channel: 'C789',
+      ts: '555.003',
+      files: [
+        {
+          id: 'FBG1',
+          name: 'bigfile.md',
+          mimetype: 'text/markdown',
+          url_private: 'https://files.slack.com/files-pri/ccc/bigfile.md',
+          size: Buffer.byteLength(bigContent, 'utf8'),
+        },
+      ],
+    };
+
+    await service.handleNewThread('T001', 'C789', '555.003', event);
+
+    const sendCalls = vi.mocked(service.chatService.sendMessageForSlack).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    const messageArg: string = sendCalls[0][1];
+
+    // Truncation notice must be present with the correct byte cap and filename
+    expect(messageArg).toContain('truncated');
+    expect(messageArg).toContain('8 KB');
+    expect(messageArg).toContain('"bigfile.md"');
+    // Content beyond the 8 KB boundary must NOT appear
+    expect(messageArg).not.toContain(sentinel);
+  });
+});
+
 // ── Bot/app message in thread tests ──
 
 describe('SlackService bot/app messages in thread', () => {

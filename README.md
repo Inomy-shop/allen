@@ -45,14 +45,14 @@ Allen runs a multi-team organization of AI agents against your codebases. You ta
 
 | Concept | What it is |
 |---|---|
-| **Agent** | A configured LLM persona (system prompt, model, tools, MCP allowlist, delegation targets). Team agents orchestrate; specialist agents do the hands-on work. |
-| **Team** | A group of agents with a lead and a parent team. Defines the delegation org chart. |
-| **Workflow** | A YAML pipeline of nodes (`agent`, `code`, `human`, `condition`, `workflow`) connected by edges, with parallel branches and retries. |
+| **Agent** | A configured LLM persona (system prompt, model, tools, MCP allowlist, delegation targets). Team agents orchestrate; specialist agents do the hands-on work. Deleted agents are soft-deleted (`isDeleted=true`) and hidden from all surfaces; recreating one with the same name restores the original record. |
+| **Team** | A group of agents with a lead and a parent team. Defines the delegation org chart. Teams with active members cannot be deleted. Deleted teams are soft-deleted and hidden; recreating with the same name restores the record. |
+| **Workflow** | A YAML pipeline of nodes (`agent`, `code`, `human`, `condition`, `workflow`) connected by edges, with parallel branches and retries. Deleted workflows are soft-deleted and hidden; recreating with the same name restores the original record. |
 | **Execution** | One run of a workflow or a single spawned agent. Has state, traces, logs, tool calls, artifacts. |
 | **Workspace** | An isolated git worktree for a repo where agents run, with a terminal and preview proxy. |
 | **Chat session** | A conversation with an agent. Can spawn agents, run workflows, and delegate. |
 | **Intervention** | A human checkpoint where a workflow pauses for approval/input. |
-| **Artifact** | A versioned output (PRD/HLD/TDD doc, generated file) addressable by a capability URL. |
+| **Artifact** | A versioned output such as a design note, validation report, or generated file, addressable by a capability URL. |
 | **Learning** | A captured insight injected into future agent prompts by scope. |
 | **MCP server** | A Model Context Protocol tool server exposed to agents; configured per-server with `ALLEN_`-prefixed env vars. |
 
@@ -140,15 +140,15 @@ Built-in workflows in `packages/engine/workflows/`:
 
 | Workflow | Purpose |
 |---|---|
-| `feature-plan-and-implement.yml` | Take a user-supplied requirement spec (PRD-style), produce the TDD, audit it, implement, validate, and open a PR. No PRD authoring inside the workflow. |
+| `feature-plan-and-implement.yml` | Take a user-supplied feature request, produce a technical design, implement, validate, and open a PR. |
 | `bug-fix-by-severity.yml` | Triage a bug by severity and dispatch the appropriate fix path. |
-| `tdd-design-by-severity.yml` | Generate a technical design document (TDD) from a user-supplied requirement, scaled to severity. |
-| `milestone-implementation-from-prd-tdd.yml` | Implement milestones from existing PRD/TDD docs. |
+| `tdd-design-by-severity.yml` | Generate a technical design from a user-supplied request, scaled to severity. |
+| `milestone-implementation-from-prd-tdd.yml` | Implement milestones from existing product and technical design artifacts. |
 | `resolve-pr-reviews.yml` | Resolve CodeRabbit/PR review comments, run tests, push fixes, summarize. |
 | `self-healing-incident-triage.yml` | Classify and route a production/runtime incident. |
 | `allen-self-healing-monitor-hourly.yml` | Hourly scan of Allen's own runtime; files and dispatches incidents. |
-| `multi-repo-change-orchestration.yml` | Parent orchestrator for cross-repo change delivery — clarify, plan per-repo work, approve, then run child workflows in dependency-aware parallel phases. |
-| `source-prd-to-ui-designs-variations.yml` | Generate 4-5 distinct UX/design options from a PRD and design-system evidence. Accepts `output_mode: 'spec_only' | 'prototype'` (default `spec_only`); in spec-only mode prototype-generation nodes are skipped. Dispatched automatically by the Design tab. |
+| `multi-repo-change-orchestration.yml` | Parent orchestrator for cross-repo change delivery — clarify, plan per-repo work, approve, then run child workflows. |
+| `source-prd-to-ui-designs-variations.yml` | Generate distinct UX/design options from a product brief and design-system evidence. Dispatched automatically by the Design tab. |
 
 See [`docs/first-workflow.md`](docs/first-workflow.md) for a step-by-step walkthrough.
 
@@ -232,13 +232,15 @@ CI (`.github/workflows/ci.yml`) runs build, lint, and Vitest on every PR and pus
 
 ## Documentation
 
+Start with [`docs/README.md`](docs/README.md) for the full documentation map. Key pages:
+
 - [`docs/first-workflow.md`](docs/first-workflow.md) — first local workflow, setup → execution review.
-- [`docs/architecture.md`](docs/architecture.md) — engine, server, UI, workspaces, agents, data model, integrations.
-- [`docs/SELF_HEALING_MONITORING.md`](docs/SELF_HEALING_MONITORING.md) — the hourly self-healing loop.
+- [`docs/architecture.md`](docs/architecture.md) — high-level system map and package responsibilities.
+- [`docs/concepts/workflows.md`](docs/concepts/workflows.md), [`docs/concepts/agents.md`](docs/concepts/agents.md), [`docs/concepts/teams.md`](docs/concepts/teams.md), and [`docs/concepts/skills.md`](docs/concepts/skills.md) — Allen's core operating model.
+- [`docs/modules/engine.md`](docs/modules/engine.md), [`docs/modules/server.md`](docs/modules/server.md), [`docs/modules/ui.md`](docs/modules/ui.md), [`docs/modules/desktop.md`](docs/modules/desktop.md), and [`docs/modules/e2e.md`](docs/modules/e2e.md) — high-level module guides.
 - [`docs/security.md`](docs/security.md) — repo execution, sandboxing limits, secrets, MCP, public capability URLs.
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — setup and runtime failure fixes.
-- [`docs/known-limitations.md`](docs/known-limitations.md) — current alpha constraints.
-- [`docs/claude-prompting-best-practices.md`](docs/claude-prompting-best-practices.md) / [`docs/gemini-prompting-best-practices.md`](docs/gemini-prompting-best-practices.md) — prompt-engineering references.
+- [`docs/documentation-guidelines.md`](docs/documentation-guidelines.md) — public documentation style and maintenance guidance.
 
 ## Security
 

@@ -12,6 +12,7 @@
 
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
+import { notDeletedFilter, softDeleteSet, restoreSet } from './soft-delete.js';
 
 // ── Types ──
 
@@ -45,22 +46,36 @@ export class TeamService {
   }
 
   async list(): Promise<Team[]> {
-    return this.collection.find({}).sort({ name: 1 }).toArray();
+    return this.collection.find(notDeletedFilter).sort({ name: 1 }).toArray();
   }
 
   async getByName(name: string): Promise<Team | null> {
-    return this.collection.findOne({ name });
+    return this.collection.findOne({ name, ...notDeletedFilter });
   }
 
   async getById(id: string): Promise<Team | null> {
-    return this.collection.findOne({ _id: new ObjectId(id) });
+    return this.collection.findOne({ _id: new ObjectId(id), ...notDeletedFilter });
   }
 
   async create(
     input: TeamInput,
     opts: { isBuiltIn?: boolean; createdBy?: Team['createdBy'] } = {},
-  ): Promise<Team> {
+  ): Promise<Team & { restored?: boolean }> {
     const now = new Date();
+
+    // Check for soft-deleted record with the same name — restore instead of insert
+    const deleted = await this.collection.findOne({ name: input.name, isDeleted: true });
+    if (deleted) {
+      const payload = {
+        ...input,
+        isBuiltIn: opts.isBuiltIn ?? false,
+        createdBy: opts.createdBy ?? 'user',
+      };
+      await this.collection.updateOne({ name: input.name }, restoreSet(payload as unknown as Record<string, unknown>));
+      const restored = await this.collection.findOne({ name: input.name, ...notDeletedFilter });
+      if (restored) return { ...restored, restored: true };
+    }
+
     const doc: Team = {
       ...input,
       isBuiltIn: opts.isBuiltIn ?? false,
@@ -101,7 +116,7 @@ export class TeamService {
         `Team "${name}" still has ${memberCount} agent(s). Delete or move them first.`,
       );
     }
-    await this.collection.deleteOne({ name });
+    await this.collection.updateOne({ name }, softDeleteSet());
   }
 
   /**
@@ -110,7 +125,7 @@ export class TeamService {
   async listMembers(teamName: string): Promise<Array<Record<string, unknown>>> {
     const agents = await this.db
       .collection('agents')
-      .find({ teamName })
+      .find({ teamName, ...notDeletedFilter })
       .toArray();
     // Lead first, then alphabetical
     return agents.sort((a, b) => {
@@ -151,7 +166,7 @@ export class TeamService {
    */
   async promoteToLead(agentName: string, teamName: string): Promise<void> {
     const agents = this.db.collection('agents');
-    const lead = await agents.findOne({ name: agentName });
+    const lead = await agents.findOne({ name: agentName, ...notDeletedFilter });
     if (!lead) throw new Error(`Lead agent "${agentName}" not found`);
 
     const currentTeam = lead.teamName as string | undefined;

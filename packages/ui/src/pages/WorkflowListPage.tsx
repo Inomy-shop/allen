@@ -144,8 +144,12 @@ export default function WorkflowListPage() {
   const importWorkflowJson = useCallback(async () => {
     try {
       const bundle = await pickJsonFile();
-      const result = await workflowsApi.importJson(bundle);
-      toast.success(`Imported ${result.created.length} workflow${result.created.length === 1 ? '' : 's'}; skipped ${result.skipped.length}.`);
+      const result: any = await workflowsApi.importJson(bundle);
+      const parts: string[] = [];
+      if (result.created?.length > 0) parts.push(`${result.created.length} created`);
+      if (result.skipped?.length > 0) parts.push(`${result.skipped.length} skipped`);
+      if (result.restored?.length > 0) parts.push(`${result.restored.length} restored`);
+      toast.success(parts.join(', ') || 'Imported workflows.');
       await refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to import workflows');

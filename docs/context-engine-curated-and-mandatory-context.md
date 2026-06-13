@@ -51,6 +51,24 @@ Mandatory mappings are loaded by exact Allen agent name. They bypass optional Co
 
 Use mandatory context only for narrow policies, rules, safety constraints, workflow contracts, and repo practices that the agent must know before it starts.
 
+### Active And Inactive Mappings
+
+Mappings use the `enabled` field as the source of truth for active/inactive state. At runtime Allen loads only enabled mappings; inactive rows are never injected.
+
+When new mappings are saved for a repo and an agent (for example by the one-click setup flow), old active mappings for the same repo and agent are deactivated — but only after the new mappings have been saved successfully. If the save fails, existing active mappings remain unchanged.
+
+Inactive rows are kept for audit and troubleshooting. They do not participate in runtime injection regardless of their other fields.
+
+Optional audit fields are written when deactivation happens through the setup flow:
+
+| Field | Meaning |
+|---|---|
+| `deactivatedAt` | Timestamp when the mapping was deactivated. |
+| `deactivatedByRunId` | The setup run identifier that triggered deactivation. |
+| `deactivationReason` | Reason for deactivation: `replaced` (a newer mapping superseded it) or `reviewed_empty` (the mapper reviewed the agent but produced no mappings). |
+
+These fields are informational only and are not part of a versioning system.
+
 ### Mandatory Context Fields
 
 | Field | Meaning | How to fill it |
@@ -85,8 +103,9 @@ Avoid making broad PRDs, full runbooks, large generated docs, or agent persona f
 
 In the repo **Context Management** page:
 
+- use the **Setup** card above the tabs to run the full pipeline (curation, mandatory mapping, and graph refresh) in one coordinated action. The card shows phase-level progress and a resume action when a run fails.
 - use **Curated Context** to review, edit, add, or mark curated entries;
-- use **Mandatory Context** to view mappings for all agents or filter by one agent;
+- use **Mandatory Context** to view active mappings for all agents or filter by one agent. Enable **Show inactive (troubleshooting)** to include deactivated rows when diagnosing unexpected context injection behavior;
 - use **Playground** to see mandatory refs, Cognee recalls, rerank scores, selected/rejected refs, resolved curated content, and injection decisions;
 - use **Context Graph** to refresh or clean-build the Cognee context dataset from active curated entries.
 

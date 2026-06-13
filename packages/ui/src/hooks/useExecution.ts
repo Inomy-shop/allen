@@ -64,6 +64,11 @@ export function useExecution(id: string | undefined) {
   //                    the user toggles "Show all descendants".
   const [children, setChildren] = useState<SpawnedChild[]>([]);
   const [descendantsMode, setDescendantsMode] = useState(false);
+  /** Full spawn subtree (children, grandchildren, …) regardless of the
+   *  panel's direct/descendants toggle. Child agents live in their own
+   *  execution rows, so header cost/token totals must fold in the whole
+   *  subtree — a direct-children sum would undercount nested spawns. */
+  const [spawnSubtree, setSpawnSubtree] = useState<SpawnedChild[]>([]);
   /** Live-streamed tool calls keyed by node name. Populated from SSE
    *  agent_tool_complete events so the tool log panel updates in real time
    *  while the node is still running (before the trace is persisted). */
@@ -104,6 +109,7 @@ export function useExecution(id: string | undefined) {
     // Fire the children fetch in parallel — cheap projection query, no
     // reason to serialize it behind the main exec load.
     api.children(id, 'direct').then(setChildren).catch(() => setChildren([]));
+    api.children(id, 'descendants').then(setSpawnSubtree).catch(() => setSpawnSubtree([]));
     Promise.all([api.get(id), api.traces(id)])
       .then(async ([exec, tr]) => {
         setExecution(exec);
@@ -409,6 +415,9 @@ export function useExecution(id: string | undefined) {
           api.children(id, descendantsMode ? 'descendants' : 'direct')
             .then(setChildren)
             .catch(() => { /* ignore transient errors */ });
+          api.children(id, 'descendants')
+            .then(setSpawnSubtree)
+            .catch(() => { /* ignore transient errors */ });
         }, isSpawnToolCall ? 400 : 0);
       }
     }
@@ -679,6 +688,9 @@ export function useExecution(id: string | undefined) {
     api.children(id, descendantsMode ? 'descendants' : 'direct')
       .then(setChildren)
       .catch(() => { /* ignore */ });
+    api.children(id, 'descendants')
+      .then(setSpawnSubtree)
+      .catch(() => { /* ignore */ });
   }, [id, descendantsMode]);
 
   // When the user toggles descendants mode, re-fetch children with the new scope.
@@ -787,6 +799,7 @@ export function useExecution(id: string | undefined) {
     children,
     descendantsMode,
     toggleDescendants,
+    spawnSubtree,
     liveToolCallsByNode,
   };
 }

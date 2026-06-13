@@ -160,7 +160,7 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
 
     const env: NodeJS.ProcessEnv = { ...process.env };
     if (isClaudeCompatibleProvider(input.provider)) {
-      Object.assign(env, await buildClaudeCompatibleEnvOverlay(input.provider, input.model));
+      Object.assign(env, await buildClaudeCompatibleEnvOverlay(input.provider, input.model, input.db));
     }
     if (input.chatSessionId) env.ALLEN_CHAT_SESSION_ID = input.chatSessionId;
 

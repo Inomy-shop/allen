@@ -116,7 +116,7 @@ describe('resolveAgentProviderModel — deepseek (Mode 3: cross-provider)', () =
   it('switches claude-cli seed to deepseek env provider+model', () => {
     process.env.ALLEN_DEFAULT_AGENT_PROVIDER = 'deepseek';
     process.env.ALLEN_DEFAULT_AGENT_MODEL = 'deepseek-v4-pro[1m]';
-    const result = resolveAgentProviderModel('claude-cli', 'sonnet');
+    const result = resolveAgentProviderModel('claude', 'sonnet');
     expect(result.provider).toBe('deepseek');
     expect(result.model).toBe('deepseek-v4-pro[1m]');
   });

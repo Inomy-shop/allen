@@ -25,6 +25,7 @@ import { resolveActiveSession } from './chat-tools.js';
 import { TeamService } from './team.service.js';
 import { WorkflowService } from './workflow.service.js';
 import { SkillService, type SkillInput } from './skill.service.js';
+import { notDeletedFilter, softDeleteSet } from './soft-delete.js';
 import type { WorkflowDef } from '@allen/engine';
 import yaml from 'js-yaml';
 
@@ -276,14 +277,20 @@ const createTeamTool: ChatTool = {
     const teamService = new TeamService(db);
 
     // Verify the lead exists
-    const lead = await db.collection('agents').findOne({ name: args.leadAgentName as string });
+    const lead = await db.collection('agents').findOne({ name: args.leadAgentName as string, ...notDeletedFilter });
     if (!lead) {
       return { error: `Lead agent "${args.leadAgentName}" not found. Create the lead agent first via create_agent, then call create_team.` };
     }
 
-    // Reject duplicates
-    const existing = await teamService.getByName(name);
-    if (existing) return { error: `Team "${name}" already exists` };
+    // Reject duplicates (but allow restoring soft-deleted)
+    const existing = await db.collection('teams').findOne({ name });
+    if (existing) {
+      if (existing.isDeleted) {
+        // Restore via the create — the create method handles restoration
+        return { error: `Team "${name}" is soft-deleted. Delete and re-create it to restore.` };
+      }
+      return { error: `Team "${name}" already exists` };
+    }
 
     // Validate parent team exists if provided
     if (args.parentTeamName) {
@@ -391,7 +398,7 @@ const createAgentTool: ChatTool = {
       teamName: { type: 'string', description: 'Existing team slug to add this agent to' },
       teamRole: { type: 'string', enum: ['lead', 'member'], description: 'Role within the team' },
       system: { type: 'string', description: 'Full system prompt for the agent' },
-      provider: { type: 'string', enum: ['claude-cli', 'codex'], description: 'Which CLI provider to use' },
+      provider: { type: 'string', enum: ['claude', 'codex'], description: 'Which CLI provider to use' },
       model: { type: 'string', description: 'Model name (e.g. "sonnet", "gpt-5.5")' },
       tools: { type: 'array', items: { type: 'string' }, description: 'Array of tool names this agent can use' },
       capabilities: { type: 'array', items: { type: 'string' }, description: 'Array of capability tags' },
@@ -422,15 +429,46 @@ const createAgentTool: ChatTool = {
       console.log(`[meta] create_agent bootstrap: creating lead "${name}" for not-yet-existing team "${teamName}". Team must be created next via create_team.`);
     }
 
-    // Reject duplicate agent names
+    // Reject duplicate agent names (but allow restoring soft-deleted)
     const existingAgent = await db.collection('agents').findOne({ name });
     if (existingAgent) {
+      if (existingAgent.isDeleted) {
+        // Restore soft-deleted record with the new data
+        await db.collection('agents').updateOne(
+          { name },
+          { $set: {
+            displayName: args.displayName,
+            teamName,
+            teamRole: args.teamRole,
+            type: args.teamRole === 'lead' ? 'team' : 'technical',
+            system: args.system,
+            provider: args.provider,
+            model: args.model ?? 'sonnet',
+            tools: args.tools ?? [],
+            capabilities: args.capabilities ?? [],
+            spawnTargets: args.spawnTargets ?? [],
+            canTrigger: [],
+            personality: args.personality,
+            icon: args.icon ?? 'bot',
+            color: args.color ?? '#3b82f6',
+            isDeleted: false,
+            deletedAt: null,
+            restoredAt: new Date(),
+            updatedAt: new Date(),
+          }, $unset: { deletedBy: '', deletedReason: '' } },
+        );
+        return {
+          success: true,
+          restored: true,
+          agent: { name, displayName: args.displayName, teamName, teamRole: args.teamRole },
+        };
+      }
       return { error: `Agent "${name}" already exists. Pick a different name.` };
     }
 
     // If creating a lead, ensure no other lead exists in the team
     if (teamRole === 'lead') {
-      const existingLead = await db.collection('agents').findOne({ teamName, teamRole: 'lead' });
+      const existingLead = await db.collection('agents').findOne({ teamName, teamRole: 'lead', ...notDeletedFilter });
       if (existingLead) {
         return { error: `Team "${teamName}" already has a lead: "${existingLead.name}". Demote the existing lead first.` };
       }
@@ -485,7 +523,7 @@ const updateAgentTool: ChatTool = {
       spawnTargets: { type: 'array', items: { type: 'string' }, description: 'Names of agents this agent can spawn' },
       personality: { type: 'string' },
       model: { type: 'string' },
-      provider: { type: 'string', enum: ['claude-cli', 'codex'] },
+      provider: { type: 'string', enum: ['claude', 'codex'] },
       icon: { type: 'string' },
       color: { type: 'string' },
       reasoningEffort: { type: 'string', enum: ['off', 'low', 'medium', 'high', 'max'] },
@@ -495,7 +533,7 @@ const updateAgentTool: ChatTool = {
   },
   async execute(args, db) {
     const name = args.name as string;
-    const target = await db.collection('agents').findOne({ name });
+    const target = await db.collection('agents').findOne({ name, ...notDeletedFilter });
     if (!target) return { error: `Agent "${name}" not found` };
 
     // Build updates object
@@ -561,7 +599,7 @@ const deleteAgentTool: ChatTool = {
     // Built-in teams are protected by Check 1 above (their leads are always
     // built-in), so we only worry about user-created teams here.
     if (target.teamRole === 'lead' && target.teamName) {
-      const team = await db.collection('teams').findOne({ name: target.teamName });
+      const team = await db.collection('teams').findOne({ name: target.teamName, ...notDeletedFilter });
       if (team && !team.isBuiltIn) {
         return {
           error: `Cannot delete "${name}" — they are the lead of team "${target.teamName}". Either assign a new lead first (via update_agent on a different member), or delete the team via delete_team.`,
@@ -569,7 +607,7 @@ const deleteAgentTool: ChatTool = {
       }
     }
 
-    await db.collection('agents').deleteOne({ name });
+    await db.collection('agents').updateOne({ name }, softDeleteSet());
     return { success: true, deleted: name };
   },
 };

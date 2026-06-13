@@ -19,7 +19,7 @@ export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
 /** Fields every agent owns as its default identity. */
 export interface AgentLike {
   name: string;
-  provider?: string;           // 'claude-cli' | 'codex' | other
+  provider?: string;           // 'claude' | 'codex' | other
   model?: string;
   reasoningEffort?: ReasoningEffort;
   planMode?: boolean;
@@ -51,8 +51,11 @@ export class AgentSettingsValidationError extends Error {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function isClaudeProvider(p: string | undefined): p is 'claude-cli' {
-  return p === 'claude-cli' || p === 'claude';
+function isClaudeProvider(p: string | undefined): p is 'claude' {
+  // 'claude-cli' is the legacy provider id (pre-rename); accept it at every
+  // input boundary forever so old env values, MCP calls, and hand-written
+  // workflow YAML keep resolving.
+  return p === 'claude' || p === 'claude-cli';
 }
 
 function looksLikeOpus(model: string | undefined): boolean {
@@ -62,7 +65,7 @@ function looksLikeOpus(model: string | undefined): boolean {
 }
 
 function normalizeProvider(p: string | undefined): ChatProvider {
-  if (isClaudeProvider(p)) return 'claude-cli';
+  if (isClaudeProvider(p)) return 'claude';
   const registered = PROVIDERS.find((provider) => provider.provider === p);
   if (registered) return registered.provider;
   return 'codex';
@@ -110,14 +113,14 @@ export function resolveAgentSettings(
   const planMode = planRaw === true;
 
   // ── Validation ────────────────────────────────────────────────────────
-  if (planMode && provider !== 'claude-cli') {
+  if (planMode && provider !== 'claude') {
     throw new AgentSettingsValidationError(
       'plan_mode_claude_only',
       `Plan mode is only supported for Claude agents (got provider=${provider}).`,
     );
   }
 
-  if (reasoningEffort === 'max' && provider !== 'claude-cli') {
+  if (reasoningEffort === 'max' && provider !== 'claude') {
     throw new AgentSettingsValidationError(
       'effort_max_claude_only',
       `reasoningEffort="max" is only supported for Claude agents (got provider=${provider}).`,

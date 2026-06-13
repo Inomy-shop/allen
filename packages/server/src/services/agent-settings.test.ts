@@ -10,7 +10,7 @@ import {
 
 const claudeAgent: AgentLike = {
   name: 'coder',
-  provider: 'claude-cli',
+  provider: 'claude',
   model: 'sonnet',
   reasoningEffort: 'medium',
   planMode: false,
@@ -18,7 +18,7 @@ const claudeAgent: AgentLike = {
 
 const opusAgent: AgentLike = {
   name: 'planner',
-  provider: 'claude-cli',
+  provider: 'claude',
   model: 'claude-opus-4-6',
   reasoningEffort: 'high',
   planMode: true,
@@ -34,7 +34,7 @@ const codexAgent: AgentLike = {
 describe('resolveAgentSettings — precedence', () => {
   it('agent-only: returns agent defaults', () => {
     const r = resolveAgentSettings(claudeAgent);
-    expect(r.provider).toBe('claude-cli');
+    expect(r.provider).toBe('claude');
     expect(r.model).toBe('sonnet');
     expect(r.reasoningEffort).toBe('medium');
     expect(r.planMode).toBe(false);
@@ -125,7 +125,7 @@ describe('resolveAgentSettings — non-mutation invariant', () => {
   it('does NOT mutate the agent document', () => {
     const agent: AgentLike = {
       name: 'coder',
-      provider: 'claude-cli',
+      provider: 'claude',
       model: 'sonnet',
       reasoningEffort: 'medium',
       planMode: false,
@@ -188,7 +188,7 @@ describe('toClaudeSdkOptions', () => {
   });
 
   it('omits model when agent has no model', () => {
-    const r = resolveAgentSettings({ name: 'x', provider: 'claude-cli' });
+    const r = resolveAgentSettings({ name: 'x', provider: 'claude' });
     const opts = toClaudeSdkOptions(r);
     expect(opts.model).toBeUndefined();
   });

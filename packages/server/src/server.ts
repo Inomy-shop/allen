@@ -13,6 +13,7 @@ import { agentRoutes } from './routes/agent.routes.js';
 import { teamRoutes } from './routes/team.routes.js';
 import { streamRoutes } from './routes/stream.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
+import { usageRoutes, startUsageCacheWarmer } from './routes/usage.routes.js';
 import { repoRoutes } from './routes/repo.routes.js';
 import { learningRoutes, executionLearningsRoute } from './routes/learning.routes.js';
 import { chatRoutes } from './routes/chat.routes.js';
@@ -136,6 +137,26 @@ async function runBootTasks(db: Db, cronService: CronService): Promise<void> {
   await ensureIndexes(db);
   await new ArtifactService(db).ensureIndexes();
 
+  // Seed model registry on first boot (NFR-001: zero-downtime migration)
+  try {
+    const { ModelRegistryService, runAliasToFullIdMigration, runProviderRenameMigration } = await import('./services/model-registry.service.js');
+    // Provider rename must run BEFORE the seeder: the seeder inserts docs
+    // under the new provider id, and the rename migration dedupes against them.
+    try {
+      await runProviderRenameMigration(db);
+    } catch (err) {
+      logger.warn('[model-registry] Provider rename migration failed — continuing boot', { component: 'model-registry', error: (err as Error).message });
+    }
+    await new ModelRegistryService(db).syncSeedModels();
+    try {
+      await runAliasToFullIdMigration(db);
+    } catch (err) {
+      logger.warn('[model-registry] Migration failed — continuing boot', { component: 'model-registry', error: (err as Error).message });
+    }
+  } catch (err) {
+    logger.error('[model-registry] Seed failed — continuing boot', { component: 'model-registry', error: (err as Error).message });
+  }
+
   try {
     const { syncMcpToCodex } = await import('./services/chat-providers.js');
     await syncMcpToCodex(db);
@@ -149,6 +170,18 @@ async function runBootTasks(db: Db, cronService: CronService): Promise<void> {
   } catch (err) {
     logger.error('[context-quality-seed] Startup seed failed — continuing boot', {
       component: 'context-quality-seed',
+      error: (err as Error).message,
+    });
+  }
+
+  try {
+    const { RepoContextSetupService } = await import('./services/context/setup/repo-context-setup.service.js');
+    const setupService = await RepoContextSetupService.createForBoot(db);
+    await setupService.reconcileSetupRuns();
+    logger.info('[repo-context-setup] Boot reconciliation complete', { component: 'repo-context-setup' });
+  } catch (err) {
+    logger.error('[repo-context-setup] Boot reconciliation failed — continuing boot', {
+      component: 'repo-context-setup',
       error: (err as Error).message,
     });
   }
@@ -179,6 +212,11 @@ async function runBootTasks(db: Db, cronService: CronService): Promise<void> {
 
   await registerCronActions(db, cronService);
   await cronService.start();
+
+  // Hourly background re-warm of the usage dashboard cache (Settings →
+  // Usage). Reports stay ≤1h stale without any request paying the
+  // aggregation cost; the Refresh button forces an immediate recompute.
+  startUsageCacheWarmer(db);
 
   runTrustBootstrap().catch((err) => {
     logger.warn('[trust-bootstrap] bootstrap crashed', { component: 'trust-bootstrap', error: (err as Error).message });
@@ -239,6 +277,7 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
   app.use('/api/agents', agentRoutes(db));
   app.use('/api/teams', teamRoutes(db));
   app.use('/api/dashboard', dashboardRoutes(db));
+  app.use('/api/usage', usageRoutes(db));
   app.use('/api/repos', repoRoutes(db));
   app.use('/api/learnings', learningRoutes(db));
   app.use('/api/executions', executionLearningsRoute(db));

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ChevronDown, FolderGit2, GitBranch, ListFilter, MessageSquare, Search, UserRound } from 'lucide-react';
 import { chat as chatApi, users as usersApi } from '../services/api';
 import { useAuthStore, type AuthUser } from '../stores/authStore';
+import { getModelDisplay } from '../hooks/useModelRegistry';
 
 interface ChatSessionItem {
   _id: string;
@@ -97,15 +98,6 @@ function sessionContext(session: ChatSessionItem): ThreadItem['context'] {
     };
   }
   return undefined;
-}
-
-function providerLabel(provider?: string, model?: string): string {
-  const prettyProvider = provider === 'claude-cli'
-    ? 'Claude'
-    : provider === 'codex'
-      ? 'Codex'
-      : provider;
-  return [prettyProvider, model].filter(Boolean).join(' / ');
 }
 
 export default function ThreadsPage() {
@@ -324,7 +316,8 @@ export default function ThreadsPage() {
           )}
           {items.map((item) => {
             const ContextIcon = item.context?.kind === 'workspace' ? GitBranch : FolderGit2;
-            const provider = providerLabel(item.provider, item.model);
+            const { providerLabel: displayProvider, modelLabel: displayModel } = getModelDisplay(item.provider ?? '', item.model);
+            const provider = displayModel ? `${displayProvider} · ${displayModel}` : displayProvider;
             return (
               <Link
                 key={`chat-${item.id}`}

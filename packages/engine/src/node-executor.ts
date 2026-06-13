@@ -8,13 +8,14 @@ import type {
   BuiltInFunction,
   ExecutionLog,
 } from './types.js';
-import { normalizeClaudeUsage, aggregateTokenUsage, tokenUsageFromChildMarkers, type TokenUsageInfo } from './token-usage.js';
+import { normalizeClaudeUsage, aggregateTokenUsage, type TokenUsageInfo } from './token-usage.js';
 import { renderTemplate } from './template.js';
 import { extractOutputs, buildOutputInstruction, outputKeys } from './output-extractor.js';
 import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { normalizeModelAlias } from './model-alias.js';
+import { buildCostInfo } from './cost-calculator.js';
 import { hasRepoContextLoadingGuidance, withArtifactsGuidance, withMandatoryRepoContext, withNonInteractiveGuidance, withRepoContextLoadingGuidance } from './agent-file-writer.js';
 import { withRepoContextUsageOutput } from './repo-context-usage.js';
 import { renderClarificationResumePrompt, renderHumanIntervention, renderHumanResumePrompt, renderResumeContextPrompt, renderReviewFeedbackRetryPrompt } from './human-intervention.js';
@@ -31,12 +32,12 @@ type ClaudeCompatibleAgentProvider = string;
 function isClaudeCompatibleAgentProvider(provider: unknown): provider is ClaudeCompatibleAgentProvider {
   return typeof provider === 'string'
     && provider !== 'claude'
-    && provider !== 'claude-cli'
+    && provider !== 'claude-cli' // legacy id for 'claude'
     && provider !== 'codex';
 }
 
-function isAgentProviderOverride(provider: unknown): provider is 'codex' | 'claude-cli' | ClaudeCompatibleAgentProvider {
-  return provider === 'codex' || provider === 'claude-cli' || isClaudeCompatibleAgentProvider(provider);
+function isAgentProviderOverride(provider: unknown): provider is 'codex' | 'claude' | ClaudeCompatibleAgentProvider {
+  return provider === 'codex' || provider === 'claude' || isClaudeCompatibleAgentProvider(provider);
 }
 
 /**
@@ -83,12 +84,6 @@ function emitLog(
   deps.emitter.emit({ event: 'execution_log', data: log as unknown as Record<string, unknown> });
 }
 
-const COST_PER_TURN: Record<string, number> = {
-  opus: 0.15,
-  sonnet: 0.05,
-  haiku: 0.01,
-};
-
 export interface NodeExecutorDeps {
   agents: Record<string, AgentDef>;
   builtIns: Record<string, BuiltInFunction>;
@@ -134,7 +129,11 @@ export interface NodeExecutorDeps {
    * Server callers use this to resolve desktop/runtime secrets without the
    * engine package importing server runtime config.
    */
-  buildClaudeCompatibleEnvOverlay?: (provider: ClaudeCompatibleAgentProvider, model?: string) => Promise<Record<string, string>>;
+  buildClaudeCompatibleEnvOverlay?: (provider: ClaudeCompatibleAgentProvider, model?: string, db?: import('mongodb').Db) => Promise<Record<string, string>>;
+  /** Registry-backed alias map: alias → fullId. Optional — static defaults used when absent. */
+  aliasMap?: Record<string, string>;
+  /** Registry-backed per-MTok cost map, keyed by alias and fullId. Optional — cost falls back to the provider-reported figure when absent. */
+  costMap?: Record<string, import('./types.js').ModelCostInfo>;
 }
 
 function resolveExternalMcpServers(
@@ -205,6 +204,12 @@ export interface NodeResult {
   /** Aggregate token usage for this node across all turns.
    *  Null when the provider did not report usage data. */
   tokenUsage?: TokenUsageInfo | null;
+  /** Provider the node's agent ran on. Persisted on the trace so usage
+   *  aggregations can group by provider. Unset for non-agent nodes. */
+  provider?: string;
+  /** For workflow nodes — the child execution id this node ran. The child's
+   *  cost stays on the child's own traces; this is just the tree link. */
+  childExecutionId?: string;
   durationMs: number;
   /** Per-tool-call log captured during the node's agent turn(s). Empty
    *  for non-agent node types. See tool-call.ts for record shape. */
@@ -313,7 +318,7 @@ export async function executeNode(
               : 'claude';
       if (effectiveProvider === 'codex') {
         const existingSession = sessions[resolveSessionKey(nodeName, nodeDef, state)];
-        return executeCodexNode(
+        const codexResult = await executeCodexNode(
           nodeName,
           effectiveNodeDef,
           state,
@@ -326,8 +331,22 @@ export async function executeNode(
           deps.abortSignal,
           deps.repoKnowledgeContext,
         );
+        // Codex reports no cost of its own — price the accumulated token
+        // usage with registry per-MTok rates here, where costMap is in scope.
+        return {
+          ...codexResult,
+          provider: effectiveProvider,
+          cost: buildCostInfo({
+            usage: codexResult.tokenUsage,
+            costInfo: codexResult.cost.model ? deps.costMap?.[codexResult.cost.model] : undefined,
+            reported: null,
+            model: codexResult.cost.model,
+            turns: codexResult.cost.turns,
+          }),
+        };
       }
-      return executeAgentNode(nodeName, effectiveNodeDef, state, sessions, deps);
+      const agentResult = await executeAgentNode(nodeName, effectiveNodeDef, state, sessions, deps);
+      return { ...agentResult, provider: effectiveProvider };
     }
     case 'code':
       return executeCodeNode(nodeName, effectiveNodeDef, state, deps);
@@ -774,7 +793,7 @@ ${context}
     // we don't depend on Claude Code CLI's (possibly stale) alias tables and
     // trigger API 404s on deprecated versions like claude-3-5-haiku-20241022.
     const rawModel = (override.model ?? role?.model) ?? 'sonnet';
-    const resolvedModel = normalizeModelAlias(rawModel) ?? rawModel;
+    const resolvedModel = normalizeModelAlias(rawModel, deps.aliasMap) ?? rawModel;
     const resolvedEffort = override.reasoningEffort ?? role?.reasoningEffort;
     const resolvedPlanMode = override.planMode ?? role?.planMode ?? false;
 
@@ -833,7 +852,7 @@ ${context}
         if (!deps.buildClaudeCompatibleEnvOverlay) {
           throw new Error(`Claude-compatible provider ${claudeCompatibleProvider} requires buildClaudeCompatibleEnvOverlay`);
         }
-        claudeCompatibleEnvOverlay = await deps.buildClaudeCompatibleEnvOverlay(claudeCompatibleProvider, resolvedModel);
+        claudeCompatibleEnvOverlay = await deps.buildClaudeCompatibleEnvOverlay(claudeCompatibleProvider, resolvedModel, deps.db);
       }
       const resolvedEnv: NodeJS.ProcessEnv = (() => {
         return {
@@ -1449,13 +1468,13 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
     prompt,
     sessionId,
     sessionKey,
-    cost: {
-      actual: actualCost,
-      estimated: (COST_PER_TURN[model] ?? 0.05) * turns,
+    cost: buildCostInfo({
+      usage: executionTokenUsage,
+      costInfo: deps.costMap?.[model] ?? (resolvedModel2 ? deps.costMap?.[resolvedModel2] : undefined),
+      reported: actualCost,
       model,
       turns,
-      method: actualCost != null ? 'sdk_reported' : 'estimated',
-    },
+    }),
     tokenUsage: executionTokenUsage,
     durationMs: Date.now() - start,
     toolCalls: allToolCalls,
@@ -1505,7 +1524,7 @@ async function executeCodeNode(
       });
       return {
         outputs,
-        cost: { actual: null, estimated: 0, method: 'estimated' },
+        cost: { actual: null, estimated: 0, method: 'unavailable' },
         durationMs: Date.now() - start,
       };
     } catch (err: unknown) {
@@ -1525,7 +1544,7 @@ async function executeCodeNode(
   if (nodeDef.on_failure === 'skip' || nodeDef.on_failure === 'fallback') {
     return {
       outputs: nodeDef.fallback_value ?? {},
-      cost: { actual: null, estimated: 0, method: 'estimated' },
+      cost: { actual: null, estimated: 0, method: 'unavailable' },
       durationMs: Date.now() - start,
     };
   }
@@ -1555,7 +1574,7 @@ async function executeHumanNode(
 
   return {
     outputs: { __waiting_for_input: true, __node: nodeName },
-    cost: { actual: null, estimated: 0, method: 'estimated' },
+    cost: { actual: null, estimated: 0, method: 'unavailable' },
     durationMs: Date.now() - start,
   };
 }
@@ -1589,27 +1608,17 @@ async function executeWorkflowNode(
     }
   }
 
-  // Extract child cost from the child state (the engine stores it in the execution record)
-  // For now, estimate based on outputs presence
-  const childCostEstimated = (childOutput.__cost_estimated as number) ?? 0;
-  const childCostActual = (childOutput.__cost_actual as number | null) ?? null;
-  const childTokenUsage = tokenUsageFromChildMarkers(childOutput as Record<string, unknown>);
-  if (childTokenUsage) {
-    emitLog(deps, nodeName, {
-      level: 'debug',
-      category: 'system',
-      message: `[token-usage] rollup — read child token markers: inputCachedTokens=${childTokenUsage.inputCachedTokens}, inputNonCachedTokens=${childTokenUsage.inputNonCachedTokens}, outputTokens=${childTokenUsage.outputTokens}`,
-    });
-  }
+  // The child workflow ran as its own execution with its own traces — its
+  // cost lives there and ONLY there. This trace records zero cost and links
+  // the child so readers roll up the tree on demand instead of finding the
+  // same dollars stored twice (child traces + here) and three times
+  // (parent executions.cost).
+  const childExecutionId = childOutput.__child_execution_id as string | undefined;
 
   return {
     outputs,
-    cost: {
-      actual: childCostActual,
-      estimated: childCostEstimated,
-      method: childCostActual != null ? 'sdk_reported' : 'estimated',
-    },
-    tokenUsage: childTokenUsage,
+    cost: { actual: null, estimated: 0, method: 'child_execution' },
+    childExecutionId,
     durationMs: Date.now() - start,
   };
 }
@@ -1630,7 +1639,7 @@ async function executeConditionNode(
 
   return {
     outputs,
-    cost: { actual: null, estimated: 0, method: 'estimated' },
+    cost: { actual: null, estimated: 0, method: 'unavailable' },
     durationMs: Date.now() - start,
   };
 }

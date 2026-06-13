@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { param } from '../types.js';
 import { ObjectId, type Db } from 'mongodb';
 import { resolveAgentSettings, AgentSettingsValidationError, type AgentLike } from '../services/agent-settings.js';
+import { notDeletedFilter, softDeleteSet, restoreSet } from '../services/soft-delete.js';
 import {
   scanRepoForClaudeAgents,
   resolveImportActions,
@@ -132,6 +133,8 @@ function validateBulkModelRequest(body: unknown): BulkModelRequest {
     agentNames.push(name);
   }
 
+  // Legacy provider id: 'claude-cli' is accepted on input forever, stored as 'claude'.
+  if (input.provider === 'claude-cli') input.provider = 'claude';
   if (typeof input.provider !== 'string' || !PROVIDER_IDS.has(input.provider as ChatProvider)) {
     throw Object.assign(
       new Error(`provider must be one of: ${[...PROVIDER_IDS].join(', ')}`),
@@ -203,14 +206,16 @@ export function agentRoutes(db: Db): Router {
   router.post('/export', async (req: Request, res: Response) => {
     try {
       const agentNames = parseAgentNames(req.body?.agentNames);
-      const filter = agentNames.length > 0 ? { name: { $in: agentNames } } : {};
+      const filter = agentNames.length > 0
+        ? { name: { $in: agentNames }, ...notDeletedFilter }
+        : notDeletedFilter;
       const rows = await col.find(filter).sort({ name: 1 }).toArray();
       const exportedAgents = rows.map((agent) => sanitizePortableAgent(agent as Record<string, unknown>));
       const teamNames = [...new Set(exportedAgents
         .map((agent) => typeof agent.teamName === 'string' ? agent.teamName : '')
         .filter(Boolean))];
       const teams = teamNames.length > 0
-        ? await db.collection('teams').find({ name: { $in: teamNames } }).sort({ name: 1 }).toArray()
+        ? await db.collection('teams').find({ name: { $in: teamNames }, ...notDeletedFilter }).sort({ name: 1 }).toArray()
         : [];
 
       res.json({
@@ -273,6 +278,12 @@ export function agentRoutes(db: Db): Router {
         }
         const existing = await col.findOne({ name });
         if (existing) {
+          if (existing.isDeleted) {
+            // Restore soft-deleted record with the imported data
+            await col.updateOne({ name }, restoreSet(sanitizePortableAgent(rawAgent)));
+            created.push(name + ' (restored)');
+            continue;
+          }
           skipped.push({ name, reason: 'already-exists' });
           continue;
         }
@@ -309,7 +320,7 @@ export function agentRoutes(db: Db): Router {
   // GET /api/agents
   router.get('/', async (_req: Request, res: Response) => {
     try {
-      const agents = await col.find({}).sort({ name: 1 }).toArray();
+      const agents = await col.find(notDeletedFilter).sort({ name: 1 }).toArray();
       res.json(agents);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -323,6 +334,7 @@ export function agentRoutes(db: Db): Router {
       // by team-builder/agent-builder via the meta chat tools. Allowing them on
       // a public POST would let any client bypass the meta-team permission gating.
       const body = { ...req.body };
+      const agentName = (body.name ?? '') as string;
       delete body._id;
       delete body.teamName;
       delete body.teamRole;
@@ -336,6 +348,21 @@ export function agentRoutes(db: Db): Router {
       delete body.sourceSha;
 
       validateAgentSettingsFields(body);
+
+      // Check for soft-deleted record with the same name — restore instead of insert
+      if (agentName) {
+        const deleted = await col.findOne({ name: agentName, isDeleted: true });
+        if (deleted) {
+          const agentPayload = {
+            ...body,
+            isBuiltIn: false,
+            createdBy: 'user',
+          };
+          await col.updateOne({ name: agentName }, restoreSet(agentPayload));
+          const restored = await col.findOne({ name: agentName });
+          return res.status(200).json({ restored: true, _id: restored?._id, name: agentName });
+        }
+      }
 
       const agent = {
         ...body,
@@ -375,7 +402,7 @@ export function agentRoutes(db: Db): Router {
 
       // For PUT, fold the update over the existing doc before validating — that
       // way someone toggling just `planMode` doesn't have to resend `provider`.
-      const existing = await col.findOne({ name });
+      const existing = await col.findOne({ name, ...notDeletedFilter });
       if (!existing) return res.status(404).json({ error: 'Agent not found' });
       validateAgentSettingsFields({ ...existing, ...updates });
 
@@ -393,9 +420,26 @@ export function agentRoutes(db: Db): Router {
   // DELETE /api/agents/:name
   router.delete('/:name', async (req: Request, res: Response) => {
     try {
-      const agent = await col.findOne({ name: param(req, 'name') });
+      const agentName = param(req, 'name');
+      const agent = await col.findOne({ name: agentName });
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
-      await col.deleteOne({ name: param(req, 'name') });
+
+      // Built-in agents cannot be deleted
+      if (agent.isBuiltIn) {
+        return res.status(403).json({ error: `Agent "${agentName}" is built-in and cannot be deleted` });
+      }
+
+      // Team leads with an active team cannot be deleted
+      if (agent.teamRole === 'lead' && agent.teamName) {
+        const team = await db.collection('teams').findOne({ name: agent.teamName, ...notDeletedFilter });
+        if (team && !team.isBuiltIn) {
+          return res.status(409).json({
+            error: `Cannot delete "${agentName}" — they are the lead of team "${agent.teamName}". Either assign a new lead first (via update_agent on a different member), or delete the team via delete_team.`,
+          });
+        }
+      }
+
+      await col.updateOne({ name: agentName }, softDeleteSet(req.body?.userId?.toString() ?? null));
       res.status(204).send();
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -410,6 +454,11 @@ export function agentRoutes(db: Db): Router {
   router.post('/:name/run', async (req: Request, res: Response) => {
     try {
       const agentName = param(req, 'name');
+      // Reject run requests for deleted agents
+      const agentRow = await col.findOne({ name: agentName, ...notDeletedFilter });
+      if (!agentRow) {
+        return res.status(404).json({ error: `Agent "${agentName}" not found or has been deleted` });
+      }
       const prompt = req.body?.prompt as string | undefined;
       const contextQuery = req.body?.context_query;
       const repoPath = req.body?.repo_path as string | undefined;
@@ -494,6 +543,12 @@ export function agentRoutes(db: Db): Router {
         // preview and commit where another caller imported the same slug.
         const conflict = await col.findOne({ name: v.agent.name });
         if (conflict) {
+          if (conflict.isDeleted) {
+            // Restore soft-deleted record with the imported data
+            await col.updateOne({ name: v.agent.name }, restoreSet(buildImportedAgentDoc(v.agent, repo)));
+            created.push(v.agent.name + ' (restored)');
+            continue;
+          }
           skipped.push({ name: v.agent.name, reason: 'skip:name-collision' });
           continue;
         }
@@ -567,12 +622,12 @@ export function agentRoutes(db: Db): Router {
         return res.status(400).json({ error: 'teamRole must be "lead" or "member"' });
       }
 
-      const agent = await col.findOne({ name });
+      const agent = await col.findOne({ name, ...notDeletedFilter });
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
       // Verify the target team exists (unless it's the unassigned holding area,
       // which is seeded but we tolerate the absence defensively).
-      const targetTeam = await db.collection('teams').findOne({ name: teamName });
+      const targetTeam = await db.collection('teams').findOne({ name: teamName, ...notDeletedFilter });
       if (!targetTeam && teamName !== 'unassigned') {
         return res.status(404).json({ error: `Team "${teamName}" does not exist` });
       }
@@ -612,7 +667,7 @@ export function agentRoutes(db: Db): Router {
         return res.status(400).json({ error: 'agentNames must be a non-empty array' });
       }
 
-      const team = await db.collection('teams').findOne({ name: teamName });
+      const team = await db.collection('teams').findOne({ name: teamName, ...notDeletedFilter });
       if (!team && teamName !== 'unassigned') {
         return res.status(404).json({ error: `Team "${teamName}" does not exist` });
       }
@@ -666,7 +721,7 @@ export function agentRoutes(db: Db): Router {
       const skipped: BulkModelSkipped[] = [];
 
       for (const name of agentNames) {
-        const existing = await col.findOne({ name });
+        const existing = await col.findOne({ name, ...notDeletedFilter });
         if (!existing) {
           skipped.push({ name, reason: 'not-found' });
           continue;

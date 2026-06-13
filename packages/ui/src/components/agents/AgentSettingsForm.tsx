@@ -15,9 +15,10 @@
  */
 import { ShieldCheck, Sparkles } from 'lucide-react';
 import Select from '../common/Select';
+import { useModelRegistry } from '../../hooks/useModelRegistry';
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
-export type Provider = 'claude-cli' | 'codex' | (string & {});
+export type Provider = 'claude' | 'codex' | (string & {});
 
 export interface AgentSettingsValue {
   provider?: Provider | null;
@@ -39,12 +40,6 @@ interface Props {
   onChange: (next: AgentSettingsValue) => void;
 }
 
-const OPEN_PROVIDER_MODEL_SUGGESTIONS: Partial<Record<Provider, string[]>> = {
-  deepseek: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
-  'xiaomi-mimo': ['mimo-v2.5-pro'],
-  kimi: ['kimi-k2.6', 'kimi-k2.5'],
-};
-
 const EFFORT_OPTIONS: Array<{ value: ReasoningEffort; label: string; description: string }> = [
   { value: 'off', label: 'Off', description: 'No extended thinking' },
   { value: 'low', label: 'Low', description: 'Quick thinking' },
@@ -62,9 +57,14 @@ export default function AgentSettingsForm({
   onChange,
 }: Props) {
   const isOverrideMode = mode !== 'agent-default';
-  const isClaudeProvider = provider === 'claude-cli';
-  const openModelSuggestions = OPEN_PROVIDER_MODEL_SUGGESTIONS[provider];
-  const isOpenModelProvider = Boolean(openModelSuggestions);
+  const isClaudeProvider = provider === 'claude' || provider === 'claude-cli';
+  // Open API providers (anything that isn't a CLI provider) take free-text
+  // model ids; suggestions come from the model registry only.
+  const { getModelsForProvider } = useModelRegistry();
+  const isOpenModelProvider = provider !== 'claude' && provider !== 'claude-cli' && provider !== 'codex';
+  const openModelSuggestions = isOpenModelProvider
+    ? getModelsForProvider(provider).map((option) => option.value)
+    : undefined;
 
   // Model display: show selected, or "(inherit)" + ghost text in override mode
   const modelValue = value.model ?? '';

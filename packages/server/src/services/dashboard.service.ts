@@ -16,13 +16,17 @@ export class DashboardService {
       .aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }])
       .toArray();
 
-    const costAgg = await execCol
+    // Cost is summed from execution_traces — the per-LLM-run source of
+    // truth — never from execution rows (which store no cost). Excluding
+    // child_execution traces keeps sub-workflow links from double-counting.
+    const costAgg = await this.db.collection('execution_traces')
       .aggregate([
+        { $match: { 'cost.method': { $ne: 'child_execution' } } },
         {
           $group: {
             _id: null,
-            totalEstimated: { $sum: '$cost.estimated' },
-            totalActual: { $sum: '$cost.actual' },
+            totalEstimated: { $sum: { $ifNull: ['$cost.estimated', 0] } },
+            totalActual: { $sum: { $ifNull: ['$cost.actual', 0] } },
           },
         },
       ])
@@ -48,26 +52,47 @@ export class DashboardService {
 
     const byAgent = await tracesCol
       .aggregate([
-        { $match: { agent: { $ne: null } } },
+        { $match: { agent: { $ne: null }, 'cost.method': { $ne: 'child_execution' } } },
         {
           $group: {
             _id: '$agent',
-            totalEstimated: { $sum: '$cost.estimated' },
-            totalActual: { $sum: '$cost.actual' },
+            totalEstimated: { $sum: { $ifNull: ['$cost.estimated', 0] } },
+            totalActual: { $sum: { $ifNull: ['$cost.actual', 0] } },
             count: { $sum: 1 },
           },
         },
       ])
       .toArray();
 
-    const byWorkflow = await this.db
-      .collection('executions')
+    // Per-workflow cost = each execution's OWN traces grouped by the
+    // execution's workflowName (join via $lookup). Execution rows no longer
+    // store cost, and a workflow's number here intentionally excludes child
+    // executions it triggered — those count under their own workflow/agent.
+    const byWorkflow = await tracesCol
       .aggregate([
+        { $match: { 'cost.method': { $ne: 'child_execution' } } },
         {
           $group: {
-            _id: '$workflowName',
-            totalEstimated: { $sum: '$cost.estimated' },
-            totalActual: { $sum: '$cost.actual' },
+            _id: '$executionId',
+            totalEstimated: { $sum: { $ifNull: ['$cost.estimated', 0] } },
+            totalActual: { $sum: { $ifNull: ['$cost.actual', 0] } },
+          },
+        },
+        {
+          $lookup: {
+            from: 'executions',
+            localField: '_id',
+            foreignField: 'id',
+            as: 'execution',
+            pipeline: [{ $project: { workflowName: 1 } }],
+          },
+        },
+        { $unwind: '$execution' },
+        {
+          $group: {
+            _id: '$execution.workflowName',
+            totalEstimated: { $sum: '$totalEstimated' },
+            totalActual: { $sum: '$totalActual' },
             count: { $sum: 1 },
           },
         },

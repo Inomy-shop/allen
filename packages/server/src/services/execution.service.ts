@@ -12,6 +12,7 @@ import {
   type WorkflowFeedbackEntry,
   aggregateTokenUsage,
   type TokenUsageInfo,
+  type ModelCostInfo,
 } from '@allen/engine';
 import { createSSEEmitter } from './stream.service.js';
 import {
@@ -23,6 +24,7 @@ import {
 import type { AgentDef } from '@allen/engine';
 import { WorkspaceManager } from './workspace.service.js';
 import { ArtifactService } from './artifact.service.js';
+import { CostRollupService } from './cost-rollup.service.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { assertSelfHealingLinearConfig, isSelfHealingWorkflowName } from './self-healing-env.js';
 import { AgentActivityService, type PersistedActivityRow } from './agent-activity.service.js';
@@ -103,6 +105,35 @@ function buildEngineServices(db: Db): EngineConfig['services'] {
   return services;
 }
 
+/**
+ * Build aliasMap and costMap from the model_registry collection.
+ * These are passed to EngineConfig → NodeExecutorDeps so the engine can
+ * resolve model aliases and estimate costs from the registry.
+ */
+async function buildAliasAndCostMaps(db: Db): Promise<{
+  aliasMap: Record<string, string>;
+  costMap: Record<string, ModelCostInfo>;
+}> {
+  const models = await db.collection('model_registry')
+    .find({ isActive: true })
+    .toArray();
+  const aliasMap: Record<string, string> = {};
+  const costMap: Record<string, ModelCostInfo> = {};
+  for (const m of models) {
+    aliasMap[m.alias as string] = m.fullId as string;
+    const info: ModelCostInfo = {
+      costInputPerMTok: (m.costInputPerMTok as number | null) ?? undefined,
+      costOutputPerMTok: (m.costOutputPerMTok as number | null) ?? undefined,
+      costCacheReadPerMTok: (m.costCacheReadPerMTok as number | null) ?? undefined,
+    };
+    // Keyed by both alias and fullId — nodes may hold either form (or a
+    // free-text "Other…" id that matches a registry fullId).
+    costMap[m.alias as string] = info;
+    if (typeof m.fullId === 'string') costMap[m.fullId] = info;
+  }
+  return { aliasMap, costMap };
+}
+
 // Track running engines by executionId
 const runningEngines = new Map<string, AllenEngine>();
 
@@ -156,7 +187,7 @@ async function loadAllAgents(db: Db): Promise<Record<string, AgentDef>> {
 const CHILDREN_PROJECTION = {
   id: 1, workflowName: 1, parentExecutionId: 1, parentCaller: 1,
   rootExecutionId: 1, spawnDepth: 1, status: 1, startedAt: 1,
-  completedAt: 1, durationMs: 1, cost: 1, failedNode: 1,
+  completedAt: 1, durationMs: 1, cost: 1, tokenUsage: 1, failedNode: 1,
   errorMessage: 1, input: 1, meta: 1, currentNodes: 1, completedNodes: 1,
 };
 
@@ -325,6 +356,12 @@ function decorateChildRow(
     durationMs: row.durationMs ?? null,
     cost: row.cost ?? null,
     tokenUsage: row.tokenUsage ?? null,
+    // Model/provider the child agent ran on — needed so cost breakdowns can
+    // show per-row "tokens × this model's price" math that actually checks out.
+    model: ((row.meta as Record<string, unknown> | undefined)?.model as string | undefined)
+      ?? ((row.cost as Record<string, unknown> | undefined)?.model as string | undefined)
+      ?? null,
+    provider: ((row.meta as Record<string, unknown> | undefined)?.provider as string | undefined) ?? null,
     failedNode: row.failedNode ?? null,
     errorMessage: row.errorMessage ?? null,
     currentStep: Array.isArray(row.currentNodes) && row.currentNodes.length > 0
@@ -428,7 +465,7 @@ function applyWorkflowAgentProvider(workflow: WorkflowDef, provider?: WorkflowAg
     if (provider === 'codex' && next.model === undefined) {
       next.model = 'default';
     }
-    if (provider === 'claude-cli' && next.model === 'default') {
+    if (provider === 'claude' && next.model === 'default') {
       delete next.model;
     }
 
@@ -440,7 +477,7 @@ function applyWorkflowAgentProvider(workflow: WorkflowDef, provider?: WorkflowAg
 
 export type RunOrigin = 'chat' | 'linear' | 'workflow' | 'direct_agent';
 export type RunType = 'workflow' | 'agent';
-export type WorkflowAgentProvider = 'claude-cli' | 'codex' | (string & {});
+export type WorkflowAgentProvider = 'claude' | 'codex' | (string & {});
 export type RunPhase =
   | 'queued'
   | 'planning'
@@ -627,6 +664,7 @@ export class ExecutionService {
       workflows[(doc.parsed as WorkflowDef).name] = doc.parsed as WorkflowDef;
     }
 
+    const _aliasMapResult = await buildAliasAndCostMaps(this.db).catch(() => undefined);
     const config: EngineConfig = {
       db: this.db,
       agents: await loadAllAgents(this.db),
@@ -649,6 +687,8 @@ export class ExecutionService {
       },
       claudeCodeExecutable: resolveClaudeCodeExecutable(),
       buildClaudeCompatibleEnvOverlay,
+      aliasMap: _aliasMapResult?.aliasMap,
+      costMap: _aliasMapResult?.costMap,
     };
 
     const engine = new AllenEngine(config);
@@ -724,7 +764,32 @@ export class ExecutionService {
     if (filter.workflowName) query.workflowName = filter.workflowName;
 
     const results = await this.stateManager.listExecutions(query);
-    return (results as unknown as Record<string, unknown>[]).map(normalizeTerminalCurrentNodes);
+    const rows = (results as unknown as Record<string, unknown>[]).map(normalizeTerminalCurrentNodes);
+    await this.hydrateOwnCosts(rows);
+    return rows;
+  }
+
+  /**
+   * Attach `cost`/`tokenUsage` to row objects from each execution's OWN
+   * traces (one grouped aggregation per call). Rows whose executions have no
+   * trace spend keep whatever legacy stored value they carry, so pre-fix
+   * documents still render.
+   */
+  private async hydrateOwnCosts(rows: Record<string, unknown>[]): Promise<void> {
+    const ids = rows.map((r) => stringValue(r.id)).filter((v): v is string => Boolean(v));
+    if (ids.length === 0) return;
+    const ownCosts = await new CostRollupService(this.db).getOwnCosts(ids).catch(() => null);
+    if (!ownCosts) return;
+    for (const row of rows) {
+      const own = ownCosts.get(stringValue(row.id) ?? '');
+      if (!own) continue;
+      row.cost = { actual: own.costUsd, estimated: own.estimatedUsd };
+      row.tokenUsage = {
+        inputCachedTokens: own.inputCachedTokens,
+        inputNonCachedTokens: own.inputNonCachedTokens,
+        outputTokens: own.outputTokens,
+      };
+    }
   }
 
   /**
@@ -788,6 +853,9 @@ export class ExecutionService {
     if (opts.hydrateLegacyChatMetadata) {
       await this.attachChatMetadataFromMessages(normalizedItems);
     }
+    // Execution rows store no cost — hydrate per-row own-trace cost for the
+    // visible page in one batch aggregation (on-demand, never persisted).
+    await this.hydrateOwnCosts(normalizedItems);
     if (!opts.enrich) {
       return { items: normalizedItems.map(listItemSummary), total };
     }
@@ -967,7 +1035,13 @@ export class ExecutionService {
 
   async getById(id: string): Promise<Record<string, unknown> | null> {
     const result = await this.stateManager.getExecution(id);
-    return result ? normalizeTerminalCurrentNodes(result as unknown as Record<string, unknown>) : null;
+    if (!result) return null;
+    const row = normalizeTerminalCurrentNodes(result as unknown as Record<string, unknown>);
+    // Rows store no cost — attach this execution's OWN trace sums on demand
+    // (accumulates retry attempts; descendants are rolled up separately by
+    // getContext / the children panel).
+    await this.hydrateOwnCosts([row]);
+    return row;
   }
 
   async getContext(id: string): Promise<RunStatus> {
@@ -984,7 +1058,7 @@ export class ExecutionService {
       || row.source === 'spawn'
       || (!exec.workflowId && row.source === 'chat');
 
-    const [workflowDoc, traces, directChildren, interventions, logs, activity, contextWorkflowEvaluation] = await Promise.all([
+    const [workflowDoc, traces, directChildren, interventions, logs, activity, contextWorkflowEvaluation, treeCost] = await Promise.all([
       exec.workflowId && ObjectId.isValid(exec.workflowId)
         ? this.db.collection('workflows').findOne(
             { _id: new ObjectId(exec.workflowId) },
@@ -1003,6 +1077,9 @@ export class ExecutionService {
         .catch(() => []),
       new AgentActivityService(this.db).listForRef(id, { limit: 50 }).catch(() => []),
       new ContextWorkflowEvaluationService(this.db).getSummaryForExecution(id).catch(() => null),
+      // On-demand cost: own traces + full spawn/sub-workflow tree. Execution
+      // rows store no cost — this is the only way to get a total.
+      new CostRollupService(this.db).getExecutionTreeCost(id).catch(() => null),
     ]);
 
     await this.attachChatMetadataFromMessages([row]);
@@ -1084,8 +1161,22 @@ export class ExecutionService {
         startedAt: exec.startedAt,
         completedAt: exec.completedAt ?? null,
         durationMs: exec.durationMs,
-        cost: exec.cost,
-        tokenUsage: exec.tokenUsage ?? null,
+        // Tree total (own + descendants), computed on demand from traces.
+        cost: treeCost
+          ? { actual: treeCost.total.costUsd, estimated: treeCost.total.estimatedUsd }
+          : { actual: null, estimated: 0 },
+        costOwn: treeCost
+          ? { actual: treeCost.own.costUsd, estimated: treeCost.own.estimatedUsd }
+          : null,
+        costTreeSize: treeCost?.treeSize ?? 1,
+        costByModel: treeCost?.byModel ?? [],
+        tokenUsage: treeCost
+          ? {
+              inputCachedTokens: treeCost.total.inputCachedTokens,
+              inputNonCachedTokens: treeCost.total.inputNonCachedTokens,
+              outputTokens: treeCost.total.outputTokens,
+            }
+          : null,
         currentNodes: exec.currentNodes ?? [],
         completedNodes: exec.completedNodes ?? [],
         failedNode: exec.failedNode ?? null,
@@ -1485,6 +1576,7 @@ export class ExecutionService {
       workflows[(doc.parsed as WorkflowDef).name] = doc.parsed as WorkflowDef;
     }
 
+    const _aliasMapResult = await buildAliasAndCostMaps(this.db).catch(() => undefined);
     const config: EngineConfig = {
       db: this.db,
       agents: await loadAllAgents(this.db),
@@ -1507,6 +1599,8 @@ export class ExecutionService {
       },
       claudeCodeExecutable: resolveClaudeCodeExecutable(),
       buildClaudeCompatibleEnvOverlay,
+      aliasMap: _aliasMapResult?.aliasMap,
+      costMap: _aliasMapResult?.costMap,
     };
 
     const engine = new AllenEngine(config);
@@ -1557,6 +1651,7 @@ export class ExecutionService {
       (exec.input ?? {}) as Record<string, unknown>,
     );
 
+    const _aliasMapResult = await buildAliasAndCostMaps(this.db).catch(() => undefined);
     const config: EngineConfig = {
       db: this.db,
       agents: await loadAllAgents(this.db),
@@ -1579,6 +1674,8 @@ export class ExecutionService {
       },
       claudeCodeExecutable: resolveClaudeCodeExecutable(),
       buildClaudeCompatibleEnvOverlay,
+      aliasMap: _aliasMapResult?.aliasMap,
+      costMap: _aliasMapResult?.costMap,
     };
 
     const engine = new AllenEngine(config);
@@ -1618,6 +1715,7 @@ export class ExecutionService {
       workflows[(doc.parsed as WorkflowDef).name] = doc.parsed as WorkflowDef;
     }
 
+    const _aliasMapResult = await buildAliasAndCostMaps(this.db).catch(() => undefined);
     const config: EngineConfig = {
       db: this.db,
       agents: await loadAllAgents(this.db),
@@ -1640,6 +1738,8 @@ export class ExecutionService {
       },
       claudeCodeExecutable: resolveClaudeCodeExecutable(),
       buildClaudeCompatibleEnvOverlay,
+      aliasMap: _aliasMapResult?.aliasMap,
+      costMap: _aliasMapResult?.costMap,
     };
 
     const engine = new AllenEngine(config);
@@ -1782,6 +1882,24 @@ export class ExecutionService {
       .find(filter, { projection: CHILDREN_PROJECTION })
       .sort({ startedAt: 1 })
       .toArray();
+
+    // Execution rows store no cost — hydrate each child's own-trace cost in
+    // one batch aggregation so the children panel still shows per-row spend.
+    const ids = rows.map((r) => r.id as string).filter(Boolean);
+    const ownCosts = await new CostRollupService(this.db)
+      .getOwnCosts(ids)
+      .catch(() => new Map<string, never>());
+    for (const row of rows) {
+      const own = ownCosts.get(row.id as string);
+      if (own) {
+        row.cost = { actual: own.costUsd, estimated: own.estimatedUsd };
+        row.tokenUsage = {
+          inputCachedTokens: own.inputCachedTokens,
+          inputNonCachedTokens: own.inputNonCachedTokens,
+          outputTokens: own.outputTokens,
+        };
+      }
+    }
 
     return rows.map(row => decorateChildRow(row, 'direct'));
   }

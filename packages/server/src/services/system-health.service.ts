@@ -52,7 +52,7 @@ function firstLine(value: string): string | undefined {
   return line ? line.slice(0, 120) : undefined;
 }
 
-async function runCommand(command: string, args: string[], timeout = COMMAND_TIMEOUT_MS): Promise<CommandResult> {
+export async function runCommand(command: string, args: string[], timeout = COMMAND_TIMEOUT_MS): Promise<CommandResult> {
   try {
     const result = await exec(command, args, {
       timeout,
@@ -84,7 +84,7 @@ async function runCommand(command: string, args: string[], timeout = COMMAND_TIM
   }
 }
 
-async function resolveExecutable(command: string, options?: {
+export async function resolveExecutable(command: string, options?: {
   envVar?: string;
   skipNodeModulesBin?: boolean;
 }): Promise<string | null> {

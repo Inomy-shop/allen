@@ -19,6 +19,9 @@ vi.mock('@allen/engine', () => ({
   normalizeModelAlias: (x: string) => x,
   ARTIFACTS_GUIDANCE: '',
   NON_INTERACTIVE_GUIDANCE: '',
+  // Pass-through aggregation matching the real null-aware semantics closely
+  // enough for completion-guard tests (real math is covered in engine tests).
+  aggregateTokenUsage: (a: unknown, b: unknown) => b ?? a ?? null,
 }));
 
 vi.mock('../chat-providers.js', () => ({
@@ -27,6 +30,7 @@ vi.mock('../chat-providers.js', () => ({
   getDefaultChatProvider: vi.fn().mockReturnValue('claude'),
   getProvidersInDefaultOrder: vi.fn().mockReturnValue([]),
   getEnabledProvidersInDefaultOrder: vi.fn().mockResolvedValue([]),
+  CLAUDE_COMPATIBLE_PROVIDER_CONFIGS: [],
 }));
 
 vi.mock('../chat-llm.js', () => ({
@@ -209,13 +213,41 @@ describe('spawn completion guard', () => {
       db,
       EXEC_ID,
       AGENT_NAME,
-      0.42,
       12_000,
       'session-after-cancel',
     );
 
     expect(completed).toBe(false);
     expect(state.exec?.status).toBe('cancelled');
+  });
+
+  it('never writes cost to the execution row (store-single invariant)', async () => {
+    const updates: Array<{ filter: unknown; update: unknown }> = [];
+    const state: FakeDbState = {
+      // Cost lives on each attempt's execution_traces row only; completion
+      // must not put any cost/tokenUsage figure on the executions row.
+      exec: {
+        ...BASE_EXEC,
+        status: 'running',
+        completedNodes: [],
+        currentNodes: [AGENT_NAME],
+      },
+      role: BASE_ROLE,
+      updates,
+    };
+    const db = makeFakeDb(state);
+
+    const completed = await __internalsForTest.markSpawnCompletedUnlessTerminal(
+      db,
+      EXEC_ID,
+      AGENT_NAME,
+      12_000,
+      'session-resumed',
+    );
+
+    expect(completed).toBe(true);
+    expect(state.exec?.cost).toBeUndefined();
+    expect(state.exec?.tokenUsage).toBeUndefined();
   });
 
   it('marks a running spawned-agent execution as completed', async () => {
@@ -231,7 +263,6 @@ describe('spawn completion guard', () => {
       db,
       EXEC_ID,
       AGENT_NAME,
-      0.42,
       12_000,
       'session-complete',
     );

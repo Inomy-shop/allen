@@ -11,23 +11,37 @@ vi.mock('../../services/api', () => ({
   agents: {
     bulkUpdateModel: mocks.bulkUpdateModel,
   },
+  system: {
+    models: {
+      list: async () => ({
+        models: [
+          { _id: '1', provider: 'claude', fullId: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6', providerDisplayName: 'Claude', isActive: true, tier: 'default', sortOrder: 1 },
+          { _id: '2', provider: 'codex', fullId: 'gpt-5.5', displayName: 'GPT-5.5', providerDisplayName: 'Codex', isActive: true, tier: 'default', sortOrder: 1 },
+          { _id: '3', provider: 'deepseek', fullId: 'deepseek-chat', displayName: 'DeepSeek Chat', providerDisplayName: 'DeepSeek', isActive: true, tier: 'default', sortOrder: 1 },
+        ],
+      }),
+    },
+  },
 }));
 
 vi.mock('../../hooks/useEnabledProviders', () => ({
+  isProviderSelectable: (p: { authStatus?: string }) => p.authStatus === undefined || p.authStatus === 'logged_in',
   useEnabledProvidersStatus: () => ({
     loaded: true,
     providers: [
       {
-        provider: 'claude-cli',
-        label: 'Claude (CLI)',
-        models: ['fable', 'sonnet', 'opus', 'haiku'],
-        defaultModel: 'sonnet',
+        provider: 'claude',
+        label: 'Claude',
+        models: ['claude-sonnet-4-6', 'claude-opus-4-7'],
+        defaultModel: 'claude-sonnet-4-6',
+        authStatus: 'logged_in',
       },
       {
         provider: 'codex',
-        label: 'Codex (CLI)',
+        label: 'Codex',
         models: ['gpt-5.5', 'gpt-5.4'],
         defaultModel: 'gpt-5.5',
+        authStatus: 'logged_in',
       },
       {
         provider: 'deepseek',
@@ -70,8 +84,10 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-function renderDialog(props?: Partial<React.ComponentProps<typeof BulkAgentModelDialog>>) {
-  act(() => {
+async function renderDialog(props?: Partial<React.ComponentProps<typeof BulkAgentModelDialog>>) {
+  // Async act so the registry fetch inside useModelRegistry resolves and the
+  // default-model backfill effect runs before the test interacts.
+  await act(async () => {
     root.render(
       <BulkAgentModelDialog
         open
@@ -94,8 +110,8 @@ async function clickByText(text: string) {
 }
 
 describe('BulkAgentModelDialog', () => {
-  it('renders selected count, selected names, and clear warning checkbox defaulted off', () => {
-    renderDialog();
+  it('renders selected count, selected names, and clear warning checkbox defaulted off', async () => {
+    await renderDialog();
 
     expect(container.textContent).toContain('3 selected');
     expect(container.textContent).toContain('agent-a');
@@ -105,21 +121,21 @@ describe('BulkAgentModelDialog', () => {
     expect(checkbox?.checked).toBe(false);
   });
 
-  it('submits claude selections as claude-cli and reports updated/skipped counts', async () => {
+  it('submits claude selections with the canonical provider id and reports updated/skipped counts', async () => {
     const onUpdated = vi.fn();
     const onClose = vi.fn();
     mocks.bulkUpdateModel.mockResolvedValue({
       updated: ['agent-a', 'agent-b'],
       skipped: [{ name: 'agent-c', reason: 'incompatible-settings' }],
     });
-    renderDialog({ onUpdated, onClose });
+    await renderDialog({ onUpdated, onClose });
 
     await clickByText('Update');
 
     expect(mocks.bulkUpdateModel).toHaveBeenCalledWith({
       agentNames: ['agent-a', 'agent-b', 'agent-c'],
-      provider: 'claude-cli',
-      model: 'sonnet',
+      provider: 'claude',
+      model: 'claude-sonnet-4-6',
       clearIncompatibleSettings: false,
     });
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Updated 2 agents, skipped 1.');
@@ -132,9 +148,9 @@ describe('BulkAgentModelDialog', () => {
 
   it('resets to an open provider suggestion and submits the clear flag when checked', async () => {
     mocks.bulkUpdateModel.mockResolvedValue({ updated: ['agent-a'], skipped: [] });
-    renderDialog();
+    await renderDialog();
 
-    await clickByText('claude');
+    await clickByText('Claude');
     await clickByText('DeepSeek');
     const checkbox = container.querySelector('input[type="checkbox"]') as HTMLInputElement;
     await act(async () => {
@@ -152,15 +168,15 @@ describe('BulkAgentModelDialog', () => {
 
   it('preserves input and selection while showing inline errors on failure', async () => {
     mocks.bulkUpdateModel.mockRejectedValue(new Error('bulk update failed'));
-    renderDialog();
+    await renderDialog();
 
-    await clickByText('claude');
-    await clickByText('codex');
+    await clickByText('Claude');
+    await clickByText('Codex');
     await clickByText('Update');
 
     expect(container.textContent).toContain('bulk update failed');
     expect(container.textContent).toContain('agent-a');
-    expect(container.textContent).toContain('codex');
-    expect(container.textContent).toContain('gpt-5.5');
+    expect(container.textContent).toContain('Codex');
+    expect(container.textContent).toContain('GPT-5.5');
   });
 });

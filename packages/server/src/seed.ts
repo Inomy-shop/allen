@@ -8,6 +8,7 @@ import type { WorkflowDef } from '@allen/engine';
 import { isSeedOverrideEnabled } from './services/seed-policy.js';
 import { normalizeNodeOverridesForProvider } from './services/llm-defaults.js';
 import type { SkillInput } from './services/skill.service.js';
+import { notDeletedFilter, restoreSet } from './services/soft-delete.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -47,6 +48,52 @@ Before touching any file:
 - **Fail loudly** — if a constraint cannot be met (type error, missing dependency, conflicting requirement), surface the exact error and stop rather than working around it silently.`;
 
 /**
+ * Full text of the prd-authoring skill body. Exported so the Planner persona
+ * (and any design/product agent) can load the same playbook for writing clear,
+ * implementation-ready PRDs from a single source of truth. The defining
+ * constraint: a PRD describes WHAT and WHY in plain language so a downstream
+ * agent can implement it — it never contains code, pseudo-code, or other
+ * technical implementation snippets.
+ */
+export const PRD_AUTHORING_BODY = `# PRD Authoring
+
+A playbook for writing a Product Requirements Document that a downstream implementing agent can pick up and build without guessing. Apply it whenever you are asked to produce a PRD, product spec, or requirements doc.
+
+## When to use
+Use when the user asks for a PRD / spec / requirements doc, or confirms they want the brainstorm written up as one.
+
+## When not to use
+Not for implementing, routing work to agents, reviewing code, or casual questions. Writing a PRD is a planning/authoring act, not an execution act.
+
+## Core principles
+- **Never assume.** If the problem, target users, scope, constraints, or success criteria are unclear, ask concise clarifying questions first. Capture anything still unconfirmed under "Open questions" — never invent a requirement, user, metric, or acceptance criterion to fill a gap.
+- **Write for the implementer.** The reader is an AI (or human) agent who will build this. Every statement must be unambiguous, self-contained, and testable. Prefer plain, precise language over cleverness.
+- **NO technical code snippets.** A PRD describes WHAT must be true and WHY, not HOW to code it. Do not include code, pseudo-code, function/class signatures, API request/response bodies, SQL/DDL, config file contents, shell commands, or file diffs. If an interface or data point matters, describe it in prose (e.g. "the user supplies an email address and a password"), not as code. Naming a technology only belongs here if the user explicitly required it — then state it as a constraint, in words.
+- **Requirements are behavioral, acceptance criteria are observable.** Requirements say what the user/system must be able to do. Acceptance criteria are the checkable conditions that prove a requirement is met — not implementation steps.
+
+## Structure
+Produce these sections (omit any that genuinely do not apply; never pad with invented content):
+1. **Title & one-line summary**
+2. **Problem / background** — why this matters, who is affected, what is broken or missing today.
+3. **Goals & non-goals** — explicit scope boundaries; non-goals prevent scope creep.
+4. **Target users / personas** — who this is for and what they are trying to achieve.
+5. **User requirements** — numbered functional requirements (R1, R2, …), each a single clear statement of what the user must be able to do.
+6. **Acceptance criteria** — for each requirement, one or more testable, unambiguous criteria (Given/When/Then or a checklist). These define "done".
+7. **Success metrics** — only if the user has given or confirmed them.
+8. **Dependencies, constraints, risks** — external systems, prerequisites, known limits.
+9. **Open questions** — everything still unconfirmed. Never silently resolve these by assumption.
+
+## Quality bar (so an agent can implement it directly)
+- Every requirement has a unique ID and at least one acceptance criterion.
+- Acceptance criteria are observable/verifiable, free of implementation detail.
+- No code or technical snippets anywhere in the document.
+- Scope is bounded by explicit non-goals.
+- All ambiguity is captured as Open questions, not guessed.
+
+## Output
+Save the PRD as a markdown artifact via allen_save_artifact (e.g. \`prd-<slug>.md\`), filed under the current chat session, link to it with its publicUrl, and also show it inline so the user can read it without leaving chat.`;
+
+/**
  * Seed the database with agents returned by loadAgents().
  *
  * NOTE: loadAgents() no longer reads agents.yml by default — the legacy
@@ -84,6 +131,13 @@ export async function seedDefaultAgents(db: Db): Promise<void> {
     if (!existing) {
       await col.insertOne({ name, ...doc, createdAt: new Date(), updatedAt: new Date() });
       created++;
+    } else if (existing.isDeleted) {
+      if (override) {
+        // Restore soft-deleted agent with current seed data
+        await col.updateOne({ name }, restoreSet({ name, ...doc }));
+        updated++;
+      }
+      // If not overriding, skip — don't re-insert a soft-deleted agent
     } else if (override) {
       await col.updateOne({ name }, { $set: { ...doc, updatedAt: new Date() } });
       updated++;
@@ -161,11 +215,11 @@ export function listDefaultWorkflowNames(): string[] {
   return names;
 }
 
-function normalizeWorkflowNodeOverrides(parsed: WorkflowDef): void {
+async function normalizeWorkflowNodeOverrides(parsed: WorkflowDef, db: Db): Promise<void> {
   const nodes = (parsed.nodes ?? {}) as Record<string, Record<string, unknown>>;
   for (const node of Object.values(nodes)) {
     if (node.agentOverrides === undefined || node.agentOverrides === null) continue;
-    const normalized = normalizeNodeOverridesForProvider(node.agentOverrides as Record<string, unknown>);
+    const normalized = await normalizeNodeOverridesForProvider(node.agentOverrides as Record<string, unknown>, db);
     if (!normalized || Object.keys(normalized).length === 0) {
       delete node.agentOverrides;
     } else {
@@ -180,7 +234,7 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
   const builtInNames = Object.keys(getBuiltIns());
 
   // Merge DB agents (source of truth) with YAML agents for validation
-  const dbAgents = await db.collection('agents').find({}, { projection: { name: 1, system: 1 } }).toArray();
+  const dbAgents = await db.collection('agents').find(notDeletedFilter, { projection: { name: 1, system: 1 } }).toArray();
   const agents: Record<string, any> = { ...yamlAgents };
   for (const a of dbAgents) {
     agents[a.name as string] = { system: (a.system as string) ?? '' };
@@ -217,7 +271,7 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
     // Strip claude-only fields when the setup picked codex (and vice versa)
     // so workflow YAMLs authored for one provider degrade gracefully on the
     // other. Preserve mode (no env) leaves overrides untouched.
-    normalizeWorkflowNodeOverrides(parsed);
+    await normalizeWorkflowNodeOverrides(parsed, db);
 
     const existing = await col.findOne({ name: parsed.name });
     const validation = validateWorkflow(parsed, agents, builtInNames);
@@ -237,6 +291,27 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
         updatedAt: new Date(),
       });
       seeded++;
+      continue;
+    }
+
+    if (existing.isDeleted) {
+      if (override) {
+        // Restore soft-deleted workflow with current YAML content
+        const restoredDoc = {
+          name: parsed.name,
+          description: parsed.description ?? '',
+          version: 1,
+          yaml: content,
+          parsed,
+          reactFlowData: null,
+          validation,
+          tags: ['default'],
+          createdBy: 'system',
+        };
+        await col.updateOne({ name: parsed.name }, restoreSet(restoredDoc));
+        updated++;
+        console.log(`[seed] Restored soft-deleted workflow: ${parsed.name}`);
+      }
       continue;
     }
 
@@ -699,6 +774,25 @@ Return: the builder agent you chose (as discovered at runtime), the blueprint pr
     body: CODING_GUIDELINES_BODY,
   },
   {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Authoring-guidelines knowledge skill loaded explicitly by the Planner
+    // persona (Plan Mode) when writing a PRD so the document is clear and
+    // implementation-ready for downstream agents — with NO technical code
+    // snippets. Low priority (40) so it never outbids the domain routing skills
+    // (72-92); allowedRoutes is direct_answer only. Like coding-guidelines it is
+    // a knowledge skill, not a top-level router.
+    // ─────────────────────────────────────────────────────────────────────────
+    name: 'prd-authoring',
+    displayName: 'PRD Authoring',
+    category: 'authoring-guidelines',
+    description: 'Playbook for writing clear, implementation-ready PRDs that a downstream agent can build without guessing: explicit user requirements, testable acceptance criteria, scope boundaries, and NO technical code snippets. Use when authoring a PRD, product spec, or requirements doc — not for routing, coding, or investigation.',
+    triggers: ['prd', 'write a prd', 'product requirements', 'requirements doc', 'product spec', 'spec doc', 'write a spec'],
+    excludes: [],
+    priority: 40,
+    allowedRoutes: ['direct_answer'],
+    body: PRD_AUTHORING_BODY,
+  },
+  {
     name: 'team-assignment-routing',
     displayName: 'Team Assignment Routing',
     category: 'coordination',
@@ -787,13 +881,13 @@ export async function seedDefaultSkills(db: Db): Promise<void> {
       continue;
     }
 
-    // Skills whose routing metadata AND body we want to keep in lockstep
-    // with the source tree, even when the user hasn't enabled SEED_OVERRIDE.
-    // These contain hard routing rules (which builder/lead to spawn,
-    // when not to call create_* directly, etc.) — user-side body edits would
-    // silently soften them, so the system body wins on every boot.
-    const ALWAYS_RESYNC = new Set(['capability-routing', 'agent-workflow-builder']);
-    if (existing.createdBy === 'system' && ALWAYS_RESYNC.has(skill.name)) {
+    // When SEED_OVERRIDE is active, resync agent-workflow-builder and
+    // capability-routing so their routing logic stays in lockstep with the
+    // source tree (they carry team/agent/workflow-builder assignment contracts).
+    // When override is off, user edits to these skills are preserved.
+    if (override && existing.createdBy === 'system') {
+      const isResync = skill.name === 'agent-workflow-builder' || skill.name === 'capability-routing';
+      if (!isResync) continue;
       // capability-routing preserves user body edits for backward compat;
       // agent-workflow-builder always overwrites body because it carries
       // the team/agent/workflow-builder assignment contract.

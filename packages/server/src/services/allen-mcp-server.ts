@@ -175,7 +175,7 @@ const TOOLS = [
   // ── Agents ──
   { name: 'list_agents', description: 'List all agents with minimal info: name, displayName, teamName, type, model, provider. Use get_agent for full details.', params: {} },
   { name: 'get_agent', description: 'Get full details of a specific agent: system prompt, tools, capabilities, model, provider, spawnTargets, personality, description.', params: { name: 'string (required) — agent slug' } },
-  { name: 'create_agent', description: 'Create a new agent in a team. Team must exist. The agent slug must be unique system-wide.', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', description: 'string — short description of what the agent does', teamName: 'string (required) — existing team slug', teamRole: 'string (required) — "lead" or "member"', system: 'string (required) — full system prompt', provider: 'string (required) — "claude-cli" or "codex"', model: 'string', tools: 'object — array of tool names', capabilities: 'object — array of capability tags', spawnTargets: 'object — array of agent names this agent can spawn', personality: 'string', icon: 'string', color: 'string' } },
+  { name: 'create_agent', description: 'Create a new agent in a team. Team must exist. The agent slug must be unique system-wide.', params: { name: 'string (required) — lowercase slug', displayName: 'string (required)', description: 'string — short description of what the agent does', teamName: 'string (required) — existing team slug', teamRole: 'string (required) — "lead" or "member"', system: 'string (required) — full system prompt', provider: 'string (required) — "claude" or "codex"', model: 'string', tools: 'object — array of tool names', capabilities: 'object — array of capability tags', spawnTargets: 'object — array of agent names this agent can spawn', personality: 'string', icon: 'string', color: 'string' } },
   { name: 'update_agent', description: 'Update an agent: system prompt, model, provider, tools, capabilities, spawnTargets, personality, displayName, description.', params: { name: 'string (required)', displayName: 'string', description: 'string', system: 'string', tools: 'object', capabilities: 'object', spawnTargets: 'object — array of agent names this agent can spawn', personality: 'string', model: 'string', provider: 'string' } },
   { name: 'delete_agent', description: 'Delete an agent. Refuses built-in agents and team leads. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
   { name: 'move_agent_to_team', description: 'Move one or more agents to a different team. Works for any cross-team move including unassigned → team.', params: { agent_names: 'object — array of agent name strings (required)', team_name: 'string (required) — target team slug' } },
@@ -201,6 +201,7 @@ const TOOLS = [
   { name: 'get_repo_context_curation_stage_status', description: 'Validate staged repo context curation rows and return missing/invalid/retry files. Call after workers finish and before promotion.', params: { run_id: 'string (required)' } },
   { name: 'promote_repo_context_curation_stage', description: 'Promote a fully validated temporary repo context curation run into final DB collections visible in UI. Fails if any expected file is missing or invalid.', params: { run_id: 'string (required)' } },
   { name: 'save_repo_mandatory_context_mappings', description: 'Save agent-specific mandatory repo context mappings into Allen DB. Use only from repo-mandatory-context-mapper; this writes always-injected context for exact Allen agent names.', params: { repo_id: 'string (required)', mappings: 'array of {agentName, sourcePath, sourceHash, title, content, reasoning, enabled}' } },
+  { name: 'save_repo_mandatory_context_mapping_proposal', description: 'Stage a mandatory context mapping proposal during a repo context setup run. Use only from repo-mandatory-context-mapper. Does NOT write to repo_mandatory_context_mappings directly — the orchestrator consumes the proposal atomically. Two-step protocol (PREFERRED — large single payloads can hang the CLI): as you draft, call with mode: "stage" and batches of AT MOST 10 mappings (staged rows persist server-side and are upserted by (setup_run_id, agentName, title[, sourcePath]), so re-staging is safe); when every mapping is staged, call once with mode: "finalize" plus affected_agent_names and expected_mapping_count (no mappings) to assemble the proposal. Omitting mode sends the legacy whole-packet body in one call.', params: { repo_id: 'string (required)', setup_run_id: 'string (required)', mode: 'string — "stage" | "finalize"; omit for the legacy whole-packet save', affected_agent_names: 'string[] (required unless mode is "stage") — agents reviewed by the mapper', mappings: 'array — required for mode "stage" (≤10 per call) and the legacy save; each: {agentName, sourcePath, sourceHash, title, content, reasoning}', expected_mapping_count: 'number (required for mode "finalize") — total staged mappings the proposal must contain' } },
   { name: 'find_repo_for_pr_url', description: 'Given a GitHub PR URL, find the registered Allen repo whose remote matches (owner/repo). Returns null if the repo is not registered.', params: { pr_url: 'string (required) — https://github.com/<owner>/<repo>/pull/<n>' } },
 
   // ── Pull Requests ──
@@ -591,6 +592,40 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         mappings: Array.isArray(args.mappings) ? args.mappings : [],
       });
     }
+    case 'save_repo_mandatory_context_mapping_proposal': {
+      const repoId = String(args.repo_id ?? args.repoId ?? '');
+      const setupRunId = String(args.setup_run_id ?? args.setupRunId ?? '');
+      if (!repoId) return { error: 'repo_id is required' };
+      if (!setupRunId) return { error: 'setup_run_id is required' };
+      const mode = String(args.mode ?? '');
+      if (mode === 'stage') {
+        return callAPI(`/api/repos/${encodeURIComponent(repoId)}/mandatory-context/proposals`, 'POST', {
+          mode: 'stage',
+          setupRunId,
+          mappings: Array.isArray(args.mappings) ? args.mappings : [],
+        });
+      }
+      const affectedAgentNames = Array.isArray(args.affected_agent_names) ? args.affected_agent_names : Array.isArray(args.affectedAgentNames) ? args.affectedAgentNames : [];
+      if (!affectedAgentNames.length) return { error: 'affected_agent_names is required and must be a non-empty array' };
+      if (mode === 'finalize') {
+        const expectedMappingCount = Number(args.expected_mapping_count ?? args.expectedMappingCount);
+        if (!Number.isInteger(expectedMappingCount) || expectedMappingCount < 0) {
+          return { error: 'expected_mapping_count is required for mode "finalize" and must be a non-negative integer' };
+        }
+        return callAPI(`/api/repos/${encodeURIComponent(repoId)}/mandatory-context/proposals`, 'POST', {
+          mode: 'finalize',
+          setupRunId,
+          affectedAgentNames,
+          expectedMappingCount,
+        });
+      }
+      if (mode) return { error: `unknown mode '${mode}' — expected 'stage' or 'finalize'` };
+      return callAPI(`/api/repos/${encodeURIComponent(repoId)}/mandatory-context/proposals`, 'POST', {
+        setupRunId,
+        affectedAgentNames,
+        mappings: Array.isArray(args.mappings) ? args.mappings : [],
+      });
+    }
     case 'get_node_context_usage': {
       const executionId = String(args.execution_id ?? '');
       if (!executionId) return { error: 'execution_id is required' };
@@ -832,7 +867,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         teamName: a.teamName,
         type: a.type,
         model: a.model,
-        provider: a.provider ?? 'claude-cli',
+        provider: a.provider ?? 'claude',
       }));
     }
     case 'get_agent': {

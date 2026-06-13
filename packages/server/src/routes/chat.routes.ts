@@ -263,7 +263,7 @@ export function chatRoutes(db: Db): Router {
       const rawProvider = String(req.query.provider ?? 'codex');
       let family: SlashCommandProvider | null = null;
       if (rawProvider === 'codex') family = 'codex';
-      else if (isClaudeFamilyProvider(rawProvider)) family = 'claude-cli';
+      else if (isClaudeFamilyProvider(rawProvider)) family = 'claude';
       if (!family) return res.json([]);
 
       const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';

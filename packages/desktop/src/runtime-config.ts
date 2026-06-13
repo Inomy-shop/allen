@@ -339,6 +339,15 @@ export async function setupDesktopRuntime(
   delete env.ALLEN_API_URL;
   delete env.ALLEN_INTERNAL_API_URL;
 
+  // Don't forward agent provider/model defaults to process.env — these
+  // are settings-only keys that should only be reachable via the
+  // configProvider. Forwarding them would cause resolveAgentProviderModel
+  // (llm-defaults.ts) to read them from process.env via readEnvProvider()
+  // and flatten ALL agents to a single provider on every startup seed,
+  // overwriting any user customizations even when SEED_OVERRIDE is false.
+  delete env.ALLEN_DEFAULT_AGENT_PROVIDER;
+  delete env.ALLEN_DEFAULT_AGENT_MODEL;
+
   mkdirSync(allenHome, { recursive: true });
   mkdirSync(workspaceBaseDir, { recursive: true });
   mkdirSync(uploadsDir, { recursive: true });

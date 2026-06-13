@@ -79,6 +79,7 @@ const SLACK_DEFAULT_MODEL = 'gpt-5.5';
 // Directory resolved lazily via getUploadsDir() so tests can override UPLOADS_DIR.
 
 const MAX_SLACK_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
+const MAX_INLINE_TEXT_SIZE = 8 * 1024;         // 8 KB — cap on inlined text/markdown content
 const MAX_FILES_PER_MENTION = 10;
 
 // ── Service ──
@@ -287,19 +288,22 @@ export class SlackService {
   // ── File attachment helpers ──
 
   /**
-   * Download a Slack private file to the shared uploads directory.
+   * Download a Slack private binary file (image/* or application/pdf) to the
+   * shared uploads directory.
    *
    * Security notes:
    *   - Only image/* and application/pdf are accepted (allowlist).
-   *   - Files larger than 25 MB are rejected before any HTTP call.
+   *   - Files larger than MAX_SLACK_FILE_SIZE are rejected before any HTTP call.
    *   - The bot token is NEVER logged — only a warning without the token value
    *     is emitted on failure.
+   *
+   * Text/markdown files are handled separately by {@link fetchSlackTextContent}.
    *
    * @returns Public URL `/api/files/<uuid><ext>` on success, `null` on any error.
    */
   private async downloadSlackFileToUploads(file: SlackFile, botToken: string): Promise<string | null> {
     try {
-      // Mimetype allowlist
+      // Mimetype allowlist — binary types only; text files go through fetchSlackTextContent.
       if (!file.mimetype.startsWith('image/') && file.mimetype !== 'application/pdf') {
         return null;
       }
@@ -334,8 +338,49 @@ export class SlackService {
   }
 
   /**
+   * Download a Slack private text/markdown file and return its UTF-8 content.
+   *
+   * Security notes:
+   *   - Only files identified by {@link isInlineTextFile} reach this method.
+   *   - Files larger than MAX_SLACK_FILE_SIZE are rejected before any HTTP call.
+   *   - The bot token is NEVER logged.
+   *
+   * Content is bounded to MAX_INLINE_TEXT_SIZE bytes before being returned;
+   * the caller is responsible for appending a truncation notice when needed.
+   *
+   * @returns Raw text content on success, `null` on any error or size violation.
+   */
+  private async fetchSlackTextContent(file: SlackFile, botToken: string): Promise<string | null> {
+    try {
+      if (file.size > MAX_SLACK_FILE_SIZE) {
+        console.warn(`[slack] Skipping text file "${file.name}": exceeds ${MAX_SLACK_FILE_SIZE / 1024 / 1024} MB size limit`);
+        return null;
+      }
+      const resp = await fetch(file.url_private, {
+        headers: { Authorization: `Bearer ${botToken}` },
+      });
+      if (!resp.ok) {
+        console.warn(`[slack] Failed to download text file "${file.name}": HTTP ${resp.status}`);
+        return null;
+      }
+      return await resp.text();
+    } catch (err) {
+      console.warn(`[slack] Error downloading text file "${file.name}":`, (err as Error).message);
+      return null;
+    }
+  }
+
+  /**
    * Download all qualifying files (up to MAX_FILES_PER_MENTION) and append
-   * Markdown image/file links to `message`. Returns the (possibly extended) message.
+   * their content to `message`. Returns the (possibly extended) message.
+   *
+   * Routing:
+   *   - image/* and application/pdf → downloaded to uploads dir, appended as a
+   *     Markdown link ([name](url)).
+   *   - text/markdown, text/plain, and .md/.txt with application/octet-stream →
+   *     content fetched, UTF-8 decoded, inlined as a fenced code block.
+   *     Content is capped at MAX_INLINE_TEXT_SIZE bytes; truncation is noted.
+   *   - All other MIME types → silently skipped.
    */
   private async appendFileLinks(message: string, files: SlackFile[]): Promise<string> {
     if (files.length === 0) return message;
@@ -347,16 +392,20 @@ export class SlackService {
     }
 
     const filesToProcess = files.slice(0, MAX_FILES_PER_MENTION);
-    const urls = await Promise.all(
-      filesToProcess.map(f => this.downloadSlackFileToUploads(f, botToken)),
+    const results = await Promise.all(
+      filesToProcess.map(async (f): Promise<string | null> => {
+        if (isInlineTextFile(f)) {
+          const content = await this.fetchSlackTextContent(f, botToken);
+          return content !== null ? formatInlineTextFile(f.name, content) : null;
+        }
+        const url = await this.downloadSlackFileToUploads(f, botToken);
+        return url !== null ? `[${f.name}](${url})` : null;
+      }),
     );
 
-    const links = urls
-      .map((url, i) => (url ? `[${filesToProcess[i].name}](${url})` : null))
-      .filter((link): link is string => link !== null);
-
-    if (links.length === 0) return message;
-    return `${message}\n\n${links.join('\n')}`;
+    const parts = results.filter((r): r is string => r !== null);
+    if (parts.length === 0) return message;
+    return `${message}\n\n${parts.join('\n\n')}`;
   }
 
   // ── Run agent and post reply ──
@@ -540,6 +589,47 @@ export class SlackService {
 }
 
 // ── Helpers ──
+
+/**
+ * Returns true when the Slack file should be inlined as text rather than
+ * downloaded as a binary upload.
+ *
+ * Accepted cases:
+ *   - MIME type is text/markdown or text/plain (regardless of extension).
+ *   - MIME type is application/octet-stream and the filename ends with .md or .txt
+ *     (common when Slack mis-classifies uploads from some clients).
+ */
+function isInlineTextFile(file: SlackFile): boolean {
+  if (file.mimetype === 'text/markdown' || file.mimetype === 'text/plain') {
+    return true;
+  }
+  if (file.mimetype === 'application/octet-stream') {
+    const ext = extname(file.name).toLowerCase();
+    return ext === '.md' || ext === '.txt';
+  }
+  return false;
+}
+
+/**
+ * Format raw text file content as a labelled, fenced Markdown block.
+ * Content is capped at MAX_INLINE_TEXT_SIZE bytes; a truncation notice is
+ * appended when the cap is hit.
+ */
+function formatInlineTextFile(name: string, content: string): string {
+  let body = content;
+  let truncated = false;
+  if (Buffer.byteLength(body, 'utf8') > MAX_INLINE_TEXT_SIZE) {
+    // Truncate at byte boundary; Buffer handles multi-byte chars safely.
+    body = Buffer.from(body, 'utf8').subarray(0, MAX_INLINE_TEXT_SIZE).toString('utf8');
+    truncated = true;
+  }
+  const ext = extname(name).toLowerCase().replace('.', '');
+  const langHint = ext === 'md' ? 'markdown' : ext === 'txt' ? '' : ext;
+  const truncationNotice = truncated
+    ? `\n\n_⚠ File truncated — only the first ${MAX_INLINE_TEXT_SIZE / 1024} KB of "${name}" is shown._`
+    : '';
+  return `**File: ${name}**\n\`\`\`${langHint}\n${body.trimEnd()}\n\`\`\`${truncationNotice}`;
+}
 
 /**
  * Split long text into chunks that fit within Slack's message limit.

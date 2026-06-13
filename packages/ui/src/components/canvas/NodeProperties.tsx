@@ -5,7 +5,9 @@ import { agents as agentsApi, mcp as mcpApi, type McpToolGroup } from '../../ser
 import Select from '../common/Select';
 import { outputsAsMap } from '../../utils/outputs';
 import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
-import { useEnabledProviders } from '../../hooks/useEnabledProviders';
+import { useEnabledProviders, isProviderSelectable } from '../../hooks/useEnabledProviders';
+import { useModelRegistry, getModelDisplay } from '../../hooks/useModelRegistry';
+import { getOpenProviderModelSuggestions, humanLabel } from '../../lib/model-catalog';
 import HumanNodeEditor from './HumanNodeEditor';
 import KeyValueEditor from './KeyValueEditor';
 import JsonField from './JsonField';
@@ -576,12 +578,6 @@ interface AgentOverridesValue {
   disabledMcpTools?: Record<string, string[]> | null;
 }
 
-// Both Claude and Codex model lists — the dropdown always shows both, grouped
-// by provider, so you can cross-override a Claude agent to run on Codex (or
-// vice versa) on just this workflow node.
-const CLAUDE_MODELS = ['fable', 'sonnet', 'opus', 'haiku'];
-const CODEX_MODELS = ['default', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex'];
-
 // Compound value in the <select>. Encodes both provider and model so a single
 // dropdown can span two providers without a separate provider picker.
 function encodeModelOption(provider: ProviderValue, model: string): string {
@@ -595,9 +591,9 @@ function decodeModelOption(value: string): { provider: ProviderValue; model: str
 }
 
 function normalizeProvider(p: string | undefined, enabledProviderIds: Set<string>): ProviderValue {
-  if (p === 'codex') return 'codex';
+  if (p === 'claude-cli') return 'claude'; // legacy id (pre-rename)
   if (p && enabledProviderIds.has(p)) return p;
-  return 'claude-cli';
+  return p === 'codex' ? 'codex' : 'claude';
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -662,14 +658,12 @@ function AgentNodeOverrides({
 }) {
   const [expanded, setExpanded] = useState(false);
   const enabledProviders = useEnabledProviders();
+  const { getModelsForProvider: registryGetModelsForProvider } = useModelRegistry();
   const enabledProviderIds = useMemo(() => new Set(enabledProviders.map((provider) => provider.provider)), [enabledProviders]);
-  const openProviderModelSuggestions = useMemo(() => Object.fromEntries(
-    enabledProviders
-      .filter((provider) => provider.open)
-      .map((provider) => [provider.provider, provider.modelSuggestions && provider.modelSuggestions.length > 0
-        ? provider.modelSuggestions
-        : [provider.defaultModel]]),
-  ) as Record<string, string[]>, [enabledProviders]);
+  const openProviderModelSuggestions = useMemo(
+    () => getOpenProviderModelSuggestions(enabledProviders),
+    [enabledProviders],
+  );
   if (!agentName) return null;
 
   const agent = agentList.find((a) => a.name === agentName);
@@ -690,48 +684,45 @@ function AgentNodeOverrides({
 
   // Effective resolved values (override wins, else agent default).
   const effectiveProvider: ProviderValue = overrides.provider ?? agentProvider;
-  const effectiveIsClaude = effectiveProvider === 'claude-cli';
+  const effectiveIsClaude = effectiveProvider === 'claude' || effectiveProvider === 'claude-cli';
   const openModelSuggestions = openProviderModelSuggestions[effectiveProvider];
   const isOpenModelProvider = Boolean(openModelSuggestions);
-  const providerLabel = (provider: ProviderValue) => {
-    if (provider === 'claude-cli') return 'Claude';
-    if (provider === 'codex') return 'Codex';
-    const enabledProvider = enabledProviders.find((item) => item.provider === provider);
-    if (enabledProvider) return enabledProvider.label;
-    return provider;
-  };
-  const selectableModelGroups = enabledProviders.flatMap((provider) => {
-    if (provider.provider === 'claude-cli') {
-      return CLAUDE_MODELS.map((model) => ({
-        value: encodeModelOption(provider.provider, model),
-        label: model,
-        sublabel: providerLabel(provider.provider),
+  const selectableModelGroups = enabledProviders.filter(isProviderSelectable).flatMap((provider) => {
+    // Registry-first: use registry models with display names for ALL providers.
+    const registryModels = registryGetModelsForProvider(provider.provider);
+    if (registryModels.length > 0) {
+      const options = registryModels.map((option) => ({
+        value: encodeModelOption(provider.provider, option.value),
+        label: option.label,
+        sublabel: getModelDisplay(provider.provider).providerLabel,
       }));
+      // Ensure the current override model is visible even when it's not
+      // in the active registry list (e.g. an inactive/inaccessible model).
+      if (provider.provider === effectiveProvider && overrides.model != null) {
+        const encoded = encodeModelOption(effectiveProvider, overrides.model);
+        if (!options.some((o) => o.value === encoded)) {
+          options.push({
+            value: encoded,
+            label: getModelDisplay(effectiveProvider, overrides.model).modelLabel,
+            sublabel: getModelDisplay(effectiveProvider).providerLabel,
+          });
+        }
+      }
+      return options;
     }
-    if (provider.provider === 'codex') {
-      return CODEX_MODELS.map((model) => ({
-        value: encodeModelOption(provider.provider, model),
-        label: model,
-        sublabel: providerLabel(provider.provider),
-      }));
-    }
-    if (provider.open) {
-      const suggestions = openProviderModelSuggestions[provider.provider] ?? [];
-      const currentModel = provider.provider === (overrides.provider ?? agentProvider) ? overrides.model : null;
-      const models = [
-        ...suggestions,
-        ...(currentModel && !suggestions.includes(currentModel) ? [currentModel] : []),
-      ];
-      return models.map((model) => ({
-        value: encodeModelOption(provider.provider, model),
-        label: model,
-        sublabel: providerLabel(provider.provider),
-      }));
-    }
-    return (provider.models ?? []).map((model) => ({
+    // Fallback when registry is empty — use provider payload (itself
+    // registry-patched server-side).
+    const modelIds = provider.open
+      ? (openProviderModelSuggestions[provider.provider] ?? [])
+      : (provider.models ?? []);
+    const currentModel = provider.provider === (overrides.provider ?? agentProvider) ? overrides.model : null;
+    const allIds = currentModel && !modelIds.includes(currentModel)
+      ? [...modelIds, currentModel]
+      : modelIds;
+    return allIds.map((model) => ({
       value: encodeModelOption(provider.provider, model),
-      label: model,
-      sublabel: providerLabel(provider.provider),
+      label: getModelDisplay(provider.provider, model).modelLabel,
+      sublabel: getModelDisplay(provider.provider).providerLabel,
     }));
   });
 
@@ -741,7 +732,7 @@ function AgentNodeOverrides({
       ? encodeModelOption(overrides.provider ?? agentProvider, overrides.model)
       : '';
 
-  const inheritedModelLabel = `${providerLabel(agentProvider)} / ${agentModel ?? '(provider default)'}`;
+  const inheritedModelLabel = `${getModelDisplay(agentProvider).providerLabel} / ${agentModel ? getModelDisplay(agentProvider, agentModel).modelLabel : '(provider default)'}`;
   const inheritedEffortLabel = agentEffort ?? '(CLI default)';
   const inheritedPlanLabel =
     agentPlan === true ? 'on' : agentPlan === false ? 'off' : '(CLI default: off)';
@@ -782,7 +773,7 @@ function AgentNodeOverrides({
       model: decoded.model,
     };
     // Moving away from Claude? Drop any explicit plan-mode override.
-    if (decoded.provider !== 'claude-cli' && next.planMode === true) next.planMode = null;
+    if (decoded.provider !== 'claude' && next.planMode === true) next.planMode = null;
     update(next);
   }
 
@@ -922,7 +913,7 @@ function AgentNodeOverrides({
             </div>
           ) : (
             <div className="text-[10px] text-theme-subtle font-body leading-relaxed">
-              Plan mode is Claude-only — this node currently resolves to {providerLabel(effectiveProvider)}, so plan
+              Plan mode is Claude-only — this node currently resolves to {getModelDisplay(effectiveProvider).providerLabel}, so plan
               mode is unavailable. Switch the model to a Claude option to use it.
             </div>
           )}

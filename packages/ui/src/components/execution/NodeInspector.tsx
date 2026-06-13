@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import {
   ChevronDown, ChevronRight, AlertCircle, CheckCircle, XCircle, Info,
-  Settings, GitBranch, Zap, BookOpen, Wrench, Cpu,
+  Settings, GitBranch, Zap, BookOpen, Wrench, Cpu, RefreshCw,
 } from 'lucide-react';
-import { authHeaders } from '../../services/api';
+import { authHeaders, type RunStatus } from '../../services/api';
+
+type WorkflowContextEvaluationSummary = NonNullable<RunStatus['execution']['contextWorkflowEvaluation']>;
 
 export type ContextRefProviderMetadata = {
   datasetName?: unknown;
@@ -229,6 +231,9 @@ interface Props {
   trace: Trace;
   workflowEdges?: Array<{ from: string; to: string | string[]; condition?: string; parallel?: boolean }>;
   contextEngineEnabled?: boolean;
+  workflowContextEvaluation?: WorkflowContextEvaluationSummary | null;
+  onRerunWorkflowContextEvaluation?: () => void | Promise<void>;
+  workflowContextEvaluationBusy?: boolean;
 }
 
 /**
@@ -236,7 +241,13 @@ interface Props {
  * Phase-2 enrichment field as a collapsible section. All sections are
  * self-hiding when their data is absent (older traces, non-agent nodes, etc).
  */
-export default function NodeInspector({ trace, contextEngineEnabled = true }: Props) {
+export default function NodeInspector({
+  trace,
+  contextEngineEnabled = true,
+  workflowContextEvaluation,
+  onRerunWorkflowContextEvaluation,
+  workflowContextEvaluationBusy = false,
+}: Props) {
   const toolsUsed = new Set((trace.toolCalls ?? []).map((tc) => tc.tool));
   const contextAttempt = trace.contextLifecycleAttempt;
 
@@ -255,7 +266,7 @@ export default function NodeInspector({ trace, contextEngineEnabled = true }: Pr
       {trace.gateDecision && <GateDecisionBanner g={trace.gateDecision} />}
       {trace.routingDecision && <RoutingDecisionBanner r={trace.routingDecision} />}
 
-      <Section icon={Settings} title="Runtime context" defaultOpen>
+      <Section icon={Settings} title="Runtime context">
         {trace.runtimeContext ? (
           <KeyValueGrid
             rows={[
@@ -284,57 +295,65 @@ export default function NodeInspector({ trace, contextEngineEnabled = true }: Pr
       />
 
       {contextEngineEnabled && (
-      <Section icon={CheckCircle} title="Context quality evaluation" defaultOpen={Boolean(trace.contextEvaluation || trace.workflowContextFinding)}>
-        {trace.contextEvaluation ? (
-          <div className="space-y-2">
-            <KeyValueGrid
-              rows={[
-                ['status', trace.contextEvaluation.status],
-                ['overall', formatScore(trace.contextEvaluation.scores?.overall)],
-                ['precision', formatScore(trace.contextEvaluation.scores?.precision)],
-                ['completeness', formatScore(trace.contextEvaluation.scores?.completeness)],
-                ['usefulness', formatScore(trace.contextEvaluation.scores?.usefulness)],
-                ['groundedness', formatScore(trace.contextEvaluation.scores?.groundedness)],
-                ['correctness', formatScore(trace.contextEvaluation.scores?.correctness)],
-                ['bloat', formatScore(trace.contextEvaluation.scores?.bloat)],
-                ['semantic provider', trace.contextEvaluation.semantic?.provider],
-                ['semantic status', trace.contextEvaluation.semantic?.status],
-                ['semantic mode', trace.contextEvaluation.semantic?.mode],
-                ['semantic completed', trace.contextEvaluation.semantic?.completedAt],
-                ['semantic reason', trace.contextEvaluation.semantic?.reason],
-                ['feedback evidence', trace.contextEvaluation.feedbackEvidenceCount],
-              ]}
-            />
-            {trace.contextEvaluation.semantic?.error && (
-              <div className="text-[11px] font-mono text-accent-red border border-accent-red/30 rounded-md p-1.5">
-                {trace.contextEvaluation.semantic.error}
-              </div>
-            )}
-            {trace.contextEvaluation.diagnostics?.length ? (
-              <div className="space-y-1">
-                <div className="overline">Evaluation diagnostics</div>
-                {trace.contextEvaluation.diagnostics.map((d, i) => (
-                  <div key={`${d.code ?? i}-eval`} className="text-[11px] font-mono text-theme-secondary border border-app rounded-md p-1.5">
-                    <span className="text-theme-primary">{d.code ?? 'diagnostic'}</span>
-                    <span className="text-theme-subtle"> · {d.severity ?? 'info'} · {d.message ?? ''}</span>
-                    {(d.refId || d.path) && <div className="mt-1 text-theme-subtle">{[d.refId, d.path].filter(Boolean).join(' · ')}</div>}
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {trace.workflowContextFinding && (
-              <WorkflowContextFinding finding={trace.workflowContextFinding} />
-            )}
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {trace.workflowContextFinding ? (
-              <WorkflowContextFinding finding={trace.workflowContextFinding} />
-            ) : null}
-            <Empty>{trace.contextEvaluationMissingReason ?? 'No context quality evaluation captured.'}</Empty>
-          </div>
-        )}
-      </Section>
+        <WorkflowContextEvaluationSection
+          evaluation={workflowContextEvaluation}
+          onRerun={onRerunWorkflowContextEvaluation}
+          busy={workflowContextEvaluationBusy}
+        />
+      )}
+
+      {contextEngineEnabled && (
+        <Section icon={CheckCircle} title="Context quality evaluation">
+          {trace.contextEvaluation ? (
+            <div className="space-y-2">
+              <KeyValueGrid
+                rows={[
+                  ['status', trace.contextEvaluation.status],
+                  ['overall', formatScore(trace.contextEvaluation.scores?.overall)],
+                  ['precision', formatScore(trace.contextEvaluation.scores?.precision)],
+                  ['completeness', formatScore(trace.contextEvaluation.scores?.completeness)],
+                  ['usefulness', formatScore(trace.contextEvaluation.scores?.usefulness)],
+                  ['groundedness', formatScore(trace.contextEvaluation.scores?.groundedness)],
+                  ['correctness', formatScore(trace.contextEvaluation.scores?.correctness)],
+                  ['bloat', formatScore(trace.contextEvaluation.scores?.bloat)],
+                  ['semantic provider', trace.contextEvaluation.semantic?.provider],
+                  ['semantic status', trace.contextEvaluation.semantic?.status],
+                  ['semantic mode', trace.contextEvaluation.semantic?.mode],
+                  ['semantic completed', trace.contextEvaluation.semantic?.completedAt],
+                  ['semantic reason', trace.contextEvaluation.semantic?.reason],
+                  ['feedback evidence', trace.contextEvaluation.feedbackEvidenceCount],
+                ]}
+              />
+              {trace.contextEvaluation.semantic?.error && (
+                <div className="text-[11px] font-mono text-accent-red border border-accent-red/30 rounded-md p-1.5">
+                  {trace.contextEvaluation.semantic.error}
+                </div>
+              )}
+              {trace.contextEvaluation.diagnostics?.length ? (
+                <div className="space-y-1">
+                  <div className="overline">Evaluation diagnostics</div>
+                  {trace.contextEvaluation.diagnostics.map((d, i) => (
+                    <div key={`${d.code ?? i}-eval`} className="text-[11px] font-mono text-theme-secondary border border-app rounded-md p-1.5">
+                      <span className="text-theme-primary">{d.code ?? 'diagnostic'}</span>
+                      <span className="text-theme-subtle"> · {d.severity ?? 'info'} · {d.message ?? ''}</span>
+                      {(d.refId || d.path) && <div className="mt-1 text-theme-subtle">{[d.refId, d.path].filter(Boolean).join(' · ')}</div>}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {trace.workflowContextFinding && (
+                <WorkflowContextFinding finding={trace.workflowContextFinding} />
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {trace.workflowContextFinding ? (
+                <WorkflowContextFinding finding={trace.workflowContextFinding} />
+              ) : null}
+              <Empty>{trace.contextEvaluationMissingReason ?? 'No context quality evaluation captured.'}</Empty>
+            </div>
+          )}
+        </Section>
       )}
 
       <Section icon={Zap} title="Agent overrides">
@@ -531,7 +550,7 @@ export function RepoContextInjectionPanel({
   if (!contextEngineEnabled) return null;
 
   return (
-    <Section icon={BookOpen} title={title} defaultOpen={Boolean(contextAttempt || repoKnowledgeInjected?.mandatoryContextInjected)}>
+    <Section icon={BookOpen} title={title}>
       {contextAttempt ? (
         <div className="space-y-2">
           <KeyValueGrid
@@ -707,19 +726,23 @@ export function RepoContextInjectionPanel({
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function Section({
-  icon: Icon, title, children, defaultOpen = false,
-}: { icon: typeof Settings; title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  icon: Icon, title, children, defaultOpen = false, headerAction,
+}: { icon: typeof Settings; title: string; children: React.ReactNode; defaultOpen?: boolean; headerAction?: React.ReactNode }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="border border-app rounded-md bg-app-muted/50 overflow-hidden">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-app-muted"
-      >
-        {open ? <ChevronDown className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronRight className="w-3.5 h-3.5 text-theme-muted" />}
-        <Icon className="w-3.5 h-3.5 text-accent-blue" />
-        <span className="font-label text-[11px] uppercase tracking-[0.15em] text-theme-secondary">{title}</span>
-      </button>
+      <div className="flex items-center gap-2 hover:bg-app-muted">
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
+        >
+          {open ? <ChevronDown className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronRight className="w-3.5 h-3.5 text-theme-muted" />}
+          <Icon className="w-3.5 h-3.5 text-accent-blue" />
+          <span className="font-label text-[11px] uppercase tracking-[0.15em] text-theme-secondary">{title}</span>
+        </button>
+        {headerAction && <div className="shrink-0 pr-2">{headerAction}</div>}
+      </div>
       {open && <div className="px-3 py-2.5 border-t border-app bg-surface-200/20">{children}</div>}
     </div>
   );
@@ -877,6 +900,162 @@ function WorkflowContextFinding({ finding }: { finding: NonNullable<Trace['workf
         </div>
       )}
     </div>
+  );
+}
+
+function WorkflowContextEvaluationSection({
+  evaluation,
+  onRerun,
+  busy = false,
+}: {
+  evaluation?: WorkflowContextEvaluationSummary | null;
+  onRerun?: () => void | Promise<void>;
+  busy?: boolean;
+}) {
+  if (!evaluation && !onRerun) return null;
+  const scores = evaluation?.result?.scores ?? {};
+  const diagnostics = evaluation?.result?.diagnostics ?? [];
+  const coverage = evaluation?.result?.evaluationCoverage;
+
+  return (
+    <Section
+      icon={CheckCircle}
+      title="Workflow context evaluation"
+      headerAction={onRerun ? (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            void onRerun();
+          }}
+          disabled={busy}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-app text-theme-muted transition-colors hover:bg-app-card hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-50"
+          title="Rerun workflow context evaluation"
+          aria-label="Rerun workflow context evaluation"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
+        </button>
+      ) : undefined}
+    >
+      <div className="space-y-2">
+        <KeyValueGrid
+          rows={[
+            ['status', evaluation?.status ?? 'not queued'],
+            ['result', evaluation?.result?.status],
+            ['provider', evaluation?.provider],
+            ['mode', evaluation?.mode],
+            ['overall', formatScore(scores.overall)],
+            ['precision', formatScore(scores.precision)],
+            ['completeness', formatScore(scores.completeness)],
+            ['usefulness', formatScore(scores.usefulness)],
+            ['groundedness', formatScore(scores.groundedness)],
+            ['correctness', formatScore(scores.correctness)],
+            ['bloat', formatScore(scores.bloat)],
+            ['attempts', evaluation?.maxAttempts == null ? evaluation?.attempts : `${evaluation.attempts ?? 0}/${evaluation.maxAttempts}`],
+            ['stale', evaluation?.stale == null ? undefined : (evaluation.stale ? 'yes' : 'no')],
+            ['evaluated', evaluation?.evaluatedAt],
+            ['completed', evaluation?.completedAt],
+          ]}
+        />
+        {!evaluation && (
+          <Empty>No workflow context evaluation has been queued for this run.</Empty>
+        )}
+        {evaluation?.result?.summary && (
+          <div className="max-h-[180px] overflow-y-auto rounded border border-app bg-surface/60 p-2 text-[11px] text-theme-secondary font-body leading-relaxed whitespace-pre-wrap">
+            {evaluation.result.summary}
+          </div>
+        )}
+        {evaluation?.staleReason && (
+          <div className="max-h-28 overflow-y-auto rounded border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] font-mono text-accent-yellow whitespace-pre-wrap">
+            {evaluation.staleReason}
+          </div>
+        )}
+        {evaluation?.error && (
+          <div className="max-h-28 overflow-y-auto rounded border border-accent-red/30 bg-red-500/10 p-2 text-[11px] font-mono text-accent-red whitespace-pre-wrap">
+            {evaluation.error}
+          </div>
+        )}
+        {diagnostics.length > 0 && (
+          <div className="space-y-1">
+            <div className="overline">Workflow diagnostics</div>
+            {diagnostics.map((d, i) => (
+              <div key={`${d.code ?? i}-workflow-eval`} className="text-[11px] font-mono text-theme-secondary border border-app rounded-md p-1.5">
+                <span className="text-theme-primary">{d.code ?? 'diagnostic'}</span>
+                <span className="text-theme-subtle"> · {d.severity ?? 'info'} · {d.message ?? ''}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {coverage && (
+          <KeyValueGrid
+            rows={[
+              ['expected findings', coverage.expectedNodeFindings],
+              ['returned findings', coverage.returnedNodeFindings],
+              ['fallback findings', coverage.fallbackNodeFindings],
+              ['missing findings', coverage.missingNodeFindings?.length],
+            ]}
+          />
+        )}
+        {evaluation?.audit && (
+          <WorkflowContextEvalAuditDetails
+            audit={evaluation.audit}
+            normalizedResult={evaluation.result}
+          />
+        )}
+      </div>
+    </Section>
+  );
+}
+
+function WorkflowContextEvalAuditDetails({
+  audit,
+  normalizedResult,
+}: {
+  audit: NonNullable<WorkflowContextEvaluationSummary['audit']>;
+  normalizedResult?: WorkflowContextEvaluationSummary['result'];
+}) {
+  const packedEvidenceJson = audit.packedEvidencePayload ? JSON.stringify(audit.packedEvidencePayload, null, 2) : '';
+  const fullEvidenceJson = audit.evidencePayload ? JSON.stringify(audit.evidencePayload, null, 2) : '';
+  const normalizedJson = normalizedResult ? JSON.stringify(normalizedResult, null, 2) : '';
+  return (
+    <div className="space-y-1.5">
+      <KeyValueGrid
+        rows={[
+          ['judge', [audit.judgeProvider, audit.judgeModel].filter(Boolean).join(' / ') || undefined],
+          ['duration', audit.judgeDurationMs == null ? undefined : `${Math.round(audit.judgeDurationMs)}ms`],
+          ['prompt', audit.promptChars == null ? undefined : `${audit.promptChars} chars`],
+          ['evidence', audit.evidenceStats?.packedChars == null ? undefined : `${audit.evidenceStats.packedChars} / ${audit.evidenceStats.originalChars ?? '?'} chars`],
+          ['sha256', audit.promptSha256],
+        ]}
+      />
+      {audit.evidenceTruncated && (
+        <div className="rounded border border-amber-500/30 bg-amber-500/10 p-1.5 text-[10px] text-accent-yellow">
+          {audit.evidenceStats
+            ? 'Evidence was packed and some per-node sections were shortened before the judge call.'
+            : 'Evidence JSON was truncated before the judge call.'}
+        </div>
+      )}
+      <AuditDisclosure title="Evaluator prompt" content={audit.promptPreview} />
+      <AuditDisclosure title="Packing stats" content={audit.evidenceStats ? JSON.stringify(audit.evidenceStats, null, 2) : ''} />
+      <AuditDisclosure title="Packed evidence sent to judge" content={packedEvidenceJson} />
+      <AuditDisclosure title="Full stored evidence payload" content={fullEvidenceJson} />
+      <AuditDisclosure title="Raw LLM response" content={audit.rawJudgeResponse} />
+      <AuditDisclosure title="Normalized result" content={normalizedJson} />
+    </div>
+  );
+}
+
+function AuditDisclosure({ title, content }: { title: string; content?: string }) {
+  if (!content) return null;
+  return (
+    <details className="rounded border border-app bg-surface/60">
+      <summary className="cursor-pointer px-2 py-1 text-[10px] font-mono uppercase tracking-wide text-theme-subtle hover:text-theme-secondary">
+        {title}
+      </summary>
+      <pre className="max-h-[220px] overflow-auto border-t border-app p-2 text-[10px] leading-relaxed text-theme-secondary whitespace-pre-wrap">
+        {content}
+      </pre>
+    </details>
   );
 }
 

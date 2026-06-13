@@ -22,6 +22,8 @@ import { agents as agentsApi, teams as teamsApi, repos as reposApi } from '../..
 import { useToast } from '../common/Toast';
 import IconTooltipButton from '../common/IconTooltipButton';
 import Select from '../common/Select';
+import { useModelRegistry } from '../../hooks/useModelRegistry';
+import { buildModelOptionsForProvider } from '../../lib/model-catalog';
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -457,6 +459,7 @@ export function CreateTeamFromAgentsDialog({
   onCreated: () => void;
 }) {
   const toast = useToast();
+  const { getModelsForProvider: registryGetModelsForProvider, getDefaultModelForProvider } = useModelRegistry();
   const [name, setName] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
@@ -464,8 +467,10 @@ export function CreateTeamFromAgentsDialog({
   const [parentTeamName, setParentTeamName] = useState('executive');
   const [allTeams, setAllTeams] = useState<Team[]>([]);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [leadModel, setLeadModel] = useState('sonnet');
+  const [leadModel, setLeadModel] = useState(() => getDefaultModelForProvider('claude'));
   const [leadEffort, setLeadEffort] = useState<'off' | 'low' | 'medium' | 'high'>('high');
+  const [isOtherLeadModel, setIsOtherLeadModel] = useState(false);
+  const [customLeadModel, setCustomLeadModel] = useState('');
   const [working, setWorking] = useState(false);
 
   useEffect(() => {
@@ -477,8 +482,10 @@ export function CreateTeamFromAgentsDialog({
     setMission('');
     setParentTeamName('executive');
     setAdvancedOpen(false);
-    setLeadModel('sonnet');
+    setLeadModel(getDefaultModelForProvider('claude'));
     setLeadEffort('high');
+    setIsOtherLeadModel(false);
+    setCustomLeadModel('');
   }, [open]);
 
   useEffect(() => {
@@ -493,11 +500,12 @@ export function CreateTeamFromAgentsDialog({
       toast.error('Name and display name are required');
       return;
     }
+    const finalModel = isOtherLeadModel ? customLeadModel : leadModel;
     setWorking(true);
     try {
       await teamsApi.createWithMembers({
         team: { name, displayName, description, mission, parentTeamName },
-        lead: { model: leadModel, reasoningEffort: leadEffort },
+        lead: { model: finalModel, reasoningEffort: leadEffort },
         memberAgentNames,
         autoWireSpawnTargets: true,
       });
@@ -641,17 +649,26 @@ export function CreateTeamFromAgentsDialog({
               <label className="mb-2 block overline">
                 Lead Model
               </label>
-              <Select
-                value={leadModel}
-                onChange={setLeadModel}
-                searchable={false}
-                options={[
-                  { value: 'fable', label: 'fable' },
-                  { value: 'haiku', label: 'haiku' },
-                  { value: 'sonnet', label: 'sonnet' },
-                  { value: 'opus', label: 'opus' },
-                ]}
-              />
+              {isOtherLeadModel ? (
+                <input
+                  type="text"
+                  value={customLeadModel}
+                  onChange={(e) => { setCustomLeadModel(e.target.value); setLeadModel(e.target.value); }}
+                  placeholder="Enter model ID..."
+                  className="input w-full h-9 text-[13px]"
+                  autoFocus
+                />
+              ) : (
+                <Select
+                  value={leadModel}
+                  onChange={(val) => {
+                    if (val === '__other__') { setIsOtherLeadModel(true); setCustomLeadModel(''); return; }
+                    setLeadModel(val);
+                  }}
+                  searchable={false}
+                  options={buildModelOptionsForProvider('claude', [], registryGetModelsForProvider('claude'))}
+                />
+              )}
             </div>
             <div>
               <label className="mb-2 block overline">

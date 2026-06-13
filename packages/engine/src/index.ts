@@ -30,6 +30,7 @@ export {
   type EnsurePythonVenvOptions,
 } from './mcp-install.js';
 export { normalizeModelAlias } from './model-alias.js';
+export { computeCostFromUsage, buildCostInfo, type ComputedCost } from './cost-calculator.js';
 export {
   renderHumanIntervention,
   renderClarifyIntervention,

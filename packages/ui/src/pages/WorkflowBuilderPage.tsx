@@ -206,16 +206,21 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
 
       if (isNew) {
         const result = await wfApi.create({ yaml: finalYaml });
+        const isRestored = result?.restored === true;
+        toast.success(isRestored
+          ? `Workflow "${workflowMeta.name ?? 'Untitled'}" restored.`
+          : `Workflow "${workflowMeta.name ?? 'Untitled'}" created.`);
         savedYamlRef.current = finalYaml;
         setDirty(false);
         navigate(`/workflows/${result._id}/edit`, { replace: true });
       } else {
         await wfApi.update(id!, { yaml: finalYaml });
+        toast.success(`Workflow "${workflowMeta.name}" saved.`);
         savedYamlRef.current = finalYaml;
         setDirty(false);
       }
     } catch (e: any) {
-      alert(e.message);
+      toast.error(e?.message ?? String(e));
     }
     setSaving(false);
   }, [yamlContent, mode, nodes, edges, workflowMeta, isNew, id, navigate]);

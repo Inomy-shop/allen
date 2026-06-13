@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type * as Monaco from 'monaco-editor';
 import type { NodeState, ActivityEntry } from '../../hooks/useExecution';
-import type { ArtifactDoc } from '../../services/api';
+import type { ArtifactDoc, RunStatus } from '../../services/api';
 import StatusBadge from '../common/StatusBadge';
 import CostDisplay from '../common/CostDisplay';
 import { ContentViewer, ExpandButton, type ViewerMode } from '../common/ContentViewer';
@@ -515,6 +515,9 @@ interface Props {
   descendantsMode?: boolean;
   onToggleDescendants?: (next: boolean) => void;
   contextEngineEnabled?: boolean;
+  workflowContextEvaluation?: NonNullable<RunStatus['execution']['contextWorkflowEvaluation']> | null;
+  onRerunWorkflowContextEvaluation?: () => void | Promise<void>;
+  workflowContextEvaluationBusy?: boolean;
   artifacts?: ArtifactDoc[];
 }
 
@@ -786,7 +789,7 @@ type DataTab = 'input' | 'prompt' | 'response' | 'outputs' | 'inspector';
 export default function NodeDetail({
   nodeName, nodeState, trace, allTraces = [], waitingInput, onSubmitInput,
   spawnedChildren = [], allChildren = [], descendantsMode = false, onToggleDescendants,
-  contextEngineEnabled = true, artifacts = [],
+  contextEngineEnabled = true, workflowContextEvaluation = null, onRerunWorkflowContextEvaluation, workflowContextEvaluationBusy = false, artifacts = [],
 }: Props) {
   const [formData, setFormData] = useState<Record<string, unknown>>({});
   const [expandViewer, setExpandViewer] = useState<{ title: string; content: string; mode?: ViewerMode } | null>(null);
@@ -1184,7 +1187,13 @@ export default function NodeDetail({
               )}
               {resolvedTab === 'inspector' && activeTrace && (
                 <div className="p-3 overflow-auto h-full">
-                  <NodeInspector trace={activeTrace as any} contextEngineEnabled={contextEngineEnabled} />
+                  <NodeInspector
+                    trace={activeTrace as any}
+                    contextEngineEnabled={contextEngineEnabled}
+                    workflowContextEvaluation={workflowContextEvaluation}
+                    onRerunWorkflowContextEvaluation={onRerunWorkflowContextEvaluation}
+                    workflowContextEvaluationBusy={workflowContextEvaluationBusy}
+                  />
                 </div>
               )}
               {/* Empty-state fallback: when every tab is empty (pending

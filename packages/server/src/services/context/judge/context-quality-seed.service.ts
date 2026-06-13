@@ -8,7 +8,7 @@
  * 2. Upsert 8 scheduler cursor rows in context_judge_scheduler_state.
  * 3. Additive backfill: add contextEligibility field to learnings (null default).
  * 4. Additive backfill: add semantic.judgeRunId field to context_evaluations (null default).
- * 5. Additive backfill: add editVersion/lastEditedBy/lastEditedAt to
+ * 5. Additive backfill: add entryVersionId/lastEditedBy/lastEditedAt to
  *    repo_context_curation_entries (for entries that pre-date edit tracking).
  * 6. Seed one initial revision row per existing curated entry that has no revision yet.
  *
@@ -152,8 +152,6 @@ export async function seedContextQuality(db: Db): Promise<void> {
     const curationResult = await db.collection('repo_context_curation_entries').updateMany(
       {
         $or: [
-          { editVersion: { $exists: false } },
-          { version: { $exists: false } },
           { active: { $exists: false } },
           { validFrom: { $exists: false } },
         ],
@@ -169,26 +167,21 @@ export async function seedContextQuality(db: Db): Promise<void> {
       { lastEditedBy: { $exists: false } },
       { $set: { lastEditedBy: null, lastEditedAt: null } },
     );
-    const entriesMissingVersion = await db.collection('repo_context_curation_entries')
+    const entriesMissingVersionId = await db.collection('repo_context_curation_entries')
       .find({
         $or: [
           { entryVersionId: { $exists: false } },
-          { version: { $exists: false } },
-          { editVersion: { $exists: false } },
           { validFrom: { $exists: false } },
         ],
       })
-      .project({ _id: 1, editVersion: 1, createdAt: 1, updatedAt: 1 })
+      .project({ _id: 1, entryVersionId: 1, createdAt: 1, updatedAt: 1 })
       .toArray();
-    for (const entry of entriesMissingVersion) {
-      const version = typeof entry['editVersion'] === 'number' ? entry['editVersion'] : 1;
+    for (const entry of entriesMissingVersionId) {
       await db.collection('repo_context_curation_entries').updateOne(
         { _id: entry['_id'] },
         {
           $set: {
-            entryVersionId: randomUUID(),
-            version,
-            editVersion: version,
+            ...(entry['entryVersionId'] ? {} : { entryVersionId: randomUUID() }),
             validFrom: entry['createdAt'] ?? entry['updatedAt'] ?? now,
           },
         },

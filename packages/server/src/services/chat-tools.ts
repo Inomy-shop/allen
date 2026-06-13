@@ -7,6 +7,7 @@
 import { ObjectId, type Db } from 'mongodb';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
+import { notDeletedFilter } from './soft-delete.js';
 import { logger } from '../logger.js';
 import { ExecutionService } from './execution.service.js';
 import { InterventionService } from './intervention.service.js';
@@ -20,6 +21,8 @@ import { ContextEvaluationService } from './context/evaluation/context-evaluatio
 import { isContextEngineEnabled } from './context/config/context-provider-config.js';
 import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
+import { resolveCostUsd } from './model-cost.service.js';
+import { CostRollupService } from './cost-rollup.service.js';
 import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload, type MaterializedAgentFileMetadata, normalizeClaudeUsage, normalizeCodexUsage, aggregateTokenUsage, type TokenUsageInfo } from '@allen/engine';
 import {
   getRuntimeApiBaseUrl,
@@ -630,7 +633,7 @@ const listWorkflows: ChatTool = {
   },
   async execute(_args, db) {
     const workflows = await db.collection('workflows')
-      .find({ archived: { $ne: true } })
+      .find({ archived: { $ne: true }, ...notDeletedFilter })
       .project({ name: 1, description: 1, parsed: 1, validation: 1, version: 1, updatedAt: 1 })
       .sort({ updatedAt: -1 })
       .limit(50)
@@ -664,7 +667,7 @@ const getWorkflow: ChatTool = {
     const name = typeof args.name === 'string' ? args.name : undefined;
     if (!id && !name) return { error: 'Provide either name or id' };
 
-    const filter: Record<string, unknown> = { archived: { $ne: true } };
+    const filter: Record<string, unknown> = { archived: { $ne: true }, ...notDeletedFilter };
     if (id) {
       if (!ObjectId.isValid(id)) return { error: `Invalid workflow id "${id}"` };
       filter._id = new ObjectId(id);
@@ -713,7 +716,7 @@ const runWorkflow: ChatTool = {
     const input = (args.input as Record<string, unknown>) ?? {};
 
     // Find workflow by name
-    const workflow = await db.collection('workflows').findOne({ name, archived: { $ne: true } });
+    const workflow = await db.collection('workflows').findOne({ name, archived: { $ne: true }, ...notDeletedFilter });
     if (!workflow) {
       return { error: `Workflow "${name}" not found. Use list_workflows to see available workflows.` };
     }
@@ -895,6 +898,12 @@ const getExecution: ChatTool = {
         }
 
         const finalActivity = await readActivity();
+        // Execution rows store no cost — roll up own + descendant traces on
+        // demand so the caller sees what this run (and anything it spawned)
+        // actually cost.
+        const treeCost = await new CostRollupService(db)
+          .getExecutionTreeCost(executionId)
+          .catch(() => null);
         return {
           id: exec.id,
           workflow_name: exec.workflowName,
@@ -905,7 +914,9 @@ const getExecution: ChatTool = {
           current_nodes: exec.currentNodes,
           failed_node: exec.failedNode,
           error: exec.errorMessage,
-          cost: exec.cost,
+          cost: treeCost
+            ? { actual: treeCost.total.costUsd, estimated: treeCost.total.estimatedUsd }
+            : null,
           duration_ms: exec.durationMs,
           started_at: exec.startedAt,
           completed_at: exec.completedAt,
@@ -959,7 +970,10 @@ const listExecutions: ChatTool = {
         id: e.id,
         workflow_name: e.workflowName,
         status: e.status,
-        cost: (e.cost as Record<string, unknown>)?.estimated ?? 0,
+        // list() hydrates cost on demand from traces; actual is authoritative.
+        cost: (e.cost as Record<string, unknown>)?.actual
+          ?? (e.cost as Record<string, unknown>)?.estimated
+          ?? 0,
         duration_ms: e.durationMs,
         started_at: e.startedAt,
         completed_at: e.completedAt,
@@ -1072,7 +1086,7 @@ const listAgents: ChatTool = {
   },
   async execute(_args, db) {
     const roles = await db.collection('agents')
-      .find({})
+      .find(notDeletedFilter)
       .sort({ name: 1 })
       .toArray();
 
@@ -1113,7 +1127,7 @@ const spawnAgent: ChatTool = {
     const prompt = promptSanitization.prompt;
     const resumeSession = args.session_id as string | undefined;
 
-    const role = await db.collection('agents').findOne({ name: agentName });
+    const role = await db.collection('agents').findOne({ name: agentName, ...notDeletedFilter });
     if (!role) {
       return { error: `Agent "${agentName}" not found. Use list_agents to see available agents.` };
     }
@@ -1233,7 +1247,8 @@ const spawnAgent: ChatTool = {
       retryCounts: {},
       currentNodes: [agentName],
       completedNodes: [],
-      cost: { actual: null, estimated: 0 },
+      // No cost field — per-attempt spend lives on execution_traces rows
+      // only; totals are rolled up on demand from the spawn tree.
       durationMs: 0,
       startedAt: new Date(),
     });
@@ -1324,20 +1339,19 @@ async function markSpawnCompletedUnlessTerminal(
   db: Db,
   executionId: string,
   agentName: string,
-  costUsd: number,
   durationMs: number,
   sessionId?: string,
-  tokenUsage?: TokenUsageInfo | null,
 ): Promise<boolean> {
+  // Cost/usage are NOT written to the execution row — each attempt's spend
+  // is on its own execution_traces row (resumed runs reuse the executionId
+  // and add another trace row), and totals are rolled up on demand.
   const completionFields: Record<string, unknown> = {
     status: 'completed',
     completedNodes: [agentName],
     currentNodes: [],
-    cost: { actual: costUsd, estimated: costUsd },
     durationMs,
     completedAt: new Date(),
   };
-  if (tokenUsage != null) completionFields.tokenUsage = tokenUsage;
   if (sessionId) completionFields[`sessions.${agentName}`] = sessionId;
 
   const result = await db.collection('executions').updateOne(
@@ -1642,10 +1656,13 @@ async function runSpawnInBackground(
 
   for (let attempt = 0; attempt <= MAX_SPAWN_RETRIES; attempt++) {
     let toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown> }[] = [];
+    // Declared outside the try so the cancel/failure paths can still price
+    // the tokens this attempt burned before dying — the trace row is the
+    // only persisted record of that spend.
+    let costUsd = 0;
+    let spawnTokenUsage: TokenUsageInfo | null = null;
     try {
       let response = '';
-      let costUsd = 0;
-      let spawnTokenUsage: TokenUsageInfo | null = null;
       let sessionId: string | undefined = currentResumeSession;
 
     // On retry, update prompt to "continue"
@@ -1971,7 +1988,7 @@ async function runSpawnInBackground(
       try {
         const { buildClaudeCompatibleEnvOverlay, isClaudeCompatibleProvider } = await import('./chat-providers.js');
         if (isClaudeCompatibleProvider(provider)) {
-          claudeCompatibleEnvOverlay = await buildClaudeCompatibleEnvOverlay(provider, model as string);
+          claudeCompatibleEnvOverlay = await buildClaudeCompatibleEnvOverlay(provider, model as string, db);
         }
       } catch (err) {
         // Fail loudly so the agent errors with a useful message rather than
@@ -2296,6 +2313,11 @@ async function runSpawnInBackground(
 
     const durationMs = Date.now() - startMs;
 
+    // Authoritative cost: registry per-MTok prices × accumulated token
+    // usage; provider-reported total_cost_usd only as fallback (REQ-022).
+    const resolvedSpawnCost = await resolveCostUsd(db, model, spawnTokenUsage, costUsd);
+    costUsd = resolvedSpawnCost.amount;
+
     // Save execution as completed
     // Clean up process registry
     runningProcesses.delete(executionId);
@@ -2304,10 +2326,8 @@ async function runSpawnInBackground(
       db,
       executionId,
       agentName,
-      costUsd,
       durationMs,
       sessionId,
-      spawnTokenUsage,
     );
     if (!markedCompleted) {
       logger.info('[spawn] completion skipped because execution is already terminal', { executionId, agentName });
@@ -2384,7 +2404,8 @@ async function runSpawnInBackground(
       contextUsageTraceId: contextUsageTrace?.traceId,
       contextEvaluationId,
       runtimeContext: buildSpawnRuntimeContext(),
-      cost: { actual: costUsd, estimated: costUsd, model, method: 'sdk_reported' as const },
+      provider,
+      cost: { actual: costUsd, estimated: 0, model, method: resolvedSpawnCost.method },
       tokenUsage: spawnTokenUsage ?? null,
       durationMs, startedAt: new Date(startMs), completedAt: new Date(),
     });
@@ -2405,6 +2426,9 @@ async function runSpawnInBackground(
     // its session marker but later crashed/timed out / got SIGTERM'd loses
     // its session id and becomes un-resumable.
     const failedSessionId = currentResumeSession;
+    // Price whatever tokens this attempt consumed before dying — failed and
+    // cancelled attempts are real spend and must land on the trace.
+    const failureCost = await resolveCostUsd(db, model, spawnTokenUsage, costUsd).catch(() => ({ amount: costUsd, method: 'sdk_reported' as const }));
     const currentExec = await db.collection('executions').findOne(
       { id: executionId },
       { projection: { status: 1 } },
@@ -2471,7 +2495,9 @@ async function runSpawnInBackground(
             contextUsageTraceId: contextUsageTrace?.traceId,
             contextEvaluationId,
             runtimeContext: buildSpawnRuntimeContext(),
-            cost: { actual: 0, estimated: 0, model, method: 'sdk_reported' as const },
+            provider,
+            cost: { actual: failureCost.amount, estimated: 0, model, method: failureCost.method },
+            tokenUsage: spawnTokenUsage ?? null,
             durationMs, startedAt: new Date(startMs), completedAt: new Date(),
           },
         },
@@ -2545,7 +2571,9 @@ async function runSpawnInBackground(
       contextUsageTraceId: contextUsageTrace?.traceId,
       contextEvaluationId,
       runtimeContext: buildSpawnRuntimeContext(),
-      cost: { actual: 0, estimated: 0, model, method: 'sdk_reported' as const },
+      provider,
+      cost: { actual: failureCost.amount, estimated: 0, model, method: failureCost.method },
+      tokenUsage: spawnTokenUsage ?? null,
       durationMs, startedAt: new Date(startMs), completedAt: new Date(),
     });
     if (activeCtx) activeCtx.pendingBackgroundTasks--;
@@ -2833,29 +2861,39 @@ const searchExecutionsAdvanced: ChatTool = {
       since.setHours(since.getHours() - (args.since_hours as number));
       filter.startedAt = { $gte: since };
     }
-    if (args.min_cost) filter['cost.estimated'] = { $gte: args.min_cost };
     if (args.has_failed_node) filter.failedNode = { $exists: true, $ne: null };
 
     const limit = Math.min((args.limit as number) || 10, 20);
 
-    const results = await db.collection('executions')
+    // Cost lives on traces, not execution rows — fetch a wider window, price
+    // each row on demand, then apply min_cost in memory.
+    const fetchLimit = args.min_cost ? Math.max(limit * 5, 100) : limit;
+    const rows = await db.collection('executions')
       .find(filter)
       .project({
-        id: 1, workflowName: 1, status: 1, cost: 1, durationMs: 1,
+        id: 1, workflowName: 1, status: 1, durationMs: 1,
         currentNodes: 1, completedNodes: 1, failedNode: 1, errorMessage: 1,
         startedAt: 1, completedAt: 1,
       })
       .sort({ startedAt: -1 })
-      .limit(limit)
+      .limit(fetchLimit)
       .toArray();
+    const ownCosts = await new CostRollupService(db)
+      .getOwnCosts(rows.map(r => r.id as string).filter(Boolean))
+      .catch(() => new Map<string, { costUsd: number }>());
+    const priced = rows.map(e => ({ row: e, costUsd: ownCosts.get(e.id as string)?.costUsd ?? 0 }));
+    const results = (args.min_cost
+      ? priced.filter(p => p.costUsd >= (args.min_cost as number))
+      : priced
+    ).slice(0, limit);
 
     return {
       count: results.length,
-      executions: results.map(e => ({
+      executions: results.map(({ row: e, costUsd }) => ({
         id: e.id,
         workflow_name: e.workflowName,
         status: e.status,
-        cost_estimated: e.cost?.estimated ?? 0,
+        cost_usd: costUsd,
         duration_ms: e.durationMs,
         completed_nodes: e.completedNodes?.length ?? 0,
         failed_node: e.failedNode ?? null,
@@ -2973,13 +3011,17 @@ const getDashboardStats: ChatTool = {
       .find({})
       .sort({ startedAt: -1 })
       .limit(100)
-      .project({ status: 1, cost: 1, durationMs: 1 })
+      .project({ id: 1, status: 1, durationMs: 1 })
       .toArray();
 
     const completed = recentExecs.filter(e => e.status === 'completed').length;
     const failed = recentExecs.filter(e => e.status === 'failed').length;
     const running = recentExecs.filter(e => e.status === 'running').length;
-    const totalCost = recentExecs.reduce((sum, e) => sum + (e.cost?.estimated ?? 0), 0);
+    // Cost on demand from traces — execution rows store none.
+    const recentCosts = await new CostRollupService(db)
+      .getOwnCosts(recentExecs.map(e => e.id as string).filter(Boolean))
+      .catch(() => new Map<string, { costUsd: number }>());
+    const totalCost = [...recentCosts.values()].reduce((sum, c) => sum + c.costUsd, 0);
 
     return {
       workflows: workflowCount,
@@ -2991,7 +3033,7 @@ const getDashboardStats: ChatTool = {
         failed,
         running,
         success_rate: executionCount > 0 ? `${Math.round((completed / Math.max(completed + failed, 1)) * 100)}%` : 'N/A',
-        total_cost_estimated: `$${totalCost.toFixed(2)}`,
+        total_cost_usd: `$${totalCost.toFixed(2)}`,
       },
     };
   },

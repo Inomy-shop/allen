@@ -70,7 +70,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const push = useCallback((type: ToastType, message: string) => {
-    setToasts(prev => [...prev, { id: ++nextId, type, message }]);
+    setToasts(prev => {
+      // Deduplicate: skip if an identical toast (same type + message) is already active.
+      if (prev.some(t => t.type === type && t.message === message)) {
+        return prev;
+      }
+      return [...prev, { id: ++nextId, type, message }];
+    });
   }, []);
 
   const dismiss = useCallback((id: number) => {

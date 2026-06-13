@@ -124,7 +124,24 @@ export interface RunStatus {
     startedAt?: string;
     completedAt?: string | null;
     durationMs?: number | null;
+    /** Tree total (own + all spawned/nested descendants), computed on demand
+     *  by the server from execution_traces. */
     cost?: { actual: number | null; estimated: number } | null;
+    /** This execution's own traces only (no descendants). */
+    costOwn?: { actual: number | null; estimated: number } | null;
+    /** Executions in the rolled-up tree (1 = no children). */
+    costTreeSize?: number;
+    /** Per-(provider, model) breakdown across the tree. */
+    costByModel?: Array<{
+      provider: string;
+      model: string;
+      costUsd: number;
+      estimatedUsd: number;
+      inputCachedTokens: number;
+      inputNonCachedTokens: number;
+      outputTokens: number;
+      llmCalls: number;
+    }>;
     tokenUsage?: TokenUsageInfo | null;
     currentNodes?: string[];
     completedNodes?: string[];
@@ -304,8 +321,11 @@ export interface SpawnedChild {
   startedAt: string;
   completedAt: string | null;
   durationMs: number | null;
-  cost: { actual: number | null; estimated: number } | null;
+  cost: { actual: number | null; estimated: number; method?: string } | null;
   tokenUsage?: TokenUsageInfo | null;
+  /** Model/provider the child agent ran on (from execution meta). */
+  model?: string | null;
+  provider?: string | null;
   failedNode: string | null;
   errorMessage: string | null;
   promptPreview: string;
@@ -376,7 +396,7 @@ export const executions = {
   start: (
     workflowId: string,
     input: Record<string, unknown>,
-    options?: { agentProvider?: 'claude-cli' | 'codex' },
+    options?: { agentProvider?: 'claude' | 'codex' },
   ) =>
     request<any>('/executions', {
       method: 'POST',
@@ -667,6 +687,11 @@ export const repos = {
     request<any>(`/repos/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   delete: (id: string) =>
     request<void>(`/repos/${id}`, { method: 'DELETE' }),
+  updateDefaultBranch: (id: string, defaultBranch: string) =>
+    request<any>(`/repos/${id}/default-branch`, {
+      method: 'PUT',
+      body: JSON.stringify({ defaultBranch }),
+    }),
   scan: (id: string) =>
     request<any>(`/repos/${id}/scan`, { method: 'POST' }),
   pull: (id: string, rescan = false) =>
@@ -701,6 +726,8 @@ export const repos = {
     request<any>(`/repos/${id}/context-management/entries`, { method: 'POST', body: JSON.stringify(body) }),
   updateCuratedContextEntry: (id: string, entryId: string, body: Record<string, unknown>) =>
     request<any>(`/repos/${id}/context-management/entries/${encodeURIComponent(entryId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteCuratedContextEntry: (id: string, entryId: string) =>
+    request<any>(`/repos/${id}/context-management/entries/${encodeURIComponent(entryId)}`, { method: 'DELETE' }),
   saveMandatoryContext: (id: string, body: Record<string, unknown>) =>
     request<any>(`/repos/${id}/context-management/mandatory`, { method: 'POST', body: JSON.stringify(body) }),
   updateMandatoryContext: (id: string, mappingId: string, body: Record<string, unknown>) =>
@@ -713,9 +740,71 @@ export const repos = {
     request<any>(`/repos/${id}/rescan-context`, { method: 'POST' }),
   cancelScan: (id: string) =>
     request<any>(`/repos/${id}/scan/cancel`, { method: 'POST' }),
+  getMandatoryMappings: (id: string, params?: { enabled?: 'true' | 'false' | 'all' }) => {
+    const search = new URLSearchParams();
+    search.set('enabled', params?.enabled ?? 'true');
+    return request<any[]>(`/repos/${id}/context-management/mandatory?${search.toString()}`);
+  },
+  contextSetup: {
+    start: (id: string, body?: Record<string, unknown>) =>
+      request<any>(`/repos/${id}/context-setup`, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined }),
+    current: (id: string) =>
+      request<any>(`/repos/${id}/context-setup`),
+    history: (id: string) =>
+      request<any>(`/repos/${id}/context-setup/runs`),
+    get: (id: string, runId: string) =>
+      request<any>(`/repos/${id}/context-setup/${runId}`),
+    cancel: (id: string, runId: string) =>
+      request<any>(`/repos/${id}/context-setup/${runId}/cancel`, { method: 'POST' }),
+    resume: (id: string, runId: string) =>
+      request<any>(`/repos/${id}/context-setup/${runId}/resume`, { method: 'POST' }),
+  },
 };
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
+export type UsageSource = 'chat' | 'workflow' | 'agent';
+
+export interface UsageBucket {
+  provider: string;
+  model: string;
+  costUsd: number;
+  inputCachedTokens: number;
+  inputNonCachedTokens: number;
+  outputTokens: number;
+  llmCalls: number;
+  bySource: Record<UsageSource, { costUsd: number; llmCalls: number }>;
+}
+
+export interface UsageReport {
+  computedAt: string;
+  range: { from: string; to: string };
+  totals: {
+    costUsd: number;
+    inputCachedTokens: number;
+    inputNonCachedTokens: number;
+    outputTokens: number;
+    llmCalls: number;
+  };
+  byProviderModel: UsageBucket[];
+  bySource: Record<UsageSource, { costUsd: number; llmCalls: number }>;
+  series: Array<{ bucket: string; costUsd: number; llmCalls: number }>;
+  seriesUnit: 'hour' | 'day';
+  stale: boolean;
+}
+
+export type UsageRangeParams = { range: 'today' | '7d' | '30d' } | { from: string; to: string };
+
+const usageQuery = (params: UsageRangeParams): string =>
+  'range' in params
+    ? `range=${params.range}`
+    : `from=${encodeURIComponent(params.from)}&to=${encodeURIComponent(params.to)}`;
+
+export const usage = {
+  get: (params: UsageRangeParams) => request<UsageReport>(`/usage?${usageQuery(params)}`),
+  refresh: (params: UsageRangeParams) =>
+    request<UsageReport>('/usage/refresh', { method: 'POST', body: JSON.stringify(params) }),
+};
+
 export const dashboard = {
   stats: () => request<any>('/dashboard/stats'),
   cost: () => request<any>('/dashboard/cost'),
@@ -744,7 +833,7 @@ export interface ChatSession {
   llmSessionId?: string;
   activeAgent?: string | null;
   agentOverrides?: {
-    provider?: 'claude-cli' | 'codex' | null;
+    provider?: 'claude' | 'codex' | null;
     model?: string | null;
     reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
     planMode?: boolean | null;

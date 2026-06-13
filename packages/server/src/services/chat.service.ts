@@ -10,10 +10,13 @@ import { ObjectId } from 'mongodb';
 import type { TokenUsageInfo } from '@allen/engine';
 import type { Response } from 'express';
 import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
-import { getDefaultChatModel, getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getTitleGenProviderModel, isClaudeCompatibleProvider, isClaudeFamilyProvider } from './chat-providers.js';
+import { getDefaultChatModel, getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getEnabledProvidersFromRegistry, getTitleGenProviderModel, isClaudeCompatibleProvider, isClaudeFamilyProvider } from './chat-providers.js';
 import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
+import { buildPlannerSystemPrompt, selectChatPersona, type ChatPersona } from './chat-persona.js';
 import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
+import { resolveCostUsd } from './model-cost.service.js';
+import { CostRollupService } from './cost-rollup.service.js';
 import { searchSimilar, backfillEmbeddings } from './embedding.service.js';
 import { buildOrgContextBlock } from './org-context.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
@@ -328,6 +331,7 @@ async function getSystemPrompt(
   db: Db,
   userMessage?: string,
   auditContext?: { rootType: 'chat'; rootId: string; agentName?: string },
+  persona: 'assistant' | 'planner' = 'assistant',
 ): Promise<string> {
   // Load relevant learnings using embedding similarity search
   let learningsBlock = '';
@@ -452,6 +456,20 @@ IMPORTANT RULES:
       reposBlock += `\n\nDefault design repo: ${defaultDesignRepo.name} at ${defaultDesignRepo.path} (use this path for design workflow \`repo_path\`/\`design_repo_path\` inputs).`;
     }
   } catch {}
+
+  // ── Planner persona (Plan Mode) ──────────────────────────────────────────
+  // When plan mode is toggled on for the base assistant, the chat is driven by
+  // the Planner instead of the routing assistant. The Planner's only job is to
+  // brainstorm ideas and, on request, author a PRD with explicit requirements
+  // and acceptance criteria. It never guesses — it asks clarifying questions
+  // first. The Planner runs with the SAME tools and permissions as the
+  // assistant (Plan Mode only swaps the persona; runLLM clears the planMode
+  // flag for this path so the SDK is not put into read-only 'plan' mode). The
+  // prompt itself lives in chat-persona.ts so it can be unit-tested without the
+  // engine/DB import graph.
+  if (persona === 'planner') {
+    return buildPlannerSystemPrompt({ learningsBlock, orgBlock, reposBlock });
+  }
 
   // Single unified tail for both providers — keeps tool guidance,
   // examples, and artifact handling identical across codex and
@@ -1005,7 +1023,17 @@ export class ChatService {
   private get messages() { return this.db.collection('chat_messages'); }
   private get messageQueue() { return this.db.collection('chat_message_queue'); }
 
-  getProviders() { return getEnabledProvidersInDefaultOrder(); }
+  async getProviders() {
+    const providers = await getEnabledProvidersFromRegistry(this.db);
+    // CLI providers are always enabled but only usable when logged in —
+    // surface authStatus so the UI can gate dropdowns and show login state.
+    const { getCliAuthStatus, isCliProvider } = await import('./cli-auth.service.js');
+    return Promise.all(providers.map(async (p) => (
+      isCliProvider(p.provider)
+        ? { ...p, authStatus: await getCliAuthStatus(p.provider) }
+        : p
+    )));
+  }
 
   async createSession(
     provider: ChatProvider = getDefaultChatProvider(),
@@ -1063,8 +1091,16 @@ export class ChatService {
       .limit(100)
       .toArray() as unknown as ChatSession[];
     const hydrated = await this.hydrateArchivedWorkspaceSnapshots(sessions);
+    // Session cost is computed on demand (messages + linked execution
+    // trees) — the stored totalCostUsd field is legacy and no longer
+    // written. Batched: three queries for the whole page.
+    const ids = hydrated.map(s => s._id?.toString() ?? '').filter(Boolean);
+    const costTotals = await new CostRollupService(this.db)
+      .getChatSessionsCostBatch(ids)
+      .catch(() => new Map<string, number>());
     return hydrated.map(session => ({
       ...session,
+      totalCostUsd: costTotals.get(session._id?.toString() ?? '') ?? session.totalCostUsd ?? 0,
       streaming: this.isStreaming(session._id?.toString() ?? ''),
     }));
   }
@@ -1075,7 +1111,15 @@ export class ChatService {
     const msgs = await this.messages.find({ sessionId: id }).sort({ createdAt: -1 }).limit(50).toArray() as ChatMessage[];
     msgs.reverse();
     const [hydrated] = await this.hydrateArchivedWorkspaceSnapshots([session as unknown as ChatSession]);
-    return { ...hydrated, streaming: this.isStreaming(id), messages: sanitizeChatMessagesForDisplay(msgs) };
+    // On-demand session total: own messages + every chat-spawned execution
+    // tree. Replaces the legacy stored totalCostUsd accumulator.
+    const sessionCost = await new CostRollupService(this.db).getChatSessionCost(id).catch(() => null);
+    return {
+      ...hydrated,
+      ...(sessionCost ? { totalCostUsd: sessionCost.totalCostUsd, costBreakdown: sessionCost } : {}),
+      streaming: this.isStreaming(id),
+      messages: sanitizeChatMessagesForDisplay(msgs),
+    };
   }
 
   private async hydrateArchivedWorkspaceSnapshots<T extends ChatSession>(sessions: T[]): Promise<T[]> {
@@ -1739,7 +1783,7 @@ User: ${userMessage.slice(0, 500)}`;
 
       // Build message history
       let llmMessages: ChatLLMMessage[];
-      const hasSessionResume = (provider === 'claude-cli' || provider === 'codex' || isClaudeCompatibleProvider(provider)) && resumeSessionId;
+      const hasSessionResume = (provider === 'claude' || provider === 'codex' || isClaudeCompatibleProvider(provider)) && resumeSessionId;
       if (hasSessionResume) {
         // CLI providers use session resume — only send new message
         llmMessages = [{ role: 'user', content: enrichedContent }];
@@ -1761,23 +1805,10 @@ User: ${userMessage.slice(0, 500)}`;
         }
       }
 
-      // Build system prompt: team agent prompt if selected, else default assistant
-      let systemPrompt: string;
-      if (effectiveAgent) {
-        systemPrompt = await this.buildAgentSystemPrompt(effectiveAgent, provider, content, sessionId);
-      } else {
-        systemPrompt = await getSystemPrompt(provider, this.db, content, { rootType: 'chat', rootId: sessionId, agentName: 'assistant' });
-      }
-
-      // Inject workspace path constraint into system prompt
-      if (resolvedCwd && resolvedCwd !== '/tmp/allen') {
-        systemPrompt += `\n\nWORKSPACE CONSTRAINT:\nYour working directory is: ${resolvedCwd}\nCRITICAL: ALL file operations (Read, Write, Edit, Grep, Glob, Bash) MUST use paths within this directory.\n- Use relative paths or paths starting with "${resolvedCwd}/"\n- NEVER read, write, or modify files outside this directory\n- If search results show paths outside this directory, replace the base with "${resolvedCwd}/"`;
-      }
-
-      // Use already-resolved cwd (workspace path or @repo path)
-      const workspaceCwd = resolvedCwd;
-
-      // Resolve agent settings (reasoning effort, plan mode) using:
+      // Resolve agent settings (reasoning effort, plan mode) BEFORE building the
+      // system prompt — plan mode swaps the base assistant into the read-only
+      // Planner persona (brainstorming + PRD authoring), so the resolved
+      // planMode flag must be known here.
       //   session.agentOverrides  >  agent defaults  >  assistant default
       // Mutations never propagate back to the agent document — overrides are
       // ephemeral per-session state.
@@ -1786,6 +1817,17 @@ User: ${userMessage.slice(0, 500)}`;
       // that pseudo-agent defaults to reasoningEffort='high' on codex (which
       // has its own reasoning budget) and 'medium' elsewhere, matching the UI
       // label shown in the ChatInput effort picker.
+      const sessionOverrides = (session?.agentOverrides as AgentOverrides | undefined) ?? undefined;
+
+      // The Planner persona (Plan Mode) applies ONLY to the base assistant (no
+      // team agent selected) and is provider-agnostic: it is a system-prompt
+      // swap, NOT Claude's read-only permissionMode='plan'. So we read the plan
+      // toggle intent here and keep planMode OUT of the SDK settings for this
+      // path — which also avoids the Claude-only validation in
+      // resolveAgentSettings on non-Claude providers (e.g. codex). Team agents
+      // keep the original planMode behavior (Claude-only read-only mode).
+      const plannerActive = !effectiveAgent && (sessionOverrides?.planMode ?? false);
+
       let resolvedSettings: ResolvedSettings | undefined;
       try {
         const agentDoc = effectiveAgent
@@ -1799,13 +1841,38 @@ User: ${userMessage.slice(0, 500)}`;
           reasoningEffort: agentDoc?.reasoningEffort ?? (effectiveAgent ? undefined : assistantDefaultEffort),
           planMode: agentDoc?.planMode,
         };
-        const sessionOverrides = (session?.agentOverrides as AgentOverrides | undefined) ?? undefined;
-        resolvedSettings = resolveAgentSettings(agentLike, [sessionOverrides]);
+        // For the Planner path, drop planMode from the override fed to the
+        // resolver: the Planner doesn't use SDK plan mode, and planMode is
+        // Claude-only in validation. Everything else (provider/model/effort)
+        // resolves normally so the Planner runs exactly like the assistant.
+        const overridesForResolve = plannerActive && sessionOverrides
+          ? { ...sessionOverrides, planMode: null }
+          : sessionOverrides;
+        resolvedSettings = resolveAgentSettings(agentLike, [overridesForResolve]);
       } catch (err) {
         // If validation fails we keep going without the override — the log
         // makes it visible so the user can fix it in the UI.
         console.warn(`[chat] resolveAgentSettings failed: ${(err as Error).message}`);
       }
+
+      // Build system prompt: team agent prompt if selected; otherwise the
+      // default routing assistant, or the Planner persona when plan mode is
+      // toggled on for the base assistant.
+      let systemPrompt: string;
+      if (effectiveAgent) {
+        systemPrompt = await this.buildAgentSystemPrompt(effectiveAgent, provider, content, sessionId);
+      } else {
+        const persona: ChatPersona = selectChatPersona(plannerActive);
+        systemPrompt = await getSystemPrompt(provider, this.db, content, { rootType: 'chat', rootId: sessionId, agentName: persona }, persona);
+      }
+
+      // Inject workspace path constraint into system prompt
+      if (resolvedCwd && resolvedCwd !== '/tmp/allen') {
+        systemPrompt += `\n\nWORKSPACE CONSTRAINT:\nYour working directory is: ${resolvedCwd}\nCRITICAL: ALL file operations (Read, Write, Edit, Grep, Glob, Bash) MUST use paths within this directory.\n- Use relative paths or paths starting with "${resolvedCwd}/"\n- NEVER read, write, or modify files outside this directory\n- If search results show paths outside this directory, replace the base with "${resolvedCwd}/"`;
+      }
+
+      // Use already-resolved cwd (workspace path or @repo path)
+      const workspaceCwd = resolvedCwd;
 
       const callbacks = {
         signal: entry.abortController.signal,
@@ -1879,7 +1946,7 @@ User: ${userMessage.slice(0, 500)}`;
           return resolveSlashCommand(content, listSlashCommands('codex', workspaceCwd));
         }
         if (isClaudeFamilyProvider(effectiveProvider)) {
-          return resolveSlashCommand(content, listSlashCommands('claude-cli', workspaceCwd));
+          return resolveSlashCommand(content, listSlashCommands('claude', workspaceCwd));
         }
         return null;
       })();
@@ -1920,8 +1987,10 @@ User: ${userMessage.slice(0, 500)}`;
 
       clearInterval(saveInterval);
       const durationMs = Date.now() - startMs;
-      const costUsd = result.costUsd;
       const tokenUsage = result.tokenUsage ?? null;
+      // Authoritative cost: registry per-MTok prices × token usage; the
+      // provider-reported figure is only a fallback (REQ-021/022).
+      const costUsd = (await resolveCostUsd(this.db, effectiveModel, tokenUsage, result.costUsd)).amount;
       const visibleResponseText = sanitizeChatAssistantResponse(result.text);
       entry.currentText = visibleResponseText;
 
@@ -1963,9 +2032,12 @@ User: ${userMessage.slice(0, 500)}`;
       const sessionUpdate: Record<string, unknown> = { updatedAt: new Date() };
       if (result.sessionId) sessionUpdate.llmSessionId = result.sessionId;
 
+      // No totalCostUsd accumulation — per-message costUsd rows are the only
+      // stored record; session totals are computed on demand from messages
+      // (+ linked execution trees). See cost-rollup.service.ts.
       await this.sessions.updateOne(
         { _id: new ObjectId(sessionId) },
-        { $set: sessionUpdate, $inc: { totalCostUsd: costUsd } },
+        { $set: sessionUpdate },
       );
 
       broadcastToListeners(entry, 'message_complete', {
@@ -2191,16 +2263,17 @@ User: ${userMessage.slice(0, 500)}`;
           // Save successful retry result
           const durationMs = Date.now() - startMs;
           const tokenUsage = retryResult.tokenUsage ?? null;
+          const retryCostUsd = (await resolveCostUsd(this.db, model, tokenUsage, retryResult.costUsd)).amount;
           const visibleRetryText = sanitizeChatAssistantResponse(retryResult.text);
           entry.currentText = visibleRetryText;
           await this.messages.updateOne(
             { _id: new ObjectId(assistantMsgId) },
-            { $set: { content: visibleRetryText, status: 'completed', costUsd: retryResult.costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+            { $set: { content: visibleRetryText, status: 'completed', costUsd: retryCostUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
           );
           if (retryResult.sessionId) {
             await this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set: { llmSessionId: retryResult.sessionId } });
           }
-          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: visibleRetryText, costUsd: retryResult.costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
+          broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: visibleRetryText, costUsd: retryCostUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
           return; // success — skip error handling below
         } catch (retryErr) {
           console.error('Auto-retry also failed:', retryErr instanceof Error ? retryErr.message : retryErr);

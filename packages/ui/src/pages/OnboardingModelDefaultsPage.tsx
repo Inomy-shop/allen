@@ -12,8 +12,10 @@ import Select from '../components/common/Select';
 import { OnboardingShell } from '../components/onboarding/OnboardingShell';
 import { useOnboardingGate } from '../hooks/useOnboardingGate';
 import { system } from '../services/api';
+import { useModelRegistry } from '../hooks/useModelRegistry';
+import { registryDefaultModelForProvider, getModelDisplay } from '../hooks/useModelRegistry';
 
-type Provider = 'codex' | 'claude-cli' | (string & {});
+type Provider = 'codex' | 'claude' | (string & {});
 type AgentProvider = '' | Provider;
 type ApiProvider = string;
 
@@ -26,58 +28,46 @@ interface HealthSummary {
   checks: HealthCheck[];
 }
 
-const CLAUDE_MODELS = [
-  { label: 'fable', value: 'fable', sublabel: 'Latest Claude model for inbuilt agents' },
-  { label: 'opus', value: 'opus', sublabel: 'Highest-capability Claude model for inbuilt agents' },
-  { label: 'sonnet', value: 'sonnet', sublabel: 'Balanced Claude model for inbuilt agents' },
-  { label: 'haiku', value: 'haiku', sublabel: 'Fastest Claude model for inbuilt agents' },
-];
-
-const CODEX_MODELS = [
-  { label: 'gpt-5.5', value: 'gpt-5.5', sublabel: 'Default high-capability Codex model for inbuilt agents' },
-  { label: 'gpt-5.4', value: 'gpt-5.4', sublabel: 'Previous high-capability Codex model' },
-  { label: 'gpt-5.3-codex', value: 'gpt-5.3-codex', sublabel: 'Codex-tuned model for agent coding work' },
-  { label: 'gpt-5.2-codex', value: 'gpt-5.2-codex', sublabel: 'Codex-tuned model for agent coding work' },
-  { label: 'gpt-5.1-codex-max', value: 'gpt-5.1-codex-max', sublabel: 'Higher-effort Codex agent model' },
-  { label: 'gpt-5.2', value: 'gpt-5.2', sublabel: 'General GPT model available to Codex provider' },
-  { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini', sublabel: 'Lower-latency Codex agent model' },
-];
+// Onboarding-only descriptive copy for known model ids. The model lists
+// themselves come from the registry (preferred) or the shared static catalog.
+const MODEL_SUBLABELS: Record<string, string> = {
+  fable: 'Latest Claude model for inbuilt agents',
+  opus: 'Highest-capability Claude model for inbuilt agents',
+  sonnet: 'Balanced Claude model for inbuilt agents',
+  haiku: 'Fastest Claude model for inbuilt agents',
+  'gpt-5.5': 'Default high-capability Codex model for inbuilt agents',
+  'gpt-5.4': 'Previous high-capability Codex model',
+  'gpt-5.3-codex': 'Codex-tuned model for agent coding work',
+  'gpt-5.2-codex': 'Codex-tuned model for agent coding work',
+  'gpt-5.1-codex-max': 'Higher-effort Codex agent model',
+  'gpt-5.2': 'General GPT model available to Codex provider',
+  'gpt-5.1-codex-mini': 'Lower-latency Codex agent model',
+  'deepseek-v4-pro[1m]': 'High-capability DeepSeek model',
+  'deepseek-v4-flash': 'Fast DeepSeek model',
+  'mimo-v2.5-pro': 'Default Xiaomi MiMo model',
+  'kimi-k2.6': 'Kimi opus-equivalent model',
+  'kimi-k2.5': 'Kimi sonnet and flash model',
+};
 
 const API_PROVIDER_OPTIONS: Array<{
   label: string;
   value: ApiProvider;
   apiKey: string;
-  defaultModel: string;
-  suggestions: Array<{ label: string; value: string; sublabel: string }>;
 }> = [
   {
-    label: 'DeepSeek',
+    label: getModelDisplay('deepseek').providerLabel,
     value: 'deepseek',
     apiKey: 'ALLEN_DEEPSEEK_API_KEY',
-    defaultModel: 'deepseek-v4-pro[1m]',
-    suggestions: [
-      { label: 'deepseek-v4-pro[1m]', value: 'deepseek-v4-pro[1m]', sublabel: 'High-capability DeepSeek model' },
-      { label: 'deepseek-v4-flash', value: 'deepseek-v4-flash', sublabel: 'Fast DeepSeek model' },
-    ],
   },
   {
-    label: 'Xiaomi MiMo',
+    label: getModelDisplay('xiaomi-mimo').providerLabel,
     value: 'xiaomi-mimo',
     apiKey: 'ALLEN_XIAOMI_MIMO_API_KEY',
-    defaultModel: 'mimo-v2.5-pro',
-    suggestions: [
-      { label: 'mimo-v2.5-pro', value: 'mimo-v2.5-pro', sublabel: 'Default Xiaomi MiMo model' },
-    ],
   },
   {
-    label: 'Kimi',
+    label: getModelDisplay('kimi').providerLabel,
     value: 'kimi',
     apiKey: 'ALLEN_KIMI_API_KEY',
-    defaultModel: 'kimi-k2.5',
-    suggestions: [
-      { label: 'kimi-k2.6', value: 'kimi-k2.6', sublabel: 'Kimi opus-equivalent model' },
-      { label: 'kimi-k2.5', value: 'kimi-k2.5', sublabel: 'Kimi sonnet and flash model' },
-    ],
   },
 ];
 
@@ -94,17 +84,20 @@ function checkPassed(summary: HealthSummary | null, id: string): boolean {
 }
 
 function defaultAgentModel(provider: AgentProvider): string {
-  if (provider === 'claude-cli') return 'opus';
-  if (provider === 'codex') return 'gpt-5.5';
-  const apiProvider = apiProviderOption(provider);
-  if (apiProvider) return apiProvider.defaultModel;
-  return '';
+  if (!provider) return '';
+  // Registry-backed. Claude inbuilt agents intentionally default to the
+  // highest-capability (opus-tier) registry model.
+  return registryDefaultModelForProvider(
+    provider,
+    provider === 'claude' ? { preferTier: 'opus' } : undefined,
+  );
 }
 
 export default function OnboardingModelDefaultsPage() {
   const navigate = useNavigate();
   const checkingOnboarding = useOnboardingGate('model_defaults');
   const isDesktop = typeof window !== 'undefined' && Boolean(window.allenDesktop);
+  const { getModelsForProvider: registryGetModelsForProvider } = useModelRegistry();
   const [health, setHealth] = useState<HealthSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -136,11 +129,11 @@ export default function OnboardingModelDefaultsPage() {
         const nextAgentProvider: AgentProvider = claudeReady && codexReady
           ? ''
           : claudeReady
-            ? 'claude-cli'
+            ? 'claude'
             : codexReady
               ? 'codex'
               : '';
-        setChatProvider(codexReady ? 'codex' : 'claude-cli');
+        setChatProvider(codexReady ? 'codex' : 'claude');
         setAgentProvider(nextAgentProvider);
         setAgentModel(defaultAgentModel(nextAgentProvider));
       })
@@ -163,8 +156,8 @@ export default function OnboardingModelDefaultsPage() {
       disabled: !providerState.codexReady,
     },
     {
-      label: 'Claude CLI',
-      value: 'claude-cli',
+      label: getModelDisplay('claude').providerLabel,
+      value: 'claude',
       sublabel: providerState.claudeReady
         ? 'Ready for chat and inbuilt agent defaults'
         : 'Disabled until Claude CLI and auth pass health',
@@ -193,10 +186,18 @@ export default function OnboardingModelDefaultsPage() {
     })),
   ];
   const apiAgentProviderOption = isApiProvider(agentProvider) ? apiProviderOption(agentProvider) : undefined;
-  const modelOptions = agentProvider === 'claude-cli' ? CLAUDE_MODELS : isApiProvider(agentProvider) ? [] : CODEX_MODELS;
+  const registryModelOptions = useMemo(() => registryGetModelsForProvider(agentProvider), [registryGetModelsForProvider, agentProvider]);
+  const hasRegistryModels = registryModelOptions.length > 0;
+  // Registry only — while it loads the dropdown is empty (REQ-005).
+  const modelOptions = hasRegistryModels
+    ? [...registryModelOptions.map((m) => ({ label: m.label, value: m.value, sublabel: MODEL_SUBLABELS[m.value] ?? '' })), { label: 'Other…', value: '__other__' }]
+    : [];
+  const apiSuggestions = apiAgentProviderOption
+    ? registryModelOptions.map((m) => ({ label: m.label, value: m.value, sublabel: MODEL_SUBLABELS[m.value] ?? '' }))
+    : [];
   const apiModelOptions = [
-    ...(apiAgentProviderOption?.suggestions ?? []),
-    ...(apiAgentProviderOption && agentModel && !(apiAgentProviderOption.suggestions ?? []).some(option => option.value === agentModel)
+    ...apiSuggestions,
+    ...(apiAgentProviderOption && agentModel && !apiSuggestions.some(option => option.value === agentModel)
       ? [{ label: agentModel, value: agentModel, sublabel: 'Custom model ID' }]
       : []),
   ];
@@ -383,7 +384,7 @@ export default function OnboardingModelDefaultsPage() {
                     value={agentModel}
                     onChange={setAgentModel}
                     searchPlaceholder="Search or enter model ID..."
-                    placeholder={`e.g. ${apiAgentProviderOption?.defaultModel ?? 'provider-model'}`}
+                    placeholder={`e.g. ${apiSuggestions[0]?.value ?? 'provider-model'}`}
                     options={apiModelOptions}
                     allowCustomValue
                   />

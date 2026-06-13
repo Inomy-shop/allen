@@ -95,6 +95,43 @@ describe('seedDefaultSkills', () => {
     }
   });
 
+  it('seeds prd-authoring as a low-priority authoring-guidelines knowledge skill', async () => {
+    const db = makeDb();
+
+    await seedDefaultSkills(db);
+
+    const skill = db.store.skills?.find((s: any) => s.name === 'prd-authoring');
+    expect(skill, 'prd-authoring skill must be seeded').toBeDefined();
+    expect(skill.category).toBe('authoring-guidelines');
+    expect(skill.priority).toBeLessThan(72); // must not outbid routing skills
+    expect(skill.allowedRoutes).toEqual(['direct_answer']);
+    expect(skill.body).toContain('PRD Authoring');
+    expect(skill.body).toContain('User requirements');
+    expect(skill.body).toContain('Acceptance criteria');
+    expect(skill.body).toContain('Open questions');
+    // The defining constraint: no technical code snippets in a PRD.
+    expect(skill.body).toContain('NO technical code snippets');
+    // The body itself must not smuggle in code fences.
+    expect(skill.body).not.toContain('```');
+  });
+
+  it('keeps prd-authoring below every domain routing skill', async () => {
+    const db = makeDb();
+
+    await seedDefaultSkills(db);
+
+    const skills: any[] = db.store.skills ?? [];
+    const prd = skills.find((s: any) => s.name === 'prd-authoring');
+    expect(prd).toBeDefined();
+
+    const routingSkills = skills.filter((s: any) =>
+      ['bug-fix-routing', 'feature-routing', 'capability-routing', 'review-routing', 'workspace-pr-routing', 'team-assignment-routing'].includes(s.name),
+    );
+    for (const routing of routingSkills) {
+      expect(routing.priority).toBeGreaterThan(prd.priority);
+    }
+  });
+
   it('does not overwrite a user-edited coding-guidelines body when SEED_OVERRIDE is false', async () => {
     const db = makeDb({
       skills: [

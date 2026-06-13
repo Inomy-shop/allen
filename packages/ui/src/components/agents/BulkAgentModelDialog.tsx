@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, AlertTriangle, Check, Loader2, Settings, X } from 'lucide-react';
 import { agents as agentsApi, type BulkModelSkipped, type BulkUpdateModelResponse } from '../../services/api';
-import { useEnabledProvidersStatus, type EnabledProvider } from '../../hooks/useEnabledProviders';
+import { useEnabledProvidersStatus, isProviderSelectable, type EnabledProvider } from '../../hooks/useEnabledProviders';
+import { useModelRegistry } from '../../hooks/useModelRegistry';
+import { getModelDisplay } from '../../hooks/useModelRegistry';
+import { buildModelOptionsForProvider } from '../../lib/model-catalog';
 import Select from '../common/Select';
 import IconTooltipButton from '../common/IconTooltipButton';
 import { useToast } from '../common/Toast';
-
-const CLAUDE_MODELS = ['fable', 'sonnet', 'opus', 'haiku'];
-const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'];
 
 type BulkAgentModelDialogProps = {
   open: boolean;
@@ -15,38 +15,6 @@ type BulkAgentModelDialogProps = {
   onClose: () => void;
   onUpdated: (result: BulkUpdateModelResponse) => void | Promise<void>;
 };
-
-function getModelsForProvider(provider: string, enabledProviders: EnabledProvider[]): string[] {
-  if (provider === 'codex') return CODEX_MODELS;
-  if (enabledProviders.some((item) => item.provider === provider && item.open)) return [];
-  return CLAUDE_MODELS;
-}
-
-function providerToBackendValue(uiProvider: string): string {
-  if (uiProvider === 'claude') return 'claude-cli';
-  return uiProvider;
-}
-
-function providerLabel(provider: string, enabledProviders: EnabledProvider[]): string {
-  if (provider === 'claude') return 'claude';
-  if (provider === 'codex') return 'codex';
-  const configured = enabledProviders.find((item) => item.provider === provider);
-  if (configured?.label) return configured.label;
-  if (provider === 'deepseek') return 'DeepSeek';
-  if (provider === 'xiaomi-mimo') return 'Xiaomi MiMo';
-  if (provider === 'kimi') return 'Kimi';
-  return provider;
-}
-
-function getOpenProviderModelSuggestions(enabledProviders: EnabledProvider[]): Record<string, string[]> {
-  return Object.fromEntries(
-    enabledProviders
-      .filter((item) => item.open)
-      .map((item) => [item.provider, item.modelSuggestions && item.modelSuggestions.length > 0
-        ? item.modelSuggestions
-        : [item.defaultModel]]),
-  ) as Record<string, string[]>;
-}
 
 export default function BulkAgentModelDialog({
   open,
@@ -56,66 +24,79 @@ export default function BulkAgentModelDialog({
 }: BulkAgentModelDialogProps) {
   const toast = useToast();
   const { providers: enabledProviders, loaded: enabledProvidersLoaded } = useEnabledProvidersStatus();
+  const { getModelsForProvider: registryGetModelsForProvider, getDefaultModelForProvider } = useModelRegistry();
   const [provider, setProvider] = useState('claude');
-  const [model, setModel] = useState('sonnet');
+  const [model, setModel] = useState(() => getDefaultModelForProvider('claude'));
+  const [isOtherModel, setIsOtherModel] = useState(false);
+  const [customModel, setCustomModel] = useState('');
   const [clearIncompatibleSettings, setClearIncompatibleSettings] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
-  const availableUiProviders = useMemo(() => new Set([
-    ...enabledProviders.map((item) => item.provider === 'claude-cli' ? 'claude' : item.provider),
-  ]), [enabledProviders]);
-
-  const openProviderModelSuggestions = useMemo(
-    () => getOpenProviderModelSuggestions(enabledProviders),
+  const selectableProviders = useMemo(
+    () => enabledProviders.filter(isProviderSelectable),
     [enabledProviders],
   );
-
-  const providerOptions = useMemo(() => [
-    ...(availableUiProviders.has('claude') ? ['claude'] : []),
-    ...(availableUiProviders.has('codex') ? ['codex'] : []),
-    ...enabledProviders.filter((item) => item.open).map((item) => item.provider),
-  ].filter((p, index, all) => all.indexOf(p) === index).map((p) => ({
-    value: p,
-    label: providerLabel(p, enabledProviders),
-  })), [availableUiProviders, enabledProviders]);
-
-  const modelOptions = useMemo(
-    () => getModelsForProvider(provider, enabledProviders).map((item) => ({ value: item, label: item })),
-    [enabledProviders, provider],
+  const availableUiProviders = useMemo(
+    () => new Set(selectableProviders.map((item) => item.provider)),
+    [selectableProviders],
   );
-  const openModelSuggestions = openProviderModelSuggestions[provider];
-  const openModelOptions = [
-    ...(openModelSuggestions ?? []).map((item) => ({ value: item, label: item })),
-    ...(openModelSuggestions && model && !openModelSuggestions.includes(model)
-      ? [{ value: model, label: model, sublabel: 'Custom model ID' }]
-      : []),
-  ];
+
+  const providerOptions = useMemo(() => selectableProviders
+    .map((item) => item.provider)
+    .filter((p, index, all) => all.indexOf(p) === index)
+    .map((p) => ({
+      value: p,
+      label: getModelDisplay(p).providerLabel,
+    })), [selectableProviders]);
+
+  const registryModelsForProvider = useMemo(
+    () => registryGetModelsForProvider(provider),
+    [registryGetModelsForProvider, provider],
+  );
+  const modelOptions = useMemo(
+    () => buildModelOptionsForProvider(provider, enabledProviders, registryModelsForProvider, model),
+    [enabledProviders, provider, registryModelsForProvider, model],
+  );
 
   useEffect(() => {
     if (!open) return;
     setProvider('claude');
-    setModel('sonnet');
+    setModel(getDefaultModelForProvider('claude'));
+    setIsOtherModel(false);
+    setCustomModel('');
     setClearIncompatibleSettings(false);
     setSubmitting(false);
     setError('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // The registry may finish loading after the open-reset above ran — backfill
+  // the default model once it's available instead of leaving the field empty.
+  useEffect(() => {
+    if (!open || model || isOtherModel) return;
+    const def = getDefaultModelForProvider(provider);
+    if (def) setModel(def);
+  }, [open, model, isOtherModel, provider, getDefaultModelForProvider]);
 
   useEffect(() => {
     if (!open || !enabledProvidersLoaded || availableUiProviders.has(provider)) return;
-    setProvider('claude');
-    setModel('sonnet');
-  }, [availableUiProviders, enabledProvidersLoaded, open, provider]);
+    const fallback = selectableProviders[0]?.provider;
+    if (!fallback) return;
+    setProvider(fallback);
+    setModel(getDefaultModelForProvider(fallback));
+    setIsOtherModel(false);
+    setCustomModel('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableUiProviders, selectableProviders, enabledProvidersLoaded, open, provider]);
 
   function handleProviderChange(nextProvider: string) {
     setProvider(nextProvider);
-    const openSuggestions = openProviderModelSuggestions[nextProvider];
-    if (openSuggestions) {
-      setModel(openSuggestions[0] ?? '');
-      return;
-    }
-    const fixedModels = getModelsForProvider(nextProvider, enabledProviders);
-    setModel(fixedModels[0] ?? '');
+    setIsOtherModel(false);
+    setCustomModel('');
+    const models = buildModelOptionsForProvider(nextProvider, enabledProviders, registryGetModelsForProvider(nextProvider));
+    const firstModel = models.find((option) => option.value !== '__other__');
+    setModel(firstModel?.value ?? '');
   }
 
   async function submit() {
@@ -126,7 +107,7 @@ export default function BulkAgentModelDialog({
     try {
       const result = await agentsApi.bulkUpdateModel({
         agentNames,
-        provider: providerToBackendValue(provider),
+        provider,
         model: trimmedModel,
         clearIncompatibleSettings,
       });
@@ -209,17 +190,24 @@ export default function BulkAgentModelDialog({
             </div>
             <div>
               <label className="mb-1.5 block overline">Model</label>
-              {openModelSuggestions ? (
-                <Select
-                  value={model}
-                  onChange={setModel}
-                  searchPlaceholder="Search or enter model ID..."
-                  placeholder={`e.g. ${openModelSuggestions[0] ?? 'provider-model'}`}
-                  options={openModelOptions}
-                  allowCustomValue
+              {isOtherModel ? (
+                <input
+                  type="text"
+                  value={customModel}
+                  onChange={(e) => { setCustomModel(e.target.value); setModel(e.target.value); }}
+                  placeholder="Enter model ID..."
+                  className="input w-full h-9 text-[13px]"
+                  autoFocus
                 />
               ) : (
-                <Select value={model} onChange={setModel} options={modelOptions} />
+                <Select
+                  value={model}
+                  onChange={(val) => {
+                    if (val === '__other__') { setIsOtherModel(true); setCustomModel(''); return; }
+                    setModel(val);
+                  }}
+                  options={modelOptions}
+                />
               )}
             </div>
           </section>

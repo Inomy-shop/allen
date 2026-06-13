@@ -19,7 +19,7 @@ import type {
   HumanResumeInput,
   ResumeContext,
 } from './types.js';
-import { aggregateTokenUsage, attachChildTokenUsageMarkers } from './token-usage.js';
+import { aggregateTokenUsage } from './token-usage.js';
 import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-executor.js';
 import { evaluateCondition } from './condition-parser.js';
 import { renderTemplate, renderTemplateWithBindings, collectPlaceholders } from './template.js';
@@ -62,7 +62,11 @@ export interface EngineConfig {
   /** Resolved Claude Code executable path for CLI-mode workflow agents. */
   claudeCodeExecutable?: string;
   /** Optional provider-specific env builder for Claude-compatible workflow agents. */
-  buildClaudeCompatibleEnvOverlay?: (provider: string, model?: string) => Promise<Record<string, string>>;
+  buildClaudeCompatibleEnvOverlay?: (provider: string, model?: string, db?: import('mongodb').Db) => Promise<Record<string, string>>;
+  /** Registry-backed alias map: alias → fullId. Optional — static defaults used when absent. */
+  aliasMap?: Record<string, string>;
+  /** Registry-backed per-MTok cost map, keyed by alias and fullId. Optional — cost falls back to the provider-reported figure when absent. */
+  costMap?: Record<string, import('./types.js').ModelCostInfo>;
 }
 
 export interface RunOptions {
@@ -70,6 +74,11 @@ export interface RunOptions {
   executionId?: string;
   /** Externally-provided workflowId (MongoDB _id). */
   workflowId?: string;
+  /** Execution that triggered this run (sub-workflow node / spawn). Links the
+   *  new execution into the tree so cost rollups can find it on demand. */
+  parentExecutionId?: string;
+  /** Root of the triggering tree. Defaults to parent's root, else own id. */
+  rootExecutionId?: string;
 }
 
 function hasMeaningfulRepoContextUsage(value: unknown): boolean {
@@ -164,6 +173,8 @@ export class AllenEngine {
       currentNodes: [],
       completedNodes: [],
       nodeAttempts: {},
+      parentExecutionId: options?.parentExecutionId ?? null,
+      rootExecutionId: options?.rootExecutionId ?? options?.parentExecutionId ?? executionId,
       cost: { actual: null, estimated: 0 },
       durationMs: 0,
       startedAt: new Date(),
@@ -209,10 +220,10 @@ export class AllenEngine {
       // Post-execution review: fire-and-forget (never delays result)
       this.triggerPostExecutionReview(exec).catch(() => {});
 
-      // Inject cost info into result so parent workflow nodes can access it
-      result.__cost_estimated = exec.cost.estimated;
-      result.__cost_actual = exec.cost.actual;
-      attachChildTokenUsageMarkers(result, exec.tokenUsage);
+      // Tell the parent workflow node WHICH execution ran — never how much it
+      // cost. Cost stays on this execution's own traces; parents link via
+      // childExecutionId and totals are rolled up on demand.
+      result.__child_execution_id = executionId;
 
       return result;
     } catch (err: unknown) {
@@ -274,7 +285,12 @@ export class AllenEngine {
       currentNodes: [],
       completedNodes: [...checkpoint.completedNodes],
       nodeAttempts: { ...(checkpoint.nodeAttempts ?? {}) },
-      cost: { actual: null, estimated: 0 },
+      // This resumes the SAME executions row — seed from the cost already
+      // accumulated before the pause/failure so completion doesn't wipe it.
+      cost: {
+        actual: existing?.cost?.actual ?? null,
+        estimated: existing?.cost?.estimated ?? 0,
+      },
       durationMs: 0,
       startedAt: new Date(),
     };
@@ -405,7 +421,12 @@ export class AllenEngine {
       currentNodes: [],
       completedNodes,
       nodeAttempts: { ...(checkpoint?.nodeAttempts ?? {}) },
-      cost: { actual: null, estimated: 0 },
+      // This resumes the SAME executions row — seed from the cost already
+      // accumulated before the pause/failure so completion doesn't wipe it.
+      cost: {
+        actual: existing?.cost?.actual ?? null,
+        estimated: existing?.cost?.estimated ?? 0,
+      },
       durationMs: 0,
       startedAt: new Date(),
     };
@@ -506,7 +527,12 @@ export class AllenEngine {
       currentNodes: [],
       completedNodes: [...checkpoint.completedNodes],
       nodeAttempts: { ...(checkpoint.nodeAttempts ?? {}) },
-      cost: { actual: null, estimated: 0 },
+      // This resumes the SAME executions row — seed from the cost already
+      // accumulated before the pause/failure so completion doesn't wipe it.
+      cost: {
+        actual: existing?.cost?.actual ?? null,
+        estimated: existing?.cost?.estimated ?? 0,
+      },
       durationMs: 0,
       startedAt: new Date(),
     };
@@ -906,7 +932,7 @@ ${lines.join('\n')}
 
       // Check pause — wait until unpaused
       while (this.pausedExecutions.has(exec.id)) {
-        await this.stateManager.updateExecution(exec.id, { status: 'waiting_for_input' });
+        await this.stateManager.updateExecution(exec.id, { status: 'waiting_for_input', cost: exec.cost });
         await sleep(1000);
         if (this.cancelledExecutions.has(exec.id)) {
           this.cancelledExecutions.delete(exec.id);
@@ -991,6 +1017,7 @@ ${lines.join('\n')}
               status: 'waiting_for_input',
               completedNodes: exec.completedNodes,
               state: exec.state,
+              cost: exec.cost,
             });
 
             this.emit({
@@ -1375,7 +1402,10 @@ ${lines.join('\n')}
       builtIns: this.config.builtIns,
       workflows: this.config.workflows,
       emitter: this.config.emitter,
-      runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1),
+      runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1, {
+        parentExecutionId: exec.id,
+        rootExecutionId: exec.rootExecutionId ?? exec.id,
+      }),
       executionId: exec.id,
       nodeContext,
       feedbackContext,
@@ -1396,6 +1426,8 @@ ${lines.join('\n')}
         mandatoryContextSkippedProviderNativeCount: repoKnowledgePacket.traceSummary.mandatoryContextSkippedProviderNativeCount,
         mandatoryContextTargetLayer: repoKnowledgePacket.traceSummary.mandatoryContextTargetLayer,
       } : undefined,
+      aliasMap: this.config.aliasMap,
+      costMap: this.config.costMap,
     };
     this.log(exec.id, {
       category: 'system',
@@ -1419,6 +1451,7 @@ ${lines.join('\n')}
           status: 'waiting_for_input',
           completedNodes: exec.completedNodes,
           state: exec.state,
+          cost: exec.cost,
         });
 
         // Save checkpoint before waiting
@@ -1583,6 +1616,8 @@ ${lines.join('\n')}
         toolsAvailable: resultExt.toolsAvailable,
         tokenUsagePerTool: resultExt.tokenUsagePerTool,
         tokenUsage: resultExt.tokenUsage ?? null,
+        provider: resultExt.provider,
+        childExecutionId: resultExt.childExecutionId,
         gateDecision: resultExt.gateDecision,
       };
 
@@ -1888,7 +1923,7 @@ ${lines.join('\n')}
         output: {},
         rawResponse: undefined,
         activity: [],
-        cost: { actual: null, estimated: 0, method: 'estimated' },
+        cost: { actual: null, estimated: 0, method: 'unavailable' },
         durationMs: Date.now() - traceStart.getTime(),
         startedAt: traceStart,
         completedAt: new Date(),
@@ -1994,7 +2029,10 @@ ${lines.join('\n')}
           builtIns: this.config.builtIns,
           workflows: this.config.workflows,
           emitter: this.config.emitter,
-          runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1),
+          runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1, {
+        parentExecutionId: exec.id,
+        rootExecutionId: exec.rootExecutionId ?? exec.id,
+      }),
           executionId: exec.id,
           nodeContext,
           db: this.config.db,
@@ -2003,6 +2041,8 @@ ${lines.join('\n')}
           discoverMcpToolNames: this.config.discoverMcpToolNames,
           claudeCodeExecutable: this.config.claudeCodeExecutable,
           buildClaudeCompatibleEnvOverlay: this.config.buildClaudeCompatibleEnvOverlay,
+          aliasMap: this.config.aliasMap,
+          costMap: this.config.costMap,
         };
 
         // Each branch reads from the snapshot, not the live state
@@ -2041,7 +2081,7 @@ ${lines.join('\n')}
           renderedPrompt: nodeDef.prompt ? renderTemplate(nodeDef.prompt, stateSnapshot) : undefined,
           output: {},
           activity: [],
-          cost: { actual: null, estimated: 0, method: 'estimated' },
+          cost: { actual: null, estimated: 0, method: 'unavailable' },
           durationMs: Date.now() - traceStart.getTime(),
           startedAt: traceStart,
           completedAt: new Date(),
@@ -2139,6 +2179,8 @@ ${lines.join('\n')}
         toolsAvailable: resultExt.toolsAvailable,
         tokenUsagePerTool: resultExt.tokenUsagePerTool,
         tokenUsage: resultExt.tokenUsage ?? null,
+        provider: resultExt.provider,
+        childExecutionId: resultExt.childExecutionId,
         gateDecision: resultExt.gateDecision,
       };
       await this.stateManager.saveTrace({ ...trace, executionId: exec.id });

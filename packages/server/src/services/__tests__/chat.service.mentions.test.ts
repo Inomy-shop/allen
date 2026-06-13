@@ -45,6 +45,7 @@ vi.mock('../chat-providers.js', () => ({
   getProvidersInDefaultOrder: vi.fn().mockReturnValue([]),
   getEnabledProvidersInDefaultOrder: vi.fn().mockResolvedValue([]),
   AGENT_FALLBACK_CWD: '/tmp',
+  CLAUDE_COMPATIBLE_PROVIDER_CONFIGS: [],
 }));
 
 vi.mock('../agent-settings.js', () => ({

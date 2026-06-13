@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-export type SlashCommandProvider = 'codex' | 'claude-cli';
+export type SlashCommandProvider = 'codex' | 'claude';
 
 export interface SlashCommandInfo {
   name: string;
@@ -16,14 +16,14 @@ export interface SlashCommandInfo {
 }
 
 const CLAUDE_BUILTINS: SlashCommandInfo[] = [
-  { name: '/clear', description: 'Start a fresh conversation.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
-  { name: '/compact', description: 'Compact conversation history.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
-  { name: '/context', description: 'Show context usage.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
-  { name: '/cost', description: 'Show conversation cost and usage.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
-  { name: '/goal', description: 'Set a goal Claude checks before stopping', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
-  { name: '/init', description: 'Initialize project guidance (CLAUDE.md).', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
-  { name: '/review', description: 'Run Claude code review.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
-  { name: '/security-review', description: 'Run a security-focused review.', provider: 'claude-cli', source: 'builtin', kind: 'builtin', dispatchable: true },
+  { name: '/clear', description: 'Start a fresh conversation.', provider: 'claude', source: 'builtin', kind: 'builtin', dispatchable: true },
+  { name: '/compact', description: 'Compact conversation history.', provider: 'claude', source: 'builtin', kind: 'builtin', dispatchable: true },
+  { name: '/context', description: 'Show context usage.', provider: 'claude', source: 'builtin', kind: 'builtin', dispatchable: true },
+  { name: '/cost', description: 'Show conversation cost and usage.', provider: 'claude', source: 'builtin', kind: 'builtin', dispatchable: true },
+  { name: '/goal', description: 'Set a goal Claude checks before stopping', provider: 'claude', source: 'builtin', kind: 'builtin', dispatchable: true },
+  { name: '/init', description: 'Initialize project guidance (CLAUDE.md).', provider: 'claude', source: 'builtin', kind: 'builtin', dispatchable: true },
+  { name: '/review', description: 'Run Claude code review.', provider: 'claude', source: 'builtin', kind: 'builtin', dispatchable: true },
+  { name: '/security-review', description: 'Run a security-focused review.', provider: 'claude', source: 'builtin', kind: 'builtin', dispatchable: true },
 ];
 
 const CODEX_BUILTINS: SlashCommandInfo[] = [
@@ -35,7 +35,7 @@ const CODEX_BUILTINS: SlashCommandInfo[] = [
 ];
 
 export function listSlashCommands(provider: SlashCommandProvider, cwd?: string): SlashCommandInfo[] {
-  const commands = provider === 'claude-cli' ? [...CLAUDE_BUILTINS] : [...CODEX_BUILTINS];
+  const commands = provider === 'claude' ? [...CLAUDE_BUILTINS] : [...CODEX_BUILTINS];
   commands.push(...scanProviderCommands(provider, cwd));
 
   const byName = new Map<string, SlashCommandInfo>();
@@ -69,7 +69,7 @@ function rankSource(source: SlashCommandInfo['source']): number {
 function scanProviderCommands(provider: SlashCommandProvider, cwd?: string): SlashCommandInfo[] {
   const roots: Array<{ dir: string; source: 'project' | 'user' }> = [];
   const home = homedir();
-  if (provider === 'claude-cli') {
+  if (provider === 'claude') {
     roots.push({ dir: join(home, '.claude', 'commands'), source: 'user' });
     roots.push({ dir: join(home, '.claude', 'skills'), source: 'user' });
     if (cwd) {

@@ -74,8 +74,23 @@ export class StateManager {
     return this.failureReportsCol.findOne({ executionId });
   }
 
+  /**
+   * Cost singularity invariant: execution rows never persist `cost` or
+   * `tokenUsage`. Those exist on ExecutionState only as in-memory running
+   * counters for live events/logs. The per-LLM-run records in
+   * execution_traces are the single source of truth; every total (execution,
+   * tree, dashboard, usage) is computed on demand from traces. Stripping
+   * here — the one write chokepoint — keeps the invariant regardless of
+   * which engine path builds the update.
+   */
+  private static stripAggregates<T extends Record<string, unknown>>(doc: T): Omit<T, 'cost' | 'tokenUsage'> {
+    const { cost: _cost, tokenUsage: _tokenUsage, ...rest } = doc;
+    return rest;
+  }
+
   async createExecution(exec: ExecutionState): Promise<string> {
-    const result = await this.executionsCol.insertOne(exec);
+    const doc = StateManager.stripAggregates(exec as unknown as Record<string, unknown>);
+    const result = await this.executionsCol.insertOne(doc);
     return result.insertedId.toString();
   }
 
@@ -84,7 +99,9 @@ export class StateManager {
   }
 
   async updateExecution(id: string, update: Partial<ExecutionState>): Promise<void> {
-    await this.executionsCol.updateOne({ id }, { $set: update });
+    const setUpdate = StateManager.stripAggregates(update as Record<string, unknown>);
+    if (Object.keys(setUpdate).length === 0) return;
+    await this.executionsCol.updateOne({ id }, { $set: setUpdate });
   }
 
   async appendFeedback(executionId: string, entry: WorkflowFeedbackEntry): Promise<void> {
@@ -114,7 +131,8 @@ export class StateManager {
     unsetFields: string[],
   ): Promise<void> {
     const op: Record<string, unknown> = {};
-    if (Object.keys(setUpdate).length > 0) op.$set = setUpdate;
+    const cleanSet = StateManager.stripAggregates(setUpdate as Record<string, unknown>);
+    if (Object.keys(cleanSet).length > 0) op.$set = cleanSet;
     if (unsetFields.length > 0) {
       op.$unset = Object.fromEntries(unsetFields.map((f) => [f, '']));
     }
@@ -295,8 +313,12 @@ export class StateManager {
     const byStatus = await this.executionsCol
       .aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }])
       .toArray();
-    const costAgg = await this.executionsCol
+    // Cost from traces, never from executions rows (which no longer store
+    // cost). Excluding child_execution traces keeps sub-workflow links from
+    // double-counting their child's spend.
+    const costAgg = await this.tracesCol
       .aggregate([
+        { $match: { 'cost.method': { $ne: 'child_execution' } } },
         { $group: { _id: null, totalEstimated: { $sum: '$cost.estimated' }, totalActual: { $sum: '$cost.actual' } } },
       ])
       .toArray();

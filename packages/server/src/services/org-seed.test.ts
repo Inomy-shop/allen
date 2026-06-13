@@ -118,9 +118,9 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
     expect(team.mission).not.toBe('custom mission');
   });
 
-  it('force-updates pr-creator even without SEED_OVERRIDE', async () => {
-    // pr-creator must be in FORCE_UPDATE_AGENT_NAMES so its prompt stays current
-    // across deployments without requiring the operator to set SEED_OVERRIDE=true.
+  it('does not overwrite pr-creator when SEED_OVERRIDE is disabled', async () => {
+    // pr-creator used to be in FORCE_UPDATE_AGENT_NAMES, but that bypass
+    // was removed so SEED_OVERRIDE=false means ALL built-ins are preserved.
     const db = makeDb({
       agents: [
         {
@@ -136,16 +136,13 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
       teams: [],
     });
 
-    // No SEED_OVERRIDE — only FORCE_UPDATE_AGENT_NAMES members should be updated
+    // No SEED_OVERRIDE — existing pr-creator must not be overwritten
     await new OrgSeedService(db).seed();
 
     const agent = db.store.agents.find((a: any) => a.name === 'pr-creator');
     expect(agent, 'pr-creator must be seeded').toBeDefined();
-    expect(agent.system, 'pr-creator must be force-updated with the new prompt').not.toBe(
+    expect(agent.system, 'pr-creator must NOT be overwritten').toBe(
       'old prompt — hardcoded allen@local',
-    );
-    expect(agent.system, 'updated pr-creator prompt must contain GitHub identity setup').toContain(
-      'gh api user',
     );
   });
 

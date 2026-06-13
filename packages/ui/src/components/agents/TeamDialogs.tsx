@@ -277,10 +277,15 @@ export function TeamDeleteConfirm({
               </span>
             </div>
           ) : (
-            <p className="text-[13px] leading-6 text-theme-muted">
-              This will permanently remove <span className="font-mono text-theme-primary">{team.name}</span> from
-              the org chart. This cannot be undone.
-            </p>
+            <div className="text-[13px] leading-6 text-theme-muted">
+              <p>
+                This will permanently remove <span className="font-mono text-theme-primary">{team.name}</span> from
+                the org chart.
+              </p>
+              <p className="mt-2">
+                Deleted teams can be recovered by recreating with the same name.
+              </p>
+            </div>
           )}
         </div>
 
