@@ -221,6 +221,23 @@ export const auth = {
   me: () => request<{ user: AuthUser }>('/auth/me'),
 };
 
+// ── Model Registry ─────────────────────────────────────────────────────────
+export interface ModelRegistryEntry {
+  _id: string;
+  provider: string;
+  fullId: string;
+  displayName: string;
+  providerDisplayName: string;
+  costInputPerMTok?: number | null;
+  costOutputPerMTok?: number | null;
+  costCacheReadPerMTok?: number | null;
+  tier?: 'default' | 'opus' | 'flash' | null;
+  sortOrder?: number;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 // ── System ────────────────────────────────────────────────────────────────
 export type DesktopRuntimeSettingsResponse = {
   desktop: boolean;
@@ -327,13 +344,13 @@ export const system = {
       { method: 'PATCH', body: JSON.stringify({ values }) },
     ),
   saveDesktopOnboardingModelDefaults: (body: {
-    chatProvider: 'codex' | 'claude-cli' | (string & {});
-    agentProvider: '' | 'codex' | 'claude-cli' | (string & {});
+    chatProvider: 'codex' | 'claude' | (string & {});
+    agentProvider: '' | 'codex' | 'claude' | (string & {});
     agentModel?: string;
   }) =>
     request<{
-      chatProvider: 'codex' | 'claude-cli' | (string & {});
-      agentProvider: '' | 'codex' | 'claude-cli' | (string & {});
+      chatProvider: 'codex' | 'claude' | (string & {});
+      agentProvider: '' | 'codex' | 'claude' | (string & {});
       agentModel: string;
       settings: DesktopRuntimeSettingsResponse;
     }>('/system/desktop-runtime/onboarding/model-defaults', {
@@ -353,6 +370,11 @@ export const system = {
     request<{ key: string; configured: boolean; source: 'secret' }>(
       '/system/desktop-runtime/secrets',
       { method: 'PUT', body: JSON.stringify({ key, value }) },
+    ),
+  recheckProviderAuth: (provider: string) =>
+    request<{ provider: string; authStatus: 'logged_in' | 'not_logged_in' | 'cli_missing'; loginCommand?: string }>(
+      `/system/providers/${encodeURIComponent(provider)}/recheck-auth`,
+      { method: 'POST' },
     ),
   deleteDesktopSecret: (key: string) =>
     request<void>(`/system/desktop-runtime/secrets/${encodeURIComponent(key)}`, { method: 'DELETE' }),
@@ -388,6 +410,22 @@ export const system = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+  models: {
+    list: (params?: { includeInactive?: boolean; provider?: string }) => {
+      const qs = new URLSearchParams();
+      if (params?.includeInactive) qs.set('includeInactive', 'true');
+      if (params?.provider) qs.set('provider', params.provider);
+      const q = qs.toString();
+      return request<{ models: ModelRegistryEntry[] }>(`/system/models${q ? `?${q}` : ''}`);
+    },
+    get: (id: string) => request<ModelRegistryEntry>(`/system/models/${id}`),
+    create: (data: Record<string, unknown>) =>
+      request<ModelRegistryEntry>('/system/models', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: Record<string, unknown>) =>
+      request<ModelRegistryEntry>(`/system/models/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    delete: (id: string) =>
+      request<{ deleted: boolean }>(`/system/models/${id}`, { method: 'DELETE' }),
+  },
 };
 
 // ── Linear Types ──────────────────────────────────────────────────────────

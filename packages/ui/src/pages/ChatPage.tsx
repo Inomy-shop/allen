@@ -1498,6 +1498,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           }
           providers={providers}
           selectedProvider={activeSession?.provider ?? selectedProvider}
+          selectedAgent={activeSession?.activeAgent ?? selectedAgent}
           selectedModel={activeSession?.model ?? selectedModel}
           modelLocked={!!activeSessionId}
           onProviderChange={(p, m) => { setSelectedProvider(p); setSelectedModel(m); }}

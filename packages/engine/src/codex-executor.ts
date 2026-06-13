@@ -30,7 +30,7 @@ interface CodexResult {
     estimated: number;
     model: string;
     turns: number;
-    method: 'sdk_reported' | 'estimated';
+    method: import('./types.js').CostInfo['method'];
   };
   tokenUsage?: TokenUsageInfo | null;
   durationMs: number;
@@ -520,11 +520,14 @@ ${context}
           prompt,
           sessionId: threadId,
           cost: {
+            // Codex reports no cost figure of its own. The caller
+            // (node-executor) prices the accumulated tokenUsage with
+            // registry per-MTok rates and replaces this placeholder.
             actual: null,
-            estimated: 0.02 * Math.max(turns, 1),
+            estimated: 0,
             model,
             turns: Math.max(turns, 1),
-            method: 'estimated',
+            method: 'unavailable',
           },
           tokenUsage: usageAccumulator.value,
           durationMs: Date.now() - start,

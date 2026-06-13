@@ -8,7 +8,7 @@ import { runChatLLM } from '../../src/services/chat-llm.js';
 vi.mock('../../src/services/chat-llm.js', () => ({
   PROVIDERS: [
     { provider: 'codex' },
-    { provider: 'claude-cli' },
+    { provider: 'claude' },
   ],
   runChatLLM: vi.fn(async () => ({
     text: '{"status":"passed","scores":{"overall":1},"summary":"ok"}',
@@ -117,7 +117,7 @@ describe('internalContextEvaluationRoutes', () => {
   it('uses configured Cognee LLM provider and model when the request omits them', async () => {
     process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
     process.env.JWT_ACCESS_SECRET = 'test-context-eval-secret';
-    process.env.ALLEN_COGNEE_LLM_PROVIDER = 'claude-cli';
+    process.env.ALLEN_COGNEE_LLM_PROVIDER = 'claude';
     process.env.ALLEN_COGNEE_LLM_MODEL = 'claude-test';
     const app = express();
     app.use('/api/internal/context-evaluation', express.raw({ type: 'application/json' }), internalContextEvaluationRoutes({} as any));
@@ -132,7 +132,7 @@ describe('internalContextEvaluationRoutes', () => {
 
     expect(res.status).toBe(200);
     expect(runChatLLM).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      provider: 'claude-cli',
+      provider: 'claude',
       model: 'claude-test',
       messages: [{ role: 'user', content: 'user: Recall repo context' }],
       skipTools: true,
@@ -142,7 +142,7 @@ describe('internalContextEvaluationRoutes', () => {
   it('uses common context LLM provider and model before Cognee-specific fallbacks', async () => {
     process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
     process.env.JWT_ACCESS_SECRET = 'test-context-eval-secret';
-    process.env.ALLEN_CONTEXT_LLM_PROVIDER = 'claude-cli';
+    process.env.ALLEN_CONTEXT_LLM_PROVIDER = 'claude';
     process.env.ALLEN_CONTEXT_LLM_MODEL = 'claude-context-test';
     process.env.ALLEN_CONTEXT_LLM_CWD = '/tmp/allen/context-common-test';
     process.env.ALLEN_COGNEE_LLM_PROVIDER = 'codex';
@@ -160,7 +160,7 @@ describe('internalContextEvaluationRoutes', () => {
 
     expect(res.status).toBe(200);
     expect(runChatLLM).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      provider: 'claude-cli',
+      provider: 'claude',
       model: 'claude-context-test',
       cwd: '/tmp/allen/context-common-test',
       messages: [{ role: 'user', content: 'user: Recall repo context' }],

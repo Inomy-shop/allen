@@ -645,7 +645,7 @@ describe('AC-23: Agent-owned orchestration path', () => {
     const session = await orchestratorService.beginOrchestration({
       scope: 'workflow',
       agentModel: 'claude-sonnet',
-      agentProvider: 'claude-cli',
+      agentProvider: 'claude',
       agentRationale: 'Scanning workflow runs for context quality issues — AC-23 test',
     });
     expect(session.status).toBe('active');

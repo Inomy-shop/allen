@@ -233,7 +233,7 @@ describe('seedContextQuality — context_evaluations backfill', () => {
 // ─── Curation Entries Backfill ───────────────────────────────────────────────
 
 describe('seedContextQuality — repo_context_curation_entries backfill', () => {
-  it('adds editVersion/lastEditedBy/lastEditedAt to entries missing these fields', async () => {
+  it('adds entryVersionId/lastEditedBy/lastEditedAt to entries missing these fields', async () => {
     await db.collection('repo_context_curation_entries').insertOne({
       entryId: 'entry-1',
       repoId: 'repo-1',
@@ -244,16 +244,16 @@ describe('seedContextQuality — repo_context_curation_entries backfill', () => 
     await seedContextQuality(db);
 
     const doc = await db.collection('repo_context_curation_entries').findOne({ entryId: 'entry-1' });
-    expect(doc!['editVersion']).toBe(1);
+    expect(doc!['entryVersionId']).toEqual(expect.any(String));
     expect(doc!['lastEditedBy']).toBeNull();
     expect(doc!['lastEditedAt']).toBeNull();
   });
 
-  it('does NOT overwrite existing editVersion', async () => {
+  it('does NOT overwrite existing edit tracking fields', async () => {
     await db.collection('repo_context_curation_entries').insertOne({
       entryId: 'entry-2',
       repoId: 'repo-1',
-      editVersion: 5,
+      entryVersionId: 'entry-version-existing',
       lastEditedBy: 'user-x',
       lastEditedAt: new Date('2025-01-01'),
     });
@@ -261,7 +261,7 @@ describe('seedContextQuality — repo_context_curation_entries backfill', () => 
     await seedContextQuality(db);
 
     const doc = await db.collection('repo_context_curation_entries').findOne({ entryId: 'entry-2' });
-    expect(doc!['editVersion']).toBe(5);
+    expect(doc!['entryVersionId']).toBe('entry-version-existing');
     expect(doc!['lastEditedBy']).toBe('user-x');
   });
 });

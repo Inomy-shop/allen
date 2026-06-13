@@ -155,7 +155,7 @@ const META_AGENTS: MetaAgent[] = [
     type: 'technical', // internal helper, only spawned by builders
     icon: 'search',
     color: '#0ea5e9',
-    provider: 'claude-cli',
+    provider: 'claude',
     model: 'sonnet',
     tools: [],
     capabilities: ['domain-research', 'role-analysis', 'web-search'],
@@ -199,7 +199,7 @@ RULES:
     type: 'technical', // internal helper, only spawned by builders
     icon: 'brain',
     color: '#a855f7',
-    provider: 'claude-cli',
+    provider: 'claude',
     model: 'sonnet',
     tools: [],
     capabilities: ['team-design', 'agent-design', 'org-architecture'],
@@ -228,7 +228,7 @@ Output a JSON blueprint:
       "displayName": "...",
       "system": "<full system prompt for this agent>",
       "model": "sonnet",
-      "provider": "claude-cli",
+      "provider": "claude",
       "tools": ["filesystem", ...],
       "capabilities": [...],
       "spawnTargets": ["<other agents in this team>"]
@@ -292,7 +292,7 @@ Each agent's "system" field should be 200-500 chars and include:
     type: 'team', // user-facing, appears in agent picker
     icon: 'rocket',
     color: '#22c55e',
-    provider: 'claude-cli',
+    provider: 'claude',
     model: 'sonnet',
     tools: [],
     capabilities: ['team-creation', 'org-design', 'meta-orchestration'],
@@ -332,7 +332,7 @@ WHEN A USER ASKS YOU TO BUILD A TEAM (e.g., "build me a finance team"):
        teamName: "<new-team-slug>",       ← the team you're about to create
        teamRole: "lead",                   ← MUST be "lead" — this enables bootstrap mode
        system: "<full prompt>",
-       provider: "claude-cli",
+       provider: "claude",
        model: "sonnet",
        tools: [...],
        capabilities: [...],
@@ -356,7 +356,7 @@ WHEN A USER ASKS YOU TO BUILD A TEAM (e.g., "build me a finance team"):
        teamName: "<new-team-slug>",
        teamRole: "member",
        system: "<full prompt>",
-       provider: "claude-cli",
+       provider: "claude",
        spawnTargets: ["<lead-slug>"]
      })
 
@@ -537,7 +537,7 @@ Your FINAL message IS the context document. It will be injected verbatim into th
     type: 'team', // user-facing despite role=member, appears in agent picker
     icon: 'plus',
     color: '#f59e0b',
-    provider: 'claude-cli',
+    provider: 'claude',
     model: 'sonnet',
     tools: [],
     capabilities: ['agent-creation', 'role-design', 'team-extension'],
@@ -576,7 +576,7 @@ WHEN A USER ASKS TO ADD AN AGENT (e.g., "add a tax specialist to the finance tea
 
    Step-by-step:
    a) Call create_agent({ name: "<new-slug>", teamName: "<team-slug>", teamRole: "member",
-                          system: "<full prompt>", provider: "claude-cli", ... })
+                          system: "<full prompt>", provider: "claude", ... })
    b) For each entry in your blueprint's update_existing list, fetch the current
       spawnTargets from the team blueprint you loaded earlier, MERGE in the new
       agent's name, then call:

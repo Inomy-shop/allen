@@ -1,12 +1,8 @@
 # Allen Design System Reference
 
-This document is a working reference for using the local Allen design system without modifying the design-system source folder.
+This document is a working reference for Allen UI design patterns. When a local design-system source folder is available, treat it as read-only and prefer reusable tokens and component patterns over one-off styling.
 
-Source folder, read-only for this project:
-
-`/Users/shreemantkumar/allen-internal-desktop/Allen Design System`
-
-Primary sources reviewed:
+Primary design-system sources:
 
 - `Allen Design System/README.md`
 - `Allen Design System/SKILL.md`

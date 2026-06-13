@@ -32,10 +32,12 @@ import {
   selectedTitle,
   type ContextGraph,
 } from '../components/context-management/ContextGraphFlow';
+import RepoContextSetupCard from '../components/context-management/RepoContextSetupCard';
 import { repos as repoApi } from '../services/api';
 import { useToast } from '../components/common/Toast';
 import Select from '../components/common/Select';
 import ContextReviewTab from '../components/context/ContextReviewTab';
+import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 
 type Repo = {
   _id: string;
@@ -74,6 +76,8 @@ type CogneeStatus = {
   buildMode?: 'resume' | 'clean_rebuild';
   previousDatasetName?: string;
   uncognifiedDocuments?: Array<{ path?: string; title?: string; fileHash?: string; dataId?: string; cogneeDataId?: string; status?: string }>;
+  curatedContextStale?: boolean;
+  staleReason?: string;
   error?: string;
   lastStartedAt?: string;
   lastCompletedAt?: string;
@@ -228,12 +232,19 @@ export default function RepoContextManagementPage() {
     }
   }, [clearGraphSelection, graphFilters.nodeType, graphFilters.query, graphFilters.relationship, id, toast]);
 
+  // Cognee status poll on a single timer: fast (2.5 s) while a build is actively
+  // running so progress stays fresh, slow (15 s) otherwise as an M1 discovery
+  // poll that catches builds started from the setup card, other tabs, or
+  // external triggers without this page initiating them.
   useEffect(() => {
     const live = isContextLiveBuild(cogneeStatus);
-    wasLiveBuildRef.current = live || wasLiveBuildRef.current;
-    if (!live) return;
+    if (live) wasLiveBuildRef.current = true;
     let cancelled = false;
     const timer = window.setInterval(() => {
+      if (!live) {
+        void refreshCogneeStatus();
+        return;
+      }
       void refreshCogneeStatus()
         .then((status) => {
           if (cancelled || !status) return;
@@ -244,7 +255,7 @@ export default function RepoContextManagementPage() {
           }
         })
         .catch((err: any) => toast.error(err.message ?? 'Failed to refresh context build status'));
-    }, 2500);
+    }, live ? 2500 : 15_000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -302,6 +313,10 @@ export default function RepoContextManagementPage() {
             <Metric label="Graph nodes" value={Number(graph?.nodeCount ?? state?.graph?.nodeCount ?? 0).toLocaleString()} />
             <Metric label="Graph edges" value={Number(graph?.edgeCount ?? state?.graph?.edgeCount ?? 0).toLocaleString()} />
           </div>
+          {/* M1: onCogneeActivity lets the card notify this page when the
+              contextRefresh phase is running so we start the fast-poll without
+              waiting for the 15 s discovery poll. */}
+          <RepoContextSetupCard repoId={id} onCogneeActivity={() => void refreshCogneeStatus()} />
           <div className="border-b border-app flex gap-1">
             {([
               ['graph', Network, 'Context Graph'],
@@ -341,7 +356,7 @@ export default function RepoContextManagementPage() {
               onChanged={() => load({ silent: true })}
             />
           )}
-          {activeTab === 'curated' && <CuratedContextSection repoId={id} entries={state?.allEntries ?? state?.entries ?? []} onChanged={load} />}
+          {activeTab === 'curated' && <CuratedContextSection repoId={id} entries={state?.allEntries ?? state?.entries ?? []} contextStatus={cogneeStatus} onChanged={load} />}
           {activeTab === 'mandatory' && <MandatoryContextSection repoId={id} agents={state?.agents ?? []} mappings={state?.mandatoryMappings ?? []} onChanged={load} />}
           {activeTab === 'review' && <ContextReviewTab repoId={id} initialTaskId={searchParams.get('taskId') ?? undefined} />}
         </div>
@@ -553,7 +568,14 @@ function ContextGraphSection({
   const [detailLoading, setDetailLoading] = useState(false);
   const [building, setBuilding] = useState(false);
   const liveBuild = isContextLiveBuild(contextStatus);
-  const graphRebuilding = liveBuild && contextStatus?.buildMode === 'clean_rebuild';
+  // M2: show note for ANY live build, not just clean_rebuild.
+  // One-click setup schedules with cleanRebuild:false → buildMode 'resume', which
+  // previously produced no note even though buttons were disabled.
+  const graphBuildNote = liveBuild
+    ? contextStatus?.buildMode === 'clean_rebuild'
+      ? 'Clean build is rebuilding the graph from curated context entries. The graph will refresh when Cognee finishes ingestion and cognification.'
+      : 'Refresh is updating the graph from curated context entries. The graph will refresh when Cognee finishes ingestion and cognification.'
+    : null;
 
   const loadConnectionDetail = useCallback(async (
     nodeId: string,
@@ -722,9 +744,9 @@ function ContextGraphSection({
           {Number(graph?.nodeCount ?? 0).toLocaleString()} nodes · {Number(graph?.edgeCount ?? 0).toLocaleString()} edges · preview {Number(graph?.previewNodeCount ?? graph?.nodes?.length ?? 0).toLocaleString()} / {Number(graph?.previewEdgeCount ?? graph?.edges?.length ?? 0).toLocaleString()}
         </div>
         <div className="h-[620px] border border-app rounded bg-app-card overflow-hidden relative">
-          {graphRebuilding && (
+          {graphBuildNote && (
             <div className="absolute inset-x-3 top-3 z-10 rounded border border-app bg-app-card/95 px-3 py-2 text-xs text-theme-secondary shadow-popover">
-              Clean build is rebuilding the graph from curated context entries. The graph will refresh when Cognee finishes ingestion and cognification.
+              {graphBuildNote}
             </div>
           )}
           <ReactFlowProvider>
@@ -1022,7 +1044,7 @@ function EdgeEndpointCard({ label, node }: { label: string; node: Record<string,
   );
 }
 
-function CuratedContextSection({ repoId, entries, onChanged }: { repoId: string; entries: Array<Record<string, any>>; onChanged: () => Promise<void> | void }) {
+function CuratedContextSection({ repoId, entries, contextStatus, onChanged }: { repoId: string; entries: Array<Record<string, any>>; contextStatus?: CogneeStatus | null; onChanged: () => Promise<void> | void }) {
   const toast = useToast();
   const [filter, setFilter] = useState<'active' | 'stale' | 'all'>('all');
   const [searchDraft, setSearchDraft] = useState('');
@@ -1031,12 +1053,19 @@ function CuratedContextSection({ repoId, entries, onChanged }: { repoId: string;
   const [selectedId, setSelectedId] = useState(String(uniqueEntries[0]?.entryId ?? ''));
   const [draft, setDraft] = useState<CuratedEntryDraft>(() => blankCuratedDraft());
   const [saving, setSaving] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<Record<string, any> | null>(null);
 
   const statusFiltered = uniqueEntries.filter((entry) => {
     if (filter === 'all') return true;
-    if (filter === 'stale') return entry.cogneeSyncStatus === 'stale' || entry.inclusion === 'stale';
+    if (filter === 'stale') return entry.inclusion === 'stale';
     return entry.inclusion === 'include';
   });
+  const contextSync = contextStatus?.curatedContextStale
+    ? 'stale'
+    : contextStatus?.status === 'completed'
+      ? 'fresh'
+      : contextStatus?.status;
   const visible = statusFiltered.filter((entry) => matchesCuratedEntrySearch(entry, searchQuery));
   const isCreating = selectedId === NEW_CURATED_ENTRY_ID;
   const selected = isCreating ? null : visible.find((entry) => String(entry.entryId) === selectedId) ?? visible[0];
@@ -1098,7 +1127,26 @@ function CuratedContextSection({ repoId, entries, onChanged }: { repoId: string;
     }
   };
 
+  const archiveSelected = async (entry = archiveTarget) => {
+    if (!entry?.entryId) return;
+    setArchiving(true);
+    try {
+      await repoApi.deleteCuratedContextEntry(repoId, String(entry.entryId));
+      toast.success('Curated context entry archived and marked stale.');
+      setArchiveTarget(null);
+      setSelectedId('');
+      await onChanged();
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to archive curated context entry');
+    } finally {
+      setArchiving(false);
+    }
+  };
+
+  const archiveTargetName = archiveTarget ? String(archiveTarget.title ?? archiveTarget.path ?? archiveTarget.entryId ?? 'Curated context entry') : '';
+
   return (
+    <>
     <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-4">
       <div className="space-y-2">
         <div className="flex flex-wrap gap-1">
@@ -1132,7 +1180,7 @@ function CuratedContextSection({ repoId, entries, onChanged }: { repoId: string;
             <button type="button" className="block w-full text-left px-3 py-2 border-b border-app bg-app-muted">
               <div className="text-xs text-theme-primary truncate">New curated entry</div>
               <div className="text-[10px] text-theme-muted font-mono truncate">user-added context</div>
-              <div className="text-[10px] text-theme-subtle font-mono">include · snippet · stale</div>
+              <div className="text-[10px] text-theme-subtle font-mono">include · snippet</div>
             </button>
           )}
           {visible.length ? visible.map((entry) => {
@@ -1146,7 +1194,7 @@ function CuratedContextSection({ repoId, entries, onChanged }: { repoId: string;
               >
                 <div className="text-xs text-theme-primary truncate">{entry.title ?? entry.path}</div>
                 <div className="text-[10px] text-theme-muted font-mono truncate">{entry.path}</div>
-                <div className="text-[10px] text-theme-subtle font-mono">{entry.inclusion} · {entry.injectionPolicy}{entry.cogneeSyncStatus === 'stale' ? ' · stale' : ''}</div>
+                <div className="text-[10px] text-theme-subtle font-mono">{entry.inclusion} · {entry.injectionPolicy}</div>
               </button>
             );
           }) : <div className="p-3"><EmptyState text="No curated context entries match this search." /></div>}
@@ -1191,7 +1239,8 @@ function CuratedContextSection({ repoId, entries, onChanged }: { repoId: string;
               {!isCreating && (
                 <KeyValue rows={[
                   ['entry', selected?.entryId],
-                  ['Context sync', selected?.cogneeSyncStatus],
+                  ['Context sync', contextSync],
+                  ['Stale reason', contextStatus?.curatedContextStale ? contextStatus?.staleReason : undefined],
                 ]} />
               )}
             </Panel>
@@ -1236,13 +1285,33 @@ function CuratedContextSection({ repoId, entries, onChanged }: { repoId: string;
                 {!draft.chunks.length && <EmptyState text="No chunks yet." />}
               </div>
             </Panel>
-            <button type="button" onClick={save} disabled={saving} className="btn btn-primary btn-sm">
-              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} {isCreating ? 'Create entry' : 'Save curated entry'}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={save} disabled={saving || archiving} className="btn btn-primary btn-sm">
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} {isCreating ? 'Create entry' : 'Save curated entry'}
+              </button>
+              {!isCreating && selected?.entryId && (
+                <button type="button" onClick={() => setArchiveTarget(selected)} disabled={saving || archiving} className="btn btn-ghost btn-sm text-accent-red hover:text-accent-red" title="Archive curated context entry">
+                  {archiving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />} Archive entry
+                </button>
+              )}
+            </div>
           </>
         ) : <EmptyState text="No curated context entries." />}
       </div>
     </div>
+    <DeleteConfirmDialog
+      open={!!archiveTarget}
+      resourceType="curated context entry"
+      resourceName={archiveTargetName}
+      title="Archive curated context entry"
+      description="This removes the entry from active context, keeps the inactive row for history, and marks Cognee context stale."
+      confirmLabel="Archive entry"
+      requireTypedName={false}
+      busy={archiving}
+      onConfirm={() => void archiveSelected()}
+      onCancel={() => setArchiveTarget(null)}
+    />
+    </>
   );
 }
 
@@ -1396,7 +1465,7 @@ function EditableTextBlock({
   );
 }
 
-function MandatoryContextSection({ repoId, agents, mappings, onChanged }: { repoId: string; agents: Array<Record<string, any>>; mappings: Array<Record<string, any>>; onChanged: () => Promise<void> | void }) {
+function MandatoryContextSection({ repoId, agents, mappings: initialMappings, onChanged }: { repoId: string; agents: Array<Record<string, any>>; mappings: Array<Record<string, any>>; onChanged: () => Promise<void> | void }) {
   const toast = useToast();
   const [agentName, setAgentName] = useState('');
   const [title, setTitle] = useState('');
@@ -1404,7 +1473,36 @@ function MandatoryContextSection({ repoId, agents, mappings, onChanged }: { repo
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(1);
+  const [showInactive, setShowInactive] = useState(false);
+  const [mappings, setMappings] = useState<Array<Record<string, any>>>(initialMappings);
+  const [loadingMappings, setLoadingMappings] = useState(false);
   const agentOptions = useMemo(() => toAgentChatOptions(agents), [agents]);
+
+  // Latest parent-provided snapshot, kept in a ref so loadMappings doesn't depend
+  // on it — otherwise a parent re-render would recreate the callback and trigger
+  // a spurious refetch.
+  const initialMappingsRef = useRef(initialMappings);
+  initialMappingsRef.current = initialMappings;
+
+  const loadMappings = useCallback(async () => {
+    if (!repoId) return;
+    setLoadingMappings(true);
+    try {
+      const result = await repoApi.getMandatoryMappings(repoId, { enabled: showInactive ? 'all' : 'true' });
+      setMappings(Array.isArray(result) ? result : []);
+    } catch {
+      // Intentional silent fallback to the parent-provided snapshot on fetch
+      // failure; server may not support the new param yet
+      setMappings(initialMappingsRef.current);
+    } finally {
+      setLoadingMappings(false);
+    }
+  }, [repoId, showInactive]);
+
+  useEffect(() => {
+    void loadMappings();
+  }, [loadMappings]);
+
   const visible = agentName ? mappings.filter((mapping) => mapping.agentName === agentName) : mappings;
   const pageSize = 25;
   const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
@@ -1423,6 +1521,7 @@ function MandatoryContextSection({ repoId, agents, mappings, onChanged }: { repo
       setTitle('');
       setContent('');
       await onChanged();
+      await loadMappings();
       toast.success('Mandatory context saved.');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to save mandatory context');
@@ -1438,6 +1537,7 @@ function MandatoryContextSection({ repoId, agents, mappings, onChanged }: { repo
     try {
       await repoApi.updateMandatoryContext(repoId, mappingId, { content: drafts[mappingId] ?? mapping.content ?? '', enabled: mapping.enabled !== false });
       await onChanged();
+      await loadMappings();
       toast.success('Mandatory context updated.');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to update mandatory context');
@@ -1462,7 +1562,18 @@ function MandatoryContextSection({ repoId, agents, mappings, onChanged }: { repo
             </div>
             <div className="text-[11px] text-theme-muted font-mono">
               {agentName ? `Showing ${visible.length} mandatory context${visible.length === 1 ? '' : 's'} for ${agentName}` : `Showing all ${visible.length} mandatory contexts`}
+              {loadingMappings && <span className="ml-2 animate-pulse">Refreshing...</span>}
             </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showInactive}
+                onChange={(e) => setShowInactive(e.target.checked)}
+                className="rounded"
+                data-testid="show-inactive-toggle"
+              />
+              <span className="text-[11px] text-theme-muted">Show inactive (troubleshooting)</span>
+            </label>
           </div>
         </Panel>
         <input value={title} onChange={(e) => setTitle(e.target.value)} className="input text-xs" placeholder="Title" />

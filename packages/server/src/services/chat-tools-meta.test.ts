@@ -68,11 +68,38 @@ function makeMockDb(collections: Record<string, Record<string, unknown>[]> = {})
     ...collections,
   };
 
+  function matchesQuery(doc: Record<string, unknown>, query: Record<string, unknown>): boolean {
+    return Object.entries(query).every(([k, v]) => {
+      const docVal = doc[k];
+      // Handle MongoDB operators
+      if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+        const opObj = v as Record<string, unknown>;
+        let passes = true;
+        for (const [op, opVal] of Object.entries(opObj)) {
+          switch (op) {
+            case '$ne':
+              passes = passes && docVal !== opVal;
+              break;
+            case '$eq':
+              passes = passes && docVal === opVal;
+              break;
+            case '$in':
+              passes = passes && Array.isArray(opVal) && (opVal as unknown[]).includes(docVal);
+              break;
+            default:
+              // For unknown operators, treat as equality (backward compatible)
+              passes = passes && docVal === v;
+          }
+        }
+        return passes;
+      }
+      return docVal === v;
+    });
+  }
+
   function findOne(collName: string, query: Record<string, unknown>): Record<string, unknown> | null {
     const docs = store[collName] ?? [];
-    return docs.find((doc) => {
-      return Object.entries(query).every(([k, v]) => doc[k] === v);
-    }) ?? null;
+    return docs.find((doc) => matchesQuery(doc, query)) ?? null;
   }
 
   return {
@@ -86,7 +113,7 @@ function makeMockDb(collections: Record<string, Record<string, unknown>[]> = {})
       },
       updateOne: async (query: Record<string, unknown>, update: Record<string, unknown>) => {
         const idx = (store[collName] ?? []).findIndex((doc) =>
-          Object.entries(query).every(([k, v]) => doc[k] === v),
+          matchesQuery(doc, query),
         );
         if (idx >= 0 && (update as any).$set) {
           store[collName][idx] = { ...store[collName][idx], ...(update as any).$set };
@@ -95,7 +122,7 @@ function makeMockDb(collections: Record<string, Record<string, unknown>[]> = {})
       },
       deleteOne: async (query: Record<string, unknown>) => {
         const idx = (store[collName] ?? []).findIndex((doc) =>
-          Object.entries(query).every(([k, v]) => doc[k] === v),
+          matchesQuery(doc, query),
         );
         if (idx >= 0) store[collName].splice(idx, 1);
         return { deletedCount: idx >= 0 ? 1 : 0 };
@@ -485,7 +512,7 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
             teamName: 'test-team',
             teamRole: 'member',
             system: 'You are a test agent.',
-            provider: 'claude-cli',
+            provider: 'claude',
           },
           db,
         );

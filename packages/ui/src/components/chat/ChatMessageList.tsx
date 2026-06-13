@@ -15,6 +15,8 @@ import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspace
 import { WorkflowInterventionAction } from '../execution/WorkflowInterventionAction';
 import { sanitizeChatAssistantResponse } from '../../lib/chat-response-sanitize';
 import { workspaceChatPath } from '../../lib/workspace-routes';
+import { humanLabel } from '../../lib/model-catalog';
+import { getModelDisplay } from '../../hooks/useModelRegistry';
 
 const ChatExecutionsPanel = React.lazy(() =>
   import('./ChatRunSidebar').then(module => ({ default: module.ExecutionsPanel })),
@@ -1592,10 +1594,6 @@ function StatusIcon({ status }: { status: string }) {
   return <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />;
 }
 
-function humanLabel(value: string): string {
-  return value.replace(/_/g, ' ');
-}
-
 function timeAgo(dateStr?: string | null): string {
   if (!dateStr) return 'recently';
   const ms = Date.now() - new Date(dateStr).getTime();
@@ -1656,7 +1654,7 @@ function WorkflowStepCard({ step, run }: { step: NonNullable<SpawnedAgent['runCo
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-theme-muted">
             <span className="font-mono capitalize">{humanLabel(status)}</span>
             <span className="font-mono">{attempts > 1 ? `${attempts} attempts` : attempts === 1 ? '1 attempt' : 'pending'}</span>
-            {step.model && <span className="truncate max-w-[220px]">{String(step.model).replace(/^claude-/, '')}</span>}
+            {step.model && <span className="truncate max-w-[220px]">{getModelDisplay(step.agent ?? '', step.model).modelLabel}</span>}
           </div>
           <div className="mt-2 grid grid-cols-1 gap-1 font-mono text-[10px] text-theme-subtle sm:grid-cols-3">
             <span className="flex min-w-0 items-center gap-1 truncate" title="Started at">

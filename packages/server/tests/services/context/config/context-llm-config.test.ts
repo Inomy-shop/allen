@@ -19,14 +19,14 @@ describe('resolveContextLlmConfig', () => {
   });
 
   it('uses common context LLM env before legacy purpose-specific env', () => {
-    process.env.ALLEN_CONTEXT_LLM_PROVIDER = 'claude-cli';
+    process.env.ALLEN_CONTEXT_LLM_PROVIDER = 'claude';
     process.env.ALLEN_CONTEXT_LLM_MODEL = 'opus';
     process.env.ALLEN_CONTEXT_LLM_CWD = '/tmp/context-common';
     process.env.ALLEN_COGNEE_LLM_PROVIDER = 'codex';
     process.env.ALLEN_COGNEE_LLM_MODEL = 'gpt-legacy';
 
     expect(resolveContextLlmConfig({ purpose: 'cognee' })).toEqual(expect.objectContaining({
-      provider: 'claude-cli',
+      provider: 'claude',
       model: 'opus',
       cwd: '/tmp/context-common',
     }));
@@ -35,17 +35,17 @@ describe('resolveContextLlmConfig', () => {
   it('keeps legacy Cognee env as a compatibility fallback', () => {
     delete process.env.ALLEN_CONTEXT_LLM_PROVIDER;
     delete process.env.ALLEN_CONTEXT_LLM_MODEL;
-    process.env.ALLEN_COGNEE_LLM_PROVIDER = 'claude-cli';
+    process.env.ALLEN_COGNEE_LLM_PROVIDER = 'claude';
     process.env.ALLEN_COGNEE_LLM_MODEL = 'sonnet';
 
     expect(resolveContextLlmConfig({ purpose: 'cognee' })).toEqual(expect.objectContaining({
-      provider: 'claude-cli',
+      provider: 'claude',
       model: 'sonnet',
     }));
   });
 
   it('uses request overrides before env vars', () => {
-    process.env.ALLEN_CONTEXT_LLM_PROVIDER = 'claude-cli';
+    process.env.ALLEN_CONTEXT_LLM_PROVIDER = 'claude';
     process.env.ALLEN_CONTEXT_LLM_MODEL = 'opus';
 
     expect(resolveContextLlmConfig({

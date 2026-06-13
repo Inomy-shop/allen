@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import {
   PROVIDERS,
   buildClaudeCompatibleEnvOverlay,
@@ -6,6 +6,7 @@ import {
   buildKimiEnvOverlay,
   getEnabledProvidersInDefaultOrder,
   normalizeDeepSeekAnthropicBaseUrl,
+  getEnabledProvidersFromRegistry,
 } from './chat-providers.js';
 import { EnvConfigProvider, resetRuntimeProvidersForTests, setRuntimeConfigProvider, setRuntimeSecretsProvider } from '../runtime/config.js';
 
@@ -319,9 +320,9 @@ describe('DeepSeek provider registry', () => {
 
 describe('Claude provider registry', () => {
   it('exposes Fable in the Claude CLI model list', () => {
-    const claude = PROVIDERS.find(p => p.provider === 'claude-cli');
+    const claude = PROVIDERS.find(p => p.provider === 'claude');
     expect(claude).toBeDefined();
-    expect(claude?.models).toEqual(['fable', 'sonnet', 'opus', 'haiku']);
+    expect(claude?.models).toEqual(['claude-fable-5', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-haiku-4-5-20251001']);
   });
 });
 
@@ -364,7 +365,7 @@ describe('enabled provider registry', () => {
     delete process.env.ALLEN_KIMI_API_KEY;
 
     const providers = await getEnabledProvidersInDefaultOrder();
-    expect(providers.map((provider) => provider.provider)).toEqual(expect.arrayContaining(['codex', 'claude-cli']));
+    expect(providers.map((provider) => provider.provider)).toEqual(expect.arrayContaining(['codex', 'claude']));
     expect(providers.some((provider) => provider.provider === 'deepseek')).toBe(false);
     expect(providers.some((provider) => provider.provider === 'xiaomi-mimo')).toBe(false);
     expect(providers.some((provider) => provider.provider === 'kimi')).toBe(false);
@@ -568,5 +569,268 @@ describe('Codex MCP suppression for tool-less calls', () => {
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
     expect(args).not.toContain('mcp_servers={}');
     expect(args.join(' ')).toContain('mcp_servers.allen.env.ALLEN_CHAT_SESSION_ID');
+  });
+});
+
+// ── REQ-014: Registry-backed provider model patching ──
+
+describe('getEnabledProvidersFromRegistry (REQ-014)', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key';
+    process.env.ALLEN_XIAOMI_MIMO_API_KEY = 'test-key';
+    process.env.ALLEN_KIMI_API_KEY = 'test-key';
+  });
+
+  afterEach(() => {
+    for (const key of [
+      'ALLEN_DEEPSEEK_API_KEY', 'ALLEN_XIAOMI_MIMO_API_KEY', 'ALLEN_KIMI_API_KEY',
+    ]) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+  });
+
+  function makeRegistryDb(records: Array<{ provider: string; fullId: string; sortOrder?: number; providerDisplayName?: string }> = []) {
+    const store = records.map((r, i) => ({
+      _id: `id-${i}`,
+      provider: r.provider,
+      fullId: r.fullId,
+      providerDisplayName: r.providerDisplayName,
+      isActive: true,
+      sortOrder: r.sortOrder ?? i + 1,
+    }));
+    const queryable = () => {
+      let results = [...store];
+      return {
+        sort: () => {
+          results.sort((a, b) => a.sortOrder - b.sortOrder);
+          return {
+            project: () => ({
+              toArray: async () => results.map((r) => ({ fullId: r.fullId, providerDisplayName: r.providerDisplayName })),
+            }),
+            toArray: async () => results.map((r) => ({ fullId: r.fullId, providerDisplayName: r.providerDisplayName })),
+          };
+        },
+        toArray: async () => results.map((r) => ({ fullId: r.fullId, providerDisplayName: r.providerDisplayName })),
+      };
+    };
+    return {
+      collection: (name: string) => ({
+        find: (query: Record<string, unknown>) => {
+          let results = [...store];
+          if (query.isActive === true) results = results.filter((r) => r.isActive);
+          if (query.provider) results = results.filter((r) => r.provider === query.provider);
+          results.sort((a, b) => a.sortOrder - b.sortOrder);
+          return {
+            sort: () => ({
+              project: () => ({
+                toArray: async () => results.map((r) => ({ fullId: r.fullId, providerDisplayName: r.providerDisplayName })),
+              }),
+              toArray: async () => results.map((r) => ({ fullId: r.fullId, providerDisplayName: r.providerDisplayName })),
+            }),
+            toArray: async () => results.map((r) => ({ fullId: r.fullId, providerDisplayName: r.providerDisplayName })),
+          };
+        },
+        findOne: async () => null,
+      }),
+    } as any;
+  }
+
+  it('patches closed provider (codex) models from registry', async () => {
+    const db = makeRegistryDb([
+      { provider: 'codex', fullId: 'gpt-5.5', sortOrder: 1 },
+      { provider: 'codex', fullId: 'gpt-5.4', sortOrder: 2 },
+      { provider: 'codex', fullId: 'o3', sortOrder: 3 },
+    ]);
+
+    const providers = await getEnabledProvidersFromRegistry(db);
+    const codex = providers.find((p) => p.provider === 'codex');
+    expect(codex).toBeDefined();
+    expect(codex!.models).toEqual(['gpt-5.5', 'gpt-5.4', 'o3']);
+  });
+
+  it('patches open provider (deepseek) modelSuggestions from registry', async () => {
+    const db = makeRegistryDb([
+      { provider: 'deepseek', fullId: 'deepseek-v4-pro[1m]', sortOrder: 1 },
+      { provider: 'deepseek', fullId: 'deepseek-v4-flash', sortOrder: 2 },
+    ]);
+
+    const providers = await getEnabledProvidersFromRegistry(db);
+    const ds = providers.find((p) => p.provider === 'deepseek');
+    expect(ds).toBeDefined();
+    expect(ds!.modelSuggestions).toEqual(['deepseek-v4-pro[1m]', 'deepseek-v4-flash']);
+  });
+
+  it('falls back to static defaults when registry is empty', async () => {
+    const db = makeRegistryDb([]);
+
+    const providers = await getEnabledProvidersFromRegistry(db);
+    const claude = providers.find((p) => p.provider === 'claude');
+    expect(claude).toBeDefined();
+    expect(claude!.models).toEqual(['claude-fable-5', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-haiku-4-5-20251001']);
+  });
+
+  it('falls back to static defaults when registry query throws', async () => {
+    const db = {
+      collection: () => ({
+        find: () => { throw new Error('DB unavailable'); },
+      }),
+    } as any;
+
+    const providers = await getEnabledProvidersFromRegistry(db);
+    const codex = providers.find((p) => p.provider === 'codex');
+    expect(codex).toBeDefined();
+    // Static fallback mirrors the model-registry seed list (SEED_MODELS).
+    expect(codex!.models).toEqual([
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.3-codex',
+      'gpt-5.2-codex',
+      'gpt-5.1-codex-max',
+      'gpt-5.2',
+      'gpt-5.1-codex-mini',
+      'o3',
+      'o4-mini',
+      'codex-mini',
+    ]);
+  });
+
+  it('patches provider label from non-empty registry providerDisplayName', async () => {
+    const db = makeRegistryDb([
+      { provider: 'deepseek', fullId: 'deepseek-v4-flash', sortOrder: 1, providerDisplayName: '  My DeepSeek  ' },
+    ]);
+
+    const providers = await getEnabledProvidersFromRegistry(db);
+    const ds = providers.find((p) => p.provider === 'deepseek');
+    expect(ds).toBeDefined();
+    // Label should be set from trimmed providerDisplayName.
+    expect(ds!.label).toBe('My DeepSeek');
+  });
+
+  it('does not patch provider label from whitespace-only providerDisplayName', async () => {
+    const db = makeRegistryDb([
+      { provider: 'deepseek', fullId: 'deepseek-v4-flash', sortOrder: 1, providerDisplayName: '   ' },
+    ]);
+
+    const providers = await getEnabledProvidersFromRegistry(db);
+    const ds = providers.find((p) => p.provider === 'deepseek');
+    expect(ds).toBeDefined();
+    // Static default label must survive when registry has only whitespace.
+    expect(ds!.label).toBe('DeepSeek');
+  });
+
+  it('only returns enabled providers', async () => {
+    delete process.env.ALLEN_KIMI_API_KEY;
+    delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
+
+    const db = makeRegistryDb([
+      { provider: 'codex', alias: 'gpt-5.5' },
+      { provider: 'kimi', alias: 'kimi-k2.6' },
+    ]);
+
+    const providers = await getEnabledProvidersFromRegistry(db);
+    const providerNames = providers.map((p) => p.provider);
+    expect(providerNames).toContain('codex');
+    expect(providerNames).toContain('deepseek');
+    expect(providerNames).not.toContain('kimi');
+    expect(providerNames).not.toContain('xiaomi-mimo');
+  });
+});
+
+// ── REQ-019: Tier resolution priority ──
+
+describe('Tier resolution via buildClaudeCompatibleEnvOverlay (REQ-019)', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    for (const key of [
+      'ALLEN_DEEPSEEK_API_KEY', 'ALLEN_DEEPSEEK_MODEL', 'ALLEN_DEEPSEEK_FLASH_MODEL',
+      'ALLEN_KIMI_API_KEY',
+    ]) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+  });
+
+  beforeEach(() => {
+    process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key';
+  });
+
+  function makeRegistryWithModel(provider: string, tier: string, fullId: string) {
+    return {
+      collection: (name: string) => ({
+        find: () => ({ toArray: async () => [], sort: () => ({ toArray: async () => [] }) }),
+        findOne: async (_query: Record<string, unknown>) => {
+          if (name === 'model_registry') {
+            return { fullId, provider, tier, isActive: true, sortOrder: 1 };
+          }
+          return null;
+        },
+      }),
+    } as any;
+  }
+
+  it('env override takes highest precedence for default model', async () => {
+    process.env.ALLEN_DEEPSEEK_MODEL = 'deepseek-from-env';
+    const db = makeRegistryWithModel('deepseek', 'default', 'deepseek-from-registry');
+
+    const overlay = await buildClaudeCompatibleEnvOverlay('deepseek', undefined, db);
+    expect(overlay.ANTHROPIC_MODEL).toBe('deepseek-from-env');
+  });
+
+  it('registry model is used when env override is absent (default tier)', async () => {
+    delete process.env.ALLEN_DEEPSEEK_MODEL;
+    const db = makeRegistryWithModel('deepseek', 'default', 'deepseek-from-registry');
+
+    const overlay = await buildClaudeCompatibleEnvOverlay('deepseek', undefined, db);
+    expect(overlay.ANTHROPIC_MODEL).toBe('deepseek-from-registry');
+  });
+
+  it('static default is used when neither env nor registry provide a value', async () => {
+    delete process.env.ALLEN_DEEPSEEK_MODEL;
+    const db = {
+      collection: () => ({
+        find: () => ({ toArray: async () => [], sort: () => ({ toArray: async () => [] }) }),
+        findOne: async () => null,
+      }),
+    } as any;
+
+    const overlay = await buildClaudeCompatibleEnvOverlay('deepseek', undefined, db);
+    expect(overlay.ANTHROPIC_MODEL).toBe('deepseek-v4-pro[1m]');
+  });
+
+  it('flash tier resolves via registry when env override is absent', async () => {
+    delete process.env.ALLEN_DEEPSEEK_FLASH_MODEL;
+    const db = makeRegistryWithModel('deepseek', 'flash', 'deepseek-flash-from-registry');
+
+    const overlay = await buildClaudeCompatibleEnvOverlay('deepseek', undefined, db);
+    expect(overlay.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('deepseek-flash-from-registry');
+  });
+
+  it('explicit model override takes highest precedence of all', async () => {
+    const db = makeRegistryWithModel('deepseek', 'default', 'deepseek-from-registry');
+    const overlay = await buildClaudeCompatibleEnvOverlay('deepseek', 'custom-model', db);
+    expect(overlay.ANTHROPIC_MODEL).toBe('custom-model');
+  });
+
+  it('tier model env override works for Kimi opus model', async () => {
+    process.env.ALLEN_KIMI_API_KEY = 'kimi-key';
+    process.env.ALLEN_KIMI_OPUS_MODEL = 'kimi-opus-env';
+
+    const db = makeRegistryWithModel('kimi', 'opus', 'kimi-opus-registry');
+
+    const overlay = await buildClaudeCompatibleEnvOverlay('kimi', undefined, db);
+    expect(overlay.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('kimi-opus-env');
+    delete process.env.ALLEN_KIMI_API_KEY;
+  });
+
+  it('registry fallback works when db is undefined (backward compat)', async () => {
+    process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key';
+    delete process.env.ALLEN_DEEPSEEK_MODEL;
+
+    const overlay = await buildClaudeCompatibleEnvOverlay('deepseek', undefined, undefined);
+    expect(overlay.ANTHROPIC_MODEL).toBe('deepseek-v4-pro[1m]');
   });
 });

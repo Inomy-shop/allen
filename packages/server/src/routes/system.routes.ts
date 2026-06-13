@@ -11,9 +11,11 @@ import { runSystemHealth } from '../services/system-health.service.js';
 import { contextProviderRuntimeConfig } from '../services/context/config/context-provider-config.js';
 import { requireAuth, type AuthedRequest } from '../middleware/requireAuth.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
+import { invalidateModelCostCache } from '../services/model-cost.service.js';
 import { getRuntimeConfigProvider, getRuntimeSecretsProvider } from '../runtime/config.js';
 import { mcpCredentialEnvKey } from '../runtime/mcp-credentials.js';
 import { MCP_PRESETS } from '../services/mcp.service.js';
+import { ModelRegistryService, seedModelFullIdsForProvider } from '../services/model-registry.service.js';
 import { OrgSeedService } from '../services/org-seed.js';
 import { seedDefaultWorkflows } from '../seed.js';
 import {
@@ -72,50 +74,32 @@ type DesktopCogneeSetupStatus = {
 
 const PROVIDER_OPTIONS = [
   { label: 'Codex', value: 'codex' },
-  { label: 'Claude CLI', value: 'claude-cli' },
+  { label: 'Claude', value: 'claude' },
   ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.map((config) => ({ label: config.label, value: config.provider })),
 ] as const;
 
 type ProviderOptionValue = (typeof PROVIDER_OPTIONS)[number]['value'];
 
+// Static fallbacks derived from the model-registry seed list. These are only
+// used when the model_registry collection is empty/unavailable — live values
+// (dropdown options, validation) are resolved from the registry first.
+const SEED_CLAUDE_MODEL_FULLIDS = seedModelFullIdsForProvider('claude');
+const SEED_CODEX_MODEL_FULLIDS = seedModelFullIdsForProvider('codex');
+
 const AGENT_MODEL_OPTIONS = [
   { label: 'Provider default', value: '' },
-  { label: 'fable', value: 'fable' },
-  { label: 'sonnet', value: 'sonnet' },
-  { label: 'opus', value: 'opus' },
-  { label: 'haiku', value: 'haiku' },
-  { label: 'gpt-5.5', value: 'gpt-5.5' },
-  { label: 'gpt-5.4', value: 'gpt-5.4' },
-  { label: 'gpt-5.3-codex', value: 'gpt-5.3-codex' },
-  { label: 'gpt-5.2-codex', value: 'gpt-5.2-codex' },
-  { label: 'gpt-5.1-codex-max', value: 'gpt-5.1-codex-max' },
-  { label: 'gpt-5.2', value: 'gpt-5.2' },
-  { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini' },
+  ...SEED_CLAUDE_MODEL_FULLIDS.map((model) => ({ label: model, value: model })),
+  ...SEED_CODEX_MODEL_FULLIDS.map((model) => ({ label: model, value: model })),
   ...CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.flatMap((config) => config.modelSuggestions.map((model) => ({ label: model, value: model }))),
-] as const;
+];
 
-const CLAUDE_AGENT_MODEL_OPTIONS = new Set(['', 'fable', 'sonnet', 'opus', 'haiku']);
-const CODEX_AGENT_MODEL_OPTIONS = new Set([
-  '',
-  'gpt-5.5',
-  'gpt-5.4',
-  'gpt-5.3-codex',
-  'gpt-5.2-codex',
-  'gpt-5.1-codex-max',
-  'gpt-5.2',
-  'gpt-5.1-codex-mini',
-]);
+const CLAUDE_AGENT_MODEL_OPTIONS = new Set(['', ...SEED_CLAUDE_MODEL_FULLIDS]);
+const CODEX_AGENT_MODEL_OPTIONS = new Set(['', ...SEED_CODEX_MODEL_FULLIDS]);
 
 const CONTEXT_LLM_MODEL_OPTIONS = [
-  { label: 'gpt-5.5', value: 'gpt-5.5' },
-  { label: 'gpt-5.4', value: 'gpt-5.4' },
-  { label: 'gpt-5.3-codex', value: 'gpt-5.3-codex' },
-  { label: 'gpt-5.2-codex', value: 'gpt-5.2-codex' },
-  { label: 'fable', value: 'fable' },
-  { label: 'sonnet', value: 'sonnet' },
-  { label: 'opus', value: 'opus' },
-  { label: 'haiku', value: 'haiku' },
-] as const;
+  ...SEED_CODEX_MODEL_FULLIDS.map((model) => ({ label: model, value: model })),
+  ...SEED_CLAUDE_MODEL_FULLIDS.map((model) => ({ label: model, value: model })),
+];
 
 const RERANKER_MODEL_OPTIONS = [
   { label: 'BAAI/bge-reranker-base', value: 'BAAI/bge-reranker-base' },
@@ -194,7 +178,7 @@ const DESKTOP_RUNTIME_SETTING_GROUPS: RuntimeSettingGroupDef[] = [
       { key: 'ALLEN_COGNEE_TIMEOUT_MS', label: 'Cognee timeout', kind: 'number', defaultValue: '14400000 ingest / 120000 search', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
       { key: 'ALLEN_COGNEE_EMBEDDING_PROVIDER', label: 'Cognee embedding provider', kind: 'select', defaultValue: 'local', options: [{ label: 'Local', value: 'local' }], advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
       { key: 'ALLEN_COGNEE_EMBEDDING_MODEL', label: 'Cognee embedding model', kind: 'select', defaultValue: 'BAAI/bge-small-en-v1.5', options: [...COGNEE_EMBEDDING_MODEL_OPTIONS], advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', in: ['cognee', 'cognee_memory'] } },
-      { key: 'ALLEN_CONTEXT_SEMANTIC_EVALUATOR', label: 'Semantic evaluator', kind: 'select', defaultValue: 'disabled', options: [{ label: 'Disabled', value: '' }, { label: 'DeepEval', value: 'deepeval' }], advanced: true, showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
+      { key: 'ALLEN_CONTEXT_SEMANTIC_EVALUATOR', label: 'Semantic evaluator', kind: 'select', defaultValue: 'deepeval', options: [{ label: 'DeepEval', value: 'deepeval' }, { label: 'Disabled', value: 'disabled' }], showWhen: { key: 'ALLEN_CONTEXT_PROVIDER', notEquals: '' } },
       { key: 'ALLEN_DEEPEVAL_SCRIPT', label: 'DeepEval script', kind: 'path', defaultValue: 'bundled evaluator', advanced: true, showWhen: { key: 'ALLEN_CONTEXT_SEMANTIC_EVALUATOR', equals: 'deepeval' } },
     ],
   },
@@ -262,7 +246,7 @@ const DESKTOP_RUNTIME_SETTING_DEFS = new Map(
 );
 
 function chatModelOptionsForProvider(provider: string): RuntimeSettingOption[] {
-  if (provider === 'claude-cli') {
+  if (provider === 'claude') {
     return [...CLAUDE_AGENT_MODEL_OPTIONS]
       .filter((value) => value !== '')
       .map((value) => ({ label: value, value }));
@@ -276,10 +260,54 @@ function chatModelOptionsForProvider(provider: string): RuntimeSettingOption[] {
   return (config?.modelSuggestions ?? []).map((value) => ({ label: value, value }));
 }
 
+/**
+ * Registry-aware version of chatModelOptionsForProvider.
+ * Queries the model_registry for active models belonging to the given provider.
+ * Falls back to the static hardcoded sets when the registry is empty/unavailable.
+ */
+async function chatModelOptionsForProviderFromRegistry(provider: string, db: Db): Promise<RuntimeSettingOption[]> {
+  try {
+    const registryModels = await db.collection('model_registry')
+      .find({ provider, isActive: true })
+      .sort({ sortOrder: 1 })
+      .project({ fullId: 1, displayName: 1 })
+      .toArray();
+    if (registryModels.length > 0) {
+      return registryModels.map((m) => ({ label: (m.displayName as string) || (m.fullId as string), value: m.fullId as string }));
+    }
+  } catch {
+    // Registry unavailable — fall through to static defaults
+  }
+  return chatModelOptionsForProvider(provider);
+}
+
 function fallbackChatModelForProvider(provider: string): string {
-  if (provider === 'claude-cli') return 'sonnet';
+  if (provider === 'claude') return 'claude-sonnet-4-6';
   if (provider === 'codex') return 'gpt-5.5';
   return CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.find((item) => item.provider === provider)?.defaultModel ?? 'gpt-5.5';
+}
+
+/**
+ * Registry-aware default model for a provider: the active `tier: 'default'`
+ * entry (lowest sortOrder), then the first active entry, then the static
+ * fallback above.
+ */
+async function defaultChatModelForProviderFromRegistry(provider: string, db: Db): Promise<string> {
+  try {
+    const tierDefault = await db.collection('model_registry').findOne(
+      { provider, isActive: true, tier: 'default' },
+      { sort: { sortOrder: 1 }, projection: { fullId: 1 } },
+    );
+    if (tierDefault?.fullId) return tierDefault.fullId as string;
+    const firstActive = await db.collection('model_registry').findOne(
+      { provider, isActive: true },
+      { sort: { sortOrder: 1 }, projection: { fullId: 1 } },
+    );
+    if (firstActive?.fullId) return firstActive.fullId as string;
+  } catch {
+    // Registry unavailable — fall through to static default
+  }
+  return fallbackChatModelForProvider(provider);
 }
 
 const COGNEE_CONTEXT_PROVIDERS = new Set(['cognee', 'cognee_memory']);
@@ -446,6 +474,14 @@ function runtimeSettingValue(
     const persistedValue = field.key === 'ALLEN_DEEPSEEK_BASE_URL'
       ? normalizeDeepSeekAnthropicBaseUrl(persisted[field.key])
       : persisted[field.key];
+    if (field.key === 'ALLEN_CONTEXT_SEMANTIC_EVALUATOR' && persistedValue === '') {
+      return {
+        currentValue: defaultValue,
+        configuredValue: null,
+        source: 'default',
+        defaultValue,
+      };
+    }
     return {
       currentValue: persistedValue,
       configuredValue: persistedValue,
@@ -543,7 +579,7 @@ async function desktopCogneeSetupStatus(
   };
 }
 
-async function desktopRuntimeSettingsPayload() {
+async function desktopRuntimeSettingsPayload(db: Db) {
   const config = getRuntimeConfigProvider();
   const desktop = config.get('ALLEN_DESKTOP') === '1';
   const configPath = config.get('ALLEN_DESKTOP_CONFIG_PATH');
@@ -554,6 +590,18 @@ async function desktopRuntimeSettingsPayload() {
     value: provider.provider,
   }));
   const enabledProviderValues = new Set<string>(enabledProviderOptions.map((option) => option.value));
+
+  // Pre-compute model options and registry-backed default models for all
+  // enabled providers (Fix 3A)
+  const modelOptionsCache = new Map<string, RuntimeSettingOption[]>();
+  const defaultModelCache = new Map<string, string>();
+  for (const opt of enabledProviderOptions) {
+    const options = await chatModelOptionsForProviderFromRegistry(opt.value, db).catch(() => []);
+    modelOptionsCache.set(opt.value, options);
+    const defaultModel = await defaultChatModelForProviderFromRegistry(opt.value, db)
+      .catch(() => fallbackChatModelForProvider(opt.value));
+    defaultModelCache.set(opt.value, defaultModel);
+  }
 
   function normalizeProviderField(field: RuntimeSettingDef, value: ReturnType<typeof runtimeSettingValue>) {
     if (field.key === 'ALLEN_DEFAULT_CHAT_PROVIDER') {
@@ -567,8 +615,8 @@ async function desktopRuntimeSettingsPayload() {
     if (field.key === 'ALLEN_DEFAULT_CHAT_MODEL') {
       const chatProvider = currentRuntimeSettingValue('ALLEN_DEFAULT_CHAT_PROVIDER', persisted, defaults);
       const normalizedProvider = enabledProviderValues.has(chatProvider) ? chatProvider : enabledProviderOptions[0]?.value ?? 'codex';
-      const modelOptions = chatModelOptionsForProvider(normalizedProvider);
-      const fallbackModel = fallbackChatModelForProvider(normalizedProvider);
+      const modelOptions = modelOptionsCache.get(normalizedProvider) ?? [];
+      const fallbackModel = defaultModelCache.get(normalizedProvider) ?? fallbackChatModelForProvider(normalizedProvider);
       const modelValues = new Set(modelOptions.map((option) => option.value));
       const currentValue = value.currentValue && (modelValues.has(value.currentValue) || modelOptions.length === 0)
         ? value.currentValue
@@ -586,6 +634,38 @@ async function desktopRuntimeSettingsPayload() {
         options: [{ label: 'Preserve seeded mix', value: '' }, ...enabledProviderOptions],
         ...value,
         currentValue: value.currentValue === '' || enabledProviderValues.has(value.currentValue) ? value.currentValue : '',
+      };
+    }
+    if (field.key === 'ALLEN_DEFAULT_AGENT_MODEL') {
+      const agentProvider = currentRuntimeSettingValue('ALLEN_DEFAULT_AGENT_PROVIDER', persisted, defaults);
+      if (!agentProvider || !enabledProviderValues.has(agentProvider)) {
+        return { ...field, ...value };
+      }
+      const modelOptions = modelOptionsCache.get(agentProvider) ?? [];
+      if (modelOptions.length === 0) return { ...field, ...value };
+      const withProviderDefault = [{ label: 'Provider default', value: '' }, ...modelOptions];
+      const modelValues = new Set(withProviderDefault.map((option) => option.value));
+      return {
+        ...field,
+        options: withProviderDefault,
+        ...value,
+        currentValue: modelValues.has(value.currentValue) ? value.currentValue : '',
+      };
+    }
+    if (field.key === 'ALLEN_CONTEXT_LLM_MODEL') {
+      const contextProvider = currentRuntimeSettingValue('ALLEN_CONTEXT_LLM_PROVIDER', persisted, defaults) || 'codex';
+      const modelOptions = modelOptionsCache.get(contextProvider) ?? [];
+      if (modelOptions.length === 0) return { ...field, ...value };
+      const modelValues = new Set(modelOptions.map((option) => option.value));
+      const fallbackModel = defaultModelCache.get(contextProvider) ?? fallbackChatModelForProvider(contextProvider);
+      const currentValue = value.currentValue && modelValues.has(value.currentValue)
+        ? value.currentValue
+        : modelValues.has(fallbackModel) ? fallbackModel : modelOptions[0].value;
+      return {
+        ...field,
+        options: modelOptions,
+        ...value,
+        currentValue,
       };
     }
     if (field.key === 'ALLEN_CONTEXT_LLM_PROVIDER') {
@@ -648,7 +728,7 @@ function isProviderValue(value: string): value is ProviderOptionValue {
   return PROVIDER_OPTIONS.some((option) => option.value === value);
 }
 
-function validateAgentModelForProvider(provider: ProviderOptionValue | '', model: string): void {
+async function validateAgentModelForProvider(provider: ProviderOptionValue | '', model: string, db: Db): Promise<void> {
   if (!provider) {
     if (model) throw new Error('agent_model_requires_agent_provider');
     return;
@@ -656,6 +736,23 @@ function validateAgentModelForProvider(provider: ProviderOptionValue | '', model
   if (CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.some((config) => config.provider === provider)) {
     // Claude-compatible API providers use open model fields — any string is valid.
     return;
+  }
+  // For closed providers (claude-cli, codex), check the registry first, fall back to static sets.
+  try {
+    const registryModels = await db.collection('model_registry')
+      .find({ provider, isActive: true })
+      .project({ fullId: 1 })
+      .toArray();
+    if (registryModels.length > 0) {
+      const validFullIds = new Set(registryModels.map((m) => m.fullId as string));
+      if (!validFullIds.has(model)) {
+        // Also allow empty string (provider default)
+        if (model !== '') throw new Error('invalid_agent_model_for_provider');
+      }
+      return;
+    }
+  } catch {
+    // Registry unavailable — fall through to static defaults
   }
   const allowed = provider === 'codex' ? CODEX_AGENT_MODEL_OPTIONS : CLAUDE_AGENT_MODEL_OPTIONS;
   if (!allowed.has(model)) throw new Error('invalid_agent_model_for_provider');
@@ -696,6 +793,7 @@ function desktopCogneeRuntimeDefaults(provider: string): Record<string, string> 
     ALLEN_CONTEXT_LLM_MODEL: getRuntimeConfigProvider().get('ALLEN_CONTEXT_LLM_MODEL') ?? 'gpt-5.5',
     ALLEN_CONTEXT_RERANKER: getRuntimeConfigProvider().get('ALLEN_CONTEXT_RERANKER') ?? 'bge',
     ALLEN_CONTEXT_RERANKER_MODEL: getRuntimeConfigProvider().get('ALLEN_CONTEXT_RERANKER_MODEL') ?? 'BAAI/bge-reranker-base',
+    ALLEN_CONTEXT_SEMANTIC_EVALUATOR: getRuntimeConfigProvider().get('ALLEN_CONTEXT_SEMANTIC_EVALUATOR') ?? 'deepeval',
   };
 }
 
@@ -913,7 +1011,7 @@ export function systemRoutes(db: Db): Router {
 
   router.get('/desktop-runtime/settings', requireAuth, async (_req: AuthedRequest, res: Response) => {
     try {
-      return res.json(await desktopRuntimeSettingsPayload());
+      return res.json(await desktopRuntimeSettingsPayload(db));
     } catch (err) {
       console.error('[system/desktop-runtime/settings]', err);
       return res.status(500).json({ error: 'desktop_runtime_settings_failed' });
@@ -952,7 +1050,7 @@ export function systemRoutes(db: Db): Router {
       }
 
       writeDesktopRuntimeConfigFile(configPath, persisted);
-      return res.json(await desktopRuntimeSettingsPayload());
+      return res.json(await desktopRuntimeSettingsPayload(db));
     } catch (err) {
       const message = (err as Error).message;
       const status = message.startsWith('invalid_value:') ? 400 : 500;
@@ -981,7 +1079,7 @@ export function systemRoutes(db: Db): Router {
       if (agentProviderRaw && !isProviderValue(agentProviderRaw)) {
         return res.status(400).json({ error: 'invalid_agent_provider' });
       }
-      validateAgentModelForProvider(agentProviderRaw as ProviderOptionValue | '', agentModel);
+      await validateAgentModelForProvider(agentProviderRaw as ProviderOptionValue | '', agentModel, db);
 
       const persisted = readDesktopRuntimeConfigFile(configPath);
       persisted.ALLEN_DEFAULT_CHAT_PROVIDER = chatProviderRaw;
@@ -1003,11 +1101,25 @@ export function systemRoutes(db: Db): Router {
       writeDesktopRuntimeConfigFile(configPath, persisted);
 
       await refreshDesktopSeedDefaults(db);
+
+      // ALLEN_DEFAULT_AGENT_PROVIDER and ALLEN_DEFAULT_AGENT_MODEL are
+      // onboarding-only — they set the initial provider/model flattening for
+      // the seed, then must be cleaned up so they never re-fire on subsequent
+      // restarts. If we keep them in the config file, setupDesktopRuntime
+      // forwards them to process.env, resolveAgentProviderModel reads them
+      // back, and ALL agents get overwritten to the onboarding provider on
+      // every app start — even with SEED_OVERRIDE disabled.
+      delete process.env.ALLEN_DEFAULT_AGENT_PROVIDER;
+      delete process.env.ALLEN_DEFAULT_AGENT_MODEL;
+      delete persisted.ALLEN_DEFAULT_AGENT_PROVIDER;
+      delete persisted.ALLEN_DEFAULT_AGENT_MODEL;
+      writeDesktopRuntimeConfigFile(configPath, persisted);
+
       return res.json({
         chatProvider: chatProviderRaw,
         agentProvider: agentProviderRaw,
         agentModel: agentProviderRaw ? agentModel : '',
-        settings: await desktopRuntimeSettingsPayload(),
+        settings: await desktopRuntimeSettingsPayload(db),
       });
     } catch (err) {
       const message = (err as Error).message;
@@ -1037,7 +1149,7 @@ export function systemRoutes(db: Db): Router {
 
       return res.json({
         ...setupResult,
-        settings: await desktopRuntimeSettingsPayload(),
+        settings: await desktopRuntimeSettingsPayload(db),
       });
     } catch (err) {
       const message = (err as Error).message;
@@ -1201,6 +1313,159 @@ export function systemRoutes(db: Db): Router {
           docsPath: 'docs/first-workflow.md',
         },
       });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Model Registry API (REQ-006)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  const modelRegistry = new ModelRegistryService(db);
+
+  /**
+   * POST /api/system/providers/:provider/recheck-auth
+   * CLI providers only (claude, codex). Bypasses the auth-status cache and
+   * re-runs the CLI login check — backs the "Check again" button in Settings.
+   */
+  router.post('/providers/:provider/recheck-auth', requireAuth, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { getCliAuthStatus, isCliProvider, cliLoginCommand } = await import('../services/cli-auth.service.js');
+      const provider = String(req.params.provider);
+      if (!isCliProvider(provider)) {
+        return res.status(400).json({ error: 'not_a_cli_provider' });
+      }
+      const authStatus = await getCliAuthStatus(provider, { fresh: true });
+      return res.json({
+        provider,
+        authStatus,
+        ...(authStatus !== 'logged_in' ? { loginCommand: cliLoginCommand(provider) } : {}),
+      });
+    } catch (err) {
+      console.error('[system/providers:recheck-auth]', err);
+      return res.status(500).json({ error: 'recheck_auth_failed' });
+    }
+  });
+
+  /**
+   * GET /api/system/models
+   * Public — needed for unauthenticated onboarding
+   * Query params: includeInactive (boolean), provider (string, optional)
+   */
+  router.get('/models', async (req: Request, res: Response) => {
+    try {
+      const includeInactive = req.query.includeInactive === 'true';
+      const provider = typeof req.query.provider === 'string' ? req.query.provider : undefined;
+      const models = await modelRegistry.list({ includeInactive, provider });
+      return res.json({ models });
+    } catch (err) {
+      console.error('[system/models:list]', err);
+      return res.status(500).json({ error: 'model_registry_list_failed' });
+    }
+  });
+
+  /**
+   * GET /api/system/models/:id
+   * Public — returns single model or 404
+   */
+  router.get('/models/:id', async (req: Request, res: Response) => {
+    try {
+      const model = await modelRegistry.getById(String(req.params.id));
+      if (!model) return res.status(404).json({ error: 'model_not_found' });
+      return res.json(model);
+    } catch (err) {
+      const message = (err as Error).message;
+      if (message.includes('ObjectId')) return res.status(400).json({ error: 'invalid_model_id' });
+      console.error('[system/models:get]', err);
+      return res.status(500).json({ error: 'model_registry_get_failed' });
+    }
+  });
+
+  /**
+   * POST /api/system/models
+   * Requires admin. Creates a new model registry entry.
+   */
+  router.post('/models', requireAuth, requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const model = await modelRegistry.create({
+        provider: String(req.body.provider ?? ''),
+        fullId: String(req.body.fullId ?? ''),
+        displayName: req.body.displayName,
+        providerDisplayName: String(req.body.providerDisplayName ?? ''),
+        costInputPerMTok: req.body.costInputPerMTok,
+        costOutputPerMTok: req.body.costOutputPerMTok,
+        costCacheReadPerMTok: req.body.costCacheReadPerMTok,
+        tier: req.body.tier ?? null,
+        sortOrder: req.body.sortOrder ?? 0,
+      });
+      invalidateModelCostCache();
+      return res.status(201).json(model);
+    } catch (err) {
+      const message = (err as Error).message;
+      if (message === 'DUPLICATE_PROVIDER_FULL_ID') return res.status(409).json({ error: 'duplicate_provider_full_id' });
+      if (message.startsWith('UNKNOWN_PROVIDER') || message.startsWith('DISPLAY_NAME_') || message.startsWith('PROVIDER_DISPLAY_NAME_') || message.startsWith('FULL_ID_') || message.startsWith('INVALID_') || message.startsWith('TIER_')) {
+        return res.status(400).json({ error: message });
+      }
+      console.error('[system/models:create]', err);
+      return res.status(500).json({ error: 'model_registry_create_failed' });
+    }
+  });
+
+  /**
+   * PATCH /api/system/models/:id
+   * Requires admin. Partial update. Provider and fullId are immutable.
+   */
+  router.patch('/models/:id', requireAuth, requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      // Immutable fields guard — reject only actual CHANGES. Clients that
+      // echo the full form object back (unchanged provider/fullId) must not
+      // fail a cost-only edit.
+      if (req.body.provider !== undefined || req.body.fullId !== undefined) {
+        const existing = await modelRegistry.getById(String(req.params.id));
+        if (!existing) return res.status(404).json({ error: 'model_not_found' });
+        const providerChanged = req.body.provider !== undefined && req.body.provider !== existing.provider;
+        const fullIdChanged = req.body.fullId !== undefined && req.body.fullId !== existing.fullId;
+        if (providerChanged || fullIdChanged) {
+          return res.status(400).json({ error: 'provider_and_fullid_are_immutable' });
+        }
+      }
+      const model = await modelRegistry.update(String(req.params.id), {
+        fullId: req.body.fullId,
+        displayName: req.body.displayName,
+        providerDisplayName: req.body.providerDisplayName,
+        costInputPerMTok: req.body.costInputPerMTok,
+        costOutputPerMTok: req.body.costOutputPerMTok,
+        costCacheReadPerMTok: req.body.costCacheReadPerMTok,
+        tier: req.body.tier,
+        sortOrder: req.body.sortOrder,
+        isActive: req.body.isActive,
+      });
+      if (!model) return res.status(404).json({ error: 'model_not_found' });
+      invalidateModelCostCache();
+      return res.json(model);
+    } catch (err) {
+      const message = (err as Error).message;
+      if (message === 'INVALID_TIER') return res.status(400).json({ error: message });
+      if (message.includes('ObjectId')) return res.status(400).json({ error: 'invalid_model_id' });
+      console.error('[system/models:update]', err);
+      return res.status(500).json({ error: 'model_registry_update_failed' });
+    }
+  });
+
+  /**
+   * DELETE /api/system/models/:id
+   * Requires admin. Soft-deletes by setting isActive=false.
+   */
+  router.delete('/models/:id', requireAuth, requireAdmin, async (req: AuthedRequest, res: Response) => {
+    try {
+      const model = await modelRegistry.softDelete(String(req.params.id));
+      if (!model) return res.status(404).json({ error: 'model_not_found' });
+      invalidateModelCostCache();
+      return res.json({ deleted: true, model });
+    } catch (err) {
+      const message = (err as Error).message;
+      if (message.includes('ObjectId')) return res.status(400).json({ error: 'invalid_model_id' });
+      console.error('[system/models:delete]', err);
+      return res.status(500).json({ error: 'model_registry_delete_failed' });
     }
   });
 

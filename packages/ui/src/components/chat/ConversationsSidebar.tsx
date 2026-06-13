@@ -3,14 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2, Search, Pencil, Sparkles, LoaderCircle } from 'lucide-react';
 import { useChat } from '../../hooks/useChat';
 import DeleteConfirmDialog from '../common/DeleteConfirmDialog';
+import { PROVIDER_COLORS } from '../../lib/model-catalog';
+import { getModelDisplay } from '../../hooks/useModelRegistry';
 
-const PROV: Record<string, { label: string; color: string }> = {
-  codex: { label: 'Codex', color: 'text-accent-green' },
-  'claude-cli': { label: 'Claude', color: 'text-accent' },
-  deepseek: { label: 'DeepSeek', color: 'text-accent-blue' },
-  'xiaomi-mimo': { label: 'MiMo', color: 'text-accent-blue' },
-  kimi: { label: 'Kimi', color: 'text-accent-blue' },
-};
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -100,8 +95,8 @@ export default function ConversationsSidebar() {
         )}
         {filtered.map((s) => {
           const isActive = s._id === activeSessionId;
-          const p = PROV[s.provider] ?? { label: s.provider, color: 'text-theme-muted' };
-          const dotBg = p.color.replace('text-', 'bg-');
+          const { providerLabel } = getModelDisplay(s.provider);
+          const colors = PROVIDER_COLORS[s.provider] ?? { color: 'text-theme-muted', dotBg: 'bg-theme-muted' };
           return (
             <div
               key={s._id}
@@ -123,7 +118,7 @@ export default function ConversationsSidebar() {
               title={s.title}
             >
               <span
-                className={`mt-[6px] w-1.5 h-1.5 rounded-full shrink-0 ${dotBg}`}
+                className={`mt-[6px] w-1.5 h-1.5 rounded-full shrink-0 ${colors.dotBg}`}
                 aria-hidden="true"
               />
               <div className="flex-1 min-w-0">
@@ -150,7 +145,7 @@ export default function ConversationsSidebar() {
                   </div>
                 )}
                 <div className="flex items-center gap-1.5 mt-0.5 text-[11px] font-mono">
-                  <span className={p.color}>{p.label}</span>
+                  <span className={colors.color}>{providerLabel}</span>
                   <span className="text-theme-subtle/60">·</span>
                   <span className="text-theme-subtle">{timeAgo(s.lastMessageAt)}</span>
                   {s.messageCount > 0 && (

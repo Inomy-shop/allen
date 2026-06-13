@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  BarChart3,
   Brain,
   CalendarClock,
   ChevronDown,
@@ -16,12 +17,17 @@ import {
   User,
 } from 'lucide-react';
 import McpServerManager from '../components/settings/McpServerManager';
+import { ProviderModelRegistrySection } from '../components/settings/ModelRegistryPanel';
+import UsageDashboard from '../components/settings/UsageDashboard';
 import Select from '../components/common/Select';
 import ShortcutKey from '../components/common/ShortcutKey';
 import { ProviderIcon } from '../components/chat/ChatInput';
 import { auth as authApi, system as systemApi, type DesktopRuntimeSettingsResponse } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { useSettingsStore } from '../stores/settingsStore';
+import { useModelRegistry, getModelDisplay } from '../hooks/useModelRegistry';
+import type { ModelRegistryEntry, UseModelRegistryReturn } from '../hooks/useModelRegistry';
+import { useEnabledProvidersStatus, type CliAuthStatus } from '../hooks/useEnabledProviders';
 import { type ColorMode } from '../lib/theme';
 import CronManagerPage from './CronManagerPage';
 import LearningsPage from './LearningsPage';
@@ -30,7 +36,8 @@ import UsersAdminPage from './UsersAdminPage';
 const TABS = [
   { id: 'general', adminOnly: false },
   { id: 'runtime', adminOnly: false },
-  { id: 'models', adminOnly: false },
+  { id: 'models', adminOnly: true },
+  { id: 'usage', adminOnly: false },
   { id: 'mcp', adminOnly: false },
   { id: 'schedules', adminOnly: false },
   { id: 'learnings', adminOnly: false },
@@ -53,8 +60,13 @@ const PAGE_COPY: Record<TabId, { title: string; description: string; icon: React
   },
   models: {
     title: 'Models',
-    description: 'Configure default models and LLM providers used by Allen agents.',
+    description: 'Manage LLM models across all providers. Add, edit, and deactivate models without code changes.',
     icon: Cpu,
+  },
+  usage: {
+    title: 'Usage',
+    description: 'LLM usage and cost across providers and models — chat, workflow runs, and agent executions, each counted once.',
+    icon: BarChart3,
   },
   mcp: {
     title: 'MCP Servers',
@@ -252,6 +264,93 @@ function formatRoleLabel(role: string): string {
     .join(' ');
 }
 
+
+function formatReleaseDate(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function ReleaseNotesModal({
+  notes,
+  loadingDetail,
+  error,
+  onClose,
+}: {
+  notes: AllenReleaseNotesIndex;
+  loadingDetail: boolean;
+  error: string | null;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
+      <div className="flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border border-app bg-app-card shadow-2xl">
+        <div className="flex items-center justify-between gap-4 border-b border-app px-5 py-3.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <h2 id="release-notes-title" className="truncate text-[17px] font-semibold tracking-tight text-theme-primary">Allen release history</h2>
+            {notes.source === 'cache' && <SettingsBadge tone="warn">Cached</SettingsBadge>}
+          </div>
+          <button type="button" className="settings-secondary-button" onClick={onClose}>Close</button>
+        </div>
+
+        {error && (
+          <div className="border-b border-app px-5 py-3 text-[12px] text-theme-muted">
+            {error}
+          </div>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {loadingDetail && <p className="mb-4 text-[12px] text-theme-muted">Loading release details...</p>}
+
+          {notes.releases.length > 0 ? (
+            <div className="space-y-6">
+              {notes.releases.map((release) => (
+                <article key={release.version} className="px-1 py-2">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="text-[15px] font-semibold text-theme-primary">{release.version}</h3>
+                      {release.publishedAt && (
+                        <div className="mt-1 text-[12px] text-theme-muted">
+                          {formatReleaseDate(release.publishedAt)}
+                        </div>
+                      )}
+                    </div>
+                    {release.channel && <SettingsBadge>{release.channel}</SettingsBadge>}
+                  </div>
+
+                  {release.summary && <p className="mt-3 text-[13px] leading-5 text-theme-muted">{release.summary}</p>}
+
+                  {(release.sections?.length ?? 0) > 0 ? (
+                    <div className="mt-4 space-y-4">
+                      {release.sections!.map((section) => (
+                        <section key={`${release.version}-${section.title}`}>
+                          <h4 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-theme-muted">{section.title}</h4>
+                          {section.items.length > 0 ? (
+                            <ul className="mt-2 list-disc space-y-1.5 pl-5 text-[13px] leading-5 text-theme-secondary">
+                              {section.items.map((item, index) => <li key={`${release.version}-${section.title}-${index}`}>{item}</li>)}
+                            </ul>
+                          ) : (
+                            <p className="mt-2 text-[13px] text-theme-muted">No entries.</p>
+                          )}
+                        </section>
+                      ))}
+                    </div>
+                  ) : (
+                    !loadingDetail && <p className="mt-4 text-[13px] text-theme-muted">No detailed notes are available for this release yet.</p>
+                  )}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[13px] text-theme-muted">No releases are available.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AppearancePicker() {
   const colorMode = useSettingsStore((s) => s.colorMode);
   const setColorMode = useSettingsStore((s) => s.setColorMode);
@@ -279,6 +378,11 @@ function GeneralTab() {
   const [updateSettings, setUpdateSettings] = useState<Awaited<ReturnType<NonNullable<typeof window.allenDesktop>['getUpdateSettings']>> | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
+  const [releaseNotes, setReleaseNotes] = useState<AllenReleaseNotesIndex | null>(null);
+  const [releaseNotesStatus, setReleaseNotesStatus] = useState<string | null>(null);
+  const [loadingReleaseNotes, setLoadingReleaseNotes] = useState(false);
+  const [loadingReleaseDetail, setLoadingReleaseDetail] = useState(false);
   const desktopUpdatesAvailable = Boolean(window.allenDesktop);
 
   useEffect(() => {
@@ -322,6 +426,53 @@ function GeneralTab() {
     }
   }
 
+  async function openReleaseNotes() {
+    if (!window.allenDesktop?.getReleaseNotes) return;
+    setReleaseNotesOpen(true);
+    setLoadingReleaseNotes(true);
+    setLoadingReleaseDetail(false);
+    setReleaseNotesStatus(null);
+    try {
+      const result = await window.allenDesktop.getReleaseNotes();
+      setReleaseNotes(result);
+      void loadAllReleaseDetails(result);
+    } catch (err) {
+      setReleaseNotesStatus(err instanceof Error ? err.message : String(err));
+      setReleaseNotesOpen(false);
+    } finally {
+      setLoadingReleaseNotes(false);
+    }
+  }
+
+  async function loadAllReleaseDetails(index: AllenReleaseNotesIndex) {
+    if (!window.allenDesktop?.getReleaseNote || index.releases.length === 0) return;
+    setLoadingReleaseDetail(true);
+    setReleaseNotesStatus(null);
+    const results = await Promise.allSettled(
+      index.releases.map((release) => window.allenDesktop!.getReleaseNote(release.version, release.notesUrl)),
+    );
+    const details = new Map<string, AllenReleaseNotesEntry>();
+    let failedCount = 0;
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        details.set(result.value.version, result.value);
+      } else {
+        failedCount += 1;
+      }
+    }
+    setReleaseNotes((current) => current
+      ? {
+        ...current,
+        releases: current.releases.map((release) => ({ ...release, ...(details.get(release.version) ?? {}) })),
+      }
+      : current);
+    if (failedCount > 0) {
+      setReleaseNotesStatus(`${failedCount} release detail file${failedCount === 1 ? '' : 's'} could not be loaded.`);
+    }
+    setLoadingReleaseDetail(false);
+  }
+
+
   return (
     <SettingsPageShell activeTab="general">
       <SettingsPanel title="Workspace behavior" description="Defaults for the local Allen desktop experience.">
@@ -362,6 +513,21 @@ function GeneralTab() {
                 {updateStatus && <div className="settings-field-meta"><span>{updateStatus}</span></div>}
               </div>
             </SettingsRow>
+            <SettingsRow label="Release notes" description="View changelog entries for all published desktop releases.">
+              <div className="settings-field-control">
+                <div className="settings-inline-action">
+                  <button
+                    type="button"
+                    className="settings-secondary-button"
+                    disabled={loadingReleaseNotes}
+                    onClick={() => void openReleaseNotes()}
+                  >
+                    <span>{loadingReleaseNotes ? 'Loading...' : 'View release notes'}</span>
+                  </button>
+                </div>
+                {releaseNotesStatus && !releaseNotesOpen && <div className="settings-field-meta"><span>{releaseNotesStatus}</span></div>}
+              </div>
+            </SettingsRow>
           </>
         ) : (
           <SettingsRow label="Updates" description="Update controls are available in the packaged desktop app.">
@@ -378,6 +544,15 @@ function GeneralTab() {
           <SettingsValue>Off</SettingsValue>
         </SettingsRow>
       </SettingsPanel>
+
+      {releaseNotesOpen && releaseNotes && (
+        <ReleaseNotesModal
+          notes={releaseNotes}
+          loadingDetail={loadingReleaseDetail}
+          error={releaseNotesStatus}
+          onClose={() => setReleaseNotesOpen(false)}
+        />
+      )}
     </SettingsPageShell>
   );
 }
@@ -387,44 +562,17 @@ type RuntimeSettingField = RuntimeSettings['groups'][number]['fields'][number];
 type RuntimeSettingOption = NonNullable<RuntimeSettingField['options']>[number];
 
 const PROVIDER_DEFAULT_MODEL_OPTION: RuntimeSettingOption = { label: 'Provider default', value: '' };
-const CLAUDE_RUNTIME_MODEL_OPTIONS: RuntimeSettingOption[] = [
-  { label: 'fable', value: 'fable' },
-  { label: 'sonnet', value: 'sonnet' },
-  { label: 'opus', value: 'opus' },
-  { label: 'haiku', value: 'haiku' },
-];
-const CODEX_RUNTIME_MODEL_OPTIONS: RuntimeSettingOption[] = [
-  { label: 'gpt-5.5', value: 'gpt-5.5' },
-  { label: 'gpt-5.4', value: 'gpt-5.4' },
-  { label: 'gpt-5.3-codex', value: 'gpt-5.3-codex' },
-  { label: 'gpt-5.2-codex', value: 'gpt-5.2-codex' },
-  { label: 'gpt-5.1-codex-max', value: 'gpt-5.1-codex-max' },
-  { label: 'gpt-5.2', value: 'gpt-5.2' },
-  { label: 'gpt-5.1-codex-mini', value: 'gpt-5.1-codex-mini' },
-];
-const OPEN_PROVIDER_RUNTIME_MODEL_OPTIONS: Record<string, RuntimeSettingOption[]> = {
-  deepseek: [
-    { label: 'deepseek-v4-pro[1m]', value: 'deepseek-v4-pro[1m]' },
-    { label: 'deepseek-v4-flash', value: 'deepseek-v4-flash' },
-  ],
-  'xiaomi-mimo': [
-    { label: 'mimo-v2.5-pro', value: 'mimo-v2.5-pro' },
-  ],
-  kimi: [
-    { label: 'kimi-k2.6', value: 'kimi-k2.6' },
-    { label: 'kimi-k2.5', value: 'kimi-k2.5' },
-  ],
-};
 const MODEL_RUNTIME_GROUP_IDS = new Set(['agents']);
 const ALL_PROVIDER_SETTINGS_ID = '__all-provider-settings__';
 
-function llmOptionsForProvider(provider: string, includeProviderDefault = false): RuntimeSettingOption[] {
-  const models = provider === 'claude-cli'
-    ? CLAUDE_RUNTIME_MODEL_OPTIONS
-    : provider === 'codex'
-      ? CODEX_RUNTIME_MODEL_OPTIONS
-      : OPEN_PROVIDER_RUNTIME_MODEL_OPTIONS[provider] ?? [...CLAUDE_RUNTIME_MODEL_OPTIONS, ...CODEX_RUNTIME_MODEL_OPTIONS];
-  return includeProviderDefault ? [PROVIDER_DEFAULT_MODEL_OPTION, ...models] : models;
+function llmOptionsForProvider(provider: string, includeProviderDefault = false, registryModels?: ModelRegistryEntry[]): RuntimeSettingOption[] {
+  // Registry only — no static catalog (REQ-005). An empty list simply renders
+  // an empty dropdown until the registry loads.
+  const canonical = provider === 'claude-cli' ? 'claude' : provider;
+  const fromRegistry = (registryModels ?? [])
+    .filter((m) => m.provider === canonical && m.isActive)
+    .map((m) => ({ label: m.displayName || m.fullId, value: m.fullId }));
+  return includeProviderDefault ? [PROVIDER_DEFAULT_MODEL_OPTION, ...fromRegistry] : fromRegistry;
 }
 
 function runtimeSourceLabel(source: RuntimeSettingField['source']): string {
@@ -455,15 +603,15 @@ function settingsValueMap(settings: RuntimeSettings): Record<string, string> {
   return values;
 }
 
-function runtimeSelectOptions(field: RuntimeSettingField, values: Record<string, string>): RuntimeSettingOption[] {
+function runtimeSelectOptions(field: RuntimeSettingField, values: Record<string, string>, registryModels?: ModelRegistryEntry[]): RuntimeSettingOption[] {
   if (field.key === 'ALLEN_DEFAULT_CHAT_MODEL') {
-    return llmOptionsForProvider(values.ALLEN_DEFAULT_CHAT_PROVIDER ?? '');
+    return llmOptionsForProvider(values.ALLEN_DEFAULT_CHAT_PROVIDER ?? '', false, registryModels);
   }
   if (field.key === 'ALLEN_DEFAULT_AGENT_MODEL') {
-    return llmOptionsForProvider(values.ALLEN_DEFAULT_AGENT_PROVIDER ?? '', true);
+    return llmOptionsForProvider(values.ALLEN_DEFAULT_AGENT_PROVIDER ?? '', true, registryModels);
   }
   if (field.key === 'ALLEN_CONTEXT_LLM_MODEL') {
-    return llmOptionsForProvider(values.ALLEN_CONTEXT_LLM_PROVIDER ?? '');
+    return llmOptionsForProvider(values.ALLEN_CONTEXT_LLM_PROVIDER ?? '', false, registryModels);
   }
   return field.options ?? [];
 }
@@ -472,12 +620,14 @@ function RuntimeSettingControl({
   editable,
   field,
   onChange,
+  registryModels,
   runtimeValues,
   value,
 }: {
   editable: boolean;
   field: RuntimeSettingField;
   onChange: (key: string, value: string) => void;
+  registryModels?: ModelRegistryEntry[];
   runtimeValues: Record<string, string>;
   value: string;
 }) {
@@ -508,7 +658,7 @@ function RuntimeSettingControl({
   }
 
   if (field.kind === 'select') {
-    const options = runtimeSelectOptions(field, runtimeValues);
+    const options = runtimeSelectOptions(field, runtimeValues, registryModels);
     const hasCurrentValue = value === '' || options.some((option) => option.value === value);
     const selectOptions = hasCurrentValue
       ? options
@@ -552,9 +702,118 @@ type ClaudeCompatibleProviderPanelConfig = {
   saveLabel: string;
 };
 
+/**
+ * Claude and Codex are CLI-backed providers: always enabled, no API key, no
+ * disable switch (REQ-002). The only requirement to use them is a logged-in
+ * CLI session, surfaced here with a "Check again" re-verification button.
+ */
+function CliProviderRows({ modelRegistry }: { modelRegistry: UseModelRegistryReturn }) {
+  const { providers, loaded } = useEnabledProvidersStatus();
+  const [statusOverride, setStatusOverride] = useState<Record<string, CliAuthStatus>>({});
+  const [loginCommands, setLoginCommands] = useState<Record<string, string>>({});
+  const [checkingProvider, setCheckingProvider] = useState<string | null>(null);
+  const [expandedById, setExpandedById] = useState<Record<string, boolean>>({});
+
+  const cliProviders = providers.filter((p) => p.provider === 'claude' || p.provider === 'codex');
+
+  async function recheck(provider: string) {
+    setCheckingProvider(provider);
+    try {
+      const result = await systemApi.recheckProviderAuth(provider);
+      setStatusOverride((current) => ({ ...current, [provider]: result.authStatus }));
+      if (result.loginCommand) {
+        setLoginCommands((current) => ({ ...current, [provider]: result.loginCommand as string }));
+      }
+    } catch {
+      // Leave the previous status in place; the button stays available.
+    } finally {
+      setCheckingProvider(null);
+    }
+  }
+
+  if (!loaded && cliProviders.length === 0) {
+    return (
+      <div className="settings-provider-item">
+        <div className="settings-provider-summary px-3 py-2 text-[13px] text-theme-muted">Loading providers…</div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {cliProviders.map((p) => {
+        const status = statusOverride[p.provider] ?? p.authStatus ?? 'logged_in';
+        const connected = status === 'logged_in';
+        const expanded = Boolean(expandedById[p.provider]);
+        const { providerLabel } = getModelDisplay(p.provider);
+        const loginHint = status === 'cli_missing'
+          ? `The ${providerLabel} CLI is not installed. Install it and log in, then check again.`
+          : `Not logged in. Run \`${loginCommands[p.provider] ?? (p.provider === 'codex' ? 'codex login' : 'claude (then /login)')}\` in a terminal, then check again.`;
+        return (
+          <div key={p.provider} className={`settings-provider-item ${connected ? 'enabled' : ''}`}>
+            <div className="settings-provider-summary">
+              <button
+                type="button"
+                className="settings-provider-main"
+                onClick={() => setExpandedById((current) => ({ ...current, [p.provider]: !current[p.provider] }))}
+                aria-expanded={expanded}
+              >
+                <span className="settings-provider-mark">
+                  <ProviderIcon provider={p.provider} className="h-3.5 w-3.5" />
+                </span>
+                <span className="settings-provider-copy">
+                  <span className="settings-provider-title-line">
+                    <strong>{providerLabel}</strong>
+                    <SettingsBadge tone={connected ? 'ok' : 'warn'}>
+                      {connected ? 'connected' : status === 'cli_missing' ? 'CLI missing' : 'not logged in'}
+                    </SettingsBadge>
+                  </span>
+                  <span>Built-in CLI provider — always enabled</span>
+                </span>
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="settings-secondary-button"
+                  disabled={checkingProvider === p.provider}
+                  onClick={() => void recheck(p.provider)}
+                >
+                  {checkingProvider === p.provider ? 'Checking…' : 'Check again'}
+                </button>
+                <button
+                  type="button"
+                  className="settings-provider-chevron-button"
+                  aria-label={`${expanded ? 'Collapse' : 'Expand'} ${providerLabel} provider models`}
+                  aria-expanded={expanded}
+                  onClick={() => setExpandedById((current) => ({ ...current, [p.provider]: !current[p.provider] }))}
+                >
+                  <ChevronDown className={`settings-provider-chevron ${expanded ? 'open' : ''}`} />
+                </button>
+              </div>
+            </div>
+            {!connected && (
+              <div className="px-3 pb-3 text-[12px] leading-relaxed text-theme-muted">{loginHint}</div>
+            )}
+            {expanded && (
+              <div className="settings-provider-details">
+                <ProviderModelRegistrySection
+                  modelRegistry={modelRegistry}
+                  provider={p.provider}
+                  providerLabel={providerLabel}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 function LlmProvidersPanel({
   configs,
   editable,
+  modelRegistry,
   savedRuntimeValues,
   showSourceMeta = true,
   runtime,
@@ -566,6 +825,7 @@ function LlmProvidersPanel({
 }: {
   configs: ClaudeCompatibleProviderPanelConfig[];
   editable: boolean;
+  modelRegistry: UseModelRegistryReturn;
   savedRuntimeValues: Record<string, string>;
   showSourceMeta?: boolean;
   runtime: Awaited<ReturnType<typeof systemApi.desktopRuntime>> | null;
@@ -682,6 +942,7 @@ function LlmProvidersPanel({
             {providerSaveError}
           </div>
         )}
+        <CliProviderRows modelRegistry={modelRegistry} />
         {configs.map((config) => {
           const enabled = enabledById[config.groupId] ?? apiKeyConfigured(config);
           const expanded = Boolean(expandedById[config.groupId]);
@@ -696,11 +957,6 @@ function LlmProvidersPanel({
                   type="button"
                   className="settings-provider-main"
                   onClick={() => {
-                    if (!enabled) {
-                      setEnabledById((current) => ({ ...current, [config.groupId]: true }));
-                      setExpandedById((current) => ({ ...current, [config.groupId]: true }));
-                      return;
-                    }
                     setExpandedById((current) => ({ ...current, [config.groupId]: !current[config.groupId] }));
                   }}
                   aria-expanded={expanded}
@@ -736,7 +992,6 @@ function LlmProvidersPanel({
                     className="settings-provider-chevron-button"
                     aria-label={`${expanded ? 'Collapse' : 'Expand'} ${config.title} provider settings`}
                     aria-expanded={expanded}
-                    disabled={!enabled}
                     onClick={() => setExpandedById((current) => ({ ...current, [config.groupId]: !current[config.groupId] }))}
                   >
                     <ChevronDown className={`settings-provider-chevron ${expanded ? 'open' : ''}`} />
@@ -795,6 +1050,24 @@ function LlmProvidersPanel({
 
                 </div>
               )}
+              {!enabled && expanded && (
+                <div className="settings-provider-details">
+                  <ProviderModelRegistrySection
+                    modelRegistry={modelRegistry}
+                    provider={config.groupId}
+                    providerLabel={config.title}
+                  />
+                </div>
+              )}
+              {enabled && expanded && (
+                <div className="settings-provider-details model-registry-provider-details">
+                  <ProviderModelRegistrySection
+                    modelRegistry={modelRegistry}
+                    provider={config.groupId}
+                    providerLabel={config.title}
+                  />
+                </div>
+              )}
             </div>
           );
         })}
@@ -803,7 +1076,17 @@ function LlmProvidersPanel({
   );
 }
 
-function RuntimeSettingsTab({ view }: { view: 'runtime' | 'models' }) {
+function RuntimeSettingsTab({
+  view,
+  noShell = false,
+  modelRegistry,
+  registryModels,
+}: {
+  view: 'runtime' | 'models';
+  noShell?: boolean;
+  modelRegistry?: UseModelRegistryReturn;
+  registryModels?: ModelRegistryEntry[];
+}) {
   const [runtime, setRuntime] = useState<Awaited<ReturnType<typeof systemApi.desktopRuntime>> | null>(null);
   const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
   const [runtimeValues, setRuntimeValues] = useState<Record<string, string>>({});
@@ -829,22 +1112,23 @@ function RuntimeSettingsTab({ view }: { view: 'runtime' | 'models' }) {
   }, []);
 
   function updateRuntimeValue(key: string, value: string) {
+    const rm = modelRegistry?.models ?? registryModels;
     setRuntimeValues((current) => {
       const next = { ...current, [key]: value };
       if (key === 'ALLEN_DEFAULT_AGENT_PROVIDER') {
-        const options = llmOptionsForProvider(value, true);
+        const options = llmOptionsForProvider(value, true, rm);
         if (!options.some((option) => option.value === next.ALLEN_DEFAULT_AGENT_MODEL)) {
           next.ALLEN_DEFAULT_AGENT_MODEL = '';
         }
       }
       if (key === 'ALLEN_DEFAULT_CHAT_PROVIDER') {
-        const options = llmOptionsForProvider(value);
+        const options = llmOptionsForProvider(value, false, rm);
         if (!options.some((option) => option.value === next.ALLEN_DEFAULT_CHAT_MODEL)) {
           next.ALLEN_DEFAULT_CHAT_MODEL = options[0]?.value ?? '';
         }
       }
       if (key === 'ALLEN_CONTEXT_LLM_PROVIDER') {
-        const options = llmOptionsForProvider(value);
+        const options = llmOptionsForProvider(value, false, rm);
         if (!options.some((option) => option.value === next.ALLEN_CONTEXT_LLM_MODEL)) {
           next.ALLEN_CONTEXT_LLM_MODEL = options[0]?.value ?? '';
         }
@@ -937,8 +1221,8 @@ function RuntimeSettingsTab({ view }: { view: 'runtime' | 'models' }) {
     return group.fields.some((field) => field.restartRequired && changedRuntimeKeys.has(field.key));
   }
 
-  return (
-    <SettingsPageShell activeTab={isModelsView ? 'models' : 'runtime'} wide>
+  const content = (
+    <>
       {!isModelsView && (
         <SettingsPanel title="Environment" description="Runtime configuration Allen is currently using.">
           {error && (
@@ -1043,6 +1327,7 @@ function RuntimeSettingsTab({ view }: { view: 'runtime' | 'models' }) {
                         editable={runtimeSettings.editable}
                         field={field}
                         value={runtimeValues[field.key] ?? ''}
+                        registryModels={modelRegistry?.models ?? registryModels}
                         runtimeValues={runtimeValues}
                         onChange={updateRuntimeValue}
                       />
@@ -1124,10 +1409,11 @@ function RuntimeSettingsTab({ view }: { view: 'runtime' | 'models' }) {
             );
           })}
 
-          {isModelsView && apiProviderPanelConfigs.length > 0 && (
+          {isModelsView && modelRegistry && (
             <LlmProvidersPanel
               configs={apiProviderPanelConfigs}
               editable={runtimeSettings.editable}
+              modelRegistry={modelRegistry}
               savedRuntimeValues={savedRuntimeValues}
               showSourceMeta={false}
               runtime={runtime}
@@ -1157,6 +1443,13 @@ function RuntimeSettingsTab({ view }: { view: 'runtime' | 'models' }) {
         </>
       )}
 
+    </>
+  );
+
+  if (noShell) return content;
+  return (
+    <SettingsPageShell activeTab={isModelsView ? 'models' : 'runtime'} wide>
+      {content}
     </SettingsPageShell>
   );
 }
@@ -1166,7 +1459,12 @@ function RuntimeTab() {
 }
 
 function ModelsTab() {
-  return <RuntimeSettingsTab view="models" />;
+  const modelRegistry = useModelRegistry();
+  return (
+    <SettingsPageShell activeTab="models" wide>
+      <RuntimeSettingsTab view="models" noShell modelRegistry={modelRegistry} />
+    </SettingsPageShell>
+  );
 }
 
 function McpTab() {
@@ -1197,6 +1495,14 @@ function LearningsTab() {
       <div className="settings-embedded-page">
         <LearningsPage />
       </div>
+    </SettingsPageShell>
+  );
+}
+
+function UsageTab() {
+  return (
+    <SettingsPageShell activeTab="usage" wide>
+      <UsageDashboard />
     </SettingsPageShell>
   );
 }
@@ -1295,6 +1601,7 @@ const TAB_COMPONENTS: Record<TabId, React.FC> = {
   runtime: RuntimeTab,
   schedules: SchedulesTab,
   team: TeamTab,
+  usage: UsageTab,
 };
 
 export default function SettingsPage() {

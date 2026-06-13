@@ -11,10 +11,11 @@ import {
 } from 'lucide-react';
 import { useExecution, type TimelineEvent, type NodeState } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
-import { executions as api, authHeaders, interventions as interventionsApi, repos as reposApi, system as systemApi, type RunStatus } from '../services/api';
+import { executions as api, authHeaders, interventions as interventionsApi, repos as reposApi, system as systemApi, type RunStatus, type SpawnedChild } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
 import TokenUsageDisplay from '../components/common/TokenUsageDisplay';
+import SpawnCostBreakdown from '../components/execution/SpawnCostBreakdown';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
 import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
@@ -30,6 +31,7 @@ import { WorkflowInterventionDialog, type WorkflowInterventionSubmit } from '../
 import { ToolCallRow, type ToolCall } from '../components/common/ToolCallLog';
 import { buildTracesForTimeline } from '../utils/executionState';
 import { workspaceChatPath } from '../lib/workspace-routes';
+import { registryDefaultModelForProvider, getModelDisplay } from '../hooks/useModelRegistry';
 
 type ExecutionRightPanelView = 'node' | 'rerun' | 'artifacts';
 
@@ -1781,8 +1783,8 @@ function AgentPanel({
   );
 }
 
-function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, refresh, runContext, contextEngineEnabled }: {
-  execution: any; agentName: string; traces: any[]; id: string; liveToolCalls?: any[]; refresh: () => void; runContext?: RunStatus | null; contextEngineEnabled: boolean;
+function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, refresh, runContext, contextEngineEnabled, spawnSubtree }: {
+  execution: any; agentName: string; traces: any[]; id: string; liveToolCalls?: any[]; refresh: () => void; runContext?: RunStatus | null; contextEngineEnabled: boolean; spawnSubtree?: SpawnedChild[];
 }) {
   // Attempt selector — when the user has resumed the agent at least once,
   // traces has multiple rows (one per attempt). The latest attempt is
@@ -1803,6 +1805,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const [showPrompt, setShowPrompt] = useState(false);
   const [showResponse, setShowResponse] = useState(true);
   const [showToolCalls, setShowToolCalls] = useState(false);
+  const [breakdownExpanded, setBreakdownExpanded] = useState(false);
   const [liveLogs, setLiveLogs] = useState<any[]>([]);
   const [logsOpen, setLogsOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
@@ -1820,6 +1823,24 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const prompt = trace?.renderedPrompt ?? execution.input?.prompt ?? '';
   const response = trace?.rawResponse ?? '';
   const cost = trace?.cost ?? execution.cost ?? {};
+
+  // Metrics deliberately show this agent's OWN numbers only (accumulated
+  // across resumed attempts) — own tokens × the shown model's price must
+  // check out. Child agents spawned by this run are summarized in a chip and
+  // fully itemized per model in the SpawnCostBreakdown table below, where
+  // aggregation is labelled and every row links to its own execution.
+  const childRollup = (() => {
+    const rows = spawnSubtree ?? [];
+    if (rows.length === 0) return null;
+    let actual = 0;
+    let sawCost = false;
+    for (const c of rows) {
+      if (c.cost?.actual != null) { actual += c.cost.actual; sawCost = true; }
+    }
+    return { actual, sawCost, count: rows.length };
+  })();
+  const ownCost = execution.cost ?? cost;
+  const ownTokenUsage = execution.tokenUsage ?? null;
   // Merge persisted tool calls (from trace) with live-streaming ones (SSE),
   // deduping by toolUseId so we don't double-count once the trace lands.
   const toolCalls = (() => {
@@ -2076,7 +2097,10 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const showLogsInMain = execution.status === 'running';
   const primaryPanelTitle = showLogsInMain ? 'Logs' : 'Response';
   const primaryPanelCount = showLogsInMain ? `${allLogs.length} entries` : `${response.length} chars`;
-  const modelLabel = [meta.provider ?? 'claude', meta.model ?? cost.model ?? 'sonnet'].filter(Boolean).join(' / ');
+  const resolvedProvider = meta.provider ?? 'claude';
+  const resolvedModel = meta.model ?? cost.model ?? registryDefaultModelForProvider(resolvedProvider);
+  const { providerLabel: execProviderLabel, modelLabel: execModelLabel } = getModelDisplay(resolvedProvider, resolvedModel);
+  const modelLabel = [execProviderLabel, execModelLabel].filter(Boolean).join(' / ');
   const startedLabel = execution.startedAt ? new Date(execution.startedAt).toLocaleString() : 'n/a';
   const completedLabel = execution.completedAt ? new Date(execution.completedAt).toLocaleString() : 'n/a';
   const selectedContextAttempt = findAgentContextAttempt(agentContextReport, agentName, selectedAttempt);
@@ -2189,17 +2213,46 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
           <section className="grid gap-2 rounded-md border border-app bg-app-muted/25 p-2 sm:grid-cols-2 2xl:grid-cols-4">
             <AgentMetric icon={<Clock className="h-3.5 w-3.5" />} label="Duration" value={durationMs > 0 ? formatDuration(durationMs) : '—'} />
             <AgentMetric icon={<Terminal className="h-3.5 w-3.5" />} label="Model" value={modelLabel} />
-            <AgentMetric icon={<DollarSign className="h-3.5 w-3.5" />} label="Cost" value={<CostDisplay cost={cost} />} />
-            {execution.tokenUsage ? (
+            <AgentMetric
+              icon={<DollarSign className="h-3.5 w-3.5" />}
+              label="Cost (own)"
+              value={
+                <span className="inline-flex items-baseline gap-2">
+                  <CostDisplay cost={ownCost} />
+                  {childRollup?.sawCost && (
+                    <span
+                      className="text-[10px] text-accent-blue font-mono"
+                      title={`Child agents spent $${childRollup.actual.toFixed(2)} on their own models — see the cost breakdown below`}
+                    >
+                      + ${childRollup.actual.toFixed(2)} · {childRollup.count} child{childRollup.count === 1 ? '' : 'ren'}
+                    </span>
+                  )}
+                </span>
+              }
+            />
+            {ownTokenUsage ? (
               <AgentMetric
                 icon={<Cpu className="h-3.5 w-3.5" />}
-                label="Tokens"
-                value={<TokenUsageDisplay tokenUsage={execution.tokenUsage} />}
+                label="Tokens (own)"
+                value={<TokenUsageDisplay tokenUsage={ownTokenUsage} />}
               />
             ) : (
-              <AgentMetric icon={<Cpu className="h-3.5 w-3.5" />} label="Tokens" value="—" />
+              <AgentMetric icon={<Cpu className="h-3.5 w-3.5" />} label="Tokens (own)" value="—" />
             )}
           </section>
+
+          {(spawnSubtree?.length ?? 0) > 0 && (
+            <SpawnCostBreakdown
+              ownLabel={agentName}
+              ownModel={modelLabel}
+              ownCost={ownCost}
+              ownTokenUsage={ownTokenUsage}
+              ownStatus={execution.status}
+              rows={spawnSubtree ?? []}
+              expandAll={breakdownExpanded}
+              onToggleExpand={setBreakdownExpanded}
+            />
+          )}
 
           {sortedTraces.length > 1 && (
             <div className="overflow-x-auto rounded-md border border-app bg-app-card p-1">
@@ -2468,6 +2521,7 @@ export default function ExecutionDetailPage() {
     logs, logFilter, setLogFilter,
     loading, connected, isLive, refresh, markExecutionRunning,
     children, descendantsMode, toggleDescendants,
+    spawnSubtree,
     liveToolCallsByNode,
   } = useExecution(id);
 
@@ -2811,6 +2865,7 @@ export default function ExecutionDetailPage() {
       refresh={refresh}
       runContext={runContext}
       contextEngineEnabled={contextEngineEnabled}
+      spawnSubtree={spawnSubtree}
     />;
   }
 
@@ -2851,6 +2906,25 @@ export default function ExecutionDetailPage() {
     if (estimated > 0 || actual != null) return { estimated, actual };
     return execution.cost;
   })();
+
+  // Child executions (spawned agents AND nested sub-workflows) live in their
+  // OWN execution rows — node costs here never include them (workflow-type
+  // node traces carry method 'child_execution' with zero cost). Fold the
+  // entire child subtree (children, grandchildren, …) into the header chip;
+  // each child row's cost is its own-trace sum, so nothing counts twice.
+  const spawnRollup = (() => {
+    const rows = spawnSubtree ?? [];
+    if (rows.length === 0) return null;
+    let actual = 0;
+    let estimated = 0;
+    let sawCost = false;
+    for (const c of rows) {
+      if (c.cost?.actual != null) { actual += c.cost.actual; sawCost = true; }
+      if (c.cost?.estimated) { estimated += c.cost.estimated; sawCost = true; }
+    }
+    return { actual, estimated, sawCost, count: rows.length };
+  })();
+
 
   const agentNodeNames = Object.entries((workflow?.parsed?.nodes ?? workflow?.nodes ?? {}) as Record<string, any>)
     .filter(([, nodeDef]) => ((nodeDef as any)?.type ?? 'agent') === 'agent')
@@ -2922,6 +2996,14 @@ export default function ExecutionDetailPage() {
               <span className="text-[12px] text-theme-muted font-mono">{formatDuration(execution.durationMs)}</span>
             )}
             <CostDisplay cost={liveCost} />
+            {spawnRollup?.sawCost && (
+              <span
+                className="text-[10px] text-accent-blue font-mono"
+                title={`Spawned child agents spent $${spawnRollup.actual.toFixed(2)} on their own models (own run: $${(liveCost?.actual ?? 0).toFixed(2)}). Per-agent breakdown in the node inspector's Spawned Agents panel.`}
+              >
+                + ${spawnRollup.actual.toFixed(2)} · {spawnRollup.count} child agent{spawnRollup.count === 1 ? '' : 's'}
+              </span>
+            )}
           </div>
 
         <div className="flex items-center gap-2">
@@ -3266,6 +3348,9 @@ export default function ExecutionDetailPage() {
                     descendantsMode={descendantsMode}
                     onToggleDescendants={toggleDescendants}
                     contextEngineEnabled={contextEngineEnabled}
+                    workflowContextEvaluation={runContext?.execution.contextWorkflowEvaluation ?? null}
+                    onRerunWorkflowContextEvaluation={contextEngineEnabled ? handleRerunContextEvaluation : undefined}
+                    workflowContextEvaluationBusy={contextEvaluationBusy}
                     artifacts={workflowArtifacts}
                   />
                 </div>

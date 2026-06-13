@@ -16,6 +16,7 @@
  */
 
 import type { Db } from 'mongodb';
+import { notDeletedFilter } from './soft-delete.js';
 
 export interface OrgContextOptions {
   /** Render a per-agent "suggested spawn targets" section for this agent. */
@@ -39,8 +40,8 @@ export async function buildOrgContextBlock(
 ): Promise<string> {
   try {
     const [teams, agents] = await Promise.all([
-      db.collection('teams').find({}).toArray(),
-      db.collection('agents').find({}).toArray(),
+      db.collection('teams').find(notDeletedFilter).toArray(),
+      db.collection('agents').find(notDeletedFilter).toArray(),
     ]);
 
     const agentByName = new Map<string, any>(agents.map((a: any) => [a.name, a]));
@@ -95,7 +96,7 @@ export async function buildOrgContextBlock(
         lines.push('');
         for (const t of targets) {
           const ag = agentByName.get(t);
-          if (!ag) continue;
+          if (!ag || ag.isDeleted) continue;
           const team = ag.teamName ? ` [${ag.teamName}]` : '';
           const desc = (ag.description as string) ?? (ag.displayName as string) ?? ag.name;
           lines.push(`- ${ag.name}${team} — ${desc}`);

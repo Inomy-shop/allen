@@ -1,3 +1,11 @@
+// ── Model Cost Info ──────────────────────────────────────────────────────────
+
+export interface ModelCostInfo {
+  costInputPerMTok?: number | null;
+  costOutputPerMTok?: number | null;
+  costCacheReadPerMTok?: number | null;
+}
+
 // ── Token Usage ─────────────────────────────────────────────────────────────
 
 /**
@@ -48,7 +56,7 @@ export type OutputsSpec = Record<string, string>;
  * equivalent to omitting the field.
  */
 export interface AgentOverrides {
-  provider?: 'claude-cli' | 'codex' | (string & {}) | null;
+  provider?: 'claude' | 'codex' | (string & {}) | null;
   model?: string | null;
   reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
   planMode?: boolean | null;
@@ -450,6 +458,14 @@ export interface NodeTrace {
   activity: ActivityEntry[];
   sessionId?: string;
   cost: CostInfo;
+  /** Provider the node's agent ran on ('claude' | 'codex' | compatible
+   *  provider name). Persisted so usage aggregations can group by provider
+   *  without joining back to agent definitions. */
+  provider?: string;
+  /** For type='workflow' nodes — the child execution this node ran. The
+   *  child's cost lives on its own traces; this link lets readers walk the
+   *  tree instead of duplicating cost here. */
+  childExecutionId?: string;
   durationMs: number;
   startedAt: Date;
   completedAt?: Date;
@@ -619,11 +635,24 @@ export interface ActivityEntry {
 }
 
 export interface CostInfo {
+  /** Authoritative cost in USD. Token-computed from registry per-MTok prices
+   *  when possible, else the provider-reported figure, else null. */
   actual: number | null;
+  /** Legacy per-turn estimate. Always 0 on new records — kept so historical
+   *  documents and existing aggregations keep reading. */
   estimated: number;
   model?: string;
   turns?: number;
-  method: 'sdk_reported' | 'estimated';
+  /** 'estimated' appears only on documents persisted before token-computed
+   *  costing replaced per-turn estimates. 'child_execution' marks a
+   *  workflow-node trace whose real cost lives on the child execution's own
+   *  traces — always 0/null here so tree sums never double-count. */
+  method: 'token_computed' | 'sdk_reported' | 'estimated' | 'unavailable' | 'child_execution';
+  /** Raw provider-reported total_cost_usd, kept for audit/reconciliation.
+   *  Never summed — `actual` is the authoritative number. */
+  reported?: number | null;
+  /** False when some token spend could not be priced (missing per-MTok price). */
+  complete?: boolean;
 }
 
 export interface Checkpoint {
@@ -672,9 +701,19 @@ export interface ExecutionState {
   nodeAttempts: Record<string, number>;
   failedNode?: string;
   errorMessage?: string;
+  /** Execution that directly triggered this one (sub-workflow node or agent
+   *  spawn). Null/absent for top-level runs. Powers on-demand cost rollups
+   *  over the execution tree. */
+  parentExecutionId?: string | null;
+  /** Top of this execution's spawn/nesting tree (own id for top-level runs). */
+  rootExecutionId?: string | null;
+  /** In-memory running total of this execution's OWN node costs (excludes
+   *  child executions). Used for live events/logs only — never persisted;
+   *  StateManager strips it on write. Totals are always recomputed on demand
+   *  from execution_traces. */
   cost: { actual: number | null; estimated: number };
-  /** Aggregate token usage across all completed nodes in this execution.
-   *  Null when no provider reported usage data. */
+  /** In-memory aggregate token usage across this execution's own completed
+   *  nodes. Like `cost`, never persisted — traces are the source of truth. */
   tokenUsage?: import('./token-usage.js').TokenUsageInfo | null;
   durationMs: number;
   worktreePath?: string;

@@ -9,7 +9,7 @@ import {
   ChevronRight, Plus, Palette,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
   SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain, Cpu,
-  Trash2, AlertTriangle, Copy, Check,
+  Trash2, AlertTriangle, Copy, Check, BarChart3,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
@@ -132,6 +132,7 @@ const SETTINGS_NAV_GROUPS: NavGroup[] = [
     { to: '/settings/general', icon: SlidersHorizontal, label: 'General', activePrefixes: ['/settings/general'], end: true },
     { to: '/settings/runtime', icon: HardDrive, label: 'Runtime', activePrefixes: ['/settings/runtime'] },
     { to: '/settings/models', icon: Cpu, label: 'Models', activePrefixes: ['/settings/models'] },
+    { to: '/settings/usage', icon: BarChart3, label: 'Usage', activePrefixes: ['/settings/usage'] },
     { to: '/settings/mcp', icon: Server, label: 'MCP Servers', activePrefixes: ['/settings/mcp'] },
   ]},
   { id: 'settings-allen', label: 'Allen', items: [

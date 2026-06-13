@@ -84,7 +84,7 @@ function defaultCwd(purpose: ContextLlmPurpose): string {
  *   2. 'codex' / 'gpt-5.5' — hard-coded defaults
  *
  * Env vars:
- *   ALLEN_CONTEXT_LLM_PROVIDER — provider slug (e.g. 'codex', 'claude-cli')
+ *   ALLEN_CONTEXT_LLM_PROVIDER — provider slug (e.g. 'codex', 'claude')
  *   ALLEN_CONTEXT_LLM_MODEL    — model string (e.g. 'gpt-5.5', 'sonnet')
  *
  * This is intentionally lightweight (no cwd/secret resolution) since it is

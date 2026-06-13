@@ -16,6 +16,10 @@ export function firstString(...values: unknown[]): string | undefined {
   return values.find((v): v is string => typeof v === 'string' && v.length > 0);
 }
 
+export function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

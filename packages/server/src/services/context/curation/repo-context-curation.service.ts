@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Collection, Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
+import { sha256, stringValue } from '../common/context-utils.js';
 import {
   REPO_CONTEXT_CURATOR_PROMPT_VERSION,
   REPO_CONTEXT_CURATOR_SCHEMA_VERSION,
@@ -15,6 +16,7 @@ import {
   contextInventoryConfig,
   resolveDefaultBranchName,
   resolveRequestedBranch,
+  revParse,
 } from './repo-context-curation-git.js';
 import {
   createRepoContextCurationRun,
@@ -31,6 +33,7 @@ import {
   hasProductionLearningSignals,
   shouldBlockAgentAdjacentInjection,
 } from './repo-context-agent-adjacent.js';
+import { CuratedContextEditorService } from '../judge/curated-context-editor.service.js';
 
 type CurationStatus = 'running' | 'completed' | 'failed' | 'stopped';
 type Inclusion = 'include' | 'exclude' | 'stale';
@@ -53,6 +56,10 @@ type CurationRunInput = {
   branch?: string;
   gitRef?: string;
   headSha?: string;
+  /** true when the inventory fetch succeeded AND the resolved ref is origin/<branch> */
+  snapshotFresh?: boolean;
+  /** mirrors inventory.fetchOk */
+  snapshotFetchOk?: boolean;
   configHash: string;
   roleInventory: Array<{ role: string; category: string }>;
   spawnedRoleInventory: Array<{ role: string; category: string }>;
@@ -164,11 +171,13 @@ export class RepoContextCurationService {
   private profiles: Collection<CurationProfile>;
   private entries: Collection<CurationEntry>;
   private repos: Collection;
+  private editor: CuratedContextEditorService;
 
   constructor(private db: Db) {
     this.profiles = db.collection<CurationProfile>('repo_context_curation_profiles');
     this.entries = db.collection<CurationEntry>('repo_context_curation_entries');
     this.repos = db.collection('repos');
+    this.editor = new CuratedContextEditorService(db);
   }
 
   async getLatest(repoId: string): Promise<CurationProfile | null> {
@@ -223,10 +232,145 @@ export class RepoContextCurationService {
     const scope = normalizeScope(body.scope ?? body);
     const requestedBranch = stringValue(body.branch) ?? stringValue(body.git_ref) ?? stringValue(body.gitRef);
     const input = await this.buildRunInput(repo, scope, { branch: requestedBranch });
+
+    // Fix L: if the caller supplies an existing run_id, try to reuse the live curation run
+    // instead of creating a new profile + run. This lets Resume pick up where staged
+    // worker progress left off rather than starting a full re-curation from zero.
+    const requestedRunId = stringValue(body.run_id);
+    if (requestedRunId) {
+      try {
+        const existingRunDoc = await this.db.collection('repo_context_curation_runs').findOne({ runId: requestedRunId });
+        const existingRunStatus = String(existingRunDoc?.status ?? '');
+        // 'running' runs are reused as-is. 'stopped' runs (stall watchdog cancelled a stalled
+        // curator) are reactivated so staged worker progress survives the interruption.
+        const runReusable =
+          existingRunDoc &&
+          String(existingRunDoc.repoId) === String(input.repoId) &&
+          ['running', 'stopped'].includes(existingRunStatus);
+
+        if (runReusable && existingRunDoc) {
+          const profileId = stringValue(existingRunDoc.profileId as unknown) ?? '';
+          const stageStatus = await getRepoContextCurationStageStatus(this.db, requestedRunId);
+          const filesToCurate = stageStatus.retryFiles.length
+            ? stageStatus.retryFiles
+            : normalizeCandidateFiles(existingRunDoc.expectedFiles);
+          const filesPreviewLimit = 50;
+
+          // Reactivate a stopped run before reusing it: flip the run + profile back to
+          // 'running' and clear the watchdog's completedAt/"interrupted or abandoned" message.
+          // Deliberately no head-SHA staleness refusal here — snapshotFresh diagnostics and
+          // the stale-at-promote guard already cover staleness; a stale snapshot must not
+          // force a fresh run.
+          const reactivated = existingRunStatus === 'stopped';
+          if (reactivated) {
+            const now = new Date();
+            await this.db.collection('repo_context_curation_runs').updateOne(
+              { runId: requestedRunId },
+              { $set: { status: 'running', updatedAt: now }, $unset: { completedAt: '', message: '' } },
+            );
+            if (profileId) {
+              await this.profiles.updateOne(
+                { profileId },
+                { $set: { status: 'running', updatedAt: now }, $unset: { completedAt: '' } },
+              );
+            }
+          }
+
+          // Update the existing profile's message so the UI shows the right state
+          if (profileId) {
+            await this.profiles.updateOne(
+              { profileId },
+              {
+                $set: {
+                  message: filesToCurate.length
+                    ? `Context curation resuming: ${filesToCurate.length} file${filesToCurate.length === 1 ? '' : 's'} pending`
+                    : 'No pending files; ready to promote',
+                  stats: baseStats(input),
+                  updatedAt: new Date(),
+                },
+              },
+            );
+          }
+
+          const diagnostics: Array<Record<string, unknown>> = [
+            ...input.diagnostics,
+            {
+              code: 'curation_run_reused',
+              severity: 'info',
+              message: `Reusing existing curation run ${requestedRunId} with ${filesToCurate.length} pending file(s)`,
+            },
+          ];
+          if (reactivated) {
+            diagnostics.push({
+              code: 'curation_run_reactivated',
+              severity: 'info',
+              message: `Reactivated stopped curation run ${requestedRunId} after interruption; ${filesToCurate.length} file(s) still pending`,
+            });
+          }
+          if (!input.snapshotFresh) {
+            diagnostics.push({
+              code: 'inventory_snapshot_stale',
+              severity: 'warning',
+              message: `Inventory snapshot may be stale (fetchOk=${String(input.snapshotFetchOk)}, ref=${String(input.gitRef)}). Commits pushed after the inventory snapshot will not be curated in this run.`,
+            });
+          }
+
+          return {
+            run_id: requestedRunId,
+            profile_id: profileId || existingRunDoc.profileId,
+            execution_id: existingRunDoc.executionId,
+            repo: { id: input.repoId, name: input.repoName, path: input.repoPath, branch: input.branch, git_ref: input.gitRef, head_sha: input.headSha },
+            snapshot: { fresh: input.snapshotFresh ?? false, ref: input.gitRef ?? null, head_sha: input.headSha ?? null, fetch_ok: input.snapshotFetchOk ?? false },
+            scope,
+            budgets: curationBudgets(),
+            role_inventory: input.roleInventory,
+            spawned_role_inventory: input.spawnedRoleInventory,
+            unchanged_reused_entries: input.reusedEntries.map(compactEntryForPrompt),
+            files_to_curate_count: filesToCurate.length,
+            files_to_curate_preview: filesToCurate.slice(0, filesPreviewLimit),
+            files_to_curate_truncated: filesToCurate.length > filesPreviewLimit,
+            deleted_or_stale_files: input.deletedOrStaleFiles,
+            diagnostics,
+            stage_status: compactStageStatusForPrompt(stageStatus),
+            instructions: [
+              'Call plan_repo_context_curation_assignments for assignment-ready batches; do not reconstruct inventory from the filesystem.',
+              'For large runs, spawn visible repo-context-curation-worker agents up to the returned concurrency limit immediately. The planner hard-caps concurrency at 4. Do not run a pilot unless explicitly requested.',
+              'After workers finish, call get_repo_context_curation_stage_status and retry missing/invalid files.',
+              'Call promote_repo_context_curation_stage only when promotable is true.',
+            ],
+          };
+        }
+
+        // Run not reusable (wrong repo, not active, or lookup failed) — add diagnostic and create new
+        input.diagnostics.push({
+          code: 'run_id_not_reusable',
+          severity: 'info',
+          message: existingRunDoc
+            ? `Requested run_id ${requestedRunId} is not reusable (status: ${existingRunDoc.status ?? 'unknown'}).`
+            : `Requested run_id ${requestedRunId} was not found; starting a new curation run.`,
+          requestedRunId,
+        });
+      } catch (_err) {
+        // Any error in the reuse path (e.g., stage run not found) — fall through to new run
+        input.diagnostics.push({
+          code: 'run_id_not_reusable',
+          severity: 'info',
+          message: `Requested run_id ${requestedRunId} could not be reused; starting a new curation run.`,
+          requestedRunId,
+        });
+      }
+    }
+
     const executionId = stringValue(body.source_execution_id) ?? stringValue(body.execution_id);
+    // Fix H: when skip_execution_record=true and no source executionId, create the profile
+    // WITHOUT inserting a synthetic executions row — the caller will attach the real
+    // spawned execution id via attachExecutionToProfile().
+    const skipExecutionRecord = body.skip_execution_record === true && !executionId;
     const profile = executionId
       ? await this.createProfileForExecution(input, executionId, 'Context curation coordinator prepared')
-      : await this.createRunningProfile(input, 'Context curation coordinator prepared', { source: 'agent_run', prompt: stringValue(body.prompt) });
+      : skipExecutionRecord
+        ? await this.createProfileOnly(input, 'Context curation coordinator prepared')
+        : await this.createRunningProfile(input, 'Context curation coordinator prepared', { source: 'agent_run', prompt: stringValue(body.prompt) });
     const run = await createRepoContextCurationRun(this.db, {
       executionId: profile.executionId!,
       profileId: profile.profileId,
@@ -239,6 +383,30 @@ export class RepoContextCurationService {
     const stageStatus = await getRepoContextCurationStageStatus(this.db, String(run.runId));
     const filesToCurate = stageStatus.retryFiles.length ? stageStatus.retryFiles : input.newOrChangedFiles;
     const filesPreviewLimit = 50;
+
+    // G1: surface snapshot freshness — add diagnostic when fetch failed or ref is not origin/<branch>
+    if (!input.snapshotFresh) {
+      input.diagnostics.push({
+        code: 'inventory_snapshot_stale',
+        severity: 'warning',
+        message: `Inventory snapshot may be stale (fetchOk=${String(input.snapshotFetchOk)}, ref=${String(input.gitRef)}). Commits pushed after the inventory snapshot will not be curated in this run.`,
+      });
+    }
+
+    // G1: persist snapshot info on the run doc so promoteStageFromAgent can compare at promote time
+    await this.db.collection('repo_context_curation_runs').updateOne(
+      { runId: String(run.runId) },
+      {
+        $set: {
+          snapshotFresh: input.snapshotFresh ?? false,
+          snapshotFetchOk: input.snapshotFetchOk ?? false,
+          snapshotHeadSha: input.headSha ?? null,
+          snapshotRef: input.gitRef ?? null,
+          updatedAt: new Date(),
+        },
+      },
+    );
+
     await this.profiles.updateOne(
       { profileId: profile.profileId },
       {
@@ -262,6 +430,13 @@ export class RepoContextCurationService {
         branch: input.branch,
         git_ref: input.gitRef,
         head_sha: input.headSha,
+      },
+      // G1: snapshot freshness block for the coordinator and the setup-service caller
+      snapshot: {
+        fresh: input.snapshotFresh ?? false,
+        ref: input.gitRef ?? null,
+        head_sha: input.headSha ?? null,
+        fetch_ok: input.snapshotFetchOk ?? false,
       },
       scope,
       budgets: curationBudgets(),
@@ -312,6 +487,7 @@ export class RepoContextCurationService {
     }
     const repo = await this.repoById(String(run.repoId));
     const runBranch = stringValue(run.branch as unknown);
+    const repoPath = String(repo.path ?? '');
     const input = await this.buildRunInput(repo, normalizeScope(run.scope), { branch: runBranch });
     const expectedFiles = normalizeCandidateFiles(run.expectedFiles);
     const inputForSave = { ...input, newOrChangedFiles: expectedFiles };
@@ -322,6 +498,21 @@ export class RepoContextCurationService {
       rawEntries: stage.entries,
     });
     const diagnostics = [...input.diagnostics, ...normalizeDiagnostics(stage.diagnostics)];
+
+    // G1: best-effort stale-at-promote check — NON-FATAL
+    const snapshotHeadSha = stringValue(run.snapshotHeadSha as unknown);
+    if (snapshotHeadSha && repoPath && runBranch) {
+      const currentSha = await revParse(repoPath, `origin/${runBranch}`).catch(() => undefined);
+      if (currentSha && currentSha !== snapshotHeadSha) {
+        diagnostics.push({
+          code: 'snapshot_stale_at_promote',
+          severity: 'warning',
+          message: `New commits appeared on origin/${runBranch} since the inventory snapshot. The promoted curation may be missing recently committed files.`,
+          snapshotHeadSha,
+          currentHeadSha: currentSha,
+        });
+      }
+    }
     await this.saveCompletedCuration({
       input: inputForSave,
       profileId: String(run.profileId),
@@ -391,7 +582,16 @@ export class RepoContextCurationService {
     }
     const deletedOrStaleFiles = priorInScope
       .filter((entry) => !candidatePaths.has(entry.path))
-      .map((entry) => ({ path: entry.path, sourceHash: entry.sourceHash, title: entry.title, reason: 'File is no longer in the tracked context inventory.' }));
+      .map((entry) => ({
+        entryId: entry.entryId,
+        path: entry.path,
+        sourceHash: entry.sourceHash,
+        title: entry.title,
+        reason: 'File is no longer in the tracked context inventory.',
+      }));
+
+    const snapshotFetchOk = inventory.fetchOk === true;
+    const snapshotFresh = snapshotFetchOk && inventory.ref === `origin/${effectiveBranch}`;
 
     return {
       repoId,
@@ -400,6 +600,8 @@ export class RepoContextCurationService {
       branch: inventory.branch,
       gitRef: inventory.ref,
       headSha: inventory.headSha,
+      snapshotFresh,
+      snapshotFetchOk,
       configHash,
       roleInventory,
       spawnedRoleInventory,
@@ -421,43 +623,26 @@ export class RepoContextCurationService {
     startedAt: number;
     message: string;
   }): Promise<void> {
-    const now = new Date();
     for (const entry of input.newEntries) {
-      const priorActive = await this.entries.findOne(
-        { repoId: entry.repoId, entryId: entry.entryId, active: { $ne: false } },
-        { sort: { version: -1, editVersion: -1, updatedAt: -1 } },
+      await this.editor.replaceFromCurator(
+        entry.repoId,
+        entry.entryId,
+        entry as unknown as Record<string, unknown>,
+        { actor: 'repo-context-curator', source: 'repo_context_curator' },
       );
-      const priorActiveRecord = priorActive as Record<string, unknown> | null;
-      const priorVersion = typeof priorActiveRecord?.['version'] === 'number'
-        ? priorActiveRecord['version'] as number
-        : typeof priorActiveRecord?.['editVersion'] === 'number'
-          ? priorActiveRecord['editVersion'] as number
-          : 0;
-      const nextVersion = priorVersion + 1;
-      if (priorActive?._id) {
-        await this.entries.updateOne(
-          { _id: priorActive._id },
-          {
-            $set: {
-              active: false,
-              validTo: now,
-              supersededAt: now,
-              updatedAt: now,
-            },
-          },
-        );
-      }
-      await this.entries.insertOne({
-        ...entry,
-        entryVersionId: randomUUID(),
-        version: nextVersion,
-        editVersion: nextVersion,
-        active: true,
-        validFrom: now,
-        validTo: null,
-        createdAt: entry.createdAt ?? now,
-        updatedAt: now,
-      } as never);
+    }
+
+    for (const item of input.input.deletedOrStaleFiles) {
+      const path = stringValue(item.path) ?? 'unknown';
+      const entryId = stringValue(item.entryId) ?? stableEntryId(input.input.repoId, path);
+      const existing = await this.editor.getEntry(input.input.repoId, entryId);
+      if (!existing) continue;
+      await this.editor.applyEdit(
+        input.input.repoId,
+        entryId,
+        {},
+        { actor: 'repo-context-curator', source: 'repo_context_curator', action: 'archive' },
+      );
     }
 
     const staleEntries = input.input.deletedOrStaleFiles.map((item) => staleEntry(input.input.repoId, input.input.configHash, item));
@@ -541,6 +726,67 @@ export class RepoContextCurationService {
       { $set: { contextCuration: { status: 'running', profileId: profile.profileId, executionId, startedAt: now } } },
     );
     return profile;
+  }
+
+  /**
+   * Fix H: creates a curation profile WITHOUT inserting a synthetic executions row.
+   * The caller (RepoContextSetupService.runCurationPhase) is responsible for spawning
+   * the real agent and calling attachExecutionToProfile() with the resulting execId.
+   */
+  private async createProfileOnly(input: CurationRunInput, message: string): Promise<CurationProfile> {
+    const now = new Date();
+    const profile: CurationProfile = {
+      profileId: randomUUID(),
+      repoId: input.repoId,
+      repoName: input.repoName,
+      repoPath: input.repoPath,
+      branch: input.branch,
+      gitRef: input.gitRef,
+      headSha: input.headSha,
+      curationVersion: CURATION_VERSION,
+      promptVersion: PROMPT_VERSION,
+      configHash: input.configHash,
+      latest: false,
+      status: 'running',
+      message,
+      stats: baseStats(input),
+      diagnostics: input.diagnostics,
+      entries: [],
+      // executionId intentionally omitted — will be backfilled by attachExecutionToProfile
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.profiles.insertOne(profile);
+    // Update repo contextCuration without executionId — will be backfilled
+    await this.repos.updateOne(
+      { _id: new ObjectId(input.repoId) },
+      { $set: { contextCuration: { status: 'running', profileId: profile.profileId, startedAt: now } } },
+    );
+    return profile;
+  }
+
+  /**
+   * Fix H: backfills the real spawned execution id onto the profile, the
+   * repo_context_curation_runs row, and the repo.contextCuration summary.
+   * Called by RepoContextSetupService immediately after spawnAgentFn resolves.
+   */
+  async attachExecutionToProfile(profileId: string, runId: string, executionId: string): Promise<void> {
+    await this.profiles.updateOne(
+      { profileId },
+      { $set: { executionId, updatedAt: new Date() } },
+    );
+    await this.db.collection('repo_context_curation_runs').updateOne(
+      { runId },
+      { $set: { executionId, updatedAt: new Date() } },
+    );
+    // Best-effort repo contextCuration.executionId backfill
+    const profile = await this.profiles.findOne({ profileId });
+    if (profile?.repoId) {
+      await this.repos.updateOne(
+        { _id: new ObjectId(String(profile.repoId)), 'contextCuration.profileId': profileId },
+        { $set: { 'contextCuration.executionId': executionId } },
+      );
+    }
   }
 
   private async createProfileForExecution(input: CurationRunInput, executionId: string, message: string): Promise<CurationProfile> {
@@ -950,7 +1196,6 @@ function previewText(value: string): string {
 function appendReason(reasoning: string, addition: string): string {
   return [reasoning, addition].filter(Boolean).join(' ');
 }
-function stringValue(value: unknown): string | undefined { return typeof value === 'string' && value.trim() ? value.trim() : undefined; }
 function isStaleDate(value: unknown): boolean {
   const date = value instanceof Date ? value : typeof value === 'string' || typeof value === 'number' ? new Date(value) : null;
   if (!date || !Number.isFinite(date.getTime())) return true;
@@ -959,4 +1204,3 @@ function isStaleDate(value: unknown): boolean {
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : [];
 }
-function sha256(value: string): string { return createHash('sha256').update(value).digest('hex'); }

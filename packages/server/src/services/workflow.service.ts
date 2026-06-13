@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { ObjectId, type Collection, type Db } from 'mongodb';
 import { validateWorkflow, loadAgents, getBuiltIns, generateMermaid } from '@allen/engine';
 import type { WorkflowDef, ValidationResult } from '@allen/engine';
+import { notDeletedFilter, softDeleteSet, restoreSet } from './soft-delete.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -18,7 +19,9 @@ export class WorkflowService {
   }
 
   async list(includeArchived = false): Promise<Record<string, unknown>[]> {
-    const filter = includeArchived ? {} : { archived: { $ne: true } };
+    const filter = includeArchived
+      ? notDeletedFilter
+      : { archived: { $ne: true }, ...notDeletedFilter };
     const rows = await this.col.find(filter, {
       projection: {
         name: 1,
@@ -80,7 +83,9 @@ export class WorkflowService {
    * tool so agents get a consistent summary across in-process and MCP paths.
    */
   async listSummary(includeArchived = false): Promise<Record<string, unknown>[]> {
-    const filter = includeArchived ? {} : { archived: { $ne: true } };
+    const filter = includeArchived
+      ? notDeletedFilter
+      : { archived: { $ne: true }, ...notDeletedFilter };
     const rows = await this.col.find(filter, {
       projection: {
         name: 1,
@@ -113,7 +118,7 @@ export class WorkflowService {
 
     const yamlAgents = loadAgents();
     const builtInNames = Object.keys(getBuiltIns());
-    const dbAgents = await this.db.collection('agents').find({}, { projection: { name: 1, system: 1 } }).toArray();
+    const dbAgents = await this.db.collection('agents').find(notDeletedFilter, { projection: { name: 1, system: 1 } }).toArray();
     const agents: Record<string, { system: string }> = { ...yamlAgents };
     for (const a of dbAgents) {
       agents[a.name as string] = { system: (a.system as string) ?? '' };
@@ -134,7 +139,27 @@ export class WorkflowService {
       if (!wanted.has(parsed.name)) continue;
 
       const existing = await this.col.findOne({ name: parsed.name });
-      if (existing) continue;
+      if (existing) {
+        // If soft-deleted, restore it with current YAML content
+        if (existing.isDeleted) {
+          const validation = validateWorkflow(parsed, agents, builtInNames);
+          await this.col.updateOne(
+            { name: parsed.name },
+            restoreSet({
+              name: parsed.name,
+              description: parsed.description ?? '',
+              version: (existing.version as number ?? 0) + 1,
+              yaml: content,
+              parsed,
+              reactFlowData: null,
+              validation,
+              tags: ['default'],
+              createdBy: 'system',
+            }),
+          );
+        }
+        continue;
+      }
 
       const validation = validateWorkflow(parsed, agents, builtInNames);
       await this.col.insertOne({
@@ -159,11 +184,11 @@ export class WorkflowService {
 
   async getById(id: string): Promise<Record<string, unknown> | null> {
     const { ObjectId } = await import('mongodb');
-    return this.col.findOne({ _id: new ObjectId(id) });
+    return this.col.findOne({ _id: new ObjectId(id), ...notDeletedFilter });
   }
 
   async getByName(name: string): Promise<Record<string, unknown> | null> {
-    return this.col.findOne({ name });
+    return this.col.findOne({ name, ...notDeletedFilter });
   }
 
   async create(body: { yaml?: string; parsed?: WorkflowDef; createdBy?: string; tags?: string[] }): Promise<Record<string, unknown>> {
@@ -180,9 +205,29 @@ export class WorkflowService {
       throw new Error('Either yaml or parsed must be provided');
     }
 
-    // Reject duplicate names so the agent gets a clear error instead of
-    // silently creating a second workflow that shadows the first.
-    const existing = await this.col.findOne({ name: parsed.name });
+    // Check for soft-deleted record with the same name — restore instead of insert.
+    // Also reject active duplicates so the agent gets a clear error.
+    const deleted = await this.col.findOne({ name: parsed.name, isDeleted: true });
+    if (deleted) {
+      const validation = await this.validate(parsed);
+      await this.col.updateOne(
+        { name: parsed.name },
+        restoreSet({
+          name: parsed.name,
+          description: parsed.description ?? '',
+          version: (deleted.version as number ?? 0) + 1,
+          yaml: rawYaml,
+          parsed,
+          reactFlowData: null,
+          validation,
+          tags: body.tags ?? [],
+          createdBy: body.createdBy ?? 'system',
+        }),
+      );
+      return { ...deleted, name: parsed.name, description: parsed.description, version: (deleted.version as number ?? 0) + 1, yaml: rawYaml, parsed, validation, tags: body.tags, restored: true };
+    }
+
+    const existing = await this.col.findOne({ name: parsed.name, ...notDeletedFilter });
     if (existing) {
       throw new Error(`Workflow "${parsed.name}" already exists. Use update instead, or pick a different name.`);
     }
@@ -209,7 +254,7 @@ export class WorkflowService {
 
   async update(id: string, body: { yaml?: string; parsed?: WorkflowDef; reactFlowData?: unknown }): Promise<Record<string, unknown>> {
     const { ObjectId } = await import('mongodb');
-    const existing = await this.col.findOne({ _id: new ObjectId(id) });
+    const existing = await this.col.findOne({ _id: new ObjectId(id), ...notDeletedFilter });
     if (!existing) throw new Error('Workflow not found');
 
     const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -241,7 +286,7 @@ export class WorkflowService {
 
   async delete(id: string): Promise<void> {
     const { ObjectId } = await import('mongodb');
-    await this.col.deleteOne({ _id: new ObjectId(id) });
+    await this.col.updateOne({ _id: new ObjectId(id) }, softDeleteSet());
   }
 
   /**
@@ -253,7 +298,7 @@ export class WorkflowService {
     const yamlAgents = loadAgents();
 
     // Also load agents from the database (the new org agents live here)
-    const dbAgents = await this.db.collection('agents').find({}, { projection: { name: 1, system: 1, model: 1, provider: 1, tools: 1 } }).toArray();
+    const dbAgents = await this.db.collection('agents').find(notDeletedFilter, { projection: { name: 1, system: 1, model: 1, provider: 1, tools: 1 } }).toArray();
     const merged = { ...yamlAgents };
     for (const a of dbAgents) {
       merged[a.name as string] = { system: (a.system as string) ?? '' };
@@ -266,7 +311,7 @@ export class WorkflowService {
   async validateById(id: string): Promise<ValidationResult> {
     const { ObjectId } = await import('mongodb');
     const _id = new ObjectId(id);
-    const doc = await this.col.findOne({ _id });
+    const doc = await this.col.findOne({ _id, ...notDeletedFilter });
     if (!doc) throw new Error('Workflow not found');
     const validation = await this.validate(doc.parsed as WorkflowDef);
     await this.col.updateOne({ _id }, { $set: { validation, updatedAt: new Date() } });
@@ -275,7 +320,7 @@ export class WorkflowService {
 
   async getMermaid(id: string): Promise<string> {
     const { ObjectId } = await import('mongodb');
-    const doc = await this.col.findOne({ _id: new ObjectId(id) });
+    const doc = await this.col.findOne({ _id: new ObjectId(id), ...notDeletedFilter });
     if (!doc) throw new Error('Workflow not found');
     return generateMermaid(doc.parsed as WorkflowDef);
   }
@@ -286,15 +331,15 @@ export class WorkflowService {
 
   async exportAsYaml(id: string): Promise<string> {
     const { ObjectId } = await import('mongodb');
-    const doc = await this.col.findOne({ _id: new ObjectId(id) });
+    const doc = await this.col.findOne({ _id: new ObjectId(id), ...notDeletedFilter });
     if (!doc) throw new Error('Workflow not found');
     return doc.yaml as string;
   }
 
   async exportAsJson(ids: string[]): Promise<Record<string, unknown>> {
     const filter = ids.length > 0
-      ? { _id: { $in: ids.map((id) => new ObjectId(id)) } }
-      : { archived: { $ne: true } };
+      ? { _id: { $in: ids.map((id) => new ObjectId(id)) }, ...notDeletedFilter }
+      : { archived: { $ne: true }, ...notDeletedFilter };
     const docs = await this.col.find(filter).sort({ name: 1 }).toArray();
     return {
       kind: 'allen-workflows-bundle',
@@ -328,6 +373,21 @@ export class WorkflowService {
       }
       const existing = await this.col.findOne({ name });
       if (existing) {
+        if (existing.isDeleted) {
+          // Restore soft-deleted workflow with the imported data
+          try {
+            const createdDoc = await this.create({
+              yaml: yamlContent || undefined,
+              parsed: yamlContent ? undefined : parsed,
+              createdBy: 'import',
+              tags: Array.isArray(item.tags) ? item.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+            });
+            created.push(String(createdDoc.name));
+          } catch (err) {
+            skipped.push({ name, reason: (err as Error).message });
+          }
+          continue;
+        }
         skipped.push({ name, reason: 'already-exists' });
         continue;
       }

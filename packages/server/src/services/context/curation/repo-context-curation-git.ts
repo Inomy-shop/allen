@@ -13,6 +13,8 @@ export type ContextInventory = {
   branch: string;
   ref: string;
   headSha?: string;
+  /** true when the best-effort `git fetch origin <branch>` at inventory time succeeded */
+  fetchOk: boolean;
   candidates: CandidateContextFile[];
   diagnostics: Array<Record<string, unknown>>;
 };
@@ -48,15 +50,18 @@ export async function collectDefaultBranchContextFiles(
   defaultBranch: string,
 ): Promise<ContextInventory> {
   const diagnostics: Array<Record<string, unknown>> = [];
-  await gitOutput(repoPath, ['fetch', '--quiet', '--prune', 'origin', defaultBranch]).catch((err) => {
-    diagnostics.push({
-      code: 'default_branch_fetch_failed',
-      severity: 'warn',
-      branch: defaultBranch,
-      message: `Could not fetch origin/${defaultBranch}; using the freshest locally available ref.`,
-      detail: (err as Error).message,
+  let fetchOk = false;
+  await gitOutput(repoPath, ['fetch', '--quiet', '--prune', 'origin', defaultBranch])
+    .then(() => { fetchOk = true; })
+    .catch((err) => {
+      diagnostics.push({
+        code: 'default_branch_fetch_failed',
+        severity: 'warn',
+        branch: defaultBranch,
+        message: `Could not fetch origin/${defaultBranch}; using the freshest locally available ref.`,
+        detail: (err as Error).message,
+      });
     });
-  });
 
   const resolved = await resolveContextRef(repoPath, defaultBranch, diagnostics);
   const paths = (await gitBuffer(repoPath, ['ls-tree', '-r', '-z', '--name-only', resolved.ref]))
@@ -86,9 +91,27 @@ export async function collectDefaultBranchContextFiles(
     branch: defaultBranch,
     ref: resolved.ref,
     headSha: resolved.headSha,
+    fetchOk,
     candidates,
     diagnostics,
   };
+}
+
+/**
+ * Best-effort `git rev-parse --verify <ref>^{commit}` — returns the resolved
+ * commit SHA, or `undefined` if the ref is unknown or the command fails.
+ */
+export async function revParse(repoPath: string, ref: string): Promise<string | undefined> {
+  return gitOutput(repoPath, ['rev-parse', '--verify', `${ref}^{commit}`]).catch(() => undefined);
+}
+
+/**
+ * Best-effort `git fetch --quiet --prune origin <branch>` — never throws.
+ * Shared git plumbing for callers (e.g. the setup service) that only need a
+ * fire-and-forget branch fetch without inventory diagnostics.
+ */
+export async function fetchBranch(repoPath: string, branch: string): Promise<void> {
+  await gitOutput(repoPath, ['fetch', '--quiet', '--prune', 'origin', branch]).catch(() => undefined);
 }
 
 async function resolveContextRef(

@@ -6,7 +6,45 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-06-13
+
+Highlights since `v0.1.9`.
+
 ### Added
+
+- **Change default branch in repository management** (`packages/server`, `packages/ui`): users can now change a registered repository's default branch from the repo edit dialog.
+  - **New endpoint** (`PUT /api/repos/:id/default-branch`): fetches remote refs via `git fetch --prune origin`, validates the requested branch exists as `origin/<branch>`, switches the checkout via `git switch -C <branch> origin/<branch>`, and persists the new branch in `detected.defaultBranch` and `defaultBranch`. Local-only branches are rejected with a clear error. Compatible uncommitted changes are carried by Git without stashing; conflicting changes block the update and the error is surfaced.
+  - **New service method** (`RepoService.updateDefaultBranch`): orchestrates the full sequence (fetch → verify → switch → persist) as a single atomic operation. Does not run `git reset`, `git clean`, `git stash`, or branch deletion.
+  - **UI update** (repo edit dialog): new **Default branch** text field initialized from the four-step chain (`detected.defaultBranch → defaultBranch → branch → 'main'`). Saving a changed branch calls the new endpoint before updating other metadata.
+  - **Workspace resolution**: the `workspaceCreateBaseBranch()` utility reads `detected.defaultBranch` first, so future workspaces automatically use the updated branch. Existing workspaces are not modified.
+  - **Covers**: PRD AC1–AC11.
+
+- **Model Registry — User-driven model configuration** (`packages/server`, `packages/engine`, `packages/ui`): replaces every hardcoded LLM model list with a MongoDB-backed `model_registry` collection managed through Settings → Models (admin-only tab). Key changes:
+  - **New service** (`packages/server/src/services/model-registry.service.ts`): `ModelRegistryService` with full CRUD (`list`, `getById`, `create`, `update`, `softDelete`) plus `syncSeedModels()` that seeds/refreshes the catalog on every boot (inserts missing models, updates prices of rows admins never customized via `seededWith` snapshots, preserves admin edits). Provider validation uses the existing `CLAUDE_COMPATIBLE_PROVIDER_CONFIGS` set; `(provider, alias)` has a compound unique index. Soft-delete sets `isActive=false`; reactivation via PATCH.
+  - **REST API** (`packages/server/src/routes/system.routes.ts`): `GET /api/system/models` (public, supports `?includeInactive` and `?provider` filters), `GET /api/system/models/:id` (public), `POST /api/system/models` (admin, validated, 409 on duplicate), `PATCH /api/system/models/:id` (admin, provider/alias immutable), `DELETE /api/system/models/:id` (admin, soft-delete). Desktop runtime settings endpoints updated to read model options from the registry.
+  - **Engine integration** (`packages/engine/src/engine.ts`, `node-executor.ts`, `types.ts`): `aliasMap` and `costMap` added to `EngineConfig` and `NodeExecutorDeps`. `normalizeModelAlias()` accepts optional `aliasMap` (env override > registry > static defaults). Cost estimation uses `costMap` with `COST_PER_TURN` as fallback. `ModelCostInfo` type exported from `types.ts`.
+  - **Execution wiring** (`packages/server/src/services/execution.service.ts`): `buildAliasAndCostMaps()` fetches active registry entries and wires `aliasMap`/`costMap` into all 4 `EngineConfig` construction sites.
+  - **Provider model patching** (`packages/server/src/services/chat-providers.ts`): added `getEnabledProvidersFromRegistry(db)` which patches closed providers (`models`) and open providers (`modelSuggestions`) from the registry. `buildClaudeCompatibleEnvOverlay()` accepts optional `db` parameter for tier-based default resolution via `resolveModelForTier()`.
+  - **New hook** (`packages/ui/src/hooks/useModelRegistry.ts`): shared `useModelRegistry()` hook with `{ models, fetch, createModel, updateModel, deleteModel, getModelsForProvider }`. All model dropdowns append an "Other…" free-text fallback (REQ-013).
+  - **New UI component** (`packages/ui/src/components/settings/ModelRegistryPanel.tsx`): admin-only CRUD table with provider filtering, inline editing, soft-delete with confirmation, and duplicate/validation error toasts.
+  - **Consumer updates**: `RoleDialog.tsx`, `NodeProperties.tsx`, `BulkAgentModelDialog.tsx`, `ImportAndTeamDialogs.tsx`, `OnboardingModelDefaultsPage.tsx`, `SettingsPage.tsx` — hardcoded model arrays replaced with `useModelRegistry()` hook consumption. `useEnabledProviders.ts` merges registry data via `mergeRegistryIntoProviders()`. `apiSecondary.ts` exports `system.models` API client wrappers.
+  - **DB indexes** (`packages/server/src/database/indexes.ts`): `{ provider: 1, alias: 1 }` (unique), `{ provider: 1, isActive: 1, sortOrder: 1 }`, `{ isActive: 1 }`.
+  - **Seed data**: Claude (fable/sonnet/opus/haiku — pricing from anthropic.com), Codex/GPT (from openai.com), DeepSeek (from api-docs.deepseek.com), Kimi (from platform.moonshot.cn), Xiaomi MiMo (no published pricing → null).
+  - **Covers**: REQ-001–019, AC-001–008, NFR-001–004. Linear: ENG-1825.
+
+- **Soft delete + restore-by-create for agents, workflows, teams, and skills** (`packages/server`, `packages/ui`): deleting an org resource now sets `isDeleted=true` and `deletedAt` instead of removing the document from MongoDB. Deleted resources are hidden everywhere (lists, detail endpoints, MCP tools, pickers, org context) and behave as if they do not exist to all external callers — no "show deleted" option exists in v1.
+  - New shared helpers in `packages/server/src/services/soft-delete.ts`: `notDeletedFilter`, `softDeleteSet()`, `restoreSet()`.
+  - All delete endpoints (agents, workflows, teams, skills) now use `softDeleteSet()` instead of `deleteOne()`.
+  - All list and get/detail endpoints add `notDeletedFilter` (`{ isDeleted: { $ne: true } }`) to query predicates.
+  - Agents: built-in protection, team-lead protection, and spawn/run/edit/move guards all remain and use `notDeletedFilter`.
+  - Workflows: `archived` and `isDeleted` are independent; both filters are applied.
+  - Teams: deletion refused if members exist. Move-to-deleted-team is rejected.
+  - Skills: `enabled` and `isDeleted` are independent; `includeDisabled=true` still excludes deleted skills.
+  - **Restore-by-create**: creating/importing a resource with the same `name` as a soft-deleted record restores it (updates `isDeleted=false`, clears timestamps) instead of inserting a new document. REST responses include `restored: true`; the UI shows "Restored" toasts.
+  - MCP tools (`create_agent`, `delete_agent`, `create_team`, `delete_team`, `list_workflows`, `get_workflow`, `run_workflow`, `list_skills`, `search_skills`, etc.) all apply the same soft-delete filtering.
+  - Org context generation excludes deleted agents and teams.
+  - Seed logic (`seed.ts`) checks `isDeleted` before recreating built-in resources; soft-deleted built-ins are only restored under `SEED_OVERRIDE`.
+  - UI: delete confirmation dialogs note that agents, workflows, and teams can be recovered by recreating with the same name. Create/import forms handle `restored: true` with "Restored" toasts. All pickers (agent selectors, team selectors, workflow selectors) exclude deleted resources.
 
 - **Workspace-linked chat** (`packages/ui`, `packages/server`): clicking a workspace in the sidebar now opens `ChatPage` in workspace mode (`/chat?workspaceId=…`) instead of the workspace IDE page.
   - `ChatPage` bootstraps a browser-style tab strip of the workspace's linked chat sessions (recent-first). Selecting a tab navigates to `/chat/<sessionId>`; the workspace context bar and tabs are preserved.
@@ -18,6 +56,27 @@ Allen is currently pre-release, so behavior can change between commits. Versione
   - Navigating directly to `/chat/<sessionId>` where the session has a `workspaceId` also bootstraps workspace mode, enabling Dashboard-driven resumption with the correct tab active.
   - Sidebar `activeWorkspaceId` now matches `/chat?workspaceId=…` and `/chat/:sessionId` (when the session is workspace-linked) in addition to the existing `/workspaces/:id` path.
   - Tab titles update live when the server generates or renames the chat title (`titleSource` transitions from `default` → `auto`/`user`). Tab state is persisted best-effort in `localStorage` keyed by workspace ID.
+
+- **Usage & cost dashboard** (`packages/server`, `packages/ui`): new Settings → Usage dashboard backed by per-LLM-run cost records that are stored individually and rolled up on demand, fixing prior cost aggregation ("cost-singularity").
+
+- **Plan Mode Planner persona** (`packages/engine`, `packages/server`): Plan Mode now drives a read-only Planner that brainstorms and authors PRDs without making code changes.
+
+- **One-click repo context bootstrap** (`packages/server`, `packages/ui`): guided orchestration that sets up repository context in a single flow.
+
+- **In-app release notes viewer** (`packages/desktop`, `packages/ui`): a desktop changelog viewer that reads the release notes feed.
+
+### Changed
+
+- **Registry-driven model display names**: model display names are now consistent and sourced from the Model Registry across all surfaces, and the registry is managed within providers.
+- **Workflow context evaluation** moved into the inspector.
+- **Reorganized public documentation** under `docs/`.
+
+### Fixed
+
+- **Slack markdown attachments** are now handled correctly.
+- **Duplicate toast messages** are de-duplicated.
+- **`SEED_OVERRIDE`** is respected, and agent providers are no longer flattened on desktop restart.
+- **Curated context refresh consistency**.
 
 ## [0.1.6] - 2026-06-08
 

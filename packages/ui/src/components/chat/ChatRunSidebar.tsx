@@ -39,6 +39,8 @@ import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
 import { renderMarkdown } from './ChatMessageList';
 import ChatContextPanel from './ChatContextPanel';
 import TokenUsageDisplay from '../common/TokenUsageDisplay';
+import { humanLabel } from '../../lib/model-catalog';
+import { getModelDisplay } from '../../hooks/useModelRegistry';
 
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
@@ -60,11 +62,6 @@ type WorkspaceBrowseSource = {
   repoId?: string | null;
 };
 type SidebarWorkflowStep = NonNullable<RunStatus['workflowSteps']>[number];
-
-function humanLabel(value?: string | null): string {
-  if (!value) return '';
-  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
 
 function shortExecutionId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
@@ -496,7 +493,7 @@ function WorkflowNodeStep({
   const meta = nodeDisplayMeta(step);
   const sub = [
     attempts > 1 ? `${attempts} attempts` : null,
-    step.model ? String(step.model).replace(/^claude-/, '') : null,
+    step.model ? getModelDisplay(step.agent ?? '', step.model).modelLabel : null,
     step.error ? 'error' : null,
   ].filter(Boolean).join(' · ');
   const content = (

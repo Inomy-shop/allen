@@ -35,7 +35,7 @@ Allen is early alpha. These limitations are intentional to document current real
 
 - Claude Code CLI must be installed and authenticated for local-repo agent workflows.
 - CLI trust prompts can still require manual intervention in some environments.
-- Model aliases can be overridden with `ALLEN_MODEL_*`, but defaults may change.
+- Model aliases can be overridden with `ALLEN_MODEL_*`, but defaults may change. The **Model Registry** (Settings → Models, admin-only) now provides editable, database-backed model definitions as an alternative — admins can add, edit, activate/deactivate, and price models without code changes or env-var configuration. The `ALLEN_MODEL_*` env-var overrides still take highest precedence when set.
 - Agent outputs are parsed heuristically where workflows ask for structured JSON.
 
 ## Workspaces

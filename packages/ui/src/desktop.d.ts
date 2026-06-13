@@ -3,6 +3,31 @@ export {};
 declare global {
   const __ALLEN_APP_VERSION__: string;
 
+  interface AllenReleaseNotesSection {
+    title: string;
+    items: string[];
+  }
+
+  interface AllenReleaseNotesEntry {
+    version: string;
+    title: string;
+    publishedAt?: string;
+    channel?: string;
+    clients?: string[];
+    summary?: string;
+    notesUrl?: string;
+    sections?: AllenReleaseNotesSection[];
+  }
+
+  interface AllenReleaseNotesIndex {
+    schemaVersion: number;
+    generatedAt?: string;
+    latestVersion?: string;
+    releases: AllenReleaseNotesEntry[];
+    source: 'remote' | 'cache';
+    cachedAt?: string;
+  }
+
   interface Window {
     allenDesktop?: {
       getRuntimeInfo(): Promise<{
@@ -48,6 +73,8 @@ declare global {
         | { status: 'not-available'; currentVersion: string; latestVersion: string }
         | { status: 'update-available'; currentVersion: string; latestVersion: string; url: string; opened: boolean }
       >;
+      getReleaseNotes(): Promise<AllenReleaseNotesIndex>;
+      getReleaseNote(version: string, notesUrl?: string): Promise<AllenReleaseNotesEntry>;
       onUpdatePrompt(handler: (payload: {
         requestId: string;
         currentVersion: string;

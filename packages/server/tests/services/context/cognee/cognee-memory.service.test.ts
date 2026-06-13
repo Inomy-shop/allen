@@ -634,6 +634,107 @@ describe('CogneeMemoryService', () => {
     }));
   });
 
+  it('clears dataset-level curated context stale state after a successful full refresh', async () => {
+    repoPath = createGitFixture();
+    const repoId = new ObjectId();
+    await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
+    await db.collection('repo_cognee_datasets').insertOne({
+      repoId: repoId.toString(),
+      repoName: 'fixture',
+      repoPath,
+      sourcePath: repoPath,
+      datasetName: 'allen-fixture-stale-docmeta-v1',
+      ingestFormat: 'curated_context_entry_v1',
+      status: 'completed',
+      curatedContextStale: true,
+      staleReason: 'curation_entry_changed',
+      updatedAt: new Date(),
+      createdAt: new Date(),
+    });
+
+    const status = await new CogneeMemoryService(db).refreshRepo(repoId.toString());
+    const persisted = await db.collection('repo_cognee_datasets').findOne({ repoId: repoId.toString() });
+
+    expect(status.status).toBe('completed');
+    expect(persisted?.['curatedContextStale']).toBe(false);
+    expect(persisted).not.toHaveProperty('staleReason');
+  });
+
+  it('deactivates stale and unresolved chunk mappings after a successful full refresh', async () => {
+    repoPath = createGitFixture();
+    const repoId = new ObjectId();
+    const datasetName = `allen-fixture-${repoId.toString()}-docmeta-v1`;
+    await db.collection('repos').insertOne({ _id: repoId, name: 'fixture', path: repoPath, defaultBranch: 'main' });
+    await seedCuratedContextEntries(db, repoId.toString());
+    await db.collection('repo_cognee_source_mappings').insertMany([
+      {
+        repoId: repoId.toString(),
+        datasetName,
+        ingestFormat: 'curated_context_entry_v1',
+        mappingType: 'chunk',
+        chunkId: 'chunk-live',
+        entryId: 'entry-agents',
+        active: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        repoId: repoId.toString(),
+        datasetName,
+        ingestFormat: 'curated_context_entry_v1',
+        mappingType: 'chunk',
+        chunkId: 'chunk-unresolved',
+        entryId: 'entry-missing-old',
+        active: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        repoId: repoId.toString(),
+        datasetName,
+        ingestFormat: 'curated_context_entry_v1',
+        mappingType: 'chunk',
+        chunkId: 'chunk-deleted',
+        entryId: 'entry-deleted',
+        active: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ]);
+    mocks.runCogneeSidecar.mockImplementation(async (action) => {
+      if (action === 'chunk_source_mappings') {
+        return {
+          rows: [
+            { chunkId: 'chunk-live', entryId: 'entry-agents', path: 'AGENTS.md' },
+            { chunkId: 'chunk-unresolved', entryId: 'entry-missing-new', path: 'missing.md' },
+          ],
+          diagnostics: [],
+        };
+      }
+      return {
+        ingestedDocumentCount: 2,
+        cognifiedDocumentCount: 2,
+        diagnostics: [{ code: 'fake_cognee', severity: 'info' }],
+      };
+    });
+
+    const status = await new CogneeMemoryService(db).refreshRepo(repoId.toString());
+    const mappings = await db.collection('repo_cognee_source_mappings').find({ repoId: repoId.toString(), mappingType: 'chunk' }).toArray();
+
+    expect(status.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'cognee_chunk_source_mapping_partial',
+        unresolvedChunkMappingCount: 1,
+        deactivatedStaleOrUnresolvedChunkMappingCount: 2,
+      }),
+    ]));
+    expect(mappings.find((mapping) => mapping['chunkId'] === 'chunk-live')?.['active']).toBe(true);
+    expect(mappings.find((mapping) => mapping['chunkId'] === 'chunk-live')?.['entryId']).toBe('entry-agents');
+    expect(mappings.find((mapping) => mapping['chunkId'] === 'chunk-unresolved')?.['active']).toBe(false);
+    expect(mappings.find((mapping) => mapping['chunkId'] === 'chunk-deleted')?.['active']).toBe(false);
+  });
+
   it('resumes the existing dataset by default when retrying after a previous status', async () => {
     repoPath = createGitFixture();
     const repoId = new ObjectId();

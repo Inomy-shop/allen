@@ -145,12 +145,10 @@ describe('Context Judge Agent Seeding', () => {
 
     await new OrgSeedService(db).seed();
 
-    // context-judge-orchestrator IS in FORCE_UPDATE_AGENT_NAMES, so it WILL be
-    // refreshed even without SEED_OVERRIDE. Verify it was updated to the current
-    // built value (not the stale custom one).
+    // FORCE_UPDATE_AGENT_NAMES was removed — without SEED_OVERRIDE no built-in
+    // agent gets overwritten. Verify the custom prompt is preserved.
     const agent = db.store.agents.find((a: any) => a.name === 'context-judge-orchestrator');
-    // FORCE_UPDATE always refreshes regardless of SEED_OVERRIDE
-    expect(agent.system).toBe(buildContextJudgeOrchestratorPrompt());
+    expect(agent.system).toBe(customPrompt);
   });
 
   // ── Test 4 ──────────────────────────────────────────────────────────────────
@@ -559,7 +557,7 @@ describe('Context Judge Agent Seeding', () => {
   // ── Test 26 — Configured context engine provider/model overrides default ──────
 
   it('ALLEN_CONTEXT_LLM_PROVIDER / ALLEN_CONTEXT_LLM_MODEL override default for all 9 context judge agents', async () => {
-    process.env.ALLEN_CONTEXT_LLM_PROVIDER = 'claude-cli';
+    process.env.ALLEN_CONTEXT_LLM_PROVIDER = 'claude';
     process.env.ALLEN_CONTEXT_LLM_MODEL = 'sonnet';
 
     const db = makeDb();
@@ -571,7 +569,7 @@ describe('Context Judge Agent Seeding', () => {
       expect(
         agent.provider,
         `${agentName}.provider must follow ALLEN_CONTEXT_LLM_PROVIDER`,
-      ).toBe('claude-cli');
+      ).toBe('claude');
       expect(
         agent.model,
         `${agentName}.model must follow ALLEN_CONTEXT_LLM_MODEL`,
@@ -602,7 +600,7 @@ describe('Context Judge Agent Seeding', () => {
     // General agent default says claude-cli, but context engine has no override
     // → context judge agents should still default to codex/gpt-5.5
     const originalAgentProvider = process.env.ALLEN_DEFAULT_AGENT_PROVIDER;
-    process.env.ALLEN_DEFAULT_AGENT_PROVIDER = 'claude-cli';
+    process.env.ALLEN_DEFAULT_AGENT_PROVIDER = 'claude';
 
     try {
       const db = makeDb();

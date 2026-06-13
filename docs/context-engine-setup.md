@@ -79,7 +79,40 @@ Expected context state:
 
 Register or open the repo in Allen. The context engine does not ingest raw repo Markdown directly. First generate Allen-curated context and mandatory mappings for the repo.
 
-Run these agents against the registered repo path:
+### One-click setup (recommended)
+
+Open the repo card, go to **Context Management**, and use the **Setup** card that appears above the tabs. This card coordinates the full pipeline in one action:
+
+1. **Preflight** — verifies the repo path, context engine availability, required agents, and that no active setup run already exists.
+2. **Curation** — runs `repo-context-curator` using existing staging and promotion semantics; unchanged files are reused by hash.
+3. **Mandatory mapping** — runs `repo-mandatory-context-mapper` using live Allen agents; new mappings are saved, and old active mappings for reviewed agents are deactivated only after the new save succeeds.
+4. **Context refresh** — rebuilds the Cognee graph from active curated entries.
+
+The card label adapts to the current state:
+
+| Label | Meaning |
+|---|---|
+| Prepare repo context | No run exists yet; first-time setup. |
+| View progress | A run is actively executing. |
+| Resume failed/stopped setup | A run is recoverable. |
+| Check for updates | A completed run exists; re-run to pick up new context files. |
+| Refresh stale context graph | Setup phases completed but graph refresh needs attention. |
+
+Clicking **Cancel** stops orchestration and attempts to cancel active child executions. Already-promoted curation entries and already-saved mandatory mappings are not rolled back.
+
+Clicking **Resume** on a failed or stopped run restarts from the failed phase. Curation resume uses existing staging status and retries only missing or invalid files. Mandatory mapping resume reruns the mapper against the current agent set.
+
+After a server restart, the setup service automatically reconciles in-progress runs. If a child execution is still running, it reattaches and continues. If the run cannot be recovered (no active child signals), it is marked `stopped` and can be resumed from the card.
+
+**Scope and branch notes:**
+
+- The setup uses the repo's detected default branch by default.
+- Uncommitted local files are not included in curation by default.
+- Use the advanced options to force curation of unchanged files (`forceCuration`), skip the Cognee graph refresh (`skipCognee`), or request a clean Cognee rebuild instead of an incremental update (`cleanRebuildCognee`).
+
+### Manual setup (advanced)
+
+If you prefer to run the pipeline steps yourself, run these agents against the registered repo path:
 
 1. `repo-context-curator`
 2. `repo-mandatory-context-mapper`
@@ -88,11 +121,13 @@ Run these agents against the registered repo path:
 
 `repo-mandatory-context-mapper` creates role-specific always-load mappings in `repo_mandatory_context_mappings`. These mappings are separate from curated entries and are injected directly for matching Allen agents.
 
+After running both agents manually, use **Refresh Context** or **Clean Build Context** in the **Context Graph** tab to update the Cognee dataset.
+
 ## 4. Build Context From The UI
 
 Open the repo card and go to **Context Management**.
 
-In the **Context Graph** section:
+The **Setup** card above the tabs runs the full pipeline (curation + mandatory mapping + graph refresh) in one coordinated flow. For graph-only refreshes after manual curated-entry edits, use the controls in the **Context Graph** tab:
 
 - click **Refresh Context** to ingest active curated entries and update Cognee;
 - click **Clean Build Context** when you want a clean rebuild of the Cognee dataset for that repo.

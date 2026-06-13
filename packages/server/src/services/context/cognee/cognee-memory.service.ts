@@ -59,6 +59,8 @@ type CogneeDatasetStatus = {
   deletedDocumentCount?: number;
   unchangedDocumentCount?: number;
   uncognifiedRetryCount?: number;
+  curatedContextStale?: boolean;
+  staleReason?: string;
   manifestVersion?: number;
   ingestFormat?: string;
   manifest?: CogneeFileManifest;
@@ -470,6 +472,7 @@ export class CogneeMemoryService {
         : await this.ensureChunkSourceMappings({
             repoId,
             datasetName,
+            documentCount: documents.length,
           });
       const partialDiagnostics = partial
         ? [{
@@ -506,6 +509,7 @@ export class CogneeMemoryService {
         storageExisting: resultBoolean(result.storageExisting),
         datasetExisting: resultBoolean(result.datasetExisting),
         fileHashes: documents.map((doc) => ({ path: doc.path, kind: doc.kind, hash: doc.hash })),
+        curatedContextStale: partial ? undefined : false,
         uncognifiedDocuments: partial ? uncognifiedDocuments : undefined,
         diagnostics: [...preflightDiagnostics, ...collectionDiagnostics, ...diffDiagnostics, ...normalizeUsageArray(result.diagnostics), ...chunkMappingDiagnostics, ...partialDiagnostics],
         lastCompletedAt: new Date(),
@@ -518,6 +522,7 @@ export class CogneeMemoryService {
           $unset: {
             error: '',
             stopRequestedAt: '',
+            ...(partial ? {} : { staleReason: '' }),
             ...(partial ? {} : { uncognifiedDocuments: '' }),
           },
         },
@@ -735,6 +740,7 @@ export class CogneeMemoryService {
   private async ensureChunkSourceMappings(input: {
     repoId: string;
     datasetName: string;
+    documentCount: number;
   }): Promise<Array<Record<string, unknown>>> {
     const existingCount = await this.sourceMappings.countDocuments({
       repoId: input.repoId,
@@ -765,22 +771,45 @@ export class CogneeMemoryService {
     }
 
     const rows = normalizeChunkSourceMappingRows(output.rows);
-    if (rows.length > 0 && existingCount >= rows.length) {
+    if (rows.length === 0) {
+      if (input.documentCount === 0) {
+        await this.sourceMappings.updateMany(
+          {
+            repoId: input.repoId,
+            datasetName: input.datasetName,
+            ingestFormat: COGNEE_INGEST_FORMAT,
+            mappingType: 'chunk',
+            active: true,
+          },
+          { $set: { active: false, updatedAt: new Date() } },
+        ).catch(() => {});
+        return [
+          ...normalizeUsageArray(output.diagnostics),
+          {
+            code: 'cognee_chunk_source_mapping_deactivated_empty_dataset',
+            severity: 'info',
+            datasetName: input.datasetName,
+            existingChunkMappingCount: existingCount,
+            message: 'Allen deactivated chunk mappings because the refreshed Cognee dataset has no curated context documents.',
+          },
+        ];
+      }
       return [
         ...normalizeUsageArray(output.diagnostics),
         {
-          code: 'cognee_chunk_source_mapping_skipped_existing',
-          severity: 'info',
+          code: 'cognee_chunk_source_mapping_empty_scan',
+          severity: 'warn',
           datasetName: input.datasetName,
-          chunkCount: rows.length,
+          documentCount: input.documentCount,
           existingChunkMappingCount: existingCount,
-          message: 'Allen skipped post-cognify chunk mapping because active chunk mappings already cover the Cognee graph chunks for this dataset.',
+          message: 'Allen preserved existing chunk mappings because Cognee returned no graph chunks for a non-empty curated context dataset.',
         },
       ];
     }
     const resolved = await this.resolveChunkSourceMappingEntries(input.repoId, rows);
     const now = new Date();
     let persistedCount = 0;
+    const resolvedChunkIds = resolved.map(({ row }) => row.chunkId).filter((chunkId): chunkId is string => Boolean(chunkId));
     await Promise.all(resolved.map(async ({ row, entry }) => {
       const entryId = resultString(entry.entryId) ?? row.entryId;
       if (!row.chunkId || !entryId) return;
@@ -816,6 +845,17 @@ export class CogneeMemoryService {
         persistedCount += 1;
       }).catch(() => {});
     }));
+    const staleResult = await this.sourceMappings.updateMany(
+      {
+        repoId: input.repoId,
+        datasetName: input.datasetName,
+        ingestFormat: COGNEE_INGEST_FORMAT,
+        mappingType: 'chunk',
+        active: true,
+        chunkId: { $nin: resolvedChunkIds },
+      },
+      { $set: { active: false, updatedAt: now } },
+    ).catch(() => ({ modifiedCount: 0 }));
 
     const unresolvedCount = rows.length - resolved.length;
     return [
@@ -828,11 +868,12 @@ export class CogneeMemoryService {
         resolvedChunkMappingCount: resolved.length,
         unresolvedChunkMappingCount: unresolvedCount,
         persistedChunkMappingCount: persistedCount,
+        deactivatedStaleOrUnresolvedChunkMappingCount: staleResult.modifiedCount,
         sidecarChunkCount: resultNumber(output.chunkCount),
         sidecarResolvedCount: resultNumber(output.resolvedCount),
         sidecarUnresolvedCount: resultNumber(output.unresolvedCount),
         existingChunkMappingCount: existingCount,
-        message: `Allen persisted ${persistedCount}/${rows.length} Cognee chunk source mappings.`,
+        message: `Allen persisted ${persistedCount}/${rows.length} Cognee chunk source mappings and deactivated ${staleResult.modifiedCount} stale or unresolved mappings.`,
       },
     ];
   }

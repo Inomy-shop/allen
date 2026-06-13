@@ -30,6 +30,7 @@ import {
   type TeamDialogMode,
 } from '../components/agents/TeamDialogs';
 import { AgentCard } from '../components/agents/AgentCard';
+import { registryDefaultModelForProvider, getModelDisplay, useModelRegistry } from '../hooks/useModelRegistry';
 import RepoManagerPage from './RepoManagerPage';
 
 type Agent = Record<string, unknown>;
@@ -68,7 +69,8 @@ function AgentDetailPanel({
     .reduce((count, [, tools]) => count + (Array.isArray(tools) ? tools.filter((tool) => typeof tool === 'string').length : 0), 0);
 
   const provider = String(agent.provider ?? 'claude');
-  const model = String(agent.model ?? 'sonnet');
+  const model = String(agent.model ?? registryDefaultModelForProvider(provider));
+  const { providerLabel: detailProviderLabel, modelLabel: detailModelLabel } = getModelDisplay(provider, model);
   const reasoningEffort = (agent.reasoningEffort as string | undefined) ?? null;
   const planMode = (agent.planMode as boolean | undefined) ?? null;
   const isLead = agent.teamRole === 'lead';
@@ -155,8 +157,8 @@ function AgentDetailPanel({
             <div className="p-5 space-y-5">
               <DetailSection label="Model">
                 <div className="flex flex-col gap-1.5">
-                  <DetailRow k="Provider" v={<span className="font-mono text-theme-primary">{provider}</span>} />
-                  <DetailRow k="Model" v={<span className="font-mono text-theme-primary">{model}</span>} />
+                  <DetailRow k="Provider" v={<span className="font-mono text-theme-primary">{detailProviderLabel}</span>} />
+                  <DetailRow k="Model" v={<span className="font-mono text-theme-primary">{detailModelLabel}</span>} />
                   {reasoningEffort && (
                     <DetailRow k="Reasoning" v={<span className="font-mono text-theme-primary">{reasoningEffort}</span>} />
                   )}
@@ -268,7 +270,7 @@ function AgentDetailPanel({
         {/* ── Footer ──────────────────────────────────────────────── */}
         <div className="flex shrink-0 items-center justify-between gap-3 border-t border-app bg-app-muted/25 px-6 py-4">
           <div className="font-mono text-[11px] text-theme-muted">
-            Read-only view · {teamName ? `Member of ${teamName}` : 'Unassigned'} · {provider}/{model}
+            Read-only view · {teamName ? `Member of ${teamName}` : 'Unassigned'} · {detailProviderLabel}/{detailModelLabel}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="btn btn-ghost btn-sm">Close</button>
@@ -461,6 +463,10 @@ export default function RoleManagerPage() {
   const [searchParams] = useSearchParams();
   const { agents: allAgents, loading, refresh } = useAgents();
   const toast = useToast();
+  // Mounted here so the registry snapshot is populated and the whole page
+  // re-renders once it loads — child rows/cards resolve display defaults
+  // via registryDefaultModelForProvider().
+  const { getDefaultModelForProvider: registryDefaultModel } = useModelRegistry();
 
   // Team data
   const [allTeams, setAllTeams] = useState<Team[]>([]);
@@ -604,8 +610,14 @@ export default function RoleManagerPage() {
   async function handleImportAgentJson() {
     try {
       const bundle = await pickJsonFile();
-      const result = await agentsApi.importJson(bundle);
-      toast.success(`Imported ${result.created.length} agent${result.created.length === 1 ? '' : 's'}; skipped ${result.skipped.length}.`);
+      const result: any = await agentsApi.importJson(bundle);
+      const parts: string[] = [];
+      if (result.created?.length > 0) parts.push(`${result.created.length} created`);
+      if (result.skipped?.length > 0) parts.push(`${result.skipped.length} skipped`);
+      if (result.restored?.length > 0) parts.push(`${result.restored.length} restored`);
+      if (result.createdTeams?.length > 0) parts.push(`${result.createdTeams.length} teams`);
+      if (result.skippedTeams?.length > 0) parts.push(`${result.skippedTeams.length} teams skipped`);
+      toast.success(parts.join(', ') || 'Imported agents.');
       await reloadTeams();
       await refresh();
     } catch (err) {
@@ -640,9 +652,12 @@ export default function RoleManagerPage() {
     if (targetTeamName) {
       await agentsApi.moveToTeam(String(created?.name ?? data.name), targetTeamName, 'member');
     }
-    toast.success(creatingForTeam
-      ? `Agent created in ${creatingForTeam.displayName}.`
-      : 'Agent created.');
+    const isRestored = created?.restored === true;
+    toast.success(isRestored
+      ? 'Agent restored.'
+      : (creatingForTeam
+        ? `Agent created in ${creatingForTeam.displayName}.`
+        : 'Agent created.'));
     await refresh();
   }
 
@@ -651,8 +666,11 @@ export default function RoleManagerPage() {
       await teamsApi.update(teamDialog.team.name, input);
       toast.success(`"${input.displayName}" updated.`);
     } else {
-      await teamsApi.create(input);
-      toast.success(`"${input.displayName}" created.`);
+      const result = await teamsApi.create(input);
+      const isRestored = result?.restored === true;
+      toast.success(isRestored
+        ? `"${input.displayName}" restored.`
+        : `"${input.displayName}" created.`);
     }
     await reloadTeams();
     refresh();
@@ -689,8 +707,11 @@ export default function RoleManagerPage() {
       await skillsApi.update(id, skill);
       toast.success(`Skill "${skill.name}" updated.`);
     } else {
-      await skillsApi.create(skill);
-      toast.success(`Skill "${skill.name}" created.`);
+      const result: any = await skillsApi.create(skill);
+      const isRestored = result?.restored === true;
+      toast.success(isRestored
+        ? `Skill "${skill.name}" restored.`
+        : `Skill "${skill.name}" created.`);
     }
     await reloadSkills();
   }
@@ -763,11 +784,11 @@ export default function RoleManagerPage() {
   const globalModels = useMemo(() => {
     const map = new Map<string, number>();
     for (const a of allAgents) {
-      const m = ((a as any).model as string) ?? 'sonnet';
+      const m = ((a as any).model as string) ?? registryDefaultModel(((a as any).provider as string) ?? 'claude');
       map.set(m, (map.get(m) ?? 0) + 1);
     }
     return [...map.entries()].sort((a, b) => b[1] - a[1]);
-  }, [allAgents]);
+  }, [allAgents, registryDefaultModel]);
 
   const topTeams = useMemo(() => {
     return allTeams
@@ -793,11 +814,11 @@ export default function RoleManagerPage() {
   const activeTeamModels = useMemo(() => {
     const map = new Map<string, number>();
     for (const a of activeMembers) {
-      const m = (a.model as string) ?? 'sonnet';
+      const m = (a.model as string) ?? registryDefaultModel((a.provider as string) ?? 'claude');
       map.set(m, (map.get(m) ?? 0) + 1);
     }
     return [...map.entries()].sort((a, b) => b[1] - a[1]);
-  }, [activeMembers]);
+  }, [activeMembers, registryDefaultModel]);
 
   const filteredActiveMembers = useMemo(() => {
     const mq = memberSearch.trim().toLowerCase();
@@ -1128,7 +1149,7 @@ function LibrarySkillsPane({
 
   async function deleteActive() {
     if (!draft._id && !draft.id) return;
-    if (!window.confirm(`Delete skill "${draft.name}"?`)) return;
+    if (!window.confirm(`Delete skill "${draft.name}"? Deleted skills can be recovered by recreating with the same name.`)) return;
     try {
       await onDelete(draft);
       newSkill();
@@ -1723,7 +1744,8 @@ function LibraryAgentListRow({
   const isLead = agent.teamRole === 'lead';
   const isBuiltIn = !!agent.isBuiltIn;
   const provider = String(agent.provider ?? 'claude');
-  const model = String(agent.model ?? 'sonnet');
+  const model = String(agent.model ?? registryDefaultModelForProvider(provider));
+  const { providerLabel: rowProviderLabel, modelLabel: rowModelLabel } = getModelDisplay(provider, model);
 
   return (
     <div className="grid grid-cols-[28px_minmax(0,1fr)_120px_116px] items-center gap-3 px-4 py-3 transition-colors hover:bg-app-muted/30">
@@ -1747,8 +1769,8 @@ function LibraryAgentListRow({
         </span>
       </button>
       <div className="min-w-0 font-mono text-[11px] text-theme-muted">
-        <div className="truncate text-theme-secondary">{provider}</div>
-        <div className="truncate text-theme-muted">{model}</div>
+        <div className="truncate text-theme-secondary">{rowProviderLabel}</div>
+        <div className="truncate text-theme-muted">{rowModelLabel}</div>
       </div>
       <div className="flex items-center justify-end gap-1">
         <IconTooltipButton label="Run agent" side="left" onClick={onRun} className="h-8 w-8">
@@ -2147,7 +2169,8 @@ function AgentRow({ agent, runs7d, onClick }: { agent: any; runs7d: number; onCl
     .slice(0, 2)
     .join('');
   const provider = String(agent.provider ?? 'claude');
-  const model = String(agent.model ?? 'sonnet');
+  const model = String(agent.model ?? registryDefaultModelForProvider(provider));
+  const { providerLabel: rowProviderLabel, modelLabel: rowModelLabel } = getModelDisplay(provider, model);
   const isActive = runs7d > 0;
   return (
     <button
@@ -2172,7 +2195,7 @@ function AgentRow({ agent, runs7d, onClick }: { agent: any; runs7d: number; onCl
           )}
         </div>
         <div className="text-[11px] font-mono text-theme-muted truncate">
-          {provider} · {model}
+          {rowProviderLabel} · {rowModelLabel}
           {isActive && (
             <>
               <span className="mx-1 text-theme-subtle">·</span>

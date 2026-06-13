@@ -8,6 +8,7 @@
 import { Router, type Request, type Response } from 'express';
 import type { Db } from 'mongodb';
 import { TeamService, type TeamInput } from '../services/team.service.js';
+import { restoreSet } from '../services/soft-delete.js';
 import { buildTeamLeadSystemPrompt, defaultAutoLeadSlug } from '../services/team-lead-template.js';
 import { getAgentDefaults } from '../services/llm-defaults.js';
 import { param } from '../types.js';
@@ -162,7 +163,8 @@ export function teamRoutes(db: Db): Router {
         return res.status(400).json({ error: 'team.name and team.displayName are required' });
       }
 
-      const existing = await service.getByName(team.name);
+      const deletedTeam = await db.collection('teams').findOne({ name: team.name, isDeleted: true });
+      const existing = deletedTeam ? null : await service.getByName(team.name);
       if (existing) return res.status(409).json({ error: `Team "${team.name}" already exists` });
 
       if (team.parentTeamName) {
@@ -175,12 +177,17 @@ export function teamRoutes(db: Db): Router {
       if (!/^[a-z][a-z0-9-]*$/.test(leadName)) {
         return res.status(400).json({ error: `Lead slug "${leadName}" must be a lowercase slug` });
       }
+      let existingLead: Record<string, unknown> | null = null;
       const leadClash = await db.collection('agents').findOne({ name: leadName });
-      if (leadClash) {
+      if (leadClash && !leadClash.isDeleted) {
         return res.status(409).json({
           error: `Lead slug "${leadName}" already exists. Rename the team or pass lead.name explicitly.`,
           code: 'lead-slug-taken',
         });
+      }
+      // If leadClash exists but isDeleted, it's a soft-deleted agent — proceed (it'll be restored implicitly)
+      if (leadClash && leadClash.isDeleted) {
+        existingLead = leadClash;
       }
 
       // Verify all member agents exist.
@@ -226,7 +233,11 @@ export function teamRoutes(db: Db): Router {
         createdAt: new Date(),
         updatedAt: new Date(),
       };
-      await db.collection('agents').insertOne(leadDoc);
+      if (existingLead) {
+        await db.collection('agents').updateOne({ name: leadName }, restoreSet(leadDoc));
+      } else {
+        await db.collection('agents').insertOne(leadDoc);
+      }
 
       // Step 2: create the team row.
       let createdTeam;
@@ -263,7 +274,8 @@ export function teamRoutes(db: Db): Router {
         }
       }
 
-      res.status(201).json({ team: createdTeam, lead: { name: leadName }, moved, skipped });
+      const wasRestored = !!(deletedTeam || existingLead);
+      res.status(201).json({ team: { ...createdTeam, restored: wasRestored }, lead: { name: leadName, restored: !!existingLead }, moved, skipped, restored: wasRestored });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

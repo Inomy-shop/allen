@@ -151,7 +151,7 @@ Open the execution detail page and inspect:
 
 After the first workflow succeeds, try one of:
 
-- `feature-plan-and-implement` for a new feature with PRD/HLD/TDD and implementation.
+- `feature-plan-and-implement` for a new feature with design, implementation, validation, and PR creation.
 
 Review workflow YAML before running implementation workflows. They can create branches, modify files, run tests, and interact with external tools depending on available credentials.
 

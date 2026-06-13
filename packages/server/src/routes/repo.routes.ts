@@ -1,17 +1,21 @@
 import { Router, type Request, type Response } from 'express';
 import { RepoService } from '../services/repo.service.js';
 import { RepoContextPacketService } from '../services/context/core/repo-context-packet.service.js';
-import { isRecord } from '../services/context/common/context-utils.js';
+import { isRecord, sha256 } from '../services/context/common/context-utils.js';
 import { CogneeMemoryService } from '../services/context/cognee/cognee-memory.service.js';
 import { RepoContextCurationService } from '../services/context/curation/repo-context-curation.service.js';
 import { RepoMandatoryContextService } from '../services/context/mandatory/repo-mandatory-context.service.js';
+import { RepoContextSetupService, SETUP_RUNS_COLLECTION } from '../services/context/setup/repo-context-setup.service.js';
 import { RepoContextGraphService } from '../services/context/graph/repo-context-graph.service.js';
 import { RepoContextEngine } from '../services/context/core/repo-context-engine.js';
 import { WorkflowContextInjectionAdapter, summarizeInjection } from '../services/context/core/workflow-context-injection-adapter.js';
+import { CuratedContextEditorService } from '../services/context/judge/curated-context-editor.service.js';
 import { isCogneeContextEnabled, isContextEngineEnabled } from '../services/context/config/context-provider-config.js';
+import { executeChatTool } from '../services/chat-tools.js';
+import { notDeletedFilter } from '../services/soft-delete.js';
 import { param } from '../types.js';
 import { ObjectId, type Db } from 'mongodb';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
@@ -19,8 +23,27 @@ import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
 
+type ErrorPayload = { error: string; code?: string };
+
 function contextProviderDisabledPayload(error = 'Context provider is disabled. Set ALLEN_CONTEXT_PROVIDER to enable context engine flows.'): Record<string, unknown> {
   return { error, code: 'CONTEXT_PROVIDER_DISABLED' };
+}
+
+/** Q6: shared error→HTTP mapping for the context-setup handlers. */
+const CONTEXT_SETUP_ERROR_STATUS: Record<string, number> = {
+  REPO_NOT_FOUND: 404,
+  RUN_NOT_FOUND: 404,
+  RUN_NOT_CANCELLABLE: 409,
+  RUN_NOT_RESUMABLE: 409,
+  INVALID_REPO_PATH: 400,
+  INVALID_OPTIONS: 400,
+};
+
+function sendContextSetupError(res: Response, err: unknown, fallbackStatus = 400): void {
+  const e = err as Error & { code?: string; statusCode?: number };
+  const status = e.statusCode ?? (e.code ? CONTEXT_SETUP_ERROR_STATUS[e.code] : undefined) ?? fallbackStatus;
+  const payload: ErrorPayload = { error: e.message, code: e.code };
+  res.status(status).json(payload);
 }
 
 function activeCurationEntries(entries: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
@@ -220,21 +243,6 @@ function stableManualCurationEntryId(repoId: string, body: Record<string, unknow
   return `manual:${repoId}:${slug}`;
 }
 
-function sha256(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-async function markContextDatasetStale(db: Db, repoId: string, entryId: string): Promise<void> {
-  const now = new Date();
-  await db.collection('repo_cognee_datasets').updateOne(
-    { repoId },
-    {
-      $set: { curatedContextStale: true, updatedAt: now },
-      $push: { diagnostics: { code: 'curated_context_stale', severity: 'info', entryId, message: 'Curated context was manually changed and needs context rebuild/update.' } },
-    } as never,
-  ).catch(() => {});
-}
-
 function safeRepoPath(repoPath: string, rawPath: string): string | null {
   const root = resolve(repoPath);
   const fullPath = resolve(root, rawPath);
@@ -321,6 +329,12 @@ export function repoRoutes(db: Db): Router {
   const contextCuration = new RepoContextCurationService(db);
   const mandatoryContext = new RepoMandatoryContextService(db);
   const contextGraph = new RepoContextGraphService(db, cogneeMemory, mandatoryContext);
+  const curatedContextEditor = new CuratedContextEditorService(db);
+
+  // Setup service — DO NOT create new CogneeMemoryService; reuse existing instance
+  const spawnAgentFn = (args: Record<string, unknown>, spawnDb: Db) =>
+    executeChatTool('spawn_agent', args, spawnDb).then((r) => ({ execution_id: String(r.execution_id ?? '') }));
+  const setupService = new RepoContextSetupService(db, contextCuration, mandatoryContext, cogneeMemory, spawnAgentFn);
 
   // GET /api/repos
   router.get('/', async (_req: Request, res: Response) => {
@@ -461,9 +475,19 @@ export function repoRoutes(db: Db): Router {
   });
 
   // POST /api/repos/mandatory-context — save mandatory agent mappings from repo-mandatory-context-mapper.
+  // D2: single-writer enforcement — while a setup run is actively running for the
+  // repo, this legacy save is rejected with 410 Gone and callers must use the
+  // proposals endpoint (POST /:id/mandatory-context/proposals) instead.
   router.post('/mandatory-context', async (req: Request, res: Response) => {
     try {
       if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Context provider is disabled.'));
+      const repoId = stringValue(req.body?.repo_id ?? req.body?.repoId);
+      if (repoId) {
+        const activeRun = await db.collection(SETUP_RUNS_COLLECTION).findOne({ repoId, status: 'running' });
+        if (activeRun) {
+          return res.status(410).json({ error: 'Use proposal endpoint during setup run', code: 'setup_run_active_use_proposals' });
+        }
+      }
       const result = await mandatoryContext.saveManyFromAgent(req.body ?? {});
       res.status(201).json(result);
     } catch (err: unknown) {
@@ -570,6 +594,21 @@ export function repoRoutes(db: Db): Router {
       res.json(repo);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // PUT /api/repos/:id/default-branch — change default branch
+  // MUST be registered BEFORE PUT /:id, otherwise Express matches :id = "default-branch".
+  router.put('/:id/default-branch', async (req: Request, res: Response) => {
+    try {
+      const branch = String(req.body?.defaultBranch ?? '').trim();
+      if (!branch) return res.status(400).json({ error: 'defaultBranch is required' });
+      const repo = await service.updateDefaultBranch(param(req, 'id'), branch);
+      res.json(repo);
+    } catch (err: unknown) {
+      const message = (err as Error).message;
+      if (message.includes('not found')) return res.status(404).json({ error: message });
+      res.status(400).json({ error: message });
     }
   });
 
@@ -683,7 +722,13 @@ export function repoRoutes(db: Db): Router {
     try {
       if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Context provider is disabled.'));
       const agentName = req.query.agentName ? String(req.query.agentName) : undefined;
-      res.json(await mandatoryContext.list(param(req, 'id'), { agentName }));
+      // enabled query param: true | false | all (default: no filter = all)
+      let enabledFilter: boolean | 'all' | undefined;
+      const enabledRaw = req.query.enabled ? String(req.query.enabled) : undefined;
+      if (enabledRaw === 'true') enabledFilter = true;
+      else if (enabledRaw === 'false') enabledFilter = false;
+      else if (enabledRaw === 'all') enabledFilter = 'all';
+      res.json(await mandatoryContext.list(param(req, 'id'), { agentName, enabled: enabledFilter }));
     } catch (err: unknown) {
       res.status(400).json({ error: (err as Error).message });
     }
@@ -807,24 +852,19 @@ export function repoRoutes(db: Db): Router {
       const patch = curationContentPatch(req.body ?? {});
       if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'At least one editable curation field is required' });
       if (!hasGeneratedCurationContent(patch)) return res.status(400).json({ error: 'curatedContext, retrievalText, or at least one chunk is required' });
-      const now = new Date();
-      const result = await db.collection('repo_context_curation_entries').findOneAndUpdate(
-        { repoId, entryId, active: { $ne: false } },
+      const existing = await curatedContextEditor.getEntry(repoId, entryId);
+      if (!existing) return res.status(404).json({ error: 'Curated context entry not found' });
+      const result = await curatedContextEditor.applyEdit(
+        repoId,
+        entryId,
         {
-          $set: {
-            ...patch,
-            manualOverride: true,
-            cogneeSyncStatus: 'stale',
-            active: true,
-            validTo: null,
-            updatedAt: now,
-          },
+          ...patch,
+          manualOverride: true,
+          source: 'manual_context_management',
         },
-        { returnDocument: 'after' },
+        { actor: 'user', source: 'manual_context_management', action: 'update' },
       );
-      if (!result) return res.status(404).json({ error: 'Curated context entry not found' });
-      await markContextDatasetStale(db, repoId, entryId);
-      res.json(result);
+      res.json(result.entry);
     } catch (err: unknown) {
       res.status(400).json({ error: (err as Error).message });
     }
@@ -845,7 +885,6 @@ export function repoRoutes(db: Db): Router {
         stringValue(patch.retrievalText),
         Array.isArray(patch.chunks) ? patch.chunks.map((chunk) => stringValue((chunk as Record<string, unknown>).text)).filter(Boolean).join('\n\n') : '',
       ].filter(Boolean).join('\n\n');
-      const now = new Date();
       const entry = {
         entryId,
         repoId,
@@ -870,21 +909,35 @@ export function repoRoutes(db: Db): Router {
         configHash: 'manual',
         manualOverride: true,
         source: 'user_added',
-        cogneeSyncStatus: 'stale',
-        active: true,
-        version: 1,
-        editVersion: 1,
-        entryVersionId: randomUUID(),
-        validFrom: now,
-        validTo: null,
-        createdAt: now,
-        updatedAt: now,
       };
       const existing = await db.collection('repo_context_curation_entries').findOne({ repoId, entryId, active: { $ne: false } });
       if (existing) return res.status(409).json({ error: 'Curated context entry already exists' });
-      await db.collection('repo_context_curation_entries').insertOne(entry);
-      await markContextDatasetStale(db, repoId, entryId);
-      res.status(201).json(entry);
+      const result = await curatedContextEditor.applyEdit(
+        repoId,
+        entryId,
+        entry as any,
+        { actor: 'user', source: 'manual_context_management', action: 'create' },
+      );
+      res.status(201).json(result.entry);
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  router.delete('/:id/context-management/entries/:entryId', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Context provider is disabled.'));
+      const repoId = param(req, 'id');
+      const entryId = param(req, 'entryId');
+      const existing = await curatedContextEditor.getEntry(repoId, entryId);
+      if (!existing) return res.status(404).json({ error: 'Curated context entry not found' });
+      const result = await curatedContextEditor.applyEdit(
+        repoId,
+        entryId,
+        {},
+        { actor: 'user', source: 'manual_context_management', action: 'archive' },
+      );
+      res.json(result.entry);
     } catch (err: unknown) {
       res.status(400).json({ error: (err as Error).message });
     }
@@ -922,6 +975,175 @@ export function repoRoutes(db: Db): Router {
     }
   });
 
+  // ── Context Setup Routes ──────────────────────────────────────────────────
+  // NOTE: /runs must be declared BEFORE /:setupRunId to prevent Express from
+  // matching 'runs' as a setupRunId parameter value.
+
+  // POST /api/repos/:id/context-setup — start or return active setup run
+  router.post('/:id/context-setup', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('context-setup'));
+      const repoId = param(req, 'id');
+      const options = (req.body?.options && typeof req.body.options === 'object') ? req.body.options : {};
+      const requestedBy = (req as Request & { user?: { _id?: unknown } }).user?._id ? String((req as Request & { user?: { _id?: unknown } }).user!._id) : undefined;
+      const { setupRun, deduped } = await setupService.startOrReturn(repoId, options, requestedBy, 'ui');
+      res.status(deduped ? 200 : 201).json({ setupRun, deduped });
+    } catch (err: unknown) {
+      sendContextSetupError(res, err, 409);
+    }
+  });
+
+  // GET /api/repos/:id/context-setup — active or latest setup run
+  router.get('/:id/context-setup', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('context-setup'));
+      const repoId = param(req, 'id');
+      const result = await setupService.getActiveOrLatest(repoId);
+      res.json(result);
+    } catch (err: unknown) {
+      sendContextSetupError(res, err);
+    }
+  });
+
+  // GET /api/repos/:id/context-setup/runs — history (MUST be before /:setupRunId)
+  router.get('/:id/context-setup/runs', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('context-setup'));
+      const repoId = param(req, 'id');
+      const limit = Math.min(Number(req.query.limit ?? 10) || 10, 50);
+      const runs = await setupService.listHistory(repoId, limit);
+      res.json({ runs });
+    } catch (err: unknown) {
+      sendContextSetupError(res, err);
+    }
+  });
+
+  // GET /api/repos/:id/context-setup/:setupRunId — detail
+  router.get('/:id/context-setup/:setupRunId', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('context-setup'));
+      const result = await setupService.get(param(req, 'setupRunId'));
+      res.json(result);
+    } catch (err: unknown) {
+      sendContextSetupError(res, err);
+    }
+  });
+
+  // POST /api/repos/:id/context-setup/:setupRunId/cancel
+  router.post('/:id/context-setup/:setupRunId/cancel', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('context-setup'));
+      const setupRun = await setupService.cancel(param(req, 'setupRunId'));
+      res.status(202).json({ setupRun });
+    } catch (err: unknown) {
+      sendContextSetupError(res, err);
+    }
+  });
+
+  // POST /api/repos/:id/context-setup/:setupRunId/resume
+  router.post('/:id/context-setup/:setupRunId/resume', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('context-setup'));
+      const setupRun = await setupService.resume(param(req, 'setupRunId'));
+      res.status(202).json({ setupRun });
+    } catch (err: unknown) {
+      sendContextSetupError(res, err);
+    }
+  });
+
+  // POST /api/repos/:id/mandatory-context/proposals — agent-facing proposal staging.
+  // Three modes:
+  //   mode:'stage'    → batched, resumable upsert of staged mapping rows (≤25 per call)
+  //   mode:'finalize' → assemble the single 'proposed' doc from staged rows
+  //   no mode         → legacy whole-packet body (unchanged behavior)
+  router.post('/:id/mandatory-context/proposals', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('context-setup'));
+      const repoId = param(req, 'id');
+      const { mode, setupRunId, affectedAgentNames, mappings } = req.body ?? {};
+      if (mode !== undefined && mode !== 'stage' && mode !== 'finalize') {
+        return res.status(400).json({ error: `Unknown mode '${String(mode)}' — expected 'stage' or 'finalize'`, code: 'INVALID_OPTIONS' });
+      }
+      if (!setupRunId || typeof setupRunId !== 'string') {
+        return res.status(400).json({ error: 'setupRunId is required', code: 'INVALID_OPTIONS' });
+      }
+      if (mode === 'stage') {
+        return await handleProposalStage(db, res, { repoId, setupRunId, mappings });
+      }
+      if (mode === 'finalize') {
+        return await handleProposalFinalize(db, res, {
+          repoId,
+          setupRunId,
+          affectedAgentNames,
+          expectedMappingCount: req.body?.expectedMappingCount,
+        });
+      }
+      if (!Array.isArray(affectedAgentNames)) {
+        return res.status(400).json({ error: 'affectedAgentNames must be an array', code: 'INVALID_OPTIONS' });
+      }
+      if (!Array.isArray(mappings)) {
+        return res.status(400).json({ error: 'mappings must be an array', code: 'INVALID_OPTIONS' });
+      }
+
+      // Validate setupRunId belongs to an active run on this repo
+      const activeRun = await findActiveSetupRun(db, repoId, setupRunId);
+      if (!activeRun) {
+        return res.status(409).json({ error: 'No active setup run found for the given setupRunId', code: 'NO_ACTIVE_SETUP_RUN' });
+      }
+
+      // Validate affectedAgentNames ⊇ unique(mappings[].agentName)
+      // Dev adaptation: exclude soft-deleted agents so a deleted agent doesn't pass validation
+      // NOTE: replaceForRun re-validates the same constraints — intentional defense-in-depth, not accidental duplication.
+      const agentNames = db.collection('agents');
+      const mappingAgentNames = [...new Set((mappings as Array<{ agentName?: string }>).map((m) => m.agentName).filter(Boolean))] as string[];
+      for (const name of [...affectedAgentNames as string[], ...mappingAgentNames]) {
+        const exists = await agentNames.findOne({ name, ...notDeletedFilter });
+        if (!exists) {
+          return res.status(400).json({ error: `Agent '${name}' not found in agents collection`, code: 'INVALID_AGENT_NAME' });
+        }
+      }
+      for (const name of mappingAgentNames) {
+        if (!(affectedAgentNames as string[]).includes(name)) {
+          return res.status(400).json({ error: `Agent '${name}' in mappings is not in affectedAgentNames`, code: 'AGENT_NOT_AFFECTED' });
+        }
+      }
+
+      // Demote any prior outstanding proposal (latest-wins)
+      const now = new Date();
+      await db.collection('mandatory_context_proposals').updateMany(
+        { setupRunId, status: 'proposed' },
+        { $set: { status: 'rejected', rejectedAt: now, rejectionReason: 'superseded' } },
+      );
+
+      // Insert new proposal
+      const proposalId = randomUUID();
+      const proposal = {
+        proposalId,
+        setupRunId,
+        repoId,
+        affectedAgentNames,
+        mappings,
+        status: 'proposed',
+        createdAt: now,
+      };
+
+      try {
+        await db.collection('mandatory_context_proposals').insertOne(proposal);
+      } catch (insertErr: unknown) {
+        if ((insertErr as { code?: number }).code === 11000) {
+          return res.status(409).json({ error: 'Concurrent proposal conflict — retry', code: 'PROPOSAL_CONFLICT' });
+        }
+        throw insertErr;
+      }
+
+      res.status(201).json({ proposalId });
+    } catch (err: unknown) {
+      sendContextSetupError(res, err);
+    }
+  });
+
+  // ── End Context Setup Routes ──────────────────────────────────────────────
+
   // POST /api/repos/:id/cognee/refresh — manually ingest/cognify repo memory.
   router.post('/:id/cognee/refresh', async (req: Request, res: Response) => {
     try {
@@ -958,4 +1180,198 @@ export function repoRoutes(db: Db): Router {
   });
 
   return router;
+}
+
+// ── Mandatory-context proposal staging helpers ────────────────────────────────
+
+/** Max mappings accepted by a single mode:'stage' call. */
+const PROPOSAL_STAGE_BATCH_LIMIT = 25;
+
+/** Shared active-setup-run lookup for all proposal modes. */
+function findActiveSetupRun(db: Db, repoId: string, setupRunId: string): Promise<Record<string, unknown> | null> {
+  return db.collection('repo_context_setup_runs').findOne({
+    setupRunId,
+    repoId,
+    status: { $in: ['running', 'partial'] },
+  }) as Promise<Record<string, unknown> | null>;
+}
+
+/** Upsert key for a staged proposal row: (setupRunId, agentName, title) + sourcePath when present. */
+function stagedRowKey(setupRunId: string, mapping: { agentName: string; title: string; sourcePath?: string }): Record<string, unknown> {
+  return {
+    setupRunId,
+    agentName: mapping.agentName,
+    title: mapping.title,
+    ...(mapping.sourcePath ? { sourcePath: mapping.sourcePath } : {}),
+    status: 'staged',
+  };
+}
+
+/** mode:'stage' — bulk upsert of staged mapping rows (resumable; safe to re-stage the same key). */
+async function handleProposalStage(
+  db: Db,
+  res: Response,
+  body: { repoId: string; setupRunId: string; mappings: unknown },
+): Promise<void> {
+  const { repoId, setupRunId } = body;
+  if (!Array.isArray(body.mappings)) {
+    res.status(400).json({ error: 'mappings must be an array', code: 'INVALID_OPTIONS' });
+    return;
+  }
+  if (body.mappings.length === 0) {
+    res.status(400).json({ error: 'mappings must not be empty for mode "stage"', code: 'INVALID_OPTIONS' });
+    return;
+  }
+  if (body.mappings.length > PROPOSAL_STAGE_BATCH_LIMIT) {
+    res.status(400).json({ error: `mappings exceeds the stage batch limit of ${PROPOSAL_STAGE_BATCH_LIMIT} (got ${body.mappings.length}) — split into smaller batches`, code: 'STAGE_BATCH_TOO_LARGE' });
+    return;
+  }
+  const mappings = body.mappings as Array<{ agentName?: string; sourcePath?: string; sourceHash?: string; title?: string; content?: string; reasoning?: string }>;
+  for (const m of mappings) {
+    if (!m || typeof m !== 'object' || typeof m.agentName !== 'string' || !m.agentName || typeof m.title !== 'string' || !m.title || typeof m.content !== 'string' || !m.content) {
+      res.status(400).json({ error: 'each mapping requires agentName, title, and content', code: 'INVALID_OPTIONS' });
+      return;
+    }
+  }
+
+  const activeRun = await findActiveSetupRun(db, repoId, setupRunId);
+  if (!activeRun) {
+    res.status(409).json({ error: 'No active setup run found for the given setupRunId', code: 'NO_ACTIVE_SETUP_RUN' });
+    return;
+  }
+
+  // Validate each mapping's agentName exists (same agent lookup as the legacy path, incl. soft-delete filter)
+  const agents = db.collection('agents');
+  for (const name of [...new Set(mappings.map((m) => m.agentName as string))]) {
+    const exists = await agents.findOne({ name, ...notDeletedFilter });
+    if (!exists) {
+      res.status(400).json({ error: `Agent '${name}' not found in agents collection`, code: 'INVALID_AGENT_NAME' });
+      return;
+    }
+  }
+
+  const proposals = db.collection('mandatory_context_proposals');
+  const now = new Date();
+  for (const m of mappings) {
+    await proposals.updateOne(
+      stagedRowKey(setupRunId, m as { agentName: string; title: string; sourcePath?: string }),
+      {
+        $set: {
+          repoId,
+          content: m.content,
+          ...(m.sourcePath ? { sourcePath: m.sourcePath } : {}),
+          ...(m.sourceHash ? { sourceHash: m.sourceHash } : {}),
+          ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+          updatedAt: now,
+        },
+        // createdAt: keeps staged rows on the same TTL cleanup as proposal docs
+        $setOnInsert: { stagedAt: now, createdAt: now },
+      },
+      { upsert: true },
+    );
+  }
+
+  const totalStaged = await proposals.countDocuments({ setupRunId, status: 'staged' });
+  res.status(200).json({ staged: mappings.length, totalStaged });
+}
+
+/** mode:'finalize' — assemble the single 'proposed' doc from staged rows and mark them consumed. */
+async function handleProposalFinalize(
+  db: Db,
+  res: Response,
+  body: { repoId: string; setupRunId: string; affectedAgentNames: unknown; expectedMappingCount: unknown },
+): Promise<void> {
+  const { repoId, setupRunId } = body;
+  if (!Array.isArray(body.affectedAgentNames)) {
+    res.status(400).json({ error: 'affectedAgentNames must be an array', code: 'INVALID_OPTIONS' });
+    return;
+  }
+  const affectedAgentNames = body.affectedAgentNames as string[];
+  const expectedMappingCount = body.expectedMappingCount;
+  if (typeof expectedMappingCount !== 'number' || !Number.isInteger(expectedMappingCount) || expectedMappingCount < 0) {
+    res.status(400).json({ error: 'expectedMappingCount must be a non-negative integer', code: 'INVALID_OPTIONS' });
+    return;
+  }
+
+  const activeRun = await findActiveSetupRun(db, repoId, setupRunId);
+  if (!activeRun) {
+    res.status(409).json({ error: 'No active setup run found for the given setupRunId', code: 'NO_ACTIVE_SETUP_RUN' });
+    return;
+  }
+
+  const proposals = db.collection('mandatory_context_proposals');
+  const stagedRows = await proposals.find({ setupRunId, status: 'staged' }).toArray();
+
+  // Validate all affectedAgentNames exist (same defense-in-depth as the legacy path; staged
+  // agentNames were validated at stage time and must be ⊆ affectedAgentNames below)
+  const agents = db.collection('agents');
+  for (const name of affectedAgentNames) {
+    const exists = await agents.findOne({ name, ...notDeletedFilter });
+    if (!exists) {
+      res.status(400).json({ error: `Agent '${name}' not found in agents collection`, code: 'INVALID_AGENT_NAME' });
+      return;
+    }
+  }
+  for (const name of [...new Set(stagedRows.map((r) => String(r.agentName ?? '')))]) {
+    if (!affectedAgentNames.includes(name)) {
+      res.status(400).json({ error: `Agent '${name}' in staged mappings is not in affectedAgentNames`, code: 'AGENT_NOT_AFFECTED' });
+      return;
+    }
+  }
+  if (stagedRows.length !== expectedMappingCount) {
+    res.status(400).json({
+      error: `Staged mapping count ${stagedRows.length} does not match expectedMappingCount ${expectedMappingCount} — verify staged coverage and re-stage missing mappings`,
+      code: 'STAGED_COUNT_MISMATCH',
+      stagedCount: stagedRows.length,
+      expectedMappingCount,
+    });
+    return;
+  }
+
+  // Demote any prior outstanding proposal (latest-wins — same as the legacy path)
+  const now = new Date();
+  await proposals.updateMany(
+    { setupRunId, status: 'proposed' },
+    { $set: { status: 'rejected', rejectedAt: now, rejectionReason: 'superseded' } },
+  );
+
+  // Insert the single proposal doc assembled from staged rows (same shape as the
+  // legacy path so the orchestrator apply flow is untouched)
+  const proposalId = randomUUID();
+  const proposal = {
+    proposalId,
+    setupRunId,
+    repoId,
+    affectedAgentNames,
+    mappings: stagedRows.map((r) => ({
+      agentName: String(r.agentName ?? ''),
+      ...(r.sourcePath ? { sourcePath: String(r.sourcePath) } : {}),
+      ...(r.sourceHash ? { sourceHash: String(r.sourceHash) } : {}),
+      title: String(r.title ?? ''),
+      content: String(r.content ?? ''),
+      ...(r.reasoning ? { reasoning: String(r.reasoning) } : {}),
+    })),
+    status: 'proposed',
+    createdAt: now,
+  };
+
+  try {
+    await proposals.insertOne(proposal);
+  } catch (insertErr: unknown) {
+    if ((insertErr as { code?: number }).code === 11000) {
+      res.status(409).json({ error: 'Concurrent proposal conflict — retry', code: 'PROPOSAL_CONFLICT' });
+      return;
+    }
+    throw insertErr;
+  }
+
+  // Mark staged rows consumed. Use consumedProposalId (not proposalId) as the
+  // audit/link field so that staged rows never carry proposalId — which would
+  // collide with the partial unique index that identifies final proposal docs.
+  await proposals.updateMany(
+    { setupRunId, status: 'staged' },
+    { $set: { status: 'consumed_into_proposal', consumedProposalId: proposalId, updatedAt: now } },
+  );
+
+  res.status(201).json({ proposalId, mappingCount: proposal.mappings.length });
 }

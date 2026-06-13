@@ -21,6 +21,8 @@ interface Repo {
   name: string;
   path: string;
   description?: string;
+  branch?: string;
+  defaultBranch?: string;
   detected: {
     language: string[];
     framework: string[];
@@ -378,6 +380,7 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
   const [context, setContext] = useState('');
   const [defaultWorkflow, setDefaultWorkflow] = useState('');
   const [status, setStatus] = useState<'active' | 'archived'>('active');
+  const [defaultBranch, setDefaultBranch] = useState('');
   const [workflows, setWorkflows] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -390,6 +393,12 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
       setContext(repo.context ?? '');
       setDefaultWorkflow(repo.defaultWorkflow ?? '');
       setStatus(repo.status);
+      // Resolve default branch via the full 4-step chain (R1, AC-001)
+      const resolvedBranch = repo.detected?.defaultBranch?.trim()
+        || repo.defaultBranch?.trim()
+        || repo.branch?.trim()
+        || 'main';
+      setDefaultBranch(resolvedBranch);
       setError('');
       wfApi.list().then(setWorkflows).catch(() => {});
     }
@@ -400,6 +409,17 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
     setSaving(true);
     setError('');
     try {
+      const initialDefaultBranch = repo.detected?.defaultBranch?.trim()
+        || repo.defaultBranch?.trim()
+        || repo.branch?.trim()
+        || 'main';
+
+      // Save default branch FIRST if changed
+      if (defaultBranch.trim() !== initialDefaultBranch) {
+        await repoApi.updateDefaultBranch(repo._id, defaultBranch.trim());
+      }
+
+      // Then save other metadata
       await repoApi.update(repo._id, {
         name: name.trim(),
         description: description.trim(),
@@ -452,6 +472,16 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
             <label className={FORM_LABEL_CLASS}>Tags</label>
             <input type="text" value={tags} onChange={e => setTags(e.target.value)}
               placeholder="Comma-separated" className={`${FORM_INPUT_CLASS} font-mono`} />
+          </div>
+          <div>
+            <label className={FORM_LABEL_CLASS}>Default branch</label>
+            <input
+              type="text"
+              value={defaultBranch}
+              onChange={e => setDefaultBranch(e.target.value)}
+              className={`${FORM_INPUT_CLASS} font-mono`}
+              placeholder="main"
+            />
           </div>
           <div>
             <label className={FORM_LABEL_CLASS}>Context</label>
@@ -844,7 +874,10 @@ export default function RepoManagerPage() {
                       <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] leading-4 text-theme-muted">
                         <span className="inline-flex items-center gap-1">
                           <GitBranch className="h-3 w-3 shrink-0" />
-                          {repo.detected?.defaultBranch ?? 'main'}
+                          {repo.detected?.defaultBranch?.trim()
+  || repo.defaultBranch?.trim()
+  || repo.branch?.trim()
+  || 'main'}
                         </span>
                         {remote && (
                           <a href={remote.href} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="inline-flex max-w-[360px] items-center gap-1 truncate transition-colors hover:text-accent">

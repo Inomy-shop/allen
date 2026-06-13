@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { Db, Collection, ObjectId } from 'mongodb';
 
 export type CuratedContextPatch = {
+  [key: string]: unknown;
   chunks?: unknown[];
   curatedContext?: string;
   retrievalText?: string;
+  path?: string;
   title?: string;
   category?: string;
   description?: string;
@@ -72,12 +74,55 @@ export class CuratedContextEditorService {
       expectedEntryVersionId?: string;
     },
   ): Promise<{ revision: CurationRevision; entry: Record<string, unknown> }> {
+    return this.writeEntry(repoId, entryId, patch, meta, { mergePriorFields: true });
+  }
+
+  async replaceFromCurator(
+    repoId: string,
+    entryId: string,
+    entry: Record<string, unknown>,
+    meta: {
+      actor: string;
+      source: string;
+      reviewTaskId?: string;
+      remediationId?: string;
+      learningId?: string;
+      expectedEntryVersionId?: string;
+    },
+  ): Promise<{ revision: CurationRevision; entry: Record<string, unknown> }> {
+    return this.writeEntry(
+      repoId,
+      entryId,
+      {
+        ...entry,
+        source: 'repo_context_curator',
+        manualOverride: false,
+      },
+      { ...meta, action: 'update' },
+      { mergePriorFields: false },
+    );
+  }
+
+  private async writeEntry(
+    repoId: string,
+    entryId: string,
+    patch: CuratedContextPatch,
+    meta: {
+      actor: string;
+      source: string;
+      reviewTaskId?: string;
+      remediationId?: string;
+      learningId?: string;
+      action?: 'create' | 'update' | 'archive';
+      expectedEntryVersionId?: string;
+    },
+    options: { mergePriorFields: boolean },
+  ): Promise<{ revision: CurationRevision; entry: Record<string, unknown> }> {
     const now = new Date();
     const existing = await this.findCurrentEntry(repoId, entryId);
 
     let before: Record<string, unknown> | null = null;
     let existingObjectId: ObjectId | undefined;
-    let currentVersion = 0;
 
     if (existing) {
       const { _id: _unused, ...existingRest } = existing as Record<string, unknown>;
@@ -90,19 +135,15 @@ export class CuratedContextEditorService {
       }
       before = existingRest;
       existingObjectId = existing['_id'] as ObjectId | undefined;
-      currentVersion = versionNumber(existing);
     }
 
     const revisionId = randomUUID();
-    const nextVersion = currentVersion + 1;
     const nextEntryVersionId = randomUUID();
     const updateFields: Record<string, unknown> = {
-      ...(before ?? {}),
+      ...(options.mergePriorFields ? before ?? {} : {}),
       repoId,
       entryId,
       entryVersionId: nextEntryVersionId,
-      version: nextVersion,
-      editVersion: nextVersion,
       active: meta.action === 'archive' ? false : true,
       validFrom: now,
       validTo: meta.action === 'archive' ? now : null,
@@ -116,7 +157,7 @@ export class CuratedContextEditorService {
       createdByRevisionId: revisionId,
     };
     delete updateFields['_id'];
-    for (const [key, value] of Object.entries(patch)) {
+    for (const [key, value] of Object.entries(sanitizeCuratedPatch(patch))) {
       if (value !== undefined) updateFields[key] = value;
     }
 
@@ -160,7 +201,7 @@ export class CuratedContextEditorService {
 
     // Compute simple diff (keys that changed)
     const diff: Record<string, unknown> = {};
-    for (const key of Object.keys({ ...patch, active: updateFields['active'] })) {
+    for (const key of Object.keys({ ...sanitizeCuratedPatch(patch), active: updateFields['active'] })) {
       diff[key] = { before: before?.[key], after: after[key] };
     }
 
@@ -243,7 +284,7 @@ export class CuratedContextEditorService {
   }
 
   private async findCurrentEntry(repoId: string, entryId: string): Promise<Record<string, unknown> | null> {
-    const active = await this.entriesCollection.findOne({ repoId, entryId, active: true }, { sort: { version: -1, editVersion: -1, updatedAt: -1 } });
+    const active = await this.entriesCollection.findOne({ repoId, entryId, active: true }, { sort: { updatedAt: -1, createdAt: -1, entryVersionId: -1 } });
     if (active) return active;
     return this.entriesCollection.findOne(
       {
@@ -251,7 +292,7 @@ export class CuratedContextEditorService {
         entryId,
         active: { $exists: false },
       },
-      { sort: { editVersion: -1, updatedAt: -1, createdAt: -1 } },
+      { sort: { updatedAt: -1, createdAt: -1, entryVersionId: -1 } },
     );
   }
 
@@ -280,7 +321,31 @@ export class CuratedContextEditorService {
   }
 }
 
-function versionNumber(entry: Record<string, unknown>): number {
-  const value = entry['version'] ?? entry['editVersion'];
-  return typeof value === 'number' && Number.isFinite(value) ? value : 1;
+const EDITOR_OWNED_FIELDS = new Set([
+  '_id',
+  'repoId',
+  'entryId',
+  'entryVersionId',
+  'active',
+  'validFrom',
+  'validTo',
+  'supersededAt',
+  'supersededByVersionId',
+  'archivedAt',
+  'createdAt',
+  'updatedAt',
+  'lastEditedAt',
+  'lastEditedBy',
+  'createdByRevisionId',
+  'version',
+  'editVersion',
+]);
+
+function sanitizeCuratedPatch(patch: CuratedContextPatch): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (EDITOR_OWNED_FIELDS.has(key)) continue;
+    sanitized[key] = value;
+  }
+  return sanitized;
 }

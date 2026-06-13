@@ -15,6 +15,8 @@ const allenDesktop = {
   getUpdateSettings: () => ipcRenderer.invoke('allen:update-settings-get'),
   setAutoUpdateEnabled: (enabled: boolean) => ipcRenderer.invoke('allen:update-settings-set-auto-enabled', enabled),
   checkForUpdates: () => ipcRenderer.invoke('allen:update-check-now'),
+  getReleaseNotes: () => ipcRenderer.invoke('allen:release-notes-list'),
+  getReleaseNote: (version: string, notesUrl?: string) => ipcRenderer.invoke('allen:release-notes-get', { version, notesUrl }),
   onUpdatePrompt: (handler: (payload: { requestId: string; currentVersion: string; latestVersion: string }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { requestId: string; currentVersion: string; latestVersion: string }) => handler(payload);
     ipcRenderer.on('allen:update-prompt', listener);

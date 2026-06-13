@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHand
 import { ArrowUp, Square, ChevronDown, Paperclip, Loader2, X, Sparkles, ShieldCheck, Plus, Check, FolderGit2, CornerDownLeft } from 'lucide-react';
 import MentionAutocomplete, { type MentionOption } from './MentionAutocomplete';
 import { authHeaders, linear, type LinearIssueSummary } from '../../services/api';
+import { getModelDisplay } from '../../hooks/useModelRegistry';
 import { CHAT_PLACEHOLDER } from '../../lib/brand';
 
 export type ReasoningEffortValue = 'off' | 'low' | 'medium' | 'high' | 'max';
@@ -37,6 +38,8 @@ interface ProviderInfo {
   modelSuggestions?: string[];
   defaultModel: string;
   open?: boolean;
+  /** CLI providers (claude/codex): login state — gate selection on 'logged_in'. */
+  authStatus?: 'logged_in' | 'not_logged_in' | 'cli_missing';
 }
 
 interface ChatInputProps {
@@ -48,6 +51,12 @@ interface ChatInputProps {
   disabledReason?: string;
   providers?: ProviderInfo[];
   selectedProvider?: string;
+  /**
+   * Currently selected team agent, or null/undefined for the base assistant.
+   * The Plan (Planner) toggle is shown only for the base assistant — it is
+   * hidden whenever a specific team agent is selected.
+   */
+  selectedAgent?: string | null;
   selectedModel?: string;
   modelLocked?: boolean;
   onProviderChange?: (provider: string, model: string) => void;
@@ -74,7 +83,7 @@ interface ChatInputProps {
 const PROVIDER_COLORS: Record<string, string> = {
   codex: 'text-accent-green',
   claude: 'text-accent',
-  'claude-cli': 'text-accent',
+  'claude-cli': 'text-accent', // legacy id on historical sessions
   deepseek: 'text-accent-blue',
   'xiaomi-mimo': 'text-accent-blue',
   kimi: 'text-accent-blue',
@@ -255,6 +264,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     disabledReason,
     providers,
     selectedProvider,
+    selectedAgent,
     selectedModel,
     modelLocked,
     onProviderChange,
@@ -829,10 +839,10 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
               >
                 <ProviderIcon provider={selectedProvider} className={`h-3 w-3 shrink-0 ${PROVIDER_COLORS[selectedProvider ?? ''] ?? 'text-theme-muted'}`} />
                 <span className={PROVIDER_COLORS[selectedProvider ?? ''] ?? 'text-theme-muted'}>
-                  {currentProvider?.label ?? selectedProvider}
+                  {selectedProvider ? getModelDisplay(selectedProvider).providerLabel : currentProvider?.label}
                 </span>
                 <span className="text-theme-subtle">/</span>
-                <span>{selectedModel}</span>
+                <span>{selectedProvider && selectedModel ? getModelDisplay(selectedProvider, selectedModel).modelLabel : selectedModel}</span>
                 {!modelLocked && <ChevronDown className="w-2.5 h-2.5 text-theme-subtle ml-0.5" />}
               </button>
             )}
@@ -848,11 +858,11 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   maxHeight: Math.min(modelPickerPos?.maxHeight ?? 360, 360),
                 }}
               >
-                {providers?.map((p, providerIndex) => (
+                {providers?.filter((p) => !p.authStatus || p.authStatus === 'logged_in').map((p, providerIndex) => (
                   <div key={p.provider} className={providerIndex > 0 ? 'mt-2 border-t border-app pt-2' : ''}>
                     <div className="flex items-center gap-2 px-2 pb-1.5 pt-0.5 text-[12px] font-medium text-theme-muted">
                       <ProviderIcon provider={p.provider} className={`h-3.5 w-3.5 shrink-0 ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`} />
-                      <span>{p.label}</span>
+                      <span>{getModelDisplay(p.provider).providerLabel}</span>
                     </div>
                     {modelOptionsForProvider(p, selectedProvider === p.provider ? selectedModel : undefined).map((m) => {
                       const active = selectedProvider === p.provider && selectedModel === m;
@@ -864,7 +874,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                           active ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary'
                         }`}
                       >
-                        <span className="min-w-0 flex-1 truncate pl-6">{m}</span>
+                        <span className="min-w-0 flex-1 truncate pl-6">{getModelDisplay(p.provider, m).modelLabel}</span>
                         {active && <Check className="h-3.5 w-3.5 shrink-0 text-theme-secondary" />}
                       </button>
                       );
@@ -935,15 +945,16 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             )}
           </div>
 
-          {/* Plan mode — slider toggle (Claude only) */}
-          {(selectedProvider === 'claude-cli' || selectedProvider === 'claude') && (
+          {/* Plan (Planner) toggle — base assistant only, any provider.
+              Hidden when a specific team agent is selected. */}
+          {!selectedAgent && (
             <button
               type="button"
               onClick={togglePlanMode}
               title={
                 effectivePlanMode
-                  ? 'Plan mode ON — agent will read & plan only, no edits'
-                  : 'Plan mode OFF — agent may edit files'
+                  ? 'Plan mode ON — Planner: brainstorm ideas & write PRDs (no code changes)'
+                  : 'Plan mode OFF — normal assistant'
               }
               aria-pressed={effectivePlanMode}
               className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-md hover:bg-surface-100/50 transition-colors"

@@ -80,10 +80,11 @@ describe('applyEdit', () => {
     );
   });
 
-  it('editVersion increments on each applyEdit', async () => {
+  it('entryVersionId changes on each applyEdit', async () => {
     const { entry: e1 } = await service.applyEdit(REPO_ID, ENTRY_ID, { title: 'V1' }, baseMeta);
     const { entry: e2 } = await service.applyEdit(REPO_ID, ENTRY_ID, { title: 'V2' }, baseMeta);
-    expect((e2['editVersion'] as number)).toBeGreaterThan((e1['editVersion'] as number));
+    expect(e2['entryVersionId']).toBeDefined();
+    expect(e2['entryVersionId']).not.toBe(e1['entryVersionId']);
   });
 
   it('diff contains changed fields', async () => {
@@ -113,7 +114,7 @@ describe('applyEdit', () => {
     expect(entry['chunks']).toBeUndefined();
   });
 
-  it('creates a new active version and marks the prior version inactive', async () => {
+  it('creates a new active row and marks the prior row inactive', async () => {
     const { entry: first } = await service.applyEdit(REPO_ID, ENTRY_ID, { title: 'V1' }, baseMeta);
     const { entry: second } = await service.applyEdit(REPO_ID, ENTRY_ID, { title: 'V2' }, baseMeta);
 
@@ -127,6 +128,71 @@ describe('applyEdit', () => {
 
     const current = await service.getEntry(REPO_ID, ENTRY_ID);
     expect(current?.['title']).toBe('V2');
+  });
+
+  it('archives and then recreates the same entryId as the active row', async () => {
+    await service.applyEdit(REPO_ID, ENTRY_ID, { title: 'Original' }, baseMeta);
+    const archived = await service.applyEdit(REPO_ID, ENTRY_ID, {}, { ...baseMeta, action: 'archive' });
+
+    expect(archived.entry['active']).toBe(false);
+    expect(await service.getEntry(REPO_ID, ENTRY_ID)).toBeNull();
+
+    const recreated = await service.applyEdit(REPO_ID, ENTRY_ID, { title: 'Recreated' }, { ...baseMeta, action: 'create' });
+    const rows = await db.collection('repo_context_curation_entries').find({ repoId: REPO_ID, entryId: ENTRY_ID }).toArray();
+
+    expect(recreated.entry['title']).toBe('Recreated');
+    expect(recreated.entry['active']).toBe(true);
+    expect(rows.filter((row) => row['active'] === true)).toHaveLength(1);
+    expect(rows.filter((row) => row['active'] === false)).toHaveLength(1);
+  });
+
+  it('does not allow patches to override editor-owned persistence fields', async () => {
+    const { entry } = await service.applyEdit(
+      REPO_ID,
+      ENTRY_ID,
+      {
+        title: 'Sanitized',
+        repoId: 'other-repo',
+        entryId: 'other-entry',
+        active: false,
+        entryVersionId: 'caller-version',
+        validTo: new Date('2020-01-01T00:00:00Z'),
+      },
+      baseMeta,
+    );
+
+    expect(entry['repoId']).toBe(REPO_ID);
+    expect(entry['entryId']).toBe(ENTRY_ID);
+    expect(entry['active']).toBe(true);
+    expect(entry['entryVersionId']).not.toBe('caller-version');
+    expect(entry['validTo']).toBeNull();
+  });
+
+  it('curator replacement does not inherit manual-only fields', async () => {
+    await service.applyEdit(
+      REPO_ID,
+      ENTRY_ID,
+      { title: 'Manual', curatedContext: 'manual content', manualOverride: true, source: 'user_added' },
+      { actor: 'user', source: 'manual_context_management', action: 'create' },
+    );
+
+    const { entry } = await service.replaceFromCurator(
+      REPO_ID,
+      ENTRY_ID,
+      {
+        title: 'Curator',
+        path: 'docs/entry.md',
+        sourceHash: 'hash-new',
+        curatedContext: 'curator content',
+        retrievalText: 'curator retrieval',
+        inclusion: 'include',
+      },
+      { actor: 'repo-context-curator', source: 'repo_context_curator' },
+    );
+
+    expect(entry['title']).toBe('Curator');
+    expect(entry['source']).toBe('repo_context_curator');
+    expect(entry['manualOverride']).toBe(false);
   });
 
   it('optional meta fields are stored in revision', async () => {

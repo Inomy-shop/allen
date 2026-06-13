@@ -1,5 +1,6 @@
 import { Crown, Play, Pencil, Trash2, Eye, ArrowRight, FolderGit2 } from 'lucide-react';
 import RoleIcon from '../common/RoleIcon';
+import { registryDefaultModelForProvider, getModelDisplay } from '../../hooks/useModelRegistry';
 
 interface AgentCardProps {
   agent: Record<string, unknown>;
@@ -20,7 +21,8 @@ export function AgentCard({
   const spawnTargets = (agent.spawnTargets as string[] | undefined) ?? [];
   const fromRepo = !!agent.sourceRepoId;
   const provider = String(agent.provider ?? 'claude');
-  const model = String(agent.model ?? 'sonnet');
+  const model = String(agent.model ?? registryDefaultModelForProvider(provider));
+  const { providerLabel: cardProviderLabel, modelLabel: cardModelLabel } = getModelDisplay(provider, model);
   const color = (agent.color as string) ?? '#666';
   const displayName = (agent.displayName as string) ?? (agent.name as string);
   const name = agent.name as string;
@@ -121,10 +123,10 @@ export function AgentCard({
           style={{ minWidth: '7rem' }}
         >
           <div className="overline px-3 py-1 border-b border-current/20 opacity-80">
-            {provider}
+            {cardProviderLabel}
           </div>
           <div className="text-[11px] font-mono px-3 py-1.5 text-theme-primary bg-app-muted/50">
-            {model}
+            {cardModelLabel}
           </div>
         </div>
       </div>

@@ -195,7 +195,7 @@ describe('agentsApi.bulkUpdateModel', () => {
 
     const result = await agentsApi.bulkUpdateModel({
       agentNames: ['agent-a', 'agent-b'],
-      provider: 'claude-cli',
+      provider: 'claude',
       model: 'sonnet',
       clearIncompatibleSettings: true,
     });
@@ -206,7 +206,7 @@ describe('agentsApi.bulkUpdateModel', () => {
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string)).toEqual({
       agentNames: ['agent-a', 'agent-b'],
-      provider: 'claude-cli',
+      provider: 'claude',
       model: 'sonnet',
       clearIncompatibleSettings: true,
     });

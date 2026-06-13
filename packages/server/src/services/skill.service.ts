@@ -1,4 +1,5 @@
 import { ObjectId, type Collection, type Db } from 'mongodb';
+import { notDeletedFilter, softDeleteSet, restoreSet } from './soft-delete.js';
 
 export type SkillRoute =
   | 'direct_answer'
@@ -166,7 +167,9 @@ export class SkillService {
   }
 
   async list(includeDisabled = false): Promise<Record<string, unknown>[]> {
-    const filter = includeDisabled ? {} : { enabled: { $ne: false } };
+    const filter = includeDisabled
+      ? notDeletedFilter
+      : { enabled: { $ne: false }, ...notDeletedFilter };
     return this.col.find(filter, {
       projection: {
         body: 0,
@@ -176,16 +179,30 @@ export class SkillService {
 
   async getById(id: string): Promise<Record<string, unknown> | null> {
     if (!ObjectId.isValid(id)) throw new Error(`Invalid skill id "${id}"`);
-    return this.col.findOne({ _id: new ObjectId(id) });
+    return this.col.findOne({ _id: new ObjectId(id), ...notDeletedFilter });
   }
 
   async getByName(name: string): Promise<Record<string, unknown> | null> {
-    return this.col.findOne({ name: normalizeSlug(name) });
+    return this.col.findOne({ name: normalizeSlug(name), ...notDeletedFilter });
   }
 
   async create(input: SkillInput): Promise<Record<string, unknown>> {
     const doc = normalizedSkill(input);
-    const existing = await this.col.findOne({ name: doc.name });
+
+    // Check for soft-deleted record with the same name — restore instead of insert
+    const deleted = await this.col.findOne({ name: doc.name, isDeleted: true });
+    if (deleted) {
+      await this.validateDoc(doc);
+      const now = new Date();
+      await this.col.updateOne(
+        { name: doc.name },
+        restoreSet({ ...doc, createdAt: now, updatedAt: now }),
+      );
+      const restored = await this.col.findOne({ name: doc.name });
+      return { ...restored, restored: true };
+    }
+
+    const existing = await this.col.findOne({ name: doc.name, ...notDeletedFilter });
     if (existing) throw new Error(`Skill "${doc.name}" already exists`);
     await this.validateDoc(doc);
     const now = new Date();
@@ -195,7 +212,7 @@ export class SkillService {
 
   async update(id: string, input: Partial<SkillInput>): Promise<Record<string, unknown>> {
     if (!ObjectId.isValid(id)) throw new Error(`Invalid skill id "${id}"`);
-    const existing = await this.col.findOne({ _id: new ObjectId(id) });
+    const existing = await this.col.findOne({ _id: new ObjectId(id), ...notDeletedFilter });
     if (!existing) throw new Error('Skill not found');
 
     const merged = normalizedSkill({
@@ -226,7 +243,7 @@ export class SkillService {
 
   async delete(id: string): Promise<void> {
     if (!ObjectId.isValid(id)) throw new Error(`Invalid skill id "${id}"`);
-    await this.col.deleteOne({ _id: new ObjectId(id) });
+    await this.col.updateOne({ _id: new ObjectId(id) }, softDeleteSet());
   }
 
   async validate(input: SkillInput | Record<string, unknown>): Promise<{ valid: boolean; errors: string[]; warnings: string[] }> {
@@ -243,7 +260,9 @@ export class SkillService {
 
   async search(input: SkillSearchInput): Promise<Record<string, unknown>> {
     const limit = Math.min(Math.max(Number(input.limit ?? 5), 1), 20);
-    const filter = input.includeDisabled ? {} : { enabled: { $ne: false } };
+    const filter = input.includeDisabled
+      ? notDeletedFilter
+      : { enabled: { $ne: false }, ...notDeletedFilter };
     const docs = await this.col.find(filter).toArray();
     const queryParts = [
       input.query ?? '',
@@ -298,13 +317,13 @@ export class SkillService {
 
     const workflows = asStringArray(doc.relatedWorkflows);
     if (workflows.length > 0) {
-      const count = await this.db.collection('workflows').countDocuments({ name: { $in: workflows } });
+      const count = await this.db.collection('workflows').countDocuments({ name: { $in: workflows }, ...notDeletedFilter });
       if (count < workflows.length) warnings.push('Some related workflows do not exist yet');
     }
 
     const agents = asStringArray(doc.relatedAgents);
     if (agents.length > 0) {
-      const count = await this.db.collection('agents').countDocuments({ name: { $in: agents } });
+      const count = await this.db.collection('agents').countDocuments({ name: { $in: agents }, ...notDeletedFilter });
       if (count < agents.length) warnings.push('Some related agents do not exist yet');
     }
 

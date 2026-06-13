@@ -680,6 +680,46 @@ export class RepoService {
     return { updated, branch, behind, commits };
   }
 
+  async updateDefaultBranch(id: string, branch: string): Promise<Record<string, unknown>> {
+    const { ObjectId } = await import('mongodb');
+    const repo = await this.col.findOne({ _id: new ObjectId(id) });
+    if (!repo) throw new Error('Repo not found');
+
+    const repoPath = repo.path as string;
+    if (!existsSync(repoPath)) throw new Error(`Repo path does not exist: ${repoPath}`);
+
+    // Fetch latest remote refs
+    try {
+      await exec('git', ['fetch', '--prune', 'origin'], { cwd: repoPath, timeout: 30_000 });
+    } catch (err: any) {
+      throw new Error(`Failed to fetch from origin: ${err.stderr || err.message}`);
+    }
+
+    // Verify the remote branch exists
+    try {
+      await exec('git', ['rev-parse', '--verify', `origin/${branch}`], { cwd: repoPath, timeout: 10_000 });
+    } catch {
+      throw new Error(`Remote branch "origin/${branch}" was not found.`);
+    }
+
+    // Switch: create local branch tracking the remote branch (resets if it already exists)
+    try {
+      await exec('git', ['switch', '-C', branch, `origin/${branch}`], { cwd: repoPath, timeout: 30_000 });
+    } catch (err: any) {
+      throw new Error(err.stderr || err.message);
+    }
+
+    // Persist the new default branch
+    await this.col.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { 'detected.defaultBranch': branch, updatedAt: new Date(), defaultBranch: branch } },
+    );
+
+    // Return full updated repo document
+    const updated = await this.col.findOne({ _id: new ObjectId(id) });
+    return updated as Record<string, unknown>;
+  }
+
   async update(id: string, body: {
     name?: string;
     description?: string;

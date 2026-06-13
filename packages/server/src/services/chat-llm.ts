@@ -275,7 +275,7 @@ async function runClaudeCompatibleChatCLI(
   resolved?: ResolvedSettings,
   chatSessionId?: string,
 ): Promise<{ text: string; costUsd: number; sessionId?: string; trace: ChatTraceEvent[]; tokenUsage?: TokenUsageInfo | null }> {
-  const overlay = await buildClaudeCompatibleEnvOverlay(provider, model);
+  const overlay = await buildClaudeCompatibleEnvOverlay(provider, model, db);
   const saved: Record<string, string | undefined> = {};
   for (const key of Object.keys(overlay)) {
     saved[key] = process.env[key];
@@ -298,12 +298,17 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
   const providerConfig = PROVIDERS.find(p => p.provider === provider) ?? PROVIDERS[0];
   const model = options.model ?? providerConfig.defaultModel;
 
+  // CLI providers require a logged-in CLI session — fail fast with a
+  // structured error instead of an opaque subprocess failure (FR-1.5).
+  const { assertCliProviderUsable } = await import('./cli-auth.service.js');
+  await assertCliProviderUsable(provider);
+
   log(`━━━ New message [${provider}/${model}] ━━━`);
   const prompt = options.messages.length > 0 ? options.messages[options.messages.length - 1].content : '';
   log(`Prompt: "${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
   const usePersistentRuntime = persistentChatRuntimeEnabled()
     && options.chatSessionId
-    && (provider === 'codex' || provider === 'claude-cli' || isClaudeCompatibleProvider(provider));
+    && (provider === 'codex' || provider === 'claude' || isClaudeCompatibleProvider(provider));
   if (options.resumeSessionId) {
     log(usePersistentRuntime
       ? `Provider session: ${options.resumeSessionId.slice(0, 8)}...`
@@ -349,7 +354,7 @@ export async function runChatLLM(db: Db, options: ChatLLMOptions): Promise<ChatL
       case 'codex':
         result = await runCodexCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
         break;
-      case 'claude-cli':
+      case 'claude':
         result = await runClaudeCLI(db, options.systemPrompt, options.messages, model, callbacks, options.resumeSessionId, options.skipTools, options.cwd, resolved, options.chatSessionId);
         break;
       default:

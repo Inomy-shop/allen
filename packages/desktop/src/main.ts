@@ -48,6 +48,39 @@ let logsDir: string | null = null;
 interface UpdateMetadata {
   version: string;
   url: string;
+  releaseNotesUrl?: string;
+  releasesUrl?: string;
+}
+
+interface ReleaseNotesSection {
+  title: string;
+  items: string[];
+}
+
+interface ReleaseNotesEntry {
+  version: string;
+  title: string;
+  publishedAt?: string;
+  channel?: string;
+  clients?: string[];
+  summary?: string;
+  notesUrl?: string;
+  sections?: ReleaseNotesSection[];
+}
+
+interface ReleaseNotesIndex {
+  schemaVersion: number;
+  generatedAt?: string;
+  latestVersion?: string;
+  releases: ReleaseNotesEntry[];
+  source: 'remote' | 'cache';
+  cachedAt?: string;
+}
+
+interface ReleaseNotesCache {
+  cachedAt: string;
+  index: Omit<ReleaseNotesIndex, 'source' | 'cachedAt'>;
+  details: Record<string, ReleaseNotesEntry>;
 }
 
 interface AutoUpdatePreferences {
@@ -62,6 +95,7 @@ type UpdateCheckResult =
 type UpdatePromptAction = 'update-now' | 'update-later';
 
 const DEFAULT_UPDATE_FEED_URL = 'https://askallen.build/download/latest.json';
+const DEFAULT_RELEASES_FEED_URL = 'https://askallen.build/download/releases.json';
 
 interface SupportBundleResult {
   ok: boolean;
@@ -893,6 +927,14 @@ ipcMain.handle('allen:update-settings-set-auto-enabled', (_event, enabled: boole
 
 ipcMain.handle('allen:update-check-now', async () => checkForProductionUpdate({ manual: true }));
 
+ipcMain.handle('allen:release-notes-list', async () => getReleaseNotesIndex());
+ipcMain.handle('allen:release-notes-get', async (_event, payload: { version?: unknown; notesUrl?: unknown }) => (
+  getReleaseNote(
+    typeof payload?.version === 'string' ? payload.version : '',
+    typeof payload?.notesUrl === 'string' ? payload.notesUrl : undefined,
+  )
+));
+
 function autoUpdatePreferencesPath(): string {
   const dir = resolve(desktopDataDir(), 'allen-preferences');
   mkdirSync(dir, { recursive: true });
@@ -920,6 +962,188 @@ function writeAutoUpdatePreferences(preferences: AutoUpdatePreferences): AutoUpd
   return normalized;
 }
 
+
+function releaseNotesCachePath(): string {
+  const updatesDir = resolve(desktopDataDir(), 'updates');
+  mkdirSync(updatesDir, { recursive: true });
+  return resolve(updatesDir, 'release-notes-cache.json');
+}
+
+function readReleaseNotesCache(): ReleaseNotesCache | null {
+  const path = releaseNotesCachePath();
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const cache = parsed as Partial<ReleaseNotesCache>;
+    if (typeof cache.cachedAt !== 'string' || !cache.index || typeof cache.index !== 'object') return null;
+    if (!Array.isArray((cache.index as ReleaseNotesIndex).releases)) return null;
+    return {
+      cachedAt: cache.cachedAt,
+      index: cache.index as ReleaseNotesCache['index'],
+      details: cache.details && typeof cache.details === 'object' && !Array.isArray(cache.details) ? cache.details as Record<string, ReleaseNotesEntry> : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeReleaseNotesCache(cache: ReleaseNotesCache): void {
+  const path = releaseNotesCachePath();
+  writeFileSync(path, `${JSON.stringify(cache, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+function normalizeReleaseVersion(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const version = value.trim().replace(/^v/i, '');
+  return /^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version) ? version : null;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+}
+
+function parseReleaseNotesUrl(value: unknown, feedUrl: string): string | undefined {
+  if (typeof value !== 'string' || value.trim() === '') return undefined;
+  try {
+    const url = new URL(value, feedUrl);
+    const origin = new URL(feedUrl).origin;
+    if (url.protocol !== 'https:' || url.origin !== origin) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function parseReleaseNotesSections(raw: unknown): ReleaseNotesSection[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const sections = raw
+    .map((section) => {
+      if (!section || typeof section !== 'object' || Array.isArray(section)) return null;
+      const data = section as Record<string, unknown>;
+      const title = optionalString(data.title);
+      if (!title) return null;
+      const items = Array.isArray(data.items)
+        ? data.items.filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim())
+        : [];
+      return { title, items };
+    })
+    .filter((section): section is ReleaseNotesSection => section != null);
+  return sections.length > 0 ? sections : undefined;
+}
+
+function parseReleaseNotesEntry(raw: unknown, feedUrl: string): ReleaseNotesEntry | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const data = raw as Record<string, unknown>;
+  const version = normalizeReleaseVersion(data.version);
+  if (!version) return null;
+
+  const clients = Array.isArray(data.clients)
+    ? data.clients.filter((client): client is string => typeof client === 'string' && client.trim() !== '').map((client) => client.trim())
+    : undefined;
+  if (clients && clients.length > 0 && !clients.includes('desktop')) return null;
+
+  return {
+    version,
+    title: optionalString(data.title) ?? `Allen ${version}`,
+    publishedAt: optionalString(data.publishedAt),
+    channel: optionalString(data.channel),
+    clients,
+    summary: optionalString(data.summary),
+    notesUrl: parseReleaseNotesUrl(data.notesUrl ?? data.releaseNotesUrl, feedUrl),
+    sections: parseReleaseNotesSections(data.sections),
+  };
+}
+
+function parseReleaseNotesIndex(raw: unknown, feedUrl: string): Omit<ReleaseNotesIndex, 'source' | 'cachedAt'> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const data = raw as Record<string, unknown>;
+  if (!Array.isArray(data.releases)) return null;
+
+  const releases = data.releases
+    .map((entry) => parseReleaseNotesEntry(entry, feedUrl))
+    .filter((entry): entry is ReleaseNotesEntry => entry != null)
+    .sort((left, right) => compareReleaseVersions(right.version, left.version));
+  if (releases.length === 0) return null;
+
+  return {
+    schemaVersion: typeof data.schemaVersion === 'number' ? data.schemaVersion : 1,
+    generatedAt: optionalString(data.generatedAt),
+    latestVersion: normalizeReleaseVersion(data.latestVersion) ?? releases[0]?.version,
+    releases,
+  };
+}
+
+function releasesFeedUrl(): string {
+  return process.env.ALLEN_RELEASE_NOTES_FEED_URL || DEFAULT_RELEASES_FEED_URL;
+}
+
+async function fetchJson(url: string): Promise<unknown> {
+  const response = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } });
+  if (!response.ok) throw new Error(`Release notes feed returned HTTP ${response.status}`);
+  return response.json();
+}
+
+async function getReleaseNotesIndex(feedUrl = releasesFeedUrl()): Promise<ReleaseNotesIndex> {
+  const cached = readReleaseNotesCache();
+  try {
+    console.info('[updates] checking release notes feed', { feedUrl });
+    const parsed = parseReleaseNotesIndex(await fetchJson(feedUrl), feedUrl);
+    if (!parsed) throw new Error('Release notes feed did not include a valid releases list');
+    const nextCache: ReleaseNotesCache = {
+      cachedAt: new Date().toISOString(),
+      index: parsed,
+      details: cached?.details ?? {},
+    };
+    writeReleaseNotesCache(nextCache);
+    return { ...parsed, source: 'remote', cachedAt: nextCache.cachedAt };
+  } catch (err) {
+    if (cached) return { ...cached.index, source: 'cache', cachedAt: cached.cachedAt };
+    throw err;
+  }
+}
+
+function defaultReleaseNoteUrl(version: string): string | undefined {
+  try {
+    return new URL(`releases/${version}.json`, releasesFeedUrl()).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+async function getReleaseNote(versionInput: string, notesUrlInput?: string): Promise<ReleaseNotesEntry> {
+  const version = normalizeReleaseVersion(versionInput);
+  if (!version) throw new Error('A valid release version is required');
+
+  const feedUrl = releasesFeedUrl();
+  const notesUrl = parseReleaseNotesUrl(notesUrlInput, feedUrl) ?? defaultReleaseNoteUrl(version);
+  const cached = readReleaseNotesCache();
+  if (!notesUrl) {
+    const cachedDetail = cached?.details?.[version];
+    if (cachedDetail) return cachedDetail;
+    throw new Error('Release notes URL is invalid');
+  }
+
+  try {
+    const parsed = parseReleaseNotesEntry(await fetchJson(notesUrl), feedUrl);
+    if (!parsed || parsed.version !== version) throw new Error('Release notes file did not match the requested version');
+    const nextCache: ReleaseNotesCache = cached ?? {
+      cachedAt: new Date().toISOString(),
+      index: { schemaVersion: 1, latestVersion: version, releases: [parsed] },
+      details: {},
+    };
+    nextCache.cachedAt = new Date().toISOString();
+    nextCache.details = { ...nextCache.details, [version]: parsed };
+    writeReleaseNotesCache(nextCache);
+    return parsed;
+  } catch (err) {
+    const cachedDetail = cached?.details?.[version];
+    if (cachedDetail) return cachedDetail;
+    throw err;
+  }
+}
+
 function parseUpdateMetadata(raw: unknown, feedUrl: string): UpdateMetadata | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const data = raw as Record<string, unknown>;
@@ -935,13 +1159,16 @@ function parseUpdateMetadata(raw: unknown, feedUrl: string): UpdateMetadata | nu
   if (url.protocol !== 'https:') return null;
   if (url.origin !== new URL(feedUrl).origin) return null;
 
+  const releaseNotesUrl = parseReleaseNotesUrl(data.releaseNotesUrl, feedUrl);
+  const releasesUrl = parseReleaseNotesUrl(data.releasesUrl, feedUrl);
+
   const rawVersion = data.version;
   const versionFromMetadata = typeof rawVersion === 'string' ? rawVersion.trim().replace(/^v/i, '') : '';
   const versionFromUrl = url.pathname.match(/Allen-([0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?)-/)?.[1] ?? '';
   const version = versionFromMetadata || versionFromUrl;
   if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) return null;
 
-  return { version, url: url.toString() };
+  return { version, url: url.toString(), releaseNotesUrl, releasesUrl };
 }
 
 function compareReleaseVersions(left: string, right: string): number {
@@ -1031,6 +1258,10 @@ async function checkForProductionUpdate(options: { manual?: boolean } = {}): Pro
 
   const metadata = parseUpdateMetadata(await response.json(), feedUrl);
   if (!metadata) throw new Error('Update feed did not include a valid version and HTTPS download URL');
+
+  void getReleaseNotesIndex(metadata.releasesUrl).catch((err) => {
+    console.warn('[updates] release notes refresh failed', err instanceof Error ? err.message : String(err));
+  });
 
   if (compareReleaseVersions(metadata.version, currentVersion) <= 0) {
     console.info('[updates] no update available', { currentVersion, latestVersion: metadata.version });

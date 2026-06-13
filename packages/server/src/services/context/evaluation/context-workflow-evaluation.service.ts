@@ -730,7 +730,7 @@ function workflowJudgeSecret(): string {
 
 function isWorkflowDeepEvalEnabled(): boolean {
   return isContextEngineEnabled()
-    && (process.env.ALLEN_CONTEXT_SEMANTIC_EVALUATOR ?? '').toLowerCase() === 'deepeval'
+    && (process.env.ALLEN_CONTEXT_SEMANTIC_EVALUATOR ?? 'deepeval').toLowerCase() === 'deepeval'
     && (process.env.ALLEN_CONTEXT_SEMANTIC_MODE ?? 'workflow_summary').toLowerCase() !== 'per_node';
 }
 
