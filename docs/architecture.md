@@ -78,6 +78,7 @@ Important server files:
 - `src/services/github-auth.ts` - GitHub token resolution from `.env`.
 - `src/services/linear.service.ts` - Linear GraphQL client, TTL caches, agent/workflow dispatch, and issue fetching.
 - `src/services/soft-delete.ts` — Shared interface (`SoftDeleteFields`), helpers (`softDeleteSet`, `restoreSet`), and the `notDeletedFilter` constant used by route handlers and services to exclude soft-deleted records from queries. Applied across agents, workflows, teams, and skills.
+- `src/services/watcher.service.ts` — Deterministic Execution Watcher: monitors chat-started workflow and agent executions, generates factual status text from execution logs and known milestones, publishes SSE `watcher_update` events, and sends hidden Assistant triggers when execution reaches a terminal or waiting-for-input state. Includes boot-time reconciliation to recover watchers after server restart. See TDD §1–§3 for full design.
 - `src/services/chat-tools.ts` — Implements all 16+ MCP tool handlers (`spawn_agent`, `wait_for_execution`, `resume_execution`, `allen_save_artifact`, etc.). `resume_execution` resolves the resumed agent's LLM session ID through a three-layer fallback: (1) `executions.sessions[agentName]`, (2) `output.session_id` from the latest `execution_traces` document (sorted `{ completedAt: -1, createdAt: -1 }`), (3) `exec.input.session_id`. When a session ID is found via layer 2 or 3, it is written back to the sessions map before the spawn so future resumes use the fast primary path. Chat-started workflow executions (`source === 'chat'` with a truthy `workflowId`) are routed to the checkpoint-based workflow-resume path rather than the agent-resume path. `spawn_agent` captures provider token usage from Codex `turn.completed` events and Claude SDK `result` messages, aggregates across turns using `aggregateTokenUsage`, and persists the normalized `TokenUsageInfo` onto the execution row.
 - `src/services/chat.service.ts` — `resolveMentions()` resolves `@ENG-123`-style tokens to Linear ticket context and `@name` tokens to workflow/repo/agent context before the LLM call. `ChatSession.source` accepts `'ui' | 'slack' | 'automation'`; automation sessions carry an `automationKey` field used as a deduplication key. `appendAutomationMessage(sessionId, role, content)` inserts a message into an automation thread without starting a live LLM session (content capped at 1 MB, `role:admin` rejected, throws `'Not an automation session'` if `session.source !== 'automation'`).
 - `src/services/cron.service.ts` — Scheduler using `node-cron`. For agent-target jobs where `agentName === job.name`, `ensureLinkedSession()` upserts a persistent `chat_sessions` document keyed by `automationKey` (race-safe via `$setOnInsert` + E11000 fallback), then injects an `AUTOMATION_CONTEXT` block into the agent prompt (`LINKED_CHAT_SESSION_ID`, `AUTOMATION_API_TOKEN`, `AUTOMATION_MESSAGE_URL`) so the agent can POST its output back to the linked thread. The `AUTOMATION_API_TOKEN` is minted with a 5-minute TTL (via `signAccessToken(..., '5m')`) to avoid persisting a long-lived credential in the `chat_messages` collection. A stale-pointer recovery path re-links `cron_jobs.linkedChatSessionId` if the session was deleted and recreated.
@@ -128,6 +129,7 @@ Key chat UI components:
 - `src/components/chat/MentionAutocomplete.tsx` - autocomplete dropdown with two modes: **default** (workflows, repos, agents filtered by query) and **linear** (activated by `@linear`, shows the user's assigned active tickets with priority dots and state badges).
 - `src/components/chat/WorkspaceChatContextBar.tsx` - context bar rendered in workspace-mode chat. Shows workspace name, repo, branch, baseBranch, and worktree path; quick-action button (Open workspace); archived-workspace banner when `status === 'archived'`; hidden in non-workspace chat.
 - `src/components/chat/WorkspaceChatTabs.tsx` - horizontal browser-style tab strip for workspace-linked chats. Supports open/close/restore tabs, `+ New Chat` button, and a **Previous chats ▾** dropdown (recent-first, capped at 50 items). Tab labels truncate with a tooltip showing the full title; a streaming indicator appears on live tabs. Close confirmation is shown when the target tab is streaming.
+- `src/components/chat/WatcherStatusLines.tsx` - renders one non-clickable status line per active execution watcher for the current chat session. Lines are keyed by `executionId` and replaced in-place via `updateSeq`. Each line shows a state icon (spinner for running, checkmark for completed, alert for failed, ban for cancelled, clock for waiting-for-input), the generated status text, and a "Last checked X ago" label.
 - `src/services/api.ts` `linear` object - typed wrappers for all `/api/linear/*` endpoints including the `assignee: 'me'` filter shorthand.
 
 ## The Seeded Org
@@ -159,7 +161,7 @@ MongoDB stores all operational state. Collections are created and indexed by ser
 
 - **Auth** — `users`, `refresh_tokens` (TTL auto-purge), `bootstrap_locks` (first-admin race guard).
 - **Org** — `teams`, `agents`, `skills`. All four org-collection types (including `workflows`) support **soft delete**: deleted records have `isDeleted=true` and are hidden from all lists, detail endpoints, MCP tools, pickers, and org context. Deleting sets `isDeleted=true`, `deletedAt`, and optionally `deletedBy`. Recovery in v1 is restore-by-create: creating a resource with the same `name` as a soft-deleted record restores it (clears deletion fields, sets `restoredAt`). The shared helpers live in `packages/server/src/services/soft-delete.ts`. Built-in delete protections still apply; team deletion is refused if the team has active members.
-- **Workflows & executions** — `workflows`, `executions`, `execution_traces`, `execution_logs`, `execution_failure_reports`, `checkpoints`. Both `executions` and `execution_traces` rows carry an optional `tokenUsage: { inputCachedTokens, inputNonCachedTokens, outputTokens }` field (each sub-field is `number | null`) that is populated when the provider reports usage data. Old rows without this field render and behave normally.
+- **Workflows & executions** — `workflows`, `executions`, `execution_traces`, `execution_logs`, `execution_failure_reports`, `checkpoints`, `execution_watchers`. Both `executions` and `execution_traces` rows carry an optional `tokenUsage: { inputCachedTokens, inputNonCachedTokens, outputTokens }` field (each sub-field is `number | null`) that is populated when the provider reports usage data. Old rows without this field render and behave normally. The `execution_watchers` collection backs the **Deterministic Execution Watcher** — one document per chat-started execution, tracking polling state, status generation, and hidden trigger deduplication (see server `WatcherService`).
 - **Chat** — `chat_sessions` (automation sessions carry a sparse-unique `automationKey`; the linked `_id` is stored as `cron_jobs.linkedChatSessionId` and never overwritten by seed updates; workspace-linked sessions carry `workspaceId` plus snapshot fields `workspaceName`, `workspaceRepoId`, `workspaceRepoName`, `workspaceBranch`, `workspaceBaseBranch`, `workspacePrNumber`, `workspacePrUrl` written by `WorkspaceManager.linkChat`), `chat_messages`, `agent_conversations` (delegation threads), `agent_activity` (7-day TTL).
 - **Docs & checkpoints** — `design_docs` (PRD/HLD/TDD), `workflow_interventions`.
 - **Design tab** — `design_sessions` (`kind='design'`, `sourceSurface='design_tab'`; carries `designRepoId`, optional `sourceRepoId`/`workspaceId`, `status`, `routingDecision`, `lastExecutionId`, `hasExistingOutputs`, and `outputMode`), `design_messages` (per-session messages with optional `routingDecision`, `executionId`, `agentRunId`, and `artifacts`). Design sessions are separate from `chat_sessions` so normal chat history excludes design conversations by default.
@@ -174,13 +176,15 @@ MongoDB stores all operational state. Collections are created and indexed by ser
 
 1. User starts a workflow from the UI or another trigger.
 2. Server creates an execution record in MongoDB.
-3. Engine loads the workflow YAML and initial input.
-4. Nodes run in order, with condition and parallel support.
-5. Agent nodes spawn Claude Code CLI or SDK sessions.
-6. Human nodes create interventions/checkpoints when input is required.
-7. Node logs and state changes stream to the UI.
-8. Outputs and artifacts are persisted.
-9. Final status and summaries are visible in the execution detail page.
+3. If the execution originates from a chat session, the **Execution Watcher** automatically registers a watcher document (fire-and-forget via `setImmediate`), starting background polling.
+4. Engine loads the workflow YAML and initial input.
+5. Nodes run in order, with condition and parallel support.
+6. Agent nodes spawn Claude Code CLI or SDK sessions.
+7. Human nodes create interventions/checkpoints when input is required.
+8. Node logs and state changes stream to the UI.
+9. The watcher polls execution status, generates factual status text from execution logs and milestone terms, and emits `watcher_update` SSE events. Reaching terminal or waiting-for-input states triggers a hidden Assistant trigger (deduplicated per state).
+10. Outputs and artifacts are persisted.
+11. Final status and summaries are visible in the execution detail page.
 
 ## Workspace Lifecycle
 

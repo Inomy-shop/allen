@@ -7485,6 +7485,32 @@
     color: rgb(var(--color-text-secondary));
   }
 
+  .watcher-status-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .watcher-status-message {
+    padding-top: 2px;
+    padding-bottom: 2px;
+  }
+
+  .watcher-status-text {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    color: rgb(var(--color-text-secondary));
+  }
+
+  .watcher-status-text span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .ch-msg-text.failed {
     color: rgb(var(--color-accent-red));
   }

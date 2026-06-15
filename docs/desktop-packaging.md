@@ -65,6 +65,60 @@ At runtime, the desktop app checks bundled resources first and falls back to its
 
 The desktop host writes runtime diagnostics to the app data logs directory. In desktop mode, Settings exposes the logs path and an action to open it.
 
+## Update feed
+
+The desktop app checks for updates by fetching a JSON feed at `ALLEN_UPDATE_FEED_URL`. The feed must return a JSON object with the following shape:
+
+```json
+{
+  "version": "0.2.0",
+  "url": "https://askallen.build/download/Allen-0.2.0-arm64.dmg",
+  "releaseNotesUrl": "https://askallen.build/download/releases/0.2.0.json",
+  "releasesUrl": "https://askallen.build/download/releases.json"
+}
+```
+
+- `version` — the new version (semver, compared against `app.getVersion()`).
+- `url` — HTTPS download URL for the DMG. Must be same origin as the feed URL; validated by `url-policy.ts`.
+- `releaseNotesUrl` — optional URL for the detailed release note for this version.
+- `releasesUrl` — optional URL for the release notes index (list of all releases).
+
+To publish an update, host the DMG and feed JSON at the configured origin, then update the feed metadata. The app respects `ALLEN_UPDATE_FEED_URL` for custom hosting.
+
+## Release notes feed
+
+The release notes index at `ALLEN_RELEASE_NOTES_FEED_URL` returns a JSON object:
+
+```json
+{
+  "schemaVersion": 1,
+  "latestVersion": "0.2.0",
+  "releases": [
+    {
+      "version": "0.2.0",
+      "title": "Allen 0.2.0",
+      "publishedAt": "2026-06-14T00:00:00Z",
+      "channel": "stable",
+      "clients": ["desktop"],
+      "summary": "Auto-update popup with release notes and download progress.",
+      "notesUrl": "https://askallen.build/download/releases/0.2.0.json",
+      "sections": [
+        { "title": "New", "items": ["Auto-update popup with version-specific release notes"] },
+        { "title": "Fixed", "items": ["Download progress now visible in the popup"] }
+      ]
+    }
+  ]
+}
+```
+
+Entry fields:
+- `schemaVersion` — feed format version (default 1).
+- `latestVersion` — the latest release version.
+- `releases` — array of release entries, sorted newest-first by the app.
+- Each entry: `version` (required), `title`, `publishedAt`, `channel`, `clients` (if specified and does not include `"desktop"`, the entry is skipped), `summary`, `notesUrl` (same-origin HTTPS URL for the detailed release note), `sections` (array of `{ title, items }` for structured notes).
+
+When the feed is unreachable, the app falls back to a local on-disk cache stored at `{desktopDataDir}/updates/release-notes-cache.json`.
+
 ## Related docs
 
 - [Desktop module](modules/desktop.md)

@@ -181,6 +181,35 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('repo_context_curation_entries').createIndex({ repoId: 1, active: 1, path: 1 });
   await db.collection('repo_context_curation_entries').createIndex({ repoId: 1, active: 1, inclusion: 1 });
 
+  // Guarded partial unique indexes for active curated entries — title and path uniqueness.
+  // Wrapped in try-catch: if existing data has duplicates, log and skip without breaking startup.
+  // Clash detection in the portability service is the primary guard at import time; these indexes
+  // add a last-resort uniqueness constraint for concurrent writes.
+  try {
+    await db.collection('repo_context_curation_entries').createIndex(
+      { repoId: 1, title: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { inclusion: 'include', active: true, title: { $type: 'string' } },
+        name: 'portability_active_curated_title_unique',
+      },
+    );
+  } catch (err) {
+    console.warn('[indexes] Could not create active curated title unique index (existing duplicates?):', (err as Error).message);
+  }
+  try {
+    await db.collection('repo_context_curation_entries').createIndex(
+      { repoId: 1, path: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { inclusion: 'include', active: true, path: { $type: 'string' } },
+        name: 'portability_active_curated_path_unique',
+      },
+    );
+  } catch (err) {
+    console.warn('[indexes] Could not create active curated path unique index (existing duplicates?):', (err as Error).message);
+  }
+
   // Cron Jobs — generic scheduler for agents/workflows/system actions
   await db.collection('cron_jobs').createIndex({ name: 1 }, { unique: true });
   // Hot path: every tick queries `enabled: true, nextRunAt <= now`
@@ -512,9 +541,13 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // repo_context_setup_runs
   await db.collection('repo_context_setup_runs').createIndex({ setupRunId: 1 }, { unique: true, name: 'idx_setup_run_id' });
   await db.collection('repo_context_setup_runs').createIndex({ repoId: 1, status: 1, updatedAt: -1 }, { name: 'idx_setup_repo_status' });
+  // One active (running|partial) setup run per repo. DocumentDB rejects `$in`
+  // inside a partialFilterExpression, so the active-status set is mirrored onto
+  // the boolean `isActive` field (kept in sync by RepoContextSetupService) and
+  // the partial filter keys off that single equality term instead.
   await db.collection('repo_context_setup_runs').createIndex(
     { repoId: 1 },
-    { unique: true, partialFilterExpression: { status: { $in: ['running', 'partial'] } }, name: 'idx_setup_active_per_repo' },
+    { unique: true, partialFilterExpression: { isActive: true }, name: 'idx_setup_active_per_repo' },
   );
   await db.collection('repo_context_setup_runs').createIndex({ status: 1, updatedAt: -1 }, { name: 'idx_setup_status_updated' });
 
@@ -549,6 +582,29 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('repo_mandatory_context_mappings').createIndex(
     { repoId: 1, agentName: 1, enabled: 1 },
     { sparse: true, name: 'idx_mandatory_repo_agent_enabled' },
+  );
+
+  // ── Execution Watchers ──────────────────────────────────────────────────────
+  // Deterministic Execution Watcher — see TDD §1.1 for index rationale.
+  await db.collection('execution_watchers').createIndex(
+    { watcherId: 1 },
+    { unique: true },
+  );
+  await db.collection('execution_watchers').createIndex(
+    { executionId: 1 },
+    { unique: true },
+  );
+  await db.collection('execution_watchers').createIndex(
+    { chatSessionId: 1, watcherStatus: 1 },
+  );
+  await db.collection('execution_watchers').createIndex(
+    { watcherStatus: 1, nextPollAt: 1 },
+  );
+  await db.collection('execution_watchers').createIndex(
+    { watcherStatus: 1, lastPolledAt: 1 },
+  );
+  await db.collection('execution_watchers').createIndex(
+    { updatedAt: 1 },
   );
 
   console.log('Database indexes ensured');

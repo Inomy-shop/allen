@@ -13,6 +13,7 @@ The server is Allen's API, persistence, integration, and runtime coordination la
 - Seed the built-in teams, agents, workflows, and scheduled jobs.
 - Manage users, auth, repos, chats, executions, interventions, artifacts, files, and workspaces.
   - Repo management includes a `PUT /api/repos/:id/default-branch` endpoint that fetches remote refs, validates `origin/<branch>` exists, switches the checkout via `git switch -C <branch> origin/<branch>`, and persists the branch as the new `detected.defaultBranch`. Local-only branches are rejected.
+- Run the **Execution Watcher** — a background poller (`WatcherService`) that automatically monitors chat-started workflow and agent executions, generates deterministic status text from execution logs and known milestones, publishes `watcher_update` SSE events in real time, and sends hidden Assistant triggers when executions complete, fail, are cancelled, or wait for input. Boot-time reconciliation recovers watchers after server restart.
 - Coordinate workspaces, terminals, file watchers, and preview proxies.
 - Integrate with GitHub, Linear, Slack, MCP servers, and scheduled jobs.
 - Dispatch workflow and agent runs through the engine.
@@ -38,6 +39,8 @@ The server is the boundary between product actions and runtime execution. It sho
 - Runtime services: `packages/server/src/services/`
 - Auth: `packages/server/src/auth/`, `packages/server/src/middleware/`
 - Runtime config: `packages/server/src/runtime/`
+- Execution Watcher service: `packages/server/src/services/watcher.service.ts`
+- Execution Watcher routes: `packages/server/src/routes/watcher.routes.ts`
 
 ## Related concepts
 

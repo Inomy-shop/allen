@@ -30,7 +30,7 @@ import { describe, it, expect } from 'vitest';
 type WorkspaceChatTabId =
   | { kind: 'session'; sessionId: string }
   | { kind: 'temp'; tempId: string }
-  | { kind: 'terminal' };
+  | { kind: 'terminal'; terminalId: string };
 
 type WorkspaceChatTab = {
   id: WorkspaceChatTabId;
@@ -52,8 +52,17 @@ type WorkspaceChatTab = {
  */
 function getTabKey(tab: WorkspaceChatTab): string {
   if (tab.id.kind === 'session') return tab.id.sessionId;
-  if (tab.id.kind === 'terminal') return 'terminal';
+  if (tab.id.kind === 'terminal') return 'terminal-' + tab.id.terminalId;
   return tab.id.tempId;
+}
+
+function terminalSequence(terminalId: string): number {
+  const match = /^term-(\d+)$/.exec(terminalId);
+  return match ? Number(match[1]) : 0;
+}
+
+function maxTerminalSequence(terminalIds: string[]): number {
+  return terminalIds.reduce((max, id) => Math.max(max, terminalSequence(id)), 0);
 }
 
 /**
@@ -109,6 +118,14 @@ function tempTab(overrides: Partial<WorkspaceChatTab> = {}): WorkspaceChatTab {
   };
 }
 
+function terminalTab(terminalId: string, title = 'Terminal'): WorkspaceChatTab {
+  return {
+    id: { kind: 'terminal', terminalId },
+    title,
+    isTemp: false,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tests: getTabKey (AC-05, AC-06)
 // ---------------------------------------------------------------------------
@@ -124,9 +141,44 @@ describe('getTabKey', () => {
     expect(getTabKey(tab)).toBe('temp-42');
   });
 
-  it('returns terminal for a terminal tab', () => {
-    const tab = sessionTab({ id: { kind: 'terminal' }, title: 'Terminal' });
-    expect(getTabKey(tab)).toBe('terminal');
+  it('returns terminal-term-N for a terminal tab', () => {
+    const tab = sessionTab({ id: { kind: 'terminal', terminalId: 'term-1' }, title: 'Terminal' });
+    expect(getTabKey(tab)).toBe('terminal-term-1');
+  });
+
+  it('two terminal tabs have distinct keys', () => {
+    const tab1 = sessionTab({ id: { kind: 'terminal', terminalId: 'term-1' }, title: 'Terminal 1' });
+    const tab2 = sessionTab({ id: { kind: 'terminal', terminalId: 'term-2' }, title: 'Terminal 2' });
+    const key1 = getTabKey(tab1);
+    const key2 = getTabKey(tab2);
+    expect(key1).toBe('terminal-term-1');
+    expect(key2).toBe('terminal-term-2');
+    expect(key1).not.toBe(key2);
+  });
+});
+
+describe('terminal tab ids', () => {
+  it('uses the highest existing numeric terminal id, not the tab count, for the next id', () => {
+    const openTerminalIds = ['term-1', 'term-3'];
+    expect(maxTerminalSequence(openTerminalIds)).toBe(3);
+    expect('term-' + (maxTerminalSequence(openTerminalIds) + 1)).toBe('term-4');
+  });
+
+  it('ignores legacy or non-numeric ids when computing the next numeric id', () => {
+    expect(maxTerminalSequence(['legacy', 'term-2', 'term-x'])).toBe(2);
+  });
+
+  it('keeps multiple open terminal tabs addressable after closing a middle terminal', () => {
+    const t1 = terminalTab('term-1', 'Terminal 1');
+    const t2 = terminalTab('term-2', 'Terminal 2');
+    const t3 = terminalTab('term-3', 'Terminal 3');
+
+    const remaining = [t1, t3];
+    const nextId = 'term-' + (maxTerminalSequence(remaining.map(tab => tab.id.kind === 'terminal' ? tab.id.terminalId : '')) + 1);
+
+    expect(remaining.map(tab => getTabKey(tab))).toEqual(['terminal-term-1', 'terminal-term-3']);
+    expect(nextId).toBe('term-4');
+    expect(getTabKey(terminalTab(nextId, 'Terminal 4'))).toBe('terminal-term-4');
   });
 });
 
@@ -187,8 +239,13 @@ describe('deriveLabel — tab title display logic', () => {
   });
 
   it('terminal tab with empty title → shows "Terminal"', () => {
-    const tab = sessionTab({ id: { kind: 'terminal' }, title: '' });
+    const tab = sessionTab({ id: { kind: 'terminal', terminalId: 'term-1' }, title: '' });
     expect(deriveLabel(tab)).toBe('Terminal');
+  });
+
+  it('terminal tab with explicit "Terminal 2" title shows that title', () => {
+    const tab = sessionTab({ id: { kind: 'terminal', terminalId: 'term-2' }, title: 'Terminal 2' });
+    expect(deriveLabel(tab)).toBe('Terminal 2');
   });
 });
 

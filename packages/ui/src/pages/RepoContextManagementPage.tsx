@@ -7,6 +7,7 @@ import {
   BookOpenCheck,
   ClipboardCheck,
   Database,
+  Download,
   Info,
   Loader2,
   Network,
@@ -17,6 +18,7 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  Upload,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -33,6 +35,7 @@ import {
   type ContextGraph,
 } from '../components/context-management/ContextGraphFlow';
 import RepoContextSetupCard from '../components/context-management/RepoContextSetupCard';
+import ContextImportExport from '../components/context-management/ContextImportExport';
 import { repos as repoApi } from '../services/api';
 import { useToast } from '../components/common/Toast';
 import Select from '../components/common/Select';
@@ -297,9 +300,12 @@ export default function RepoContextManagementPage() {
           </h1>
           <ContextBuildProgress status={cogneeStatus} stopping={stoppingBuild} onStop={() => void stopContextBuild()} />
         </div>
-        <button type="button" onClick={() => void load()} className="btn btn-secondary btn-sm">
-          <RefreshCw className="w-3.5 h-3.5" /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <ContextImportExport repoId={id} repoName={repo?.name ?? ''} onImported={() => void load({ silent: true })} />
+          <button type="button" onClick={() => void load()} className="btn btn-secondary btn-sm">
+            <RefreshCw className="w-3.5 h-3.5" /> Refresh
+          </button>
+        </div>
       </div>
 
       {loading ? (

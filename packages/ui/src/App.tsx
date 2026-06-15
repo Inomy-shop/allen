@@ -9,7 +9,7 @@ import {
   ChevronRight, Plus, Palette,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
   SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain, Cpu,
-  Trash2, AlertTriangle, Copy, Check, BarChart3,
+  Trash2, AlertTriangle, Copy, Check, BarChart3, X,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
@@ -546,39 +546,191 @@ function isNavItemActive(
 // ── Main App ──
 
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / Math.pow(1024, i);
+  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+type UpdatePromptPhase = 'prompt' | 'downloading' | 'complete' | 'error';
+
 type UpdatePromptState = {
   requestId: string;
   currentVersion: string;
   latestVersion: string;
+  phase: UpdatePromptPhase;
+  releaseNotes: AllenReleaseNotesEntry | null;
+  releaseNotesError: string | null;
+  downloadPercent: number | null;
+  downloadedBytes: number | null;
+  totalBytes: number | null;
+  downloadError: string | null;
+  downloadRetryable: boolean;
+  completeMessage: string | null;
 };
 
 function UpdatePromptModal({
   prompt,
   onAction,
+  onRetry,
+  onClose,
+  onCancelDownload,
 }: {
   prompt: UpdatePromptState;
   onAction: (action: 'update-now' | 'update-later') => void;
+  onRetry: () => void;
+  onClose: () => void;
+  onCancelDownload: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="allen-update-title">
-      <div className="w-full max-w-md overflow-hidden rounded-2xl border border-app bg-app-card shadow-2xl">
-        <div className="border-b border-app px-6 py-5">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">Update available</div>
-          <h2 id="allen-update-title" className="mt-2 text-[18px] font-semibold tracking-tight text-theme-primary">
-            Allen {prompt.latestVersion} is available
-          </h2>
-          <p className="mt-2 text-[13px] leading-5 text-theme-muted">
-            You are currently using Allen {prompt.currentVersion}. Download and open the latest installer now, or update later.
-          </p>
-        </div>
-        <div className="flex items-center justify-end gap-2 px-6 py-4">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => onAction('update-later')}>
-            Update later
-          </button>
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => onAction('update-now')}>
-            Update now
-          </button>
-        </div>
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="allen-update-title">
+      <div className="flex max-h-[min(720px,calc(100vh-3rem))] w-full max-w-3xl flex-col overflow-hidden rounded-md border border-app bg-app-card shadow-2xl">
+
+        {/* ── Prompt phase ── */}
+        {prompt.phase === 'prompt' && (
+          <>
+            <div className="flex-none border-b border-app px-6 py-5">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">Update available</div>
+              <h2 id="allen-update-title" className="mt-2 text-[18px] font-semibold tracking-tight text-theme-primary">
+                Allen {prompt.latestVersion} is available
+              </h2>
+              <p className="mt-2 text-[13px] leading-5 text-theme-muted">
+                You are currently using Allen {prompt.currentVersion}. Download and open the latest installer now, or update later.
+              </p>
+            </div>
+
+            {prompt.releaseNotes ? (
+              <div className="min-h-0 overflow-y-auto px-6 py-4">
+                <div className="rounded-md border border-app bg-app-muted p-3">
+                  {prompt.releaseNotes.summary && (
+                    <p className="mb-2 text-[13px] leading-5 text-theme-secondary">{prompt.releaseNotes.summary}</p>
+                  )}
+                  {prompt.releaseNotes.sections?.map((section, idx) => (
+                    <div key={idx} className={idx > 0 ? 'mt-3' : ''}>
+                      <h4 className="mb-1 text-[12px] font-semibold text-theme-primary">{section.title}</h4>
+                      <ul className="list-inside list-disc space-y-0.5">
+                        {section.items.map((item, iidx) => (
+                          <li key={iidx} className="text-[12px] leading-5 text-theme-secondary">{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="min-h-0 overflow-y-auto px-6 py-4">
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-[13px] text-theme-primary">
+                  Release notes could not be loaded. You can still update to Allen {prompt.latestVersion}.
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-none items-center justify-end gap-2 border-t border-app px-6 py-4">
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => onAction('update-later')}>
+                Update later
+              </button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => onAction('update-now')}>
+                Update now
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── Downloading phase ── */}
+        {prompt.phase === 'downloading' && (
+          <>
+            <div className="flex items-start justify-between gap-4 border-b border-app px-6 py-5">
+              <h2 id="allen-update-title" className="text-[18px] font-semibold tracking-tight text-theme-primary">
+                Downloading Allen {prompt.latestVersion}…
+              </h2>
+              <button
+                type="button"
+                aria-label="Cancel download"
+                title="Cancel download"
+                className="inline-flex h-8 w-8 flex-none items-center justify-center rounded-md text-theme-muted transition hover:bg-app-muted hover:text-theme-primary focus:outline-none focus:ring-2 focus:ring-accent/40"
+                onClick={onCancelDownload}
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="space-y-3 px-6 py-5">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-app-muted">
+                <div
+                  className={`h-full rounded-full bg-accent transition-all duration-300 ${
+                    prompt.downloadPercent !== null ? '' : 'w-1/2 animate-pulse'
+                  }`}
+                  style={prompt.downloadPercent !== null ? { width: `${prompt.downloadPercent}%` } : undefined}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[13px] text-theme-muted">Downloading update…</p>
+                {prompt.downloadedBytes !== null && (
+                  <p className="font-mono text-[12px] text-theme-subtle">
+                    {prompt.totalBytes !== null
+                      ? `${formatBytes(prompt.downloadedBytes)} / ${formatBytes(prompt.totalBytes)} (${prompt.downloadPercent ?? 0}%)`
+                      : `${formatBytes(prompt.downloadedBytes)} downloaded`}
+                  </p>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── Complete phase ── */}
+        {prompt.phase === 'complete' && (
+          <>
+            <div className="border-b border-app px-6 py-5">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">Update ready</div>
+              <h2 id="allen-update-title" className="mt-2 text-[18px] font-semibold tracking-tight text-theme-primary">
+                Update ready
+              </h2>
+            </div>
+            <div className="space-y-3 px-6 py-5">
+              <p className="text-[13px] leading-5 text-theme-muted">
+                Allen {prompt.latestVersion} has been downloaded. The installer will open now. Drag Allen into your Applications folder to finish installing.
+              </p>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-app-muted">
+                <div className="h-full w-full rounded-full bg-accent" />
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── Error phase ── */}
+        {prompt.phase === 'error' && (
+          <>
+            <div className="border-b border-app px-6 py-5">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent-red">Update failed</div>
+              <h2 id="allen-update-title" className="mt-2 text-[18px] font-semibold tracking-tight text-theme-primary">
+                Update failed
+              </h2>
+            </div>
+            <div className="space-y-4 px-6 py-5">
+              {prompt.downloadError && (
+                <div className="rounded-md border border-accent-red/25 bg-accent-red/5 p-3 text-[13px] text-theme-primary">
+                  {prompt.downloadError}
+                </div>
+              )}
+              <div className="flex items-center justify-end gap-2">
+                {prompt.downloadRetryable && (
+                  <button type="button" className="btn btn-primary btn-sm" onClick={onRetry}>
+                    Retry
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={prompt.downloadRetryable ? 'btn btn-secondary btn-sm' : 'btn btn-primary btn-sm'}
+                  onClick={onClose}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
       </div>
     </div>
   );
@@ -772,12 +924,78 @@ export default function App() {
 
   useEffect(() => {
     if (!window.allenDesktop?.onUpdatePrompt) return undefined;
-    return window.allenDesktop.onUpdatePrompt((payload) => setUpdatePrompt(payload));
+    return window.allenDesktop.onUpdatePrompt((payload) => setUpdatePrompt({
+      requestId: payload.requestId,
+      currentVersion: payload.currentVersion,
+      latestVersion: payload.latestVersion,
+      phase: 'prompt',
+      releaseNotes: payload.releaseNotes ?? null,
+      releaseNotesError: payload.releaseNotesError ?? null,
+      downloadPercent: null,
+      downloadedBytes: null,
+      totalBytes: null,
+      downloadError: null,
+      downloadRetryable: false,
+      completeMessage: null,
+    }));
+  }, []);
+
+  // Listen for download progress
+  useEffect(() => {
+    if (!window.allenDesktop?.onUpdateDownloadProgress) return;
+    return window.allenDesktop.onUpdateDownloadProgress((payload) => {
+      setUpdatePrompt(prev => prev && prev.requestId === payload.requestId
+        ? { ...prev, phase: 'downloading', downloadPercent: payload.percent,
+            downloadedBytes: payload.downloadedBytes, totalBytes: payload.totalBytes }
+        : prev);
+    });
+  }, []);
+
+  // Listen for download error
+  useEffect(() => {
+    if (!window.allenDesktop?.onUpdateDownloadError) return;
+    return window.allenDesktop.onUpdateDownloadError((payload) => {
+      setUpdatePrompt(prev => prev && prev.requestId === payload.requestId
+        ? { ...prev, phase: 'error', downloadError: payload.error, downloadRetryable: payload.retryable }
+        : prev);
+    });
+  }, []);
+
+  // Listen for download complete
+  useEffect(() => {
+    if (!window.allenDesktop?.onUpdateDownloadComplete) return;
+    return window.allenDesktop.onUpdateDownloadComplete((payload) => {
+      setUpdatePrompt(prev => prev && prev.requestId === payload.requestId
+        ? { ...prev, phase: 'complete', downloadPercent: 100,
+            completeMessage: 'Update ready. Allen will now quit.' }
+        : prev);
+    });
   }, []);
 
   function respondToUpdatePrompt(action: 'update-now' | 'update-later') {
     if (!updatePrompt) return;
+    if (action === 'update-now') {
+      setUpdatePrompt(prev => prev ? {
+        ...prev, phase: 'downloading', downloadError: null,
+        downloadPercent: null, downloadedBytes: null, totalBytes: null,
+      } : null);
+    } else {
+      setUpdatePrompt(null);
+    }
     window.allenDesktop?.respondToUpdatePrompt?.(updatePrompt.requestId, action);
+  }
+
+  function retryUpdateDownload() {
+    if (!updatePrompt) return;
+    setUpdatePrompt(prev => prev ? { ...prev, phase: 'downloading', downloadError: null, downloadPercent: null, downloadedBytes: null, totalBytes: null } : null);
+    window.allenDesktop?.retryUpdateDownload?.(updatePrompt.requestId);
+  }
+
+  function closeUpdatePrompt() { setUpdatePrompt(null); }
+
+  function cancelUpdateDownload() {
+    if (!updatePrompt) return;
+    window.allenDesktop?.cancelUpdateDownload?.(updatePrompt.requestId);
     setUpdatePrompt(null);
   }
 
@@ -1422,6 +1640,9 @@ export default function App() {
         <UpdatePromptModal
           prompt={updatePrompt}
           onAction={respondToUpdatePrompt}
+          onRetry={retryUpdateDownload}
+          onClose={closeUpdatePrompt}
+          onCancelDownload={cancelUpdateDownload}
         />
       )}
 

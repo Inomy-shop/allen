@@ -10,8 +10,18 @@ Allen assumes the operator controls:
 - The repositories registered in Allen.
 - The credentials provided to Allen.
 - The workflow YAML and agent definitions being run.
+- The update feed URLs the desktop app fetches at startup.
 
 Allen does not provide a hardened sandbox for hostile code or untrusted workflows.
+
+### Desktop update URL validation
+
+The desktop app's auto-update feature is protected by a URL validation layer (`packages/desktop/src/url-policy.ts`):
+
+- **Update feed URLs** are validated on access: `ALLEN_UPDATE_FEED_URL` and `ALLEN_RELEASE_NOTES_FEED_URL` must be HTTPS URLs. The download URL (`url` field in the feed) must share the same origin as the feed URL to prevent MITM-style payload substitution.
+- **External navigation** is restricted to HTTPS URLs. Loopback hosts (`localhost`, `127.0.0.1`, `::1`, `*.localhost`) are allowed over HTTP for local design-preview dev servers.
+- The URL policy module is pure logic with no Electron imports, making it independently unit-testable (`url-policy.test.ts`).
+- Operators hosting their own update feed should serve it over HTTPS and keep the signing origin private.
 
 ## Workspaces
 

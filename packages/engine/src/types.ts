@@ -739,7 +739,8 @@ export type SSEEventType =
   | 'parallel_started'
   | 'parallel_branch_done'
   | 'parallel_joined'
-  | 'execution_log';
+  | 'execution_log'
+  | 'watcher_update'; // Deterministic Execution Watcher
 
 // ── Execution Log ──────────────────────────────────────────────────────────
 

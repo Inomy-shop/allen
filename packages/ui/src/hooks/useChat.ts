@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { chat as api, executions as executionsApi, interventions as interventionsApi, authHeaders, type RunStatus, type TokenUsageInfo } from '../services/api';
+import { chat as api, executions as executionsApi, interventions as interventionsApi, executionWatchers as executionWatchersApi, authHeaders, type RunStatus, type TokenUsageInfo, type WatcherUIDoc } from '../services/api';
 import { useAuthStore, type AuthUser } from '../stores/authStore';
 
 /** Maximum number of automatic reconnect attempts on a transient stream error. */
@@ -126,6 +126,7 @@ export interface ChatMessage {
   error?: string;
   toolCalls?: ToolCallRecord[];
   thinkingText?: string;
+  hidden?: boolean;
   createdAt: string;
 }
 
@@ -373,6 +374,7 @@ export function useChat() {
   const [pendingUserQuestion, setPendingUserQuestion] = useState<{ question: string; fromAgent: string } | null>(null);
   const [spawnedAgents, setSpawnedAgents] = useState<SpawnedAgent[]>([]);
   const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
+  const [watchers, setWatchers] = useState<WatcherUIDoc[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [messageReloadNonce, setMessageReloadNonce] = useState(0);
@@ -466,6 +468,8 @@ export function useChat() {
           executionsApi.forChat(activeSessionId).catch(() => []),
         ]);
         if (cancelled) return;
+        // Load execution watchers for this session
+        executionWatchersApi.list(activeSessionId).then(setWatchers).catch(() => {/* best-effort */});
         const loadedMessages = (session.messages || []) as ChatMessage[];
         const { messages: _messages, ...sessionMeta } = session as ChatSession & { messages?: ChatMessage[] };
         void _messages;
@@ -728,6 +732,23 @@ export function useChat() {
         setActiveToolCalls([]);
         setStreaming(false);
         break;
+
+      case 'watcher_update':
+        setWatchers(prev => {
+          const idx = prev.findIndex(w => w.executionId === data.executionId);
+          const incoming = data as WatcherUIDoc;
+          if (idx >= 0) {
+            // Only replace if the incoming updateSeq is greater (avoid out-of-order downgrades)
+            if (incoming.updateSeq > prev[idx].updateSeq) {
+              const next = [...prev];
+              next[idx] = incoming;
+              return next;
+            }
+            return prev;
+          }
+          return [...prev, incoming];
+        });
+        break;
     }
   }, [streamText, thinkingText]);
 
@@ -797,6 +818,7 @@ export function useChat() {
     setPendingUserQuestion(null);
     setSpawnedAgents([]);
     setStreaming(false);
+    setWatchers([]);
   }, []);
 
   const sendMessage = useCallback(async (content: string, overrideSessionId?: string, agent?: string, cwd?: string) => {
@@ -1012,6 +1034,22 @@ export function useChat() {
                   ]);
                   setStreamText('');
                   setActiveToolCalls([]);
+                  break;
+
+                case 'watcher_update':
+                  setWatchers(prev => {
+                    const idx = prev.findIndex(w => w.executionId === data.executionId);
+                    const incoming = data as WatcherUIDoc;
+                    if (idx >= 0) {
+                      if (incoming.updateSeq > prev[idx].updateSeq) {
+                        const next = [...prev];
+                        next[idx] = incoming;
+                        return next;
+                      }
+                      return prev;
+                    }
+                    return [...prev, incoming];
+                  });
                   break;
               }
             } catch {
@@ -1257,6 +1295,7 @@ export function useChat() {
     messages,
     streaming,
     streamText,
+    watchers,
     thinkingText,
     activeToolCalls,
     agentReports,

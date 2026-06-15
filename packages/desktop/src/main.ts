@@ -28,7 +28,7 @@ import {
 import { arch, platform, release } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { ObjectId } from 'mongodb';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import type { AllenServerHandle } from '@allen/server/server';
@@ -93,6 +93,32 @@ type UpdateCheckResult =
   | { status: 'update-available'; currentVersion: string; latestVersion: string; url: string; opened: boolean };
 
 type UpdatePromptAction = 'update-now' | 'update-later';
+
+interface UpdateDownloadProgressPayload {
+  requestId: string;
+  percent: number | null;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  status: 'downloading';
+}
+
+interface UpdateDownloadErrorPayload {
+  requestId: string;
+  error: string;
+  retryable: boolean;
+}
+
+interface UpdateDownloadCompletePayload {
+  requestId: string;
+  dmgPath: string;
+}
+
+interface UpdateDownloadRetryPayload {
+  requestId: string;
+}
+
+const pendingUpdates = new Map<string, UpdateMetadata>();
+const activeUpdateDownloads = new Map<string, AbortController>();
 
 const DEFAULT_UPDATE_FEED_URL = 'https://askallen.build/download/latest.json';
 const DEFAULT_RELEASES_FEED_URL = 'https://askallen.build/download/releases.json';
@@ -1195,32 +1221,88 @@ function updateInstallerPath(update: UpdateMetadata): string {
   return resolve(updatesDir, filename);
 }
 
-async function downloadAndOpenUpdateInstaller(update: UpdateMetadata): Promise<void> {
+async function downloadUpdateInstaller(
+  update: UpdateMetadata,
+  onProgress: (data: { percent: number | null; downloadedBytes: number; totalBytes: number | null }) => void,
+  signal?: AbortSignal,
+): Promise<string> {
   const outputPath = updateInstallerPath(update);
   rmSync(outputPath, { force: true });
 
-  const response = await fetch(update.url, { headers: { 'Cache-Control': 'no-cache' } });
-  if (!response.ok) throw new Error(`Update download returned HTTP ${response.status}`);
-  if (!response.body) throw new Error('Update download did not return a readable body');
+  try {
+    const response = await fetch(update.url, { headers: { 'Cache-Control': 'no-cache' }, signal });
+    if (!response.ok) throw new Error(`Update download returned HTTP ${response.status}`);
+    if (!response.body) throw new Error('Update download did not return a readable body');
 
-  await finished(Readable.fromWeb(response.body as never).pipe(createWriteStream(outputPath, { mode: 0o600 })));
-  chmodSync(outputPath, 0o600);
+    const contentLength = response.headers.get('content-length');
+    const totalBytes = contentLength ? Number(contentLength) : null;
+    let downloadedBytes = 0;
 
-  const openError = await shell.openPath(outputPath);
-  if (openError) throw new Error(openError);
+    const progressTransform = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        downloadedBytes += chunk.length;
+        onProgress({
+          percent: totalBytes ? Math.min(99, Math.round((downloadedBytes / totalBytes) * 100)) : null,
+          downloadedBytes,
+          totalBytes,
+        });
+        callback(null, chunk);
+      },
+    });
+
+    await finished(
+      Readable.fromWeb(response.body as never)
+        .pipe(progressTransform)
+        .pipe(createWriteStream(outputPath, { mode: 0o600 })),
+    );
+
+    onProgress({ percent: 100, downloadedBytes, totalBytes: totalBytes ?? downloadedBytes });
+    chmodSync(outputPath, 0o600);
+    return outputPath;
+  } catch (err) {
+    rmSync(outputPath, { force: true });
+    if (signal?.aborted) {
+      const canceled = new Error('Update download canceled');
+      canceled.name = 'AbortError';
+      throw canceled;
+    }
+    throw err;
+  }
 }
 
-async function showUpdateAvailablePrompt(update: UpdateMetadata, currentVersion: string): Promise<UpdatePromptAction> {
+async function showUpdateAvailablePrompt(
+  update: UpdateMetadata,
+  currentVersion: string,
+): Promise<{ action: UpdatePromptAction; requestId: string }> {
   if (!mainWindow || mainWindow.isDestroyed()) {
     console.info('[updates] renderer window unavailable; postponing update prompt', { latestVersion: update.version });
-    return 'update-later';
+    return { action: 'update-later', requestId: '' };
+  }
+
+  // Load release notes (non-blocking — if it fails, we still show the prompt)
+  let releaseNotes: ReleaseNotesEntry | null = null;
+  let releaseNotesError: string | null = null;
+
+  try {
+    const index = await getReleaseNotesIndex(update.releasesUrl);
+    const entry = index.releases.find(r => r.version === update.version);
+    if (entry?.sections && entry.sections.length > 0) {
+      releaseNotes = entry;
+      console.info('[updates] release-notes-loaded', { version: update.version, source: index.source });
+    } else if (entry) {
+      releaseNotes = await getReleaseNote(entry.version, entry.notesUrl);
+      console.info('[updates] release-notes-loaded', { version: update.version, source: index.source });
+    }
+  } catch (err) {
+    releaseNotesError = 'Release notes could not be loaded.';
+    console.warn('[updates] release-notes-failed', { version: update.version, error: err instanceof Error ? err.message : String(err) });
   }
 
   return new Promise((resolvePrompt) => {
     const requestId = randomUUID();
     const timeout = setTimeout(() => {
       ipcMain.off('allen:update-prompt-response', onResponse);
-      resolvePrompt('update-later');
+      resolvePrompt({ action: 'update-later', requestId });
     }, 5 * 60_000);
     timeout.unref();
 
@@ -1229,7 +1311,11 @@ async function showUpdateAvailablePrompt(update: UpdateMetadata, currentVersion:
       if (payload?.requestId !== requestId) return;
       clearTimeout(timeout);
       ipcMain.off('allen:update-prompt-response', onResponse);
-      resolvePrompt(payload.action === 'update-now' ? 'update-now' : 'update-later');
+      const action: UpdatePromptAction = payload.action === 'update-now' ? 'update-now' : 'update-later';
+      if (action === 'update-now') {
+        pendingUpdates.set(requestId, update);
+      }
+      resolvePrompt({ action, requestId });
     };
 
     ipcMain.on('allen:update-prompt-response', onResponse);
@@ -1237,6 +1323,8 @@ async function showUpdateAvailablePrompt(update: UpdateMetadata, currentVersion:
       requestId,
       currentVersion,
       latestVersion: update.version,
+      releaseNotes,
+      releaseNotesError,
     });
   });
 }
@@ -1252,6 +1340,9 @@ async function checkForProductionUpdate(options: { manual?: boolean } = {}): Pro
 
   const feedUrl = process.env.ALLEN_UPDATE_FEED_URL || DEFAULT_UPDATE_FEED_URL;
   console.info('[updates] checking feed', { feedUrl, manual: options.manual === true });
+  if (options.manual) {
+    console.info('[updates] manual-check', { triggeredBy: 'settings' });
+  }
 
   const response = await fetch(feedUrl, { headers: { 'Cache-Control': 'no-cache' } });
   if (!response.ok) throw new Error(`Update feed returned HTTP ${response.status}`);
@@ -1269,16 +1360,91 @@ async function checkForProductionUpdate(options: { manual?: boolean } = {}): Pro
   }
 
   console.info('[updates] update available', { currentVersion, latestVersion: metadata.version, url: metadata.url });
-  const choice = await showUpdateAvailablePrompt(metadata, currentVersion);
+  const { action, requestId } = await showUpdateAvailablePrompt(metadata, currentVersion);
 
-  if (choice !== 'update-now') {
+  if (action !== 'update-now') {
     console.info('[updates] user postponed update', { latestVersion: metadata.version });
     return { status: 'update-available', currentVersion, latestVersion: metadata.version, url: metadata.url, opened: false };
   }
 
-  await downloadAndOpenUpdateInstaller(metadata);
+  // Download with progress
+  await doDownloadAndOpen(metadata, requestId);
   return { status: 'update-available', currentVersion, latestVersion: metadata.version, url: metadata.url, opened: true };
 }
+
+async function doDownloadAndOpen(metadata: UpdateMetadata, requestId: string): Promise<void> {
+  const version = metadata.version;
+  let finalBytes = 0;
+  activeUpdateDownloads.get(requestId)?.abort();
+  const controller = new AbortController();
+  activeUpdateDownloads.set(requestId, controller);
+  try {
+    const dmgPath = await downloadUpdateInstaller(metadata, (progress) => {
+      finalBytes = progress.downloadedBytes;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('allen:update-download-progress', {
+          requestId,
+          ...progress,
+          status: 'downloading',
+        });
+      }
+    }, controller.signal);
+
+    console.info('[updates] download-complete', { version, path: dmgPath, bytes: finalBytes });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('allen:update-download-complete', { requestId, dmgPath });
+    }
+
+    const openError = await shell.openPath(dmgPath);
+    if (openError) {
+      console.error('[updates] dmg-open-failed', { version, path: dmgPath, error: openError });
+    } else {
+      console.info('[updates] dmg-opened', { version, path: dmgPath });
+    }
+
+    await new Promise(r => setTimeout(r, 1500));
+    console.info('[updates] quitting-after-update', { version });
+    app.quit();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof Error && err.name === 'AbortError') {
+      console.info('[updates] download-canceled', { version, requestId });
+      return;
+    }
+    const retryable = !/security policy|Failed to write/i.test(message);
+    console.error('[updates] download-failed', { version, error: message, retryable });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('allen:update-download-error', { requestId, error: message, retryable });
+    }
+  } finally {
+    if (activeUpdateDownloads.get(requestId) === controller) {
+      activeUpdateDownloads.delete(requestId);
+    }
+  }
+}
+
+ipcMain.on('allen:update-download-retry', (_event, payload: UpdateDownloadRetryPayload) => {
+  const metadata = pendingUpdates.get(payload.requestId);
+  if (!metadata) {
+    console.warn('[updates] download-retry: no pending update found for requestId', { requestId: payload.requestId });
+    return;
+  }
+  console.info('[updates] download-retry', { version: metadata.version, requestId: payload.requestId });
+  void doDownloadAndOpen(metadata, payload.requestId);
+});
+
+ipcMain.on('allen:update-download-cancel', (_event, payload: UpdateDownloadRetryPayload) => {
+  const requestId = payload.requestId;
+  const controller = activeUpdateDownloads.get(requestId);
+  if (!controller) {
+    console.warn('[updates] download-cancel: no active download found for requestId', { requestId });
+    pendingUpdates.delete(requestId);
+    return;
+  }
+  console.info('[updates] download-cancel', { requestId });
+  controller.abort();
+  pendingUpdates.delete(requestId);
+});
 
 function setupAutoUpdates(): void {
   if (!app.isPackaged || process.env.ALLEN_DISABLE_AUTO_UPDATE === '1') return;

@@ -17,15 +17,25 @@ import { ObjectId } from 'mongodb';
 // ── Mock transitive dependencies that chat.service.ts imports ───────────────
 
 vi.mock('./chat-llm.js', () => ({
-  runChatLLM: vi.fn().mockResolvedValue({ content: '', cost: 0 }),
+  PROVIDERS: [],
+  runChatLLM: vi.fn().mockResolvedValue({
+    text: 'Watcher update delivered.',
+    costUsd: 0,
+    tokenUsage: null,
+    model: 'test-model',
+    sessionId: 'llm-session-1',
+    trace: [],
+  }),
 }));
 
 vi.mock('./chat-providers.js', () => ({
   getDefaultChatProvider: vi.fn().mockReturnValue('claude'),
-  getProvidersInDefaultOrder: vi.fn().mockReturnValue([]),
+  getDefaultChatModel: vi.fn().mockReturnValue('test-model'),
+  getTitleGenProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'test-model' }),
+  getEnabledProvidersFromRegistry: vi.fn().mockResolvedValue([]),
   getEnabledProvidersInDefaultOrder: vi.fn().mockResolvedValue([]),
-  AGENT_FALLBACK_CWD: '/tmp',
-  CLAUDE_COMPATIBLE_PROVIDER_CONFIGS: [],
+  isClaudeCompatibleProvider: vi.fn().mockReturnValue(false),
+  isClaudeFamilyProvider: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('./agent-settings.js', () => ({
@@ -55,7 +65,9 @@ vi.mock('./org-context.js', () => ({
 }));
 
 vi.mock('./self-healing-monitor.service.js', () => ({
-  MonitoringService: vi.fn().mockImplementation(() => ({})),
+  MonitoringService: vi.fn().mockImplementation(() => ({
+    handleEvent: vi.fn().mockResolvedValue(undefined),
+  })),
 }));
 
 vi.mock('./execution.service.js', () => ({
@@ -68,8 +80,24 @@ vi.mock('./linear.service.js', () => ({
   LinearService: vi.fn().mockImplementation(() => ({ getIssue: vi.fn() })),
 }));
 
+vi.mock('./model-cost.service.js', () => ({
+  resolveCostUsd: vi.fn().mockResolvedValue({ amount: 0 }),
+}));
+
+vi.mock('./cost-rollup.service.js', () => ({
+  CostRollupService: vi.fn().mockImplementation(() => ({ refreshSessionCost: vi.fn().mockResolvedValue(undefined) })),
+}));
+
+vi.mock('./context/core/chat-context-packet.service.js', () => ({
+  ChatContextPacketService: vi.fn().mockImplementation(() => ({
+    buildChatContextPacket: vi.fn().mockResolvedValue(null),
+    recordChatContextUsage: vi.fn().mockResolvedValue(undefined),
+  })),
+}));
+
 // Import after all mocks
 import { ChatService } from './chat.service.js';
+import { runChatLLM } from './chat-llm.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -89,9 +117,12 @@ function makeDb(
 
   const makeCollection = (name: string) => ({
     find: (_q: Record<string, unknown>) => ({
+      toArray: async () => stores[name] ?? [],
       sort: () => ({
+        toArray: async () => stores[name] ?? [],
         limit: () => ({
           toArray: async () => stores[name] ?? [],
+          next: async () => (stores[name] ?? [])[0] ?? null,
         }),
       }),
     }),
@@ -233,6 +264,7 @@ describe('ChatService.appendAutomationMessage()', () => {
       {
         _id: oid,
         title: 'Regular chat',
+        titleSource: 'user',
         source: 'ui',
         status: 'active',
         messageCount: 0,
@@ -244,5 +276,85 @@ describe('ChatService.appendAutomationMessage()', () => {
     await expect(
       svc.appendAutomationMessage(String(oid), 'assistant', 'hello'),
     ).rejects.toThrow('Not an automation session');
+  });
+});
+
+describe('ChatService.appendWatcherTrigger()', () => {
+  let sessionId: string;
+  let db: ReturnType<typeof makeDb>;
+  let service: ChatService;
+
+  beforeEach(() => {
+    vi.mocked(runChatLLM).mockClear();
+    const oid = makeOid();
+    sessionId = String(oid);
+    db = makeDb([
+      {
+        _id: oid,
+        title: 'Regular chat',
+        titleSource: 'user',
+        source: 'ui',
+        status: 'active',
+        provider: 'claude',
+        model: 'test-model',
+        messageCount: 0,
+        totalCostUsd: 0,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ]);
+    service = new ChatService(db as any);
+  });
+
+  it('inserts a hidden trigger and wakes the assistant when the session is idle', async () => {
+    const triggerContext = {
+      executionId: 'exec-1',
+      executionType: 'agent',
+      workflowName: null,
+      agentName: 'reviewer',
+      currentNode: null,
+      status: 'completed',
+      recentMilestones: [],
+      relevantArtifactUrls: [],
+      finalResponse: 'Done',
+      errorMessage: null,
+      inputRequest: null,
+      validNextActions: ['view_execution_details'],
+    };
+
+    const { messageId } = await service.appendWatcherTrigger(
+      sessionId,
+      'watcher_completed',
+      triggerContext,
+    );
+
+    expect(messageId).toBeTruthy();
+
+    await vi.waitFor(() => {
+      const assistant = db.stores.chat_messages.find((m: any) => m.role === 'assistant') as any;
+      expect(assistant?.status).toBe('completed');
+      expect(assistant?.content).toBe('Watcher update delivered.');
+    });
+
+    const hiddenTrigger = db.stores.chat_messages.find((m: any) => m.hidden) as any;
+    expect(hiddenTrigger).toMatchObject({
+      sessionId,
+      role: 'user',
+      status: 'completed',
+      senderSource: 'system',
+      hidden: true,
+      triggerType: 'watcher_completed',
+      triggerContext,
+    });
+    expect(hiddenTrigger.content).toContain('[watcher:watcher_completed]');
+    expect(hiddenTrigger.content).toContain('"executionId": "exec-1"');
+
+    expect(runChatLLM).toHaveBeenCalledTimes(1);
+    const llmArgs = vi.mocked(runChatLLM).mock.calls[0][1] as any;
+    expect(llmArgs.messages.at(-1).content).toContain('[watcher:watcher_completed]');
+    expect(llmArgs.messages.at(-1).content).toContain('"finalResponse": "Done"');
+
+    const session = db.stores.chat_sessions[0] as any;
+    expect(session.messageCount).toBe(2);
   });
 });

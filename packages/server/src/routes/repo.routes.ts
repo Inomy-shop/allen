@@ -10,6 +10,7 @@ import { RepoContextGraphService } from '../services/context/graph/repo-context-
 import { RepoContextEngine } from '../services/context/core/repo-context-engine.js';
 import { WorkflowContextInjectionAdapter, summarizeInjection } from '../services/context/core/workflow-context-injection-adapter.js';
 import { CuratedContextEditorService } from '../services/context/judge/curated-context-editor.service.js';
+import { RepoContextPortabilityService } from '../services/context/portability/repo-context-portability.service.js';
 import { isCogneeContextEnabled, isContextEngineEnabled } from '../services/context/config/context-provider-config.js';
 import { executeChatTool } from '../services/chat-tools.js';
 import { notDeletedFilter } from '../services/soft-delete.js';
@@ -330,6 +331,7 @@ export function repoRoutes(db: Db): Router {
   const mandatoryContext = new RepoMandatoryContextService(db);
   const contextGraph = new RepoContextGraphService(db, cogneeMemory, mandatoryContext);
   const curatedContextEditor = new CuratedContextEditorService(db);
+  const portabilityService = new RepoContextPortabilityService(db);
 
   // Setup service — DO NOT create new CogneeMemoryService; reuse existing instance
   const spawnAgentFn = (args: Record<string, unknown>, spawnDb: Db) =>
@@ -972,6 +974,67 @@ export function repoRoutes(db: Db): Router {
       }));
     } catch (err: unknown) {
       res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Context Portability Routes ────────────────────────────────────────────
+
+  // GET /:id/context-management/export/preview
+  router.get('/:id/context-management/export/preview', async (req: Request, res: Response) => {
+    if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
+    try {
+      const result = await portabilityService.previewExport(param(req, 'id'));
+      return res.json(result);
+    } catch (err) {
+      const e = err as Error & { code?: string; statusCode?: number };
+      return res.status(e.statusCode ?? 500).json({ error: e.message, code: e.code });
+    }
+  });
+
+  // GET /:id/context-management/export
+  router.get('/:id/context-management/export', async (req: Request, res: Response) => {
+    if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
+    try {
+      const pkg = await portabilityService.buildExport(param(req, 'id'));
+      const repoName = String((pkg.sourceRepo as Record<string, unknown>)?.repoName ?? 'repo');
+      const filename = `${repoName.replace(/[^a-z0-9_-]/gi, '_')}-context-package.json`;
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.json(pkg);
+    } catch (err) {
+      const e = err as Error & { code?: string; statusCode?: number };
+      return res.status(e.statusCode ?? 500).json({ error: e.message, code: e.code });
+    }
+  });
+
+  // POST /:id/context-management/import/preview
+  router.post('/:id/context-management/import/preview', async (req: Request, res: Response) => {
+    if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
+    const pkg = req.body?.package;
+    if (!pkg || typeof pkg !== 'object') return res.status(400).json({ error: 'Request body must include a "package" object', code: 'PACKAGE_INVALID' });
+    try {
+      const result = await portabilityService.previewImport(param(req, 'id'), pkg as Record<string, unknown>);
+      return res.json(result);
+    } catch (err) {
+      const e = err as Error & { code?: string; statusCode?: number };
+      return res.status(e.statusCode ?? 400).json({ error: e.message, code: e.code });
+    }
+  });
+
+  // POST /:id/context-management/import
+  router.post('/:id/context-management/import', async (req: Request, res: Response) => {
+    if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload());
+    const pkg = req.body?.package;
+    if (!pkg || typeof pkg !== 'object') return res.status(400).json({ error: 'Request body must include a "package" object', code: 'PACKAGE_INVALID' });
+    try {
+      const confirmRepoNameMismatch = req.body?.confirmRepoNameMismatch === true;
+      const result = await portabilityService.applyImport(param(req, 'id'), pkg as Record<string, unknown>, { confirmRepoNameMismatch });
+      console.info(JSON.stringify({ event: 'repo.context.import.applied', targetRepoId: param(req, 'id'), imported: result.imported, checksumValid: result.checksumValid }));
+      return res.json(result);
+    } catch (err) {
+      const e = err as Error & { code?: string; statusCode?: number; repoNameMismatch?: unknown };
+      console.info(JSON.stringify({ event: 'repo.context.import.rejected', targetRepoId: param(req, 'id'), code: e.code }));
+      return res.status(e.statusCode ?? 400).json({ error: e.message, code: e.code, repoNameMismatch: e.repoNameMismatch });
     }
   });
 

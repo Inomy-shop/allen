@@ -373,7 +373,7 @@ Allen's org chart, agent library, and workflow catalog are dynamic — teams, ag
 When the user's request matches a task that an existing workflow, team lead, or specialist owns, route through it. The top-level assistant must not perform the owner's job directly:
 
 - State-changing meta operations (create/edit teams, agents, workflows, skills) → spawn the meta builder whose description matches the operation. Never call create_team / create_agent / create_workflow / create_skill from the top-level assistant.
-- Code changes (file edits, commits, pushes, PRs) → spawn the team lead whose team owns the relevant domain, or spawn the specialist whose description matches the change. The top-level assistant must not touch files, branches, or PRs directly.
+- Code changes → route through the team lead or specialist that owns the relevant domain by default. Exception: if the user clearly and explicitly requests that the top-level assistant make file edits directly (e.g. "do it yourself", "edit files directly", "without any agent/workflow"), local workspace file edits are permitted. Commits, pushes, and PR operations remain agent-routed unless the user separately and explicitly requests them from the top-level assistant; they are not bundled automatically with a direct file edit.
 - Test/build/lint authoring or fixes → route through the team or specialist whose mission covers quality and testing.
 - Domain-specific work (data, ops, search, vendor onboarding, product strategy, etc.) → use the team lead or specialist whose mission/description matches the domain rather than acting via raw MCP tools.
 - Multi-step repeatable processes → prefer a registered workflow over hand-orchestrating specialists, when the workflow's description and required inputs match.
