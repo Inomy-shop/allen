@@ -79,8 +79,28 @@ declare global {
         requestId: string;
         currentVersion: string;
         latestVersion: string;
+        releaseNotes: AllenReleaseNotesEntry | null;
+        releaseNotesError: string | null;
       }) => void): () => void;
       respondToUpdatePrompt(requestId: string, action: 'update-now' | 'update-later'): void;
+      onUpdateDownloadProgress(handler: (payload: {
+        requestId: string;
+        percent: number | null;
+        downloadedBytes: number;
+        totalBytes: number | null;
+        status: 'downloading';
+      }) => void): () => void;
+      onUpdateDownloadError(handler: (payload: {
+        requestId: string;
+        error: string;
+        retryable: boolean;
+      }) => void): () => void;
+      onUpdateDownloadComplete(handler: (payload: {
+        requestId: string;
+        dmgPath: string;
+      }) => void): () => void;
+      retryUpdateDownload(requestId: string): void;
+      cancelUpdateDownload(requestId: string): void;
     };
   }
 }

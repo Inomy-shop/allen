@@ -558,6 +558,24 @@ export default function RoleManagerPage() {
     });
   }
 
+  function selectMultiple(names: string[]) {
+    if (names.length === 0) return;
+    setSelectedAgents(prev => {
+      const next = new Set(prev);
+      for (const name of names) next.add(name);
+      return next;
+    });
+  }
+
+  function deselectMultiple(names: string[]) {
+    if (names.length === 0) return;
+    setSelectedAgents(prev => {
+      const next = new Set(prev);
+      for (const name of names) next.delete(name);
+      return next;
+    });
+  }
+
   function clearSelection() { setSelectedAgents(new Set()); }
 
   async function reloadTeams() {
@@ -884,6 +902,9 @@ export default function RoleManagerPage() {
             activityByAgent={activityByAgent}
             selectedAgents={selectedAgents}
             onToggleSelect={toggleAgentSelection}
+            onSelectAll={selectMultiple}
+            onDeselectAll={deselectMultiple}
+            onClearSelection={clearSelection}
             onViewAgent={setViewingAgent}
             onEditAgent={handleEdit}
             onDeleteAgent={setDeletingRole}
@@ -1376,7 +1397,7 @@ function LibrarySkillsPane({
 
 function LibraryTeamsAgentsPane({
   teams, agents, agentsByTeam, activityByAgent, selectedAgents,
-  onToggleSelect, onViewAgent, onEditAgent, onDeleteAgent, onRunAgent,
+  onToggleSelect, onSelectAll, onDeselectAll, onClearSelection, onViewAgent, onEditAgent, onDeleteAgent, onRunAgent,
   onCreateTeam, onBuildTeamWithAi, onCreateAgent, onImportAgents, onImportAgentJson, onExportAgents, onEditTeam, onDeleteTeam,
   onAddAgentToTeam, onRefresh,
 }: {
@@ -1386,6 +1407,9 @@ function LibraryTeamsAgentsPane({
   activityByAgent: Map<string, number>;
   selectedAgents: Set<string>;
   onToggleSelect: (name: string) => void;
+  onSelectAll: (names: string[]) => void;
+  onDeselectAll: (names: string[]) => void;
+  onClearSelection: () => void;
   onViewAgent: (agent: Agent) => void;
   onEditAgent: (agent: Agent) => void;
   onDeleteAgent: (name: string) => void;
@@ -1447,6 +1471,20 @@ function LibraryTeamsAgentsPane({
     .filter(() => !q || 'unassigned'.includes(q));
   const visibleGroupCount = groupedFilteredMembers.length + (unassignedMembers.length > 0 ? 1 : 0);
   const showingAllAgents = !activeTeam;
+  // Names of agents that are actually visible — respects team search + agent search + role filter.
+  // In the All agents view, the rendered groups come from groupedFilteredMembers + unassignedMembers,
+  // not from filteredMembers (which ignores team search).
+  const visibleAgentNames = useMemo(() => {
+    if (showingAllAgents) {
+      const names: string[] = [];
+      for (const group of groupedFilteredMembers) {
+        for (const m of group.members) names.push(m.name as string);
+      }
+      for (const m of unassignedMembers) names.push(m.name as string);
+      return names;
+    }
+    return filteredMembers.map(m => m.name as string);
+  }, [showingAllAgents, groupedFilteredMembers, unassignedMembers, filteredMembers]);
 
   return (
     <div className="flex w-full flex-col gap-5 px-8 py-8">
@@ -1622,6 +1660,44 @@ function LibraryTeamsAgentsPane({
                   )}
                 </div>
               </header>
+
+              {/* ── Select All / Clear bar — scoped to visible agents ── */}
+              {visibleAgentNames.length > 0 && selectedAgents.size > 0 && (
+                <div className="flex items-center justify-between border-b border-app px-5 py-2">
+                  <button
+                    onClick={() => {
+                      const allSelected = visibleAgentNames.every(n => selectedAgents.has(n));
+                      if (allSelected) {
+                        onDeselectAll(visibleAgentNames);
+                      } else {
+                        onSelectAll(visibleAgentNames);
+                      }
+                    }}
+                    className="inline-flex items-center gap-2 text-[12px] text-theme-muted hover:text-theme-primary transition-colors"
+                    aria-label="Select or deselect all visible agents"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={visibleAgentNames.every(n => selectedAgents.has(n))}
+                      readOnly
+                      className="h-4 w-4 rounded border-app bg-app-muted text-accent pointer-events-none"
+                    />
+                    <span className="font-medium">
+                      {visibleAgentNames.every(n => selectedAgents.has(n))
+                        ? `Deselect all ${visibleAgentNames.length} visible`
+                        : `Select all ${visibleAgentNames.length} visible`}
+                    </span>
+                  </button>
+                  {selectedAgents.size > 0 && (
+                    <button
+                      onClick={onClearSelection}
+                      className="text-[12px] text-theme-muted hover:text-theme-primary transition-colors"
+                    >
+                      Clear (<span className="font-mono">{selectedAgents.size}</span>)
+                    </button>
+                  )}
+                </div>
+              )}
 
               <div className="max-h-[calc(100vh-360px)] overflow-auto p-4">
                 {showingAllAgents ? (

@@ -1,0 +1,145 @@
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { WatcherService } from '../watcher.service.js';
+
+describe('WatcherService lifecycle — reactivate() and markReplaced()', () => {
+  let mockDb: any;
+  let mockChatService: any;
+  let service: WatcherService;
+  let chainable: any;
+
+  beforeEach(() => {
+    chainable = {
+      findOne: vi.fn().mockResolvedValue(null),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: { toHexString: () => 'mock-id' } }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+      find: vi.fn().mockReturnThis(),
+      toArray: vi.fn().mockResolvedValue([]),
+      sort: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+    };
+    mockDb = {
+      collection: vi.fn().mockReturnValue(chainable),
+    };
+
+    mockChatService = {
+      isStreaming: vi.fn().mockReturnValue(false),
+      broadcastToSession: vi.fn().mockReturnValue(1),
+      appendWatcherTrigger: vi.fn().mockResolvedValue({ messageId: 'msg-1' }),
+    };
+    service = new WatcherService(mockDb as any, mockChatService as any);
+  });
+
+  // ── AC9: reactivate ──────────────────────────────────────────────────
+
+  describe('reactivate()', () => {
+    it('sets watcherStatus=active, clears triggerSentForState, bumps updateSeq for checkpoint path (AC9)', async () => {
+      const existingDoc = {
+        watcherId: 'w-1',
+        executionId: 'exec-1',
+        watcherStatus: 'waiting',
+        triggerSentForState: 'waiting_for_input',
+        updateSeq: 5,
+      };
+
+      chainable.findOne.mockResolvedValueOnce(existingDoc);
+
+      await service.reactivate('exec-1', 'checkpoint');
+
+      expect(chainable.updateOne).toHaveBeenCalledWith(
+        { executionId: 'exec-1' },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            watcherStatus: 'active',
+            triggerSentForState: null,
+            updateSeq: 6,
+          }),
+        }),
+      );
+    });
+
+    it('clears triggerSentForState and resets nextPollAt for agent path (AC9)', async () => {
+      const existingDoc = {
+        watcherId: 'w-1',
+        executionId: 'exec-2',
+        watcherStatus: 'waiting',
+        triggerSentForState: 'failed',
+        updateSeq: 3,
+      };
+
+      chainable.findOne.mockResolvedValueOnce(existingDoc);
+
+      await service.reactivate('exec-2', 'agent');
+
+      const setArg = chainable.updateOne.mock.calls[0][1].$set;
+      expect(setArg.watcherStatus).toBe('active');
+      expect(setArg.triggerSentForState).toBeNull();
+      expect(setArg.nextPollAt).toBeInstanceOf(Date);
+      expect(setArg.updateSeq).toBe(4);
+    });
+
+    it('works for engine resume path', async () => {
+      const existingDoc = {
+        watcherId: 'w-1',
+        executionId: 'exec-3',
+        watcherStatus: 'waiting',
+        triggerSentForState: 'completed',
+        updateSeq: 7,
+      };
+
+      chainable.findOne.mockResolvedValueOnce(existingDoc);
+
+      await service.reactivate('exec-3', 'engine');
+
+      const setArg = chainable.updateOne.mock.calls[0][1].$set;
+      expect(setArg.watcherStatus).toBe('active');
+      expect(setArg.triggerSentForState).toBeNull();
+      expect(setArg.updateSeq).toBe(8);
+    });
+
+    it('is a no-op when the watcher does not exist (no error, no insert)', async () => {
+      // chainable.findOne returns null by default → no existing watcher
+      // The fallback tries to find execution for chatSessionId;
+      // with no execution either, no register() call happens
+      chainable.findOne.mockResolvedValueOnce(null);  // watcher not found
+      // execution.findOne returns null (default) → no chatSessionId → no register
+
+      await service.reactivate('nonexistent-exec', 'checkpoint');
+
+      expect(chainable.updateOne).not.toHaveBeenCalled();
+      expect(chainable.insertOne).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── AC10: markReplaced ────────────────────────────────────────────────
+
+  describe('markReplaced()', () => {
+    it('sets watcherStatus to replaced (AC10)', async () => {
+      const existingDoc = {
+        watcherId: 'w-1',
+        executionId: 'exec-1',
+        watcherStatus: 'active',
+        updateSeq: 5,
+      };
+
+      chainable.findOne.mockResolvedValueOnce(existingDoc);
+
+      await service.markReplaced('exec-1');
+
+      expect(chainable.updateOne).toHaveBeenCalledWith(
+        { executionId: 'exec-1' },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            watcherStatus: 'replaced',
+          }),
+        }),
+      );
+    });
+
+    it('does NOT call updateOne when the watcher does not exist (no error)', async () => {
+      // chainable.findOne returns null by default
+      await service.markReplaced('nonexistent-exec');
+
+      expect(chainable.updateOne).not.toHaveBeenCalled();
+    });
+  });
+});

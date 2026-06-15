@@ -10,7 +10,8 @@ import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
 import TokenUsageDisplay from '../common/TokenUsageDisplay';
 import MermaidChatBlock from './MermaidChatBlock';
-import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
+import { WatcherStatusLines } from './WatcherStatusLines';
+import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc, type WatcherUIDoc } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { WorkflowInterventionAction } from '../execution/WorkflowInterventionAction';
 import { sanitizeChatAssistantResponse } from '../../lib/chat-response-sanitize';
@@ -46,6 +47,8 @@ interface ChatMessageListProps {
   onSaveToLearnings?: (content: string) => void;
   onOpenExecutionsPanel?: () => void;
   onOpenFilesPanel?: () => void;
+  /** Execution watcher status lines — non-clickable per-execution updates */
+  watchers?: WatcherUIDoc[];
 }
 
 type WorkflowInterventionField = {
@@ -2137,7 +2140,7 @@ function WorkflowInterventionPrompt({
   );
 }
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentReports = [], pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel }: ChatMessageListProps) {
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentReports = [], pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel, watchers = [] }: ChatMessageListProps) {
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
   const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
   const hasActiveSpawnedRuns = spawnedAgents.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
@@ -2179,9 +2182,13 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
 
     return byMessage;
   }, [messages, runsBySourceMessage]);
-  const chatTimeline = useMemo(
-    () => buildChatTimeline(messages),
+  const visibleMessages = useMemo(
+    () => messages.filter(m => !(m as any).hidden),
     [messages],
+  );
+  const chatTimeline = useMemo(
+    () => buildChatTimeline(visibleMessages),
+    [visibleMessages],
   );
 
   // Load agent info for labels, avatars, and thread display
@@ -2354,6 +2361,11 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
 
         </React.Fragment>);
       })}
+
+      {/* Watcher status lines — above streaming indicator, near the message area bottom */}
+      {watchers.length > 0 && (
+        <WatcherStatusLines watchers={watchers} assistantStreaming={streaming} />
+      )}
 
       {/* Streaming message */}
       {streaming && (!hasActiveSpawnedRuns || Boolean(streamText) || Boolean(thinkingText) || activeToolCalls.length > 0) && (() => {

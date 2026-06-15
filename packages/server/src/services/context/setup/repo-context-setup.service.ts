@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { ObjectId, type Db } from 'mongodb';
-import type { RepoContextSetupRun, SetupPhase, SetupPhaseSnapshot, SetupStatus } from './repo-context-setup.types.js';
+import { isActiveSetupStatus, type RepoContextSetupRun, type SetupPhase, type SetupPhaseSnapshot, type SetupStatus } from './repo-context-setup.types.js';
 import type { RepoContextCurationService } from '../curation/repo-context-curation.service.js';
 import type { RepoMandatoryContextService } from '../mandatory/repo-mandatory-context.service.js';
 import type { CogneeMemoryService } from '../cognee/cognee-memory.service.js';
@@ -154,6 +154,7 @@ export class RepoContextSetupService {
       repoPath: String(repo.path ?? ''),
       branch,
       status: 'running',
+      isActive: true,
       currentPhase: 'curation',
       requestedBy,
       requestedAt: now,
@@ -355,7 +356,7 @@ export class RepoContextSetupService {
       logger.warn('repo-context-setup:reconcile', { setupRunId, decision: 'timeout_stopped' });
       await this.setupRuns.findOneAndUpdate(
         { setupRunId, status: { $in: ['running', 'partial'] } },
-        { $set: { status: 'stopped', updatedAt: new Date(), message: 'Timed out during server restart', diagnostics: [...(run.diagnostics ?? []), { code: 'server_restart', severity: 'warning', message: 'Run timed out' }] } },
+        { $set: { status: 'stopped', isActive: false, updatedAt: new Date(), message: 'Timed out during server restart', diagnostics: [...(run.diagnostics ?? []), { code: 'server_restart', severity: 'warning', message: 'Run timed out' }] } },
       );
       await this.alerts.create({ title: 'Repo context setup timed out', message: `Setup run ${setupRunId} exceeded the ${SETUP_TIMEOUT_MS}ms timeout and was stopped. Resume from the context management page.`, severity: 'warning', category: 'system', link: `/repos/${repoId}/context-management` }).catch(() => {});
       return;
@@ -403,7 +404,7 @@ export class RepoContextSetupService {
     logger.info('repo-context-setup:reconcile', { setupRunId, decision: 'stopped_orphan' });
     await this.setupRuns.findOneAndUpdate(
       { setupRunId, status: { $in: ['running', 'partial'] } },
-      { $set: { status: 'stopped', updatedAt: new Date(), diagnostics: [...(run.diagnostics ?? []), { code: 'server_restart', severity: 'warning', message: 'Run orphaned by server restart' }] } },
+      { $set: { status: 'stopped', isActive: false, updatedAt: new Date(), diagnostics: [...(run.diagnostics ?? []), { code: 'server_restart', severity: 'warning', message: 'Run orphaned by server restart' }] } },
     );
   }
 
@@ -422,7 +423,7 @@ export class RepoContextSetupService {
     }
     await this.setupRuns.findOneAndUpdate(
       { setupRunId, status: { $in: ['running', 'partial'] } },
-      { $set: { status: 'stopped', updatedAt: new Date() } },
+      { $set: { status: 'stopped', isActive: false, updatedAt: new Date() } },
     );
   }
 
@@ -444,6 +445,7 @@ export class RepoContextSetupService {
     const finalStatus: SetupStatus = !opts.resumable && cogneeStatus === 'completed' ? 'completed' : 'partial';
     const $set: Record<string, unknown> = {
       status: finalStatus,
+      isActive: isActiveSetupStatus(finalStatus),
       currentPhase: opts.resumable ? 'context_refresh' : 'completed',
       updatedAt: now,
       'phases.contextRefresh.status': finalStatus === 'completed' ? 'completed' : 'failed',
@@ -1074,6 +1076,10 @@ export class RepoContextSetupService {
 
   private async patch(setupRunId: string, patch: Partial<RepoContextSetupRun>): Promise<RepoContextSetupRun> {
     const updated = { ...patch, updatedAt: new Date() };
+    // Keep the isActive mirror in lockstep with any status transition flowing
+    // through patch() (cancel/resume/fail/complete), so the partial unique
+    // index stays accurate. See isActiveSetupStatus / repo-context-setup.types.
+    if (patch.status !== undefined) updated.isActive = isActiveSetupStatus(patch.status);
     await this.setupRuns.updateOne({ setupRunId }, { $set: updated as never });
     return (await this.setupRuns.findOne({ setupRunId }))!;
   }

@@ -111,3 +111,22 @@ export function createSSEEmitter(executionId: string): EngineEventEmitter {
     },
   };
 }
+
+/**
+ * Broadcast a watcher_update event on the per-execution SSE stream.
+ *
+ * This is an OPTIONAL secondary channel. The PRIMARY channel for watcher
+ * updates to the chat UI is chatService.broadcastToSession(sessionId, ...)
+ * which sends the event on the chat session's SSE stream (the stream the UI
+ * is already subscribed to via /api/chat/sessions/:id/stream).
+ *
+ * This per-execution stream is keyed by executionId and consumed by execution
+ * detail pages. Broadcasting here ensures the execution detail page also
+ * receives real-time watcher updates.
+ */
+export function broadcastWatcherUpdate(executionId: string, payload: Record<string, unknown>): void {
+  broadcastToExecution(executionId, {
+    event: 'watcher_update',
+    data: payload,
+  });
+}

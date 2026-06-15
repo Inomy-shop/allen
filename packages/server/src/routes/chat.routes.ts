@@ -326,12 +326,15 @@ export function chatRoutes(db: Db): Router {
   });
 
   // GET /api/chat/sessions/:id/messages — Paginated messages
+  // Hidden watcher-trigger messages are excluded by default. Pass
+  // ?includeHidden=true to include them for debugging.
   router.get('/sessions/:id/messages', async (req: Request, res: Response) => {
     try {
       const sessionId = param(req, 'id');
       const before = req.query.before as string | undefined;
+      const includeHidden = req.query.includeHidden === 'true';
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
-      const result = await chatService.getMessages(sessionId, before, limit);
+      const result = await chatService.getMessages(sessionId, before, limit, includeHidden);
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -817,6 +820,54 @@ export function chatRoutes(db: Db): Router {
       }
       // Do not leak internal error details to the client
       logger.error('automation-message: unexpected error', { sessionId: id, error: (err as Error).message });
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // POST /api/chat/sessions/:id/watcher-trigger — Internal endpoint called by
+  // WatcherService when an execution reaches a terminal/waiting state. Injects
+  // a hidden chat message that triggers the Assistant.
+  // Auth is enforced by the global requireAuth middleware. The service-to-service
+  // caller validates via triggerSentForState on the watcher doc (see TDD §2.3).
+  router.post('/sessions/:id/watcher-trigger', async (req: Request, res: Response) => {
+    const id = param(req, 'id');
+    const { executionId, triggerType, triggerContext, enforceFirstOnly } = req.body as {
+      executionId?: string;
+      triggerType?: string;
+      triggerContext?: Record<string, unknown>;
+      enforceFirstOnly?: boolean;
+    };
+
+    if (!executionId || !triggerType) {
+      return res.status(400).json({ error: 'executionId and triggerType are required' });
+    }
+
+    const VALID_TRIGGER_TYPES = ['watcher_completed', 'watcher_failed', 'watcher_cancelled', 'watcher_waiting_for_input'];
+    if (!VALID_TRIGGER_TYPES.includes(triggerType as string)) {
+      return res.status(400).json({ error: `Invalid triggerType. Must be one of: ${VALID_TRIGGER_TYPES.join(', ')}` });
+    }
+
+    try {
+      // Optional: enforce that no trigger for this executionId exists yet
+      if (enforceFirstOnly) {
+        const existingTrigger = await db.collection('chat_messages').findOne({
+          sessionId: id,
+          triggerType: { $regex: '^watcher_' },
+          'triggerContext.executionId': executionId,
+        });
+        if (existingTrigger) {
+          return res.status(409).json({ error: `Trigger already sent for execution ${executionId}` });
+        }
+      }
+
+      const result = await chatService.appendWatcherTrigger(id, triggerType as string, triggerContext ?? {});
+      return res.status(201).json({ inserted: true, messageId: result.messageId });
+    } catch (err: unknown) {
+      const message = (err as Error).message;
+      if (message === 'Session not found') {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+      logger.error('watcher-trigger: unexpected error', { sessionId: id, executionId, error: message });
       return res.status(500).json({ error: 'Internal server error' });
     }
   });

@@ -190,6 +190,15 @@ function workspaceChatToTab(chat: any): WorkspaceChatTab {
   };
 }
 
+function terminalSequence(terminalId: string): number {
+  const match = /^term-(\d+)$/.exec(terminalId);
+  return match ? Number(match[1]) : 0;
+}
+
+function maxTerminalSequence(terminalIds: string[]): number {
+  return terminalIds.reduce((max, id) => Math.max(max, terminalSequence(id)), 0);
+}
+
 export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const routeBase = config?.routeBase ?? 'chat';
   const isDesignMode = Boolean(config?.designMode);
@@ -243,6 +252,8 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const [openWorkspaceTabs, setOpenWorkspaceTabs] = useState<WorkspaceChatTab[]>([]);
   const [activeWorkspaceTabKey, setActiveWorkspaceTabKey] = useState<string | null>(null);
   const [tempTabCounter, setTempTabCounter] = useState(0);
+  const [workspaceTerminalCounter, setWorkspaceTerminalCounter] = useState(0);
+  const workspaceTerminalCounterRef = useRef(0);
   const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null);
   const [ideMenuOpen, setIdeMenuOpen] = useState(false);
 
@@ -252,7 +263,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     spawnedAgents, pendingUserQuestion, answerUserQuestion, answerWorkflowIntervention,
     loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
-    restoredDraft, clearRestoredDraft,
+    restoredDraft, clearRestoredDraft, watchers,
     refresh: refreshSessions, refreshActiveSession,
   } = useChat();
 
@@ -260,6 +271,12 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const activeProvider = activeSession?.provider ?? selectedProvider;
   const pullRequests = collectPullRequests(spawnedAgents);
   const floatingPullRequest = !sidePanelOpen ? pullRequests[0] ?? null : null;
+
+  function syncWorkspaceTerminalCounter(terminalIds: string[]) {
+    const maxId = maxTerminalSequence(terminalIds);
+    workspaceTerminalCounterRef.current = maxId;
+    setWorkspaceTerminalCounter(maxId);
+  }
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('allen:active-chat-conversation', { detail: { sessionId: activeSessionId ?? null } }));
@@ -445,7 +462,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         let restoredOpenIds: string[] = [];
         let restoredActiveId: string | null = null;
         let restoredActiveTabKey: string | null = null;
-        let restoredTerminalOpen = false;
+        let restoredTerminalIds: string[] = [];
         let restoredServersOpen = false;
         try {
           const stored = localStorage.getItem(`allen-ws-chat-tabs:${urlWorkspaceId}`);
@@ -457,21 +474,29 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
             }
             restoredActiveId = typeof parsed.activeSessionId === 'string' ? parsed.activeSessionId : null;
             restoredActiveTabKey = typeof parsed.activeTabKey === 'string' ? parsed.activeTabKey : null;
-            restoredTerminalOpen = parsed.openTerminal === true && parsed.terminalWorkspaceId === urlWorkspaceId;
+            if (Array.isArray(parsed.openTerminalIds) && parsed.openTerminalIds.every((id: unknown) => typeof id === 'string' && id.length > 0)) {
+              restoredTerminalIds = parsed.openTerminalIds as string[];
+            } else if (parsed.openTerminal === true && parsed.terminalWorkspaceId === urlWorkspaceId) {
+              restoredTerminalIds = ['term-1'];
+            }
             restoredServersOpen = parsed.openServers === true && parsed.serversWorkspaceId === urlWorkspaceId && (ws.services?.length ?? 0) > 0;
           }
         } catch {}
 
+        syncWorkspaceTerminalCounter(restoredTerminalIds);
+
         const pendingTemp = pendingWorkspaceTempTabRef.current?.workspaceId === urlWorkspaceId
           ? pendingWorkspaceTempTabRef.current.tab
           : null;
-        const restoredTerminalTab: WorkspaceChatTab | null = restoredTerminalOpen
-          ? { id: { kind: 'terminal' }, title: 'Terminal', isTemp: false }
-          : null;
+        const restoredTerminalTabs: WorkspaceChatTab[] = restoredTerminalIds.map((tid, idx) => ({
+          id: { kind: 'terminal', terminalId: tid },
+          title: 'Terminal ' + (idx + 1),
+          isTemp: false,
+        }));
         const restoredServersTab: WorkspaceChatTab | null = restoredServersOpen
           ? { id: { kind: 'servers' }, title: 'Servers', isTemp: false }
           : null;
-        const restoredUtilityTabs = [restoredTerminalTab, restoredServersTab].filter((tab): tab is WorkspaceChatTab => Boolean(tab));
+        const restoredUtilityTabs = [...restoredTerminalTabs, ...(restoredServersTab ? [restoredServersTab] : [])];
 
         if (chats.length === 0) {
           const tempTab: WorkspaceChatTab = pendingTemp ?? {
@@ -609,7 +634,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
 
         let hasStoredTabState = false;
         let restoredOpenIds: string[] = [];
-        let restoredTerminalOpen = false;
+        let restoredTerminalIds: string[] = [];
         let restoredServersOpen = false;
         try {
           const stored = localStorage.getItem(`allen-ws-chat-tabs:${wsId}`);
@@ -619,10 +644,16 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
               hasStoredTabState = true;
               restoredOpenIds = parsed.openSessionIds;
             }
-            restoredTerminalOpen = parsed.openTerminal === true && parsed.terminalWorkspaceId === wsId;
+            if (Array.isArray(parsed.openTerminalIds) && parsed.openTerminalIds.every((id: unknown) => typeof id === 'string' && id.length > 0)) {
+              restoredTerminalIds = parsed.openTerminalIds as string[];
+            } else if (parsed.openTerminal === true && parsed.terminalWorkspaceId === wsId) {
+              restoredTerminalIds = ['term-1'];
+            }
             restoredServersOpen = parsed.openServers === true && parsed.serversWorkspaceId === wsId && (ws.services?.length ?? 0) > 0;
           }
         } catch {}
+
+        syncWorkspaceTerminalCounter(restoredTerminalIds);
 
         const tabSessionIds = hasStoredTabState
           ? restoredOpenIds.filter(id => chats.some((c: any) => c._id === id))
@@ -638,9 +669,13 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           tabs.push({ id: { kind: 'session' as const, sessionId: routeSessionId }, title: routeSessionTitle, isTemp: false });
         }
 
-        if (restoredTerminalOpen && !tabs.some(t => getTabKey(t) === 'terminal')) {
-          tabs.push({ id: { kind: 'terminal' as const }, title: 'Terminal', isTemp: false });
-        }
+        // Restore terminal tabs from stored ids
+        restoredTerminalIds.forEach((tid, idx) => {
+          const tKey = 'terminal-' + tid;
+          if (!tabs.some(t => getTabKey(t) === tKey)) {
+            tabs.push({ id: { kind: 'terminal' as const, terminalId: tid }, title: 'Terminal ' + (idx + 1), isTemp: false });
+          }
+        });
         if (restoredServersOpen && !tabs.some(t => getTabKey(t) === 'servers')) {
           tabs.push({ id: { kind: 'servers' as const }, title: 'Servers', isTemp: false });
         }
@@ -700,13 +735,17 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
       .filter(t => t.id.kind === 'session')
       .map(t => (t.id as { kind: 'session'; sessionId: string }).sessionId);
     const activeSessionIdForStorage = (openWorkspaceTabs.find(t => getTabKey(t) === activeWorkspaceTabKey)?.id as any)?.sessionId ?? null;
-    const openTerminal = openWorkspaceTabs.some(t => t.id.kind === 'terminal');
+    const openTerminalIds = openWorkspaceTabs
+      .filter(t => t.id.kind === 'terminal')
+      .map(t => (t.id as { kind: 'terminal'; terminalId: string }).terminalId);
+    const openTerminal = openTerminalIds.length > 0;
     const openServers = openWorkspaceTabs.some(t => t.id.kind === 'servers');
     try {
       localStorage.setItem(`allen-ws-chat-tabs:${activeWorkspaceId}`, JSON.stringify({
         openSessionIds,
         activeSessionId: activeSessionIdForStorage,
         activeTabKey: activeWorkspaceTabKey,
+        openTerminalIds,
         openTerminal,
         terminalWorkspaceId: openTerminal ? activeWorkspaceId : null,
         openServers,
@@ -1076,14 +1115,21 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
 
   function handleWorkspaceTerminalTab() {
     if (!activeWorkspaceId) return;
+    const existingTerminalIds = openWorkspaceTabs
+      .filter(tab => tab.id.kind === 'terminal')
+      .map(tab => (tab.id as { kind: 'terminal'; terminalId: string }).terminalId);
+    const nextN = Math.max(workspaceTerminalCounterRef.current, maxTerminalSequence(existingTerminalIds)) + 1;
+    workspaceTerminalCounterRef.current = nextN;
+    setWorkspaceTerminalCounter(nextN);
+    const terminalId = 'term-' + nextN;
     const terminalTab: WorkspaceChatTab = {
-      id: { kind: 'terminal' },
-      title: 'Terminal',
+      id: { kind: 'terminal', terminalId },
+      title: 'Terminal ' + nextN,
       isTemp: false,
     };
     pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab: terminalTab };
-    setOpenWorkspaceTabs(prev => prev.some(tab => getTabKey(tab) === 'terminal') ? prev : [...prev, terminalTab]);
-    setActiveWorkspaceTabKey('terminal');
+    setOpenWorkspaceTabs(prev => [...prev, terminalTab]);
+    setActiveWorkspaceTabKey(getTabKey(terminalTab));
     switchSession('');
     navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
   }
@@ -1241,6 +1287,8 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   });
   const activeWorkspaceTab = openWorkspaceTabs.find(tab => getTabKey(tab) === activeWorkspaceTabKey) ?? null;
   const workspaceTerminalActive = activeWorkspaceTab?.id.kind === 'terminal';
+  const workspaceTerminalTabs = openWorkspaceTabs.filter((tab): tab is WorkspaceChatTab & { id: { kind: 'terminal'; terminalId: string } } => tab.id.kind === 'terminal');
+  const workspaceTerminalTabsOpen = workspaceTerminalTabs.length > 0;
   const workspaceServersActive = activeWorkspaceTab?.id.kind === 'servers';
   const workspaceServersTabOpen = openWorkspaceTabs.some(tab => tab.id.kind === 'servers');
   const workspaceUtilityTabActive = workspaceTerminalActive || workspaceServersActive;
@@ -1278,12 +1326,23 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         </div>
       )}
 
-      {/* Messages */}
-      {workspaceTerminalActive && activeWorkspaceId ? (
-        <div className="flex-1 min-h-0">
-          <XTerminal workspaceId={activeWorkspaceId} terminalId={`chat-tab-${activeWorkspaceId}`} className="h-full" />
+      {/* Workspace terminals stay mounted while switching tabs so each xterm remains interactive. */}
+      {workspaceTerminalTabsOpen && activeWorkspaceId && (
+        <div className={`${workspaceTerminalActive ? 'relative flex-1 min-h-0' : 'fixed -left-[10000px] top-0 h-[720px] w-[1100px] pointer-events-none opacity-0'}`}>
+          {workspaceTerminalTabs.map(tab => {
+            const tabKey = getTabKey(tab);
+            const active = tabKey === activeWorkspaceTabKey;
+            return (
+              <div key={tabKey} className={`${active ? 'absolute inset-0' : 'absolute inset-0 invisible pointer-events-none'}`}>
+                <XTerminal workspaceId={activeWorkspaceId} terminalId={`chat-tab-${activeWorkspaceId}-${tab.id.terminalId}`} className="h-full" />
+              </div>
+            );
+          })}
         </div>
-      ) : (
+      )}
+
+      {/* Messages */}
+      {!workspaceTerminalActive && (
         <>
         {workspaceServersTabOpen && activeWorkspaceId && (
           <div className={`${workspaceServersActive ? 'flex-1 min-h-0' : 'fixed -left-[10000px] top-0 h-[720px] w-[1100px] pointer-events-none opacity-0'}`}>
@@ -1330,7 +1389,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
               <div className="chat-empty-stream" aria-label="New conversation" />
             )
           ) : (
-            <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentReports={agentReports} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} />
+            <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentReports={agentReports} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} watchers={watchers} />
           )
         )}
         </>
@@ -1588,7 +1647,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
             <Code2 className="h-4 w-4" />
           </button>
           {activeWorkspaceId && (
-            <button type="button" className={activeWorkspaceTabKey === 'terminal' ? 'active' : ''} onClick={handleWorkspaceTerminalTab} title="Terminal" data-tooltip="Terminal">
+            <button type="button" className={activeWorkspaceTabKey?.startsWith('terminal-') ? 'active' : ''} onClick={handleWorkspaceTerminalTab} title="Terminal" data-tooltip="Terminal">
               <Terminal className="h-4 w-4" />
             </button>
           )}

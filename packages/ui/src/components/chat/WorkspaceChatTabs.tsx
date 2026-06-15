@@ -4,7 +4,7 @@ import { X, Plus, ChevronDown, MessageSquare, Server, Terminal } from 'lucide-re
 export type WorkspaceChatTabId =
   | { kind: 'session'; sessionId: string }
   | { kind: 'temp'; tempId: string }
-  | { kind: 'terminal' }
+  | { kind: 'terminal'; terminalId: string }
   | { kind: 'servers' };
 
 export type WorkspaceChatTab = {
@@ -19,7 +19,7 @@ export type WorkspaceChatTab = {
 
 export function getTabKey(tab: WorkspaceChatTab): string {
   if (tab.id.kind === 'session') return tab.id.sessionId;
-  if (tab.id.kind === 'terminal') return 'terminal';
+  if (tab.id.kind === 'terminal') return 'terminal-' + tab.id.terminalId;
   if (tab.id.kind === 'servers') return 'servers';
   return tab.id.tempId;
 }

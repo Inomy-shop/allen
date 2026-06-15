@@ -705,6 +705,30 @@ export class ExecutionService {
         this.dequeueNext(workflow.name).catch(() => {});
       });
 
+    // ── Watcher registration ─────────────────────────────────────────────
+    // Fire-and-forget: register a watcher if the execution carries a chatSessionId.
+    setImmediate(async () => {
+      const chatSessionId = (input.meta as Record<string, unknown> | undefined)?.chatSessionId as string | undefined
+        ?? (input.chatSessionId as string | undefined);
+      if (chatSessionId) {
+        try {
+          const { WatcherService } = await import('./watcher.service.js');
+          const { ChatService } = await import('./chat.service.js');
+          await new WatcherService(this.db, new ChatService(this.db)).register({
+            executionId,
+            chatSessionId,
+            executionType: 'workflow',
+          });
+        } catch (err) {
+          logger.warn('[execution] Watcher auto-registration failed', {
+            component: 'execution',
+            executionId,
+            error: (err as Error).message,
+          });
+        }
+      }
+    });
+
     return {
       id: executionId,
       status: 'running',
@@ -1461,6 +1485,21 @@ export class ExecutionService {
       engine.resumeExecution(id);
     }
     await this.stateManager.updateExecution(id, { status: 'running' as never });
+
+    // ── Watcher reactivation ─────────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const { WatcherService } = await import('./watcher.service.js');
+        const { ChatService } = await import('./chat.service.js');
+        await new WatcherService(this.db, new ChatService(this.db)).reactivate(id, 'engine');
+      } catch (err) {
+        logger.warn('[execution] Watcher reactivation failed after engine resume', {
+          component: 'execution',
+          executionId: id,
+          error: (err as Error).message,
+        });
+      }
+    });
   }
 
   async submitInput(id: string, node: string, data: Record<string, unknown>): Promise<boolean> {
@@ -1609,6 +1648,21 @@ export class ExecutionService {
     engine.runFromCheckpoint(workflow, executionId, checkpointId)
       .catch(() => {})
       .finally(() => runningEngines.delete(executionId));
+
+    // ── Watcher reactivation ─────────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const { WatcherService } = await import('./watcher.service.js');
+        const { ChatService } = await import('./chat.service.js');
+        await new WatcherService(this.db, new ChatService(this.db)).reactivate(executionId, 'checkpoint');
+      } catch (err) {
+        logger.warn('[execution] Watcher reactivation failed after checkpoint resume', {
+          component: 'execution',
+          executionId,
+          error: (err as Error).message,
+        });
+      }
+    });
 
     return { id: executionId, status: 'running', resumingFromCheckpoint: checkpointId };
   }

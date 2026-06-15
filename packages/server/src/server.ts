@@ -17,7 +17,7 @@ import { usageRoutes, startUsageCacheWarmer } from './routes/usage.routes.js';
 import { repoRoutes } from './routes/repo.routes.js';
 import { learningRoutes, executionLearningsRoute } from './routes/learning.routes.js';
 import { chatRoutes } from './routes/chat.routes.js';
-import { backfillSessionOwners } from './services/chat.service.js';
+import { ChatService, backfillSessionOwners } from './services/chat.service.js';
 import { mcpRoutes } from './routes/mcp.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
 import { workspaceRoutes, publicWorkspaceRoutes } from './routes/workspace.routes.js';
@@ -51,6 +51,8 @@ import { designRoutes } from './routes/design.routes.js';
 import { designReposRoutes, createDesignRepoPreviewHandler } from './routes/design-repos.routes.js';
 import { DesignRepoPreviewManager } from './services/design-repo-preview-manager.js';
 import { interventionRoutes } from './routes/intervention.routes.js';
+import { watcherRoutes } from './routes/watcher.routes.js';
+import { WatcherService } from './services/watcher.service.js';
 import { linearRoutes } from './routes/linear.routes.js';
 import { monitoringRoutes } from './routes/monitoring.routes.js';
 import { internalContextEvaluationRoutes } from './routes/context-evaluation.routes.js';
@@ -186,6 +188,14 @@ async function runBootTasks(db: Db, cronService: CronService): Promise<void> {
     });
   }
 
+  try {
+    const chatSvc = new ChatService(db);
+    await new WatcherService(db, chatSvc).runReconciliation();
+    logger.info('[watcher] Boot reconciliation complete', { component: 'watcher' });
+  } catch (err) {
+    logger.error('[watcher] Boot reconciliation failed — continuing boot', { component: 'watcher', error: (err as Error).message });
+  }
+
   await new OrgSeedService(db).seed();
   await seedDefaultWorkflows(db);
   await seedDefaultSkills(db);
@@ -291,6 +301,7 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
   app.use('/api/design', designRoutes(db));
   app.use('/api/design', designReposRoutes(db));
   app.use('/api/interventions', interventionRoutes(db));
+  app.use('/api/execution-watchers', watcherRoutes(db));
   app.use('/api/linear', linearRoutes(db));
   app.use('/api/monitoring', monitoringRoutes(db));
   app.use('/api/files', fileRoutes(db));
@@ -359,9 +370,12 @@ export async function startAllenServer(options: StartAllenServerOptions = {}): P
   });
 
   let orphanSweeperHandle: McpOrphanSweeperHandle | null = null;
+  let watcherServiceHandle: WatcherService | null = null;
   if (startBackgroundServices) {
     startMcpHealthMonitor(db);
     orphanSweeperHandle = startMcpOrphanSweeper();
+    watcherServiceHandle = new WatcherService(db, new ChatService(db));
+    watcherServiceHandle.startPoller();
   }
 
   startFileWatchServer();
@@ -411,6 +425,7 @@ export async function startAllenServer(options: StartAllenServerOptions = {}): P
       await collect(() => stopFileWatchServer());
       await collect(() => orphanSweeperHandle?.stop());
       await collect(() => stopMcpHealthMonitor());
+      await collect(() => watcherServiceHandle?.stopPoller());
       await collect(() => cronService.stop());
       await collect(() => DesignRepoPreviewManager.stopAll());
       await collect(() => closeHttpServer(httpServer));

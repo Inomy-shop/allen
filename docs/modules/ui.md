@@ -9,7 +9,7 @@ The UI is Allen's React application. It gives operators a browser-based way to c
 ## Responsibilities
 
 - Render the dashboard, chat, workflow, execution, workspace, repo, agent, team, ticket, PR, design, and settings screens.
-- Stream execution progress and show logs, traces, artifacts, checkpoints, and token usage.
+- Stream execution progress and show logs, traces, artifacts, checkpoints, token usage, and **execution watcher status lines** (one live non-clickable line per running execution, updated in-place via SSE `watcher_update` events).
 - Provide workspace-aware chat and terminal/preview surfaces.
 - Manage forms for integrations, MCP servers, design repos, and admin settings. The repository edit dialog includes a **Default branch** field — the initial value is resolved from `detected.defaultBranch → defaultBranch → branch → 'main'`, and saving a changed branch calls `PUT /api/repos/:id/default-branch`.
 - Keep user-facing flows understandable while the server and engine handle execution.

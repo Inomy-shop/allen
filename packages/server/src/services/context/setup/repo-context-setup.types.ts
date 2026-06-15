@@ -16,6 +16,20 @@ export type SetupStatus =
 export type SetupPhaseStatus =
   | 'pending' | 'running' | 'skipped' | 'completed' | 'failed' | 'cancelled';
 
+/** Statuses in which a run still occupies its repo's single active setup slot. */
+export const ACTIVE_SETUP_STATUSES = ['running', 'partial'] as const satisfies readonly SetupStatus[];
+
+/**
+ * True when a run is active ('running' | 'partial'). Drives the persisted
+ * `isActive` flag on each run, which backs the partial unique index that
+ * enforces one active setup run per repo. DocumentDB rejects `$in` inside a
+ * partialFilterExpression, so the active set is collapsed to this boolean in
+ * application code rather than expressed in the index filter.
+ */
+export function isActiveSetupStatus(status: SetupStatus): boolean {
+  return status === 'running' || status === 'partial';
+}
+
 export type SetupPhaseSnapshot = {
   status: SetupPhaseStatus;
   startedAt?: Date;
@@ -51,6 +65,14 @@ export type RepoContextSetupRun = {
   repoPath: string;
   branch?: string;
   status: SetupStatus;
+  /**
+   * Derived mirror of `status ∈ {running, partial}`. Persisted so the partial
+   * unique index (one active run per repo) can filter on a single boolean —
+   * DocumentDB does not support `$in` in partialFilterExpression. Always kept
+   * in sync with `status`; see {@link isActiveSetupStatus}. Optional only for
+   * legacy docs written before this field existed.
+   */
+  isActive?: boolean;
   currentPhase: SetupPhase;
   requestedBy?: string;
   requestedAt: Date;

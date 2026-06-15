@@ -10,6 +10,7 @@ import { mkdirSync } from 'node:fs';
 import { notDeletedFilter } from './soft-delete.js';
 import { logger } from '../logger.js';
 import { ExecutionService } from './execution.service.js';
+import { WatcherService } from './watcher.service.js';
 import { InterventionService } from './intervention.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
 import { AgentActivityService } from './agent-activity.service.js';
@@ -774,6 +775,25 @@ const runWorkflow: ChatTool = {
         chatSessionId,
         error: (err as Error).message,
       }));
+
+      // ── Watcher registration for workflow executions ──────────────
+      setImmediate(async () => {
+        try {
+          const { ChatService } = await import('./chat.service.js');
+          await new WatcherService(db, new ChatService(db)).register({
+            executionId,
+            chatSessionId,
+            executionType: 'workflow',
+            originatingMessageId: activeCtx?.parentMessageId,
+          });
+        } catch (err: unknown) {
+          logger.warn('[chat-tools] Watcher registration failed for run_workflow', {
+            component: 'chat-tools',
+            executionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
     }
     return {
       execution_id: result.id,
@@ -1298,6 +1318,29 @@ const spawnAgent: ChatTool = {
       contextQuery,
       inlineContextQueryStripped: promptSanitization.stripped,
     }, 1, context).catch(() => {});
+
+    // ── Watcher registration for spawned agents ───────────────────────
+    if (chatSessionIdForMeta) {
+      const execType: 'lead' | 'agent' = role.teamRole === 'lead' ? 'lead' : 'agent';
+      setImmediate(async () => {
+        try {
+          const { ChatService } = await import('./chat.service.js');
+          await new WatcherService(db, new ChatService(db)).register({
+            executionId,
+            chatSessionId: chatSessionIdForMeta,
+            executionType: execType,
+            rootExecutionId: rootExecutionId !== executionId ? rootExecutionId : undefined,
+            originatingMessageId: activeCtxForMeta?.parentMessageId,
+          });
+        } catch (err: unknown) {
+          logger.warn('[chat-tools] Watcher registration failed for spawn_agent', {
+            component: 'chat-tools',
+            executionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+    }
 
     return {
       agent_name: agentName,
@@ -2335,6 +2378,19 @@ async function runSpawnInBackground(
       return;
     }
 
+    // Trigger a one-time watcher poll so the terminal trigger fires quickly
+    setImmediate(async () => {
+      try {
+        const { ChatService } = await import('./chat.service.js');
+        await new WatcherService(db, new ChatService(db)).pollWatcherByExecutionId(executionId);
+      } catch (err: unknown) {
+        logger.warn('[spawn] watcher poll completion failed', {
+          executionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+
     // Broadcast completion + log
     if (onEvent) onEvent('spawn_completed', { executionId, agent: agentName, durationMs, toolCount: toolCalls.length, response: response.slice(0, 300) });
     liveLog({ type: 'completed', content: `Done in ${(durationMs/1000).toFixed(1)}s, ${toolCalls.length} tools` });
@@ -2706,6 +2762,20 @@ export async function resumeAgentExecution(
       $unset: { durationMs: '' },
     },
   );
+
+  // ── Watcher reactivation after agent resume ──────────────────────────
+  setImmediate(async () => {
+    try {
+      const { ChatService } = await import('./chat.service.js');
+      await new WatcherService(db, new ChatService(db)).reactivate(executionId, 'agent');
+    } catch (err: unknown) {
+      logger.warn('[resume] Watcher reactivation failed', {
+        component: 'chat-tools',
+        executionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
 
   // Preserve the artifact root across resume so loop-back runs keep filing
   // under the same chat / workflow / agent parent. Pull from exec.meta —

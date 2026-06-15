@@ -6,6 +6,44 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-06-16
+
+Highlights since `v0.1.10`.
+
+### Added
+
+- **Deterministic Execution Watcher** (`packages/server`, `packages/ui`): automatically monitors chat-started workflow and agent executions, replaces polling chat messages with a single live status line per execution, and triggers the correct Assistant when the execution completes, fails, is cancelled, or waits for input.
+  - **New service** (`packages/server/src/services/watcher.service.ts`): `WatcherService` with auto-registration on execution start/resume, log-driven status generation (factual templates + milestone vocabulary lookup against `execution_logs`), polling sweep driven by per-watcher `nextPollAt` (staggered intervals: 1 min ≤10 min, 5 min ≤60 min, 10 min >60 min), hidden trigger coordination, and boot-time reconciliation for server restart recovery.
+  - **New API** (`packages/server/src/routes/watcher.routes.ts`): `GET /api/execution-watchers?chatSessionId=X` (list active watchers for a chat session), `GET /api/execution-watchers/:executionId` (single watcher). `POST /api/chat/sessions/:id/watcher-trigger` added in chat routes for hidden trigger injection.
+  - **New UI component** (`packages/ui/src/components/chat/WatcherStatusLines.tsx`): non-clickable per-execution status lines with state icons, factual text, and "Last checked X ago" label. Lines are replaced in-place via SSE `watcher_update` events (updateSeq-based dedup).
+  - **Chat message filtering**: hidden watcher-trigger messages (`hidden: true`) are filtered from the visible chat message list and from `ChatService.getSession()` / `getMessages()` responses.
+  - **Registration hooks**: auto-registration on `run_workflow` and `spawn_agent` MCP tool calls (from `chat-tools.ts`), on execution start (from `ExecutionService.start()`), and on each resume path (agent resume, engine resume, checkpoint resume). Boot reconciliation in `server.ts` `runBootTasks()`. SSE `watcher_update` events via `stream.service.ts` `broadcastWatcherUpdate()`.
+  - **New DB collection**: `execution_watchers` with indexes on `watcherId` (unique), `executionId` (unique), `chatSessionId+watcherStatus`, `watcherStatus+nextPollAt`, `watcherStatus+lastPolledAt`, and `updatedAt`.
+  - **Covers**: PRD AC1–AC11, R1–R16.
+
+- **Auto-update popup with release notes and download progress** (`packages/desktop`, `packages/ui`): replaced the previous `electron-updater` silent download with a custom production-update flow.
+  - **Custom update checker** (`packages/desktop/src/main.ts`): fetches a JSON feed from `ALLEN_UPDATE_FEED_URL`, compares versions, and prompts the user via a new IPC channel instead of downloading silently in the background.
+  - **Update prompts/flow** (`packages/desktop/src/main.ts`): the app sends an `allen:update-prompt` event to the renderer; the renderer responds with `update-now` or `update-later`. On "Update now", the app downloads the DMG, opens it, and quits Allen automatically for macOS drag-and-drop installation.
+  - **Release notes** (`packages/desktop/src/main.ts`): fetches a release notes index from `ALLEN_RELEASE_NOTES_FEED_URL`, caches it locally, and serves individual release notes by version. Degrades gracefully to cached data when offline.
+  - **UI modal** (`packages/ui/src/App.tsx`): new `UpdatePromptModal` component that shows current/latest version, release notes area, and buttons. Hooks into `allen:update-prompt` IPC events.
+  - **IPC bridge** (`packages/desktop/src/preload.ts`, `preload.cjs`, `packages/ui/src/desktop.d.ts`): new contract for `getUpdateSettings`, `setAutoUpdateEnabled`, `checkForUpdates`, `getReleaseNotes`, `getReleaseNote`, `onUpdatePrompt`, `respondToUpdatePrompt`, and `openWorkspaceIde`.
+  - **URL policy** (`packages/desktop/src/url-policy.ts`): extracted external URL validation into a standalone testable module with loopback hostname detection.
+  - **Settings integration** (`packages/ui/src/pages/SettingsPage.tsx`): manual "Check for updates" now routes through the new IPC channels, with consistent auto-update toggle.
+  - **Covers**: REQ-001–007, AC-001–008.
+
+- **Context portability — import/export for curated and mandatory context** (`packages/server`, `packages/ui`): selectively export a repo's active curated entries and enabled mandatory mappings as a checksum-verified JSON package, and re-import them into another Allen instance with clash handling. New routes under `packages/server/src/routes/repo.routes.ts` and a portability module with deterministic SHA-256 package checksums.
+
+- **Scoped "select all" for agents** (`packages/ui`): a scoped select-all control in the agent manager (`RoleManagerPage`) so bulk actions apply to the currently filtered/visible set.
+
+### Changed
+
+- **Direct file edits from the top-level Assistant when explicitly requested** (`packages/server`): the top-level Assistant may now make direct file edits when the user clearly and explicitly asks (e.g. "edit files directly"). Commits, pushes, and PR operations remain agent-routed unless separately and explicitly requested. Updates both the seed prompt and the live chat system prompt.
+- **Terminal tabs**: clicking the terminal icon in workspace-linked chat now opens a new terminal tab with its own backend PTY session (unique terminal ID) instead of reusing a single shared tab.
+
+### Fixed
+
+- **Database index definitions** corrected for the repo context setup pipeline.
+
 ## [0.1.10] - 2026-06-13
 
 Highlights since `v0.1.9`.

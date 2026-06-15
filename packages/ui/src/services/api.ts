@@ -759,6 +759,14 @@ export const repos = {
     resume: (id: string, runId: string) =>
       request<any>(`/repos/${id}/context-setup/${runId}/resume`, { method: 'POST' }),
   },
+  previewContextExport: (id: string) =>
+    request<any>(`/repos/${id}/context-management/export/preview`),
+  exportContext: (id: string) =>
+    request<unknown>(`/repos/${id}/context-management/export`),
+  previewContextImport: (id: string, body: { package: unknown }) =>
+    request<any>(`/repos/${id}/context-management/import/preview`, { method: 'POST', body: JSON.stringify(body) }),
+  applyContextImport: (id: string, body: { package: unknown; confirmRepoNameMismatch?: boolean }) =>
+    request<any>(`/repos/${id}/context-management/import`, { method: 'POST', body: JSON.stringify(body) }),
 };
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
@@ -941,6 +949,28 @@ export const chat = {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
     return request<any[]>(`/chat/logs${qs}`);
   },
+};
+
+// ── Execution Watchers ──────────────────────────────────────────────────────
+export type WatcherExecutionState = 'running' | 'waiting_for_input' | 'completed' | 'failed' | 'cancelled';
+export type WatcherExecutionType = 'workflow' | 'agent' | 'lead';
+export interface WatcherUIDoc {
+  watcherId: string;
+  executionId: string;
+  executionType: WatcherExecutionType;
+  watcherStatus: 'active' | 'waiting' | 'resolved' | 'replaced';
+  executionState: WatcherExecutionState;
+  triggerSentForState: string | null;
+  latestStatusText: string;
+  lastCheckedAt: string;
+  updateSeq: number;
+}
+
+export const executionWatchers = {
+  list: (chatSessionId: string) =>
+    request<WatcherUIDoc[]>(`/execution-watchers?chatSessionId=${encodeURIComponent(chatSessionId)}`),
+  get: (executionId: string) =>
+    request<WatcherUIDoc>(`/execution-watchers/${executionId}`),
 };
 
 export * from './apiSecondary';

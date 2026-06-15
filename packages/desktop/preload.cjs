@@ -23,6 +23,23 @@ const allenDesktop = {
     return () => ipcRenderer.off('allen:update-prompt', listener);
   },
   respondToUpdatePrompt: (requestId, action) => ipcRenderer.send('allen:update-prompt-response', { requestId, action }),
+  onUpdateDownloadProgress: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('allen:update-download-progress', listener);
+    return () => ipcRenderer.off('allen:update-download-progress', listener);
+  },
+  onUpdateDownloadError: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('allen:update-download-error', listener);
+    return () => ipcRenderer.off('allen:update-download-error', listener);
+  },
+  onUpdateDownloadComplete: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('allen:update-download-complete', listener);
+    return () => ipcRenderer.off('allen:update-download-complete', listener);
+  },
+  retryUpdateDownload: (requestId) => ipcRenderer.send('allen:update-download-retry', { requestId }),
+  cancelUpdateDownload: (requestId) => ipcRenderer.send('allen:update-download-cancel', { requestId }),
 };
 
 contextBridge.exposeInMainWorld('allenDesktop', allenDesktop);

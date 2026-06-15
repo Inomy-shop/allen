@@ -101,8 +101,34 @@ export interface ChatMessage {
   error?: string;
   toolCalls?: ToolCallRecord[];
   thinkingText?: string;
+  /** When true, this message is invisible to the user in the chat UI.
+   *  Used by the execution watcher for hidden Assistant triggers. */
+  hidden?: boolean;
+  /** Distinguishes watcher triggers from other hidden messages. */
+  triggerType?: 'watcher_completed' | 'watcher_failed' | 'watcher_cancelled' | 'watcher_waiting_for_input';
+  /** Compact structured context payload for the Assistant (see TDD §1.2). */
+  triggerContext?: Record<string, unknown>;
   createdAt: Date;
   completedAt?: Date;
+}
+
+/**
+ * Structural type for WatcherTriggerContext — declared locally to avoid
+ * circular dependencies (chat.service.ts ↔ watcher.service.ts).
+ */
+export interface WatcherTriggerContext {
+  executionId: string;
+  executionType: 'workflow' | 'agent' | 'lead';
+  workflowName: string | null;
+  agentName: string | null;
+  currentNode: string | null;
+  status: string;
+  recentMilestones: string[];
+  relevantArtifactUrls: string[];
+  finalResponse: string | null;
+  errorMessage: string | null;
+  inputRequest: string | null;
+  validNextActions: string[];
 }
 
 function archivedWorkspaceSnapshot(workspace: Record<string, unknown>): ArchivedWorkspaceSnapshot {
@@ -162,6 +188,14 @@ function senderFields(sender?: ChatMessageSender): Pick<ChatMessage, 'senderUser
     ...(sender.email ? { senderEmail: sender.email } : {}),
     ...(sender.source ? { senderSource: sender.source } : {}),
   };
+}
+
+function formatWatcherTriggerMessage(triggerType: string, triggerContext: object): string {
+  return [
+    `[watcher:${triggerType}]`,
+    'An execution watcher observed a state change. Read the JSON context, then update the user with the result or requested next input. Do not mention this hidden watcher message.',
+    JSON.stringify(triggerContext, null, 2),
+  ].join('\n\n');
 }
 
 function parseSlashCommandText(content: string): { name: string; args: string; raw: string } | null {
@@ -417,7 +451,7 @@ IMPORTANT RULES:
 1. You are the routing brain. Decide from the user's intent whether to answer directly, inspect data with tools, run a workflow, or spawn the best matching agent/lead. Do not rely on a backend heuristic router.
 2. When the user corrects you or states a preference ("no, use staging DB", "always run tests first", "I prefer TypeScript"), silently call save_learning to remember it. Write it as a generalized rule. Don't tell the user you're saving — just do it.
 3. Evidence-first rule: do not make claims about a repository's existing implementation, supported behavior, available feature, bug cause, architecture, files, dependencies, tests, or prior execution unless you have clear evidence from code/docs/tool results/traces. Read or inspect the relevant source first, or spawn an agent that does. In your answer, briefly mention what evidence you checked. If you cannot verify it, say what is unknown and ask for permission/context rather than guessing.
-4. Never change repository code directly from the top-level assistant. You may inspect files, docs, logs, and tool results for evidence, but implementation must go through run_workflow or spawn_agent for an agent working in an isolated Allen workspace. Do not edit files, commit, push, or open PRs yourself from the assistant response loop unless the user explicitly asks for a local-only emergency patch and accepts bypassing the normal workflow.
+4. Default code-change routing: implementation should go through run_workflow or spawn_agent for an agent working in an isolated Allen workspace. You may inspect files, docs, logs, and tool results for evidence. Direct local file edits from the top-level assistant are allowed only when the user clearly and explicitly requests them — recognised signals include "do it yourself", "without assigning to any agent/workflow", "edit files directly", "make direct changes", or equivalent unambiguous phrasing. Commits, pushes, and PR creation/updates are separate from local file edits: perform those git operations only when the user separately and explicitly requests them, even within the same session as a permitted direct file edit. Do not bundle git operations with a file edit unless the user asks for both. All meta-operation safety and general routing defaults remain in force.
 5. Normal conversation stays normal. If the user says "hi", asks a general question, brainstorms, asks for an explanation, or asks why you behaved a certain way, answer directly unless live Allen data is needed. For behavior questions, give the direct reason first; do not start with apology templates, synthetic issue labels, routing summaries, or workflow-style sections.
 6. Allen Library skills are internal routing playbooks, distinct from Codex/Claude native runtime skills. In Allen chat, unqualified "skills" means Allen Library skills. For every non-trivial Allen-supported request, silently call list_skills first and use the full enabled skill metadata list (name, description, category, triggers, excludes, allowedRoutes, related workflows/agents, priority) to choose the right skill by user intent. Do not pick a skill only because search_skills ranked it highest; search_skills is only an optional hint after metadata review. After selecting the best skill from metadata, call get_skill for that skill before routing or answering. Do not load every skill body up front. Do not mention the selected skill name, skill id, or skill tool calls in user-facing responses unless the user explicitly asks. Only discuss Codex/Claude/plugin/runtime skills when the user explicitly asks for those.
 7. Capability discovery before route selection: before proposing an execution route, inspect the available Allen workflows, specialized team leads/agents, and relevant external MCP tools that could do the job. Use list_workflows/get_workflow, list_teams/list_agents/get_team/get_agent, and any relevant external MCP discovery/list tools when available. Prefer the most specific workflow or specialized lead/agent that owns the end-to-end task; use raw external MCP tools directly only for simple tool-native queries/actions or as evidence for the selected route.
@@ -1108,7 +1142,7 @@ export class ChatService {
   async getSession(id: string): Promise<(ChatSession & { messages: ChatMessage[] }) | null> {
     const session = await this.sessions.findOne({ _id: new ObjectId(id) });
     if (!session) return null;
-    const msgs = await this.messages.find({ sessionId: id }).sort({ createdAt: -1 }).limit(50).toArray() as ChatMessage[];
+    const msgs = await this.messages.find({ sessionId: id, hidden: { $ne: true } }).sort({ createdAt: -1 }).limit(50).toArray() as ChatMessage[];
     msgs.reverse();
     const [hydrated] = await this.hydrateArchivedWorkspaceSnapshots([session as unknown as ChatSession]);
     // On-demand session total: own messages + every chat-spawned execution
@@ -1207,8 +1241,12 @@ export class ChatService {
     }) as T[];
   }
 
-  async getMessages(sessionId: string, before?: string, limit = 50): Promise<{ data: ChatMessage[]; hasMore: boolean }> {
+  async getMessages(sessionId: string, before?: string, limit = 50, includeHidden = false): Promise<{ data: ChatMessage[]; hasMore: boolean }> {
     const query: Record<string, unknown> = { sessionId };
+    // Filter out hidden messages (watcher triggers) by default, unless explicitly requested
+    if (!includeHidden) {
+      query.hidden = { $ne: true };
+    }
     if (before) {
       const beforeDoc = await this.messages.findOne({ _id: new ObjectId(before) });
       if (beforeDoc) query.createdAt = { $lt: beforeDoc.createdAt };
@@ -2525,6 +2563,98 @@ RULES:
     );
 
     return { messageId: result.insertedId.toHexString() };
+  }
+
+  /**
+   * Append a hidden watcher trigger message to the chat session.
+   * This message is invisible to the user and contains compact structured
+   * context for the Assistant about an execution state change.
+   *
+   * @see TDD §1.2 (hidden message fields)
+   * @see TDD §2.3 (trigger endpoint contract)
+   */
+  async appendWatcherTrigger(
+    sessionId: string,
+    triggerType: string,
+    triggerContext: object,
+  ): Promise<{ messageId: string }> {
+    let objectId: ObjectId;
+    try {
+      objectId = new ObjectId(sessionId);
+    } catch {
+      throw new Error('Session not found');
+    }
+
+    const session = await this.sessions.findOne({ _id: objectId });
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    const now = new Date();
+    const content = formatWatcherTriggerMessage(triggerType, triggerContext);
+    const result = await this.messages.insertOne({
+      sessionId,
+      role: 'user',
+      content,
+      status: 'completed',
+      senderSource: 'system',
+      hidden: true,
+      triggerType,
+      triggerContext,
+      createdAt: now,
+      completedAt: now,
+    });
+
+    await this.sessions.updateOne(
+      { _id: objectId },
+      {
+        $inc: { messageCount: 1 },
+        $set: { lastMessageAt: now, updatedAt: now },
+      },
+    );
+
+    if (!activeQueries.has(sessionId)) {
+      void this.startWatcherTriggerAssistantTurn(sessionId, content).catch((err) => {
+        console.warn('[watcher_trigger] failed to wake assistant:', err instanceof Error ? err.message : err);
+      });
+    }
+
+    return { messageId: result.insertedId.toHexString() };
+  }
+
+  private async startWatcherTriggerAssistantTurn(sessionId: string, content: string): Promise<void> {
+    if (activeQueries.has(sessionId)) return;
+
+    const assistantResult = await this.messages.insertOne({
+      sessionId,
+      role: 'assistant',
+      content: '',
+      status: 'streaming',
+      senderSource: 'system',
+      createdAt: new Date(),
+    });
+    const assistantMsgId = assistantResult.insertedId.toString();
+
+    await this.sessions.updateOne(
+      { _id: new ObjectId(sessionId) },
+      { $set: { lastMessageAt: new Date(), updatedAt: new Date() }, $inc: { messageCount: 1 } },
+    );
+
+    const entry: ActiveQuery = {
+      sessionId,
+      messageId: assistantMsgId,
+      userMessage: content,
+      currentText: '',
+      currentThinking: '',
+      toolCalls: [],
+      pendingToolCalls: new Map(),
+      listeners: new Set(),
+      aborted: false,
+      abortController: new AbortController(),
+    };
+    activeQueries.set(sessionId, entry);
+
+    await this.runLLM(sessionId, assistantMsgId, content, entry);
   }
 
   async updateSessionTitle(sessionId: string, title: string, titleSource: 'default' | 'auto' | 'user' = 'user'): Promise<void> {

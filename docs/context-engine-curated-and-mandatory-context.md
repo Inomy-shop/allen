@@ -107,6 +107,69 @@ In the repo **Context Management** page:
 - use **Curated Context** to review, edit, add, or mark curated entries;
 - use **Mandatory Context** to view active mappings for all agents or filter by one agent. Enable **Show inactive (troubleshooting)** to include deactivated rows when diagnosing unexpected context injection behavior;
 - use **Playground** to see mandatory refs, Cognee recalls, rerank scores, selected/rejected refs, resolved curated content, and injection decisions;
-- use **Context Graph** to refresh or clean-build the Cognee context dataset from active curated entries.
+- use **Context Graph** to refresh or clean-build the Cognee context dataset from active curated entries;
+- use the **Export** and **Import** controls (described below) to copy context between Allen instances.
 
 After editing curated entries, run **Refresh Context** so Cognee and chunk-source mappings reflect the latest curated content. After editing mandatory mappings, new agent runs will use the updated mandatory content directly.
+
+## Context Portability — Import And Export
+
+The **Context Management** page exposes **Export** and **Import** controls for copying curated and mandatory context between Allen instances. Both controls are unavailable when the context engine is disabled.
+
+### Export
+
+Clicking **Export** shows a preview of what will be included — the count of active curated entries (`inclusion === "include"`) and enabled mandatory mappings — then downloads a JSON package file.
+
+The package includes:
+
+- `kind` and `schemaVersion` for package identification;
+- `createdAt` timestamp;
+- `sourceRepo.repoName` and `sourceRepo.sourceRepoId` for reference only — `sourceRepoId` is not written to the target on import;
+- `curatedEntries`: all active curated entries for the repo, stripped of `_id`, `repoId`, and runtime/Cognee state fields. Each entry includes `repoName`.
+- `mandatoryMappings`: all enabled mandatory mappings for the repo, stripped of `_id`, `repoId`, `agentId`, and source lifecycle timestamps (`createdAt`, `updatedAt`, `lastValidatedAt`). Each mapping includes `repoName` for provenance.
+- `manifest.contentSha256`: a deterministic checksum over the canonical package content for integrity verification on import. This checksum is not used for source file validation.
+
+### Import
+
+The **Import** panel accepts a JSON package uploaded from disk or pasted as text. Import proceeds in two steps.
+
+**Preview** runs a dry-run that does not write anything. It:
+
+1. Validates that the package has the correct `kind` and `schemaVersion`.
+2. Uses the currently-viewed repo as the import target. `sourceRepo.repoName` in the package is provenance metadata — it records where the package came from but does not control which repo receives the content.
+
+   If `sourceRepo.repoName` differs from the target repo name, preview returns a **repo name mismatch warning** with source and target names. You must explicitly confirm the mismatch before apply is enabled. Apply refuses to proceed if the mismatch is unconfirmed.
+3. Validates that every entry and mapping `repoName` matches the package `repoName`.
+4. Verifies the package checksum.
+5. Classifies each entry and mapping as one of: `add`, `skip_duplicate`, `skip_clash`, or `skip_missing_agent`.
+
+**Apply** re-runs the full server-side validation and preview, then writes only `add`-classified records. It never overwrites, updates, or disables existing curated entries or mandatory mappings.
+
+### Clash Detection
+
+Curated entry clashes are detected per target repo on `entryId`, `title`, or `path`:
+
+| Situation | Action |
+|---|---|
+| Same `entryId`, `title`, `path`, and equivalent content | `skip_duplicate` |
+| Same `entryId` or `title` or `path` with different content | `skip_clash` |
+| No match on any key | `add` |
+
+Mandatory mapping clashes are detected per `agentName` on `title` or `sourcePath`:
+
+| Situation | Action |
+|---|---|
+| `agentName` not found in this Allen instance | `skip_missing_agent` |
+| Same `title` or `sourcePath` for the same agent with equivalent content | `skip_duplicate` |
+| Same `title` or `sourcePath` for the same agent with different content | `skip_clash` |
+| No match on any key | `add` |
+
+Clashes and missing agents are shown in the import preview table, in the completion summary, and as UI notifications.
+
+### After Import
+
+Import does not trigger a Cognee context graph refresh automatically. After a successful import, the UI shows:
+
+> Imported curated context is saved. Semantic context is stale — Refresh Context from Context Graph before relying on semantic recall. Mandatory context takes effect on new agent runs immediately.
+
+Run **Refresh Context** from the **Context Graph** tab to make imported curated entries available for semantic recall. Mandatory mappings become active for matching agents immediately on the next agent run.
