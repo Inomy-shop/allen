@@ -487,7 +487,7 @@ export default function ExecutionListPage() {
             </div>
           </div>
           {/* Source filter chips */}
-          <div className="mt-2.5 flex items-center gap-1.5 border-t border-app/50 pt-2.5">
+          <div className="mt-2.5 flex items-center gap-1.5 border-t border-app pt-2.5">
             <span className="mr-1 font-mono text-[10.5px] uppercase tracking-wide text-theme-subtle">Source</span>
             {(['', 'chat', 'workflow', 'design'] as SourceFilter[]).map((s) => {
               const label = s === '' ? 'All' : s === 'chat' ? 'Chat' : s === 'workflow' ? 'Workflow' : 'Design';

@@ -545,10 +545,27 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // inside a partialFilterExpression, so the active-status set is mirrored onto
   // the boolean `isActive` field (kept in sync by RepoContextSetupService) and
   // the partial filter keys off that single equality term instead.
-  await db.collection('repo_context_setup_runs').createIndex(
-    { repoId: 1 },
-    { unique: true, partialFilterExpression: { isActive: true }, name: 'idx_setup_active_per_repo' },
-  );
+  //
+  // A prior server version created this same-named index with a different
+  // partialFilterExpression ({ status: { $in: ["running","partial"] } }).
+  // MongoDB refuses to recreate a same-named index with a changed spec
+  // (IndexKeySpecsConflict, code 86), which crash-loops boot. On that specific
+  // conflict, drop the stale index and recreate it with the current spec.
+  await db.collection('repo_context_setup_runs')
+    .createIndex(
+      { repoId: 1 },
+      { unique: true, partialFilterExpression: { isActive: true }, name: 'idx_setup_active_per_repo' },
+    )
+    .catch(async (err: unknown) => {
+      if (!isIndexSpecConflict(err)) throw err;
+      await db.collection('repo_context_setup_runs')
+        .dropIndex('idx_setup_active_per_repo')
+        .catch(ignoreMissingIndex);
+      await db.collection('repo_context_setup_runs').createIndex(
+        { repoId: 1 },
+        { unique: true, partialFilterExpression: { isActive: true }, name: 'idx_setup_active_per_repo' },
+      );
+    });
   await db.collection('repo_context_setup_runs').createIndex({ status: 1, updatedAt: -1 }, { name: 'idx_setup_status_updated' });
 
   // mandatory_context_proposals
@@ -608,6 +625,23 @@ export async function ensureIndexes(db: Db): Promise<void> {
   );
 
   console.log('Database indexes ensured');
+}
+
+// True when MongoDB rejects an index because one with the same name already
+// exists with a different key/options spec (IndexKeySpecsConflict code 86 or
+// IndexOptionsConflict code 85). Used to trigger a drop-and-recreate migration.
+function isIndexSpecConflict(err: unknown): boolean {
+  const e = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : undefined;
+  const codeName = e?.['codeName'];
+  const code = e?.['code'];
+  const message = String(e?.['message'] ?? '');
+  return (
+    codeName === 'IndexKeySpecsConflict' ||
+    codeName === 'IndexOptionsConflict' ||
+    code === 86 ||
+    code === 85 ||
+    /same name as the requested index|already exists with different options|different options/i.test(message)
+  );
 }
 
 function ignoreMissingIndex(err: unknown): void {

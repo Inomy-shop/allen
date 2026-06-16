@@ -6,6 +6,13 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-06-16
+
+### Fixed
+
+- **Execution page dark-mode borders** (`packages/ui`): the source-filter and run-status-card dividers used opacity modifiers on the hand-written `border-app` utility (`border-app/50`, `border-app/70`), which produced invalid classes and fell back to `currentColor` — rendering a bright white line in dark mode. Both now use the valid `border-app` utility.
+- **Server boot recovery from an index spec conflict** (`packages/server`): the server now recovers on boot when `idx_setup_active_per_repo` already exists with a different `partialFilterExpression` from a prior version, instead of failing to start.
+
 ## [0.1.11] - 2026-06-16
 
 Highlights since `v0.1.10`.
