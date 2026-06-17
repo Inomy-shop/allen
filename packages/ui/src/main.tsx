@@ -29,6 +29,9 @@ import OnboardingFirstWorkflowPage from './pages/OnboardingFirstWorkflowPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
 import DesignPage from './pages/DesignPage';
+import DesignStudioPage from './pages/DesignStudioPage';
+import DesignStudioWorkspacePage from './pages/DesignStudioWorkspacePage';
+import DesignStudioSessionPage from './pages/DesignStudioSessionPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import { ToastProvider } from './components/common/Toast';
 import { useSettingsStore } from './stores/settingsStore';
@@ -84,6 +87,10 @@ const router = createBrowserRouter([
           { path: 'chat/:sessionId', element: <ChatPage /> },
           { path: 'design', element: <DesignPage /> },
           { path: 'design/:sessionId', element: <DesignPage /> },
+          { path: 'studio', element: <DesignStudioPage /> },
+          { path: 'studio/workspaces/:id', element: <DesignStudioWorkspacePage /> },
+          { path: 'studio/sessions', element: <DesignStudioSessionPage /> },
+          { path: 'studio/sessions/:sessionId', element: <DesignStudioSessionPage /> },
           { path: 'workspaces', element: <WorkspaceListPage /> },
           { path: 'workspaces/:id', element: <WorkspaceChatRedirect /> },
           { path: 'pull-requests', element: <PullRequestListPage /> },

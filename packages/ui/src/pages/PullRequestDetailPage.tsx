@@ -278,6 +278,7 @@ export default function PullRequestDetailPage() {
           workspaceId={pendingWsId}
           onComplete={(ws) => { setPendingWsId(null); navigate(workspaceChatPath(ws._id)); }}
           onFailed={() => setPendingWsId(null)}
+          onCancel={() => setPendingWsId(null)}
         />
       )}
     </div>

@@ -44,6 +44,15 @@ export default defineConfig(({ mode }) => {
           target: `http://127.0.0.1:${apiPort}`,
           changeOrigin: true,
         },
+        // Design Studio previews are served unauthenticated by the API server.
+        '/dstudio-preview': {
+          target: `http://127.0.0.1:${apiPort}`,
+          changeOrigin: true,
+        },
+        '/dstudio-site': {
+          target: `http://127.0.0.1:${apiPort}`,
+          changeOrigin: true,
+        },
         '/ws': {
           target: `http://127.0.0.1:${wsPort}`,
           changeOrigin: true,

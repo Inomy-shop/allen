@@ -351,6 +351,7 @@ export default function WorkspacesSidebar({ collapsed, onToggle, onNew }: Props)
           repo={workspaceCreateRepo}
           onClose={() => setWorkspaceCreateRepo(null)}
           onCreatedPending={(workspace) => prependWorkspace(workspace as Workspace)}
+          onCancelledPending={(workspaceId) => setList(prev => prev.filter(item => item._id !== workspaceId))}
           onCreated={(workspace) => {
             prependWorkspace(workspace as Workspace);
             setWorkspaceCreateRepo(null);

@@ -42,6 +42,13 @@ describe('WorkspaceManager.list', () => {
             }]),
           };
         }
+        if (name === 'chat_sessions') {
+          return {
+            aggregate: () => ({
+              toArray: async () => [],
+            }),
+          };
+        }
         if (name === 'repos') {
           return {
             find: () => ({
@@ -62,6 +69,68 @@ describe('WorkspaceManager.list', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].baseBranch).toBe('main');
     expect(rows[0].repoDefaultBranch).toBe('development');
+  });
+
+  it('orders workspaces by the most recent linked chat message', async () => {
+    const repoId = new ObjectId();
+    const olderWsId = new ObjectId();
+    const newerWsId = new ObjectId();
+    const older = new Date('2024-01-01T00:00:00Z');
+    const newer = new Date('2024-02-01T00:00:00Z');
+    const base = {
+      repoId: String(repoId),
+      repoName: 'repo',
+      repoPath: '/tmp/repo',
+      worktreePath: '/tmp/workspace',
+      branch: 'feature',
+      baseBranch: 'main',
+      status: 'active',
+      source: 'new',
+      basePort: 15000,
+      services: [],
+      terminals: [],
+      changedFiles: 0,
+      ahead: 0,
+      behind: 0,
+      updatedAt: older,
+    };
+    const db = {
+      collection: (name: string) => {
+        if (name === 'workspaces') {
+          // Returned in the "wrong" order on purpose; list() must re-sort by chat activity.
+          return {
+            find: () => collectionFind([
+              { _id: olderWsId, name: 'older', ...base },
+              { _id: newerWsId, name: 'newer', ...base },
+            ]),
+          };
+        }
+        if (name === 'chat_sessions') {
+          return {
+            aggregate: () => ({
+              toArray: async () => [
+                { _id: String(newerWsId), latestMessageAt: newer },
+                { _id: String(olderWsId), latestMessageAt: older },
+              ],
+            }),
+          };
+        }
+        if (name === 'repos') {
+          return {
+            find: () => ({
+              toArray: async () => [{ _id: repoId, detected: { defaultBranch: 'development' } }],
+            }),
+          };
+        }
+        throw new Error(`Unexpected collection: ${name}`);
+      },
+    } as any;
+
+    const manager = new WorkspaceManager(db);
+    const rows = await manager.list();
+
+    expect(rows.map(row => row.name)).toEqual(['newer', 'older']);
+    expect(rows[0].latestMessageAt).toEqual(newer);
   });
 });
 

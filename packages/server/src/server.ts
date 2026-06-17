@@ -50,6 +50,9 @@ import { designDocRoutes } from './routes/design-doc.routes.js';
 import { designRoutes } from './routes/design.routes.js';
 import { designReposRoutes, createDesignRepoPreviewHandler } from './routes/design-repos.routes.js';
 import { DesignRepoPreviewManager } from './services/design-repo-preview-manager.js';
+import { designStudioRoutes } from './routes/design-studio.routes.js';
+import { createPreviewHandler, createChatPreviewHandler, DSTUDIO_PREVIEW_PREFIX, DSTUDIO_CHAT_PREVIEW_PREFIX } from './services/design-studio/preview.service.js';
+import { createWorkspaceSiteHandler, DSTUDIO_SITE_PREFIX } from './services/design-studio/workspace-fs.js';
 import { interventionRoutes } from './routes/intervention.routes.js';
 import { watcherRoutes } from './routes/watcher.routes.js';
 import { WatcherService } from './services/watcher.service.js';
@@ -276,6 +279,16 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
 
   app.use('/api/design/repos/:repoId/preview', createDesignRepoPreviewHandler(db));
 
+  // Design Studio previews are served unauthenticated so they open in the
+  // user's real local browser. Mounted before requireAuth. The chat-session
+  // route serves a session's HTML/CSS/JS artifacts as a mini static site (so
+  // multi-screen prototypes with relative links work); it is mounted first so
+  // "chat" isn't captured by the token route's :token param.
+  app.use(`${DSTUDIO_CHAT_PREVIEW_PREFIX}/:sessionId/:file?`, createChatPreviewHandler(db));
+  app.use(`${DSTUDIO_PREVIEW_PREFIX}/:token/:file?`, createPreviewHandler());
+  // Serve a workspace's design-system folder as a static site (Open in browser).
+  app.use(`${DSTUDIO_SITE_PREFIX}/:workspaceId/:file(*)?`, createWorkspaceSiteHandler());
+
   app.use('/api', requireAuth, blockIfMustReset);
 
   app.use('/api/users', userRoutes(db));
@@ -300,6 +313,7 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
   app.use('/api/design-docs', designDocRoutes(db));
   app.use('/api/design', designRoutes(db));
   app.use('/api/design', designReposRoutes(db));
+  app.use('/api/design-studio', designStudioRoutes(db));
   app.use('/api/interventions', interventionRoutes(db));
   app.use('/api/execution-watchers', watcherRoutes(db));
   app.use('/api/linear', linearRoutes(db));

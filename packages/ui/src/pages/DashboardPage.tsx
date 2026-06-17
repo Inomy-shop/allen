@@ -21,6 +21,7 @@ import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import { chatCodeDiffs, pullRequests } from '../services/workspaceService';
 import { useAuthStore } from '../stores/authStore';
 import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
+import { useFileDropZone, FileDropOverlay } from '../hooks/useFileDropZone';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
 
 interface ExecutionItem {
@@ -1023,8 +1024,13 @@ export default function DashboardPage() {
   const recentRows = recentConversations.slice(0, 4);
   const humanLoopRows = humanApprovals.slice(0, 4);
 
+  const { dragActive, dropProps } = useFileDropZone(
+    (files) => chatInputRef.current?.uploadFiles(files),
+  );
+
   return (
-    <div className="content scroll-hide bg-app" data-screen-label="dashboard">
+    <div className="content scroll-hide bg-app" data-screen-label="dashboard" {...dropProps}>
+      {dragActive && <FileDropOverlay />}
       <div className="mx-auto max-w-[1180px] px-8 py-14">
         <section>
           <div className="flex items-center gap-2 font-mono text-[11px] font-medium uppercase tracking-[0.16em] text-theme-subtle">

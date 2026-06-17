@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Acme CRM design dashboard empty state</title>
+  <style>
+    :root {
+      --color-primary: #4763cf;
+      --color-bg: #fcfdff;
+      --color-text: #0b1730;
+      --color-muted: #6e778a;
+      --color-subtle: #9ca5b8;
+      --color-panel: #ffffff;
+      --color-panel-soft: #f7f9fd;
+      --color-border: #e2e5ed;
+      --color-border-strong: #cdd3e0;
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      font-family: Inter, "Inter Tight", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--color-text);
+      background:
+        linear-gradient(180deg, rgba(71, 99, 207, 0.055), transparent 340px),
+        var(--color-bg);
+      letter-spacing: 0;
+    }
+
+    .studio-dashboard {
+      width: min(1120px, calc(100% - 32px));
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 56px 0 64px;
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+    }
+
+    .studio-dashboard__header {
+      margin-bottom: 30px;
+    }
+
+    .studio-dashboard__eyebrow {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      min-height: 26px;
+      margin: 0 0 14px;
+      padding: 5px 9px;
+      border: 1px solid var(--color-border);
+      border-radius: 999px;
+      background: var(--color-panel);
+      color: var(--color-primary);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .studio-dashboard h1 {
+      margin: 0;
+      max-width: 760px;
+      font-size: clamp(26px, 3.75vw, 44px);
+      line-height: 1;
+      font-weight: 760;
+      letter-spacing: -0.01em;
+    }
+
+    .studio-dashboard__intro {
+      max-width: 680px;
+      margin: 16px 0 0;
+      color: var(--color-muted);
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    .studio-design-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+
+    .studio-empty-state {
+      display: grid;
+      place-items: center;
+      min-height: 340px;
+      border: 1px dashed var(--color-border-strong);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.58);
+      padding: 56px 24px;
+    }
+
+    .studio-empty-state__content {
+      max-width: 460px;
+      text-align: center;
+    }
+
+    .studio-empty-state h2 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      font-weight: 730;
+    }
+
+    .studio-empty-state p {
+      margin: 10px 0 0;
+      color: var(--color-muted);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .studio-dashboard__footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: auto;
+      padding-top: 18px;
+      border-top: 1px solid var(--color-border);
+      color: var(--color-subtle);
+      font-size: 12px;
+    }
+
+    .studio-dashboard__footer strong {
+      color: var(--color-muted);
+      font-weight: 650;
+    }
+
+    @media (max-width: 760px) {
+      .studio-dashboard {
+        padding: 32px 0 44px;
+      }
+
+      .studio-empty-state {
+        padding: 24px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="studio-dashboard">
+    <header class="studio-dashboard__header">
+      <p class="studio-dashboard__eyebrow">Repository: Acme CRM</p>
+      <h1>Acme CRM design dashboard</h1>
+      <p class="studio-dashboard__intro">A focused preview of the design groups created for this repository.</p>
+    </header>
+
+    <section class="studio-design-grid" aria-label="Design groups">
+      <div class="studio-empty-state">
+        <div class="studio-empty-state__content">
+          <h2>No design groups yet</h2>
+          <p>Generated designs for this repository will appear here.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer class="studio-dashboard__footer">
+      <span><strong>Allen Design Studio</strong></span>
+      <span>© askallen.build</span>
+    </footer>
+  </main>
+</body>
+</html>

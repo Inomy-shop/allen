@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import NotificationBell from './components/common/NotificationBell';
@@ -6,7 +6,7 @@ import ShortcutKey from './components/common/ShortcutKey';
 import {
   CirclePlay, GitBranch, GitPullRequest, History, LayoutDashboard, Settings,
   FolderGit2, TicketCheck, Workflow,
-  ChevronRight, Plus, Palette,
+  ChevronRight, Plus, Palette, PenTool,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
   SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain, Cpu,
   Trash2, AlertTriangle, Copy, Check, BarChart3, X,
@@ -67,6 +67,7 @@ interface SidebarWorkspace {
   prNumber?: number;
   updatedAt?: string;
   createdAt?: string;
+  latestMessageAt?: string;
 }
 
 interface SidebarRepo {
@@ -120,6 +121,7 @@ const NAV_GROUPS: NavGroup[] = [
   ]},
   { id: 'design', dividerBefore: true, items: [
     { to: '/design', icon: Palette, label: 'Design', activePrefixes: ['/design'] },
+    { to: '/studio', icon: PenTool, label: 'Design Studio', activePrefixes: ['/studio'] },
   ]},
   { id: 'studio', dividerBefore: true, items: [
     { to: '/agents?section=teams-agents', icon: UsersRound, label: 'Teams & Agents' },
@@ -146,6 +148,7 @@ const SETTINGS_NAV_GROUPS: NavGroup[] = [
 ];
 
 const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
+  { prefix: '/studio', label: 'Design Studio' },
   { prefix: '/design', label: 'Design' },
   { prefix: '/chats', label: 'History' },
   { prefix: '/threads', label: 'History' },
@@ -169,6 +172,7 @@ const COMMANDS: CommandItem[] = [
   { id: 'executions', label: 'Open executions', group: 'Navigate', to: '/executions', icon: CirclePlay },
   { id: 'chats', label: 'Open history', group: 'Navigate', to: '/chats', icon: History },
   { id: 'design', label: 'Open design', group: 'Navigate', to: '/design', icon: Palette },
+  { id: 'studio', label: 'Open Design Studio', group: 'Navigate', to: '/studio', icon: PenTool },
   { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: History },
   { id: 'activity', label: 'View execution log', group: 'Executions', to: '/executions', icon: CirclePlay },
   { id: 'running', label: 'View running executions', group: 'Executions', to: '/executions?status=running', icon: CirclePlay },
@@ -223,7 +227,9 @@ function saveCollapsedWorkspaceRepos(value: Set<string>) {
 }
 
 function sidebarWorkspaceTime(workspace: SidebarWorkspace): number {
-  const raw = workspace.updatedAt ?? workspace.createdAt ?? '';
+  // Order by the most recent linked chat message first, falling back to
+  // workspace metadata timestamps when a workspace has no chat activity.
+  const raw = workspace.latestMessageAt ?? workspace.updatedAt ?? workspace.createdAt ?? '';
   const time = raw ? new Date(raw).getTime() : 0;
   return Number.isFinite(time) ? time : 0;
 }
@@ -815,7 +821,11 @@ export default function App() {
       }
     }
 
-    return Array.from(groups.values()).sort((a, b) => b.latest - a.latest);
+    const ordered = Array.from(groups.values());
+    for (const group of ordered) {
+      group.items.sort((a, b) => sidebarWorkspaceTime(b) - sidebarWorkspaceTime(a));
+    }
+    return ordered.sort((a, b) => b.latest - a.latest);
   }, [sidebarRepos, sidebarWorkspaces, workspaceSearch]);
 
   async function openCreateWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
@@ -1057,35 +1067,46 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [location.pathname, navigate]);
 
+  // Fetch the sidebar workspaces + repos. When quiet=true (live refresh) the
+  // loading state is left untouched and a transient failure keeps the existing
+  // list instead of clearing it, so the sidebar never flickers.
+  const loadSidebarWorkspaces = useCallback(async (quiet = false) => {
+    if (!quiet) setSidebarWorkspacesLoading(true);
+    const [items, repoItems] = await Promise.all([
+      workspacesApi.list().catch(() => null),
+      reposApi.list().catch(() => null),
+    ]);
+    if (items) setSidebarWorkspaces(items as SidebarWorkspace[]);
+    else if (!quiet) setSidebarWorkspaces([]);
+    if (repoItems) setSidebarRepos(repoItems as SidebarRepo[]);
+    else if (!quiet) setSidebarRepos([]);
+    if (!quiet) setSidebarWorkspacesLoading(false);
+  }, []);
+
   useEffect(() => {
     if (sidebarPanel !== 'workspaces') return;
-    let cancelled = false;
-    setSidebarWorkspacesLoading(true);
-    Promise.all([
-      workspacesApi.list().catch(() => []),
-      reposApi.list().catch(() => []),
-    ])
-      .then(([items, repoItems]) => {
-        if (!cancelled) setSidebarWorkspaces((items ?? []) as SidebarWorkspace[]);
-        if (!cancelled) setSidebarRepos((repoItems ?? []) as SidebarRepo[]);
-        if (!cancelled) {
-          console.info('[workspace-create-debug] app-sidebar data loaded', {
-            workspaceCount: (items ?? []).length,
-            repos: ((repoItems ?? []) as SidebarRepo[]).map(workspaceCreateRepoDebug),
-          });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setSidebarWorkspaces([]);
-        if (!cancelled) setSidebarRepos([]);
-      })
-      .finally(() => {
-        if (!cancelled) setSidebarWorkspacesLoading(false);
-      });
-    return () => {
-      cancelled = true;
+    void loadSidebarWorkspaces(false);
+  }, [sidebarPanel, loadSidebarWorkspaces]);
+
+  // Keep the sidebar ordered by recent chat activity in real time while it is
+  // open: refresh on the workspace-activity event (fired when a chat message is
+  // sent/completed) and on window focus. Both are action-driven — no polling.
+  useEffect(() => {
+    if (sidebarPanel !== 'workspaces') return;
+    let debounce: ReturnType<typeof setTimeout> | undefined;
+    const onActivity = () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => void loadSidebarWorkspaces(true), 300);
     };
-  }, [sidebarPanel]);
+    const onFocus = () => void loadSidebarWorkspaces(true);
+    window.addEventListener('allen:workspace-activity', onActivity);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      if (debounce) clearTimeout(debounce);
+      window.removeEventListener('allen:workspace-activity', onActivity);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [sidebarPanel, loadSidebarWorkspaces]);
 
   useEffect(() => {
     if (!isWorkspaceChatRoute || !activeWorkspaceId) {
@@ -1666,6 +1687,7 @@ export default function App() {
           repo={workspaceCreateRepo}
           onClose={() => setWorkspaceCreateRepo(null)}
           onCreatedPending={(workspace) => prependSidebarWorkspace(workspace as SidebarWorkspace)}
+          onCancelledPending={(workspaceId) => setSidebarWorkspaces(prev => prev.filter(item => item._id !== workspaceId))}
           onCreated={(workspace) => {
             prependSidebarWorkspace(workspace as SidebarWorkspace);
             setWorkspaceCreateRepo(null);

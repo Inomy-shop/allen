@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Acme CRM design dashboard</title>
+  <style>
+    :root {
+      --color-primary: #4763cf;
+      --color-bg: #fcfdff;
+      --color-text: #0b1730;
+      --color-muted: #6e778a;
+      --color-subtle: #9ca5b8;
+      --color-panel: #ffffff;
+      --color-panel-soft: #f7f9fd;
+      --color-border: #e2e5ed;
+      --color-border-strong: #cdd3e0;
+      --radius: 8px;
+      --space: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      font-family: Inter, "Inter Tight", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--color-text);
+      background:
+        linear-gradient(180deg, rgba(71, 99, 207, 0.055), transparent 340px),
+        var(--color-bg);
+      letter-spacing: 0;
+    }
+
+    .studio-dashboard {
+      width: min(1120px, calc(100% - 32px));
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 56px 0 64px;
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+    }
+
+    .studio-dashboard__header {
+      margin-bottom: 30px;
+    }
+
+    .studio-dashboard__eyebrow {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      min-height: 26px;
+      margin: 0 0 14px;
+      padding: 5px 9px;
+      border: 1px solid var(--color-border);
+      border-radius: 999px;
+      background: var(--color-panel);
+      color: var(--color-primary);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .studio-dashboard h1 {
+      margin: 0;
+      max-width: 760px;
+      font-size: clamp(26px, 3.75vw, 44px);
+      line-height: 1;
+      font-weight: 760;
+      letter-spacing: -0.01em;
+    }
+
+    .studio-dashboard__intro {
+      max-width: 680px;
+      margin: 16px 0 0;
+      color: var(--color-muted);
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    .studio-design-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 340px));
+      justify-content: start;
+      gap: 18px;
+    }
+
+    .studio-design-card {
+      display: grid;
+      grid-template-rows: 156px 132px;
+      overflow: hidden;
+      height: 288px;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      background: var(--color-panel);
+      color: inherit;
+      text-decoration: none;
+      box-shadow: 0 1px 2px rgba(24, 24, 26, 0.04);
+      transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+    }
+
+    .studio-design-card:hover {
+      border-color: var(--color-primary);
+      box-shadow: 0 12px 30px rgba(24, 24, 26, 0.08), 0 1px 2px rgba(24, 24, 26, 0.04);
+      transform: translateY(-2px);
+    }
+
+    .studio-design-card__preview {
+      min-height: 0;
+      height: 156px;
+      overflow: hidden;
+      padding: 16px;
+      border-bottom: 1px solid var(--color-border);
+      background: var(--color-panel-soft);
+    }
+
+    .studio-preview-login {
+      display: grid;
+      place-items: center;
+    }
+
+    .studio-preview-form {
+      width: min(190px, 100%);
+      display: grid;
+      gap: 8px;
+      padding: 14px;
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    .studio-preview-input,
+    .studio-preview-line,
+    .studio-preview-block,
+    .studio-preview-pill {
+      border-radius: 5px;
+      background: #dfe4f1;
+    }
+
+    .studio-preview-input {
+      height: 26px;
+    }
+
+    .studio-preview-line {
+      height: 10px;
+    }
+
+    .studio-preview-line.is-dark {
+      background: #aab4c9;
+    }
+
+    .studio-preview-pill {
+      height: 24px;
+      background: var(--color-primary);
+    }
+
+    .studio-preview-block {
+      min-height: 60px;
+    }
+
+    .studio-preview-landing {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 0.72fr;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .studio-preview-stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .studio-preview-billing {
+      display: grid;
+      gap: 10px;
+    }
+
+    .studio-preview-mini-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .studio-design-card__body {
+      display: grid;
+      grid-template-rows: auto auto;
+      align-content: start;
+      gap: 12px;
+      height: 132px;
+      min-height: 0;
+      padding: 16px;
+    }
+
+    .studio-design-card__head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .studio-design-card h2 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.2;
+      font-weight: 720;
+    }
+
+    .studio-design-card p {
+      display: -webkit-box;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      margin: 6px 0 0;
+      color: var(--color-muted);
+      font-size: 13px;
+      line-height: 1.5;
+      min-height: 39px;
+    }
+
+    .studio-card-summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--color-muted);
+      font-size: 12px;
+    }
+
+    .studio-card-dot {
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--color-border-strong);
+    }
+
+    .studio-empty-state {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+      gap: 28px;
+      align-items: center;
+      min-height: 310px;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: 28px;
+      background: var(--color-panel);
+      box-shadow: 0 8px 24px rgba(24, 24, 26, 0.06), 0 1px 2px rgba(24, 24, 26, 0.04);
+    }
+
+    .studio-empty-state h2 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      font-weight: 720;
+    }
+
+    .studio-empty-state p {
+      margin: 10px 0 0;
+      max-width: 540px;
+      color: var(--color-muted);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .studio-empty-state__path {
+      display: inline-flex;
+      align-items: center;
+      margin-top: 18px;
+      min-height: 32px;
+      padding: 7px 10px;
+      border: 1px solid var(--color-border);
+      border-radius: 7px;
+      background: var(--color-panel-soft);
+      color: var(--color-muted);
+      font-family: "JetBrains Mono", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+
+    .studio-empty-state__preview {
+      display: grid;
+      gap: 10px;
+      padding: 16px;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      background: var(--color-panel-soft);
+    }
+
+    .studio-dashboard__footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: auto;
+      padding-top: 18px;
+      border-top: 1px solid var(--color-border);
+      color: var(--color-subtle);
+      font-size: 12px;
+    }
+
+    .studio-dashboard__footer strong {
+      color: var(--color-muted);
+      font-weight: 650;
+    }
+
+    .studio-placeholder-card {
+      min-height: 74px;
+      border: 1px solid var(--color-border);
+      border-radius: 7px;
+      background: var(--color-panel);
+      padding: 12px;
+    }
+
+    .studio-placeholder-card::before,
+    .studio-placeholder-card::after {
+      content: "";
+      display: block;
+      height: 9px;
+      border-radius: 999px;
+      background: #dfe4f1;
+    }
+
+    .studio-placeholder-card::before {
+      width: 46%;
+      margin-bottom: 10px;
+      background: #aab4c9;
+    }
+
+    .studio-placeholder-card::after {
+      width: 74%;
+    }
+
+    @media (max-width: 760px) {
+      .studio-dashboard {
+        padding: 32px 0 44px;
+      }
+
+      .studio-empty-state {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="studio-dashboard">
+    <header class="studio-dashboard__header">
+      <div>
+        <p class="studio-dashboard__eyebrow">Repository: Acme CRM</p>
+        <h1>Acme CRM design dashboard</h1>
+        <p class="studio-dashboard__intro">A focused preview of the design groups created for this repository.</p>
+      </div>
+    </header>
+
+    <section class="studio-design-grid" aria-label="Design groups">
+      <a class="studio-design-card" href="designs/login/index.html">
+        <div class="studio-design-card__preview studio-preview-login">
+          <div class="studio-preview-form">
+            <div class="studio-preview-line is-dark" style="width: 58%;"></div>
+            <div class="studio-preview-input"></div>
+            <div class="studio-preview-input"></div>
+            <div class="studio-preview-pill"></div>
+          </div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Login page</h2>
+              <p>Authentication screens for returning users and SSO entry.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>3 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Login flow</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/landing/index.html">
+        <div class="studio-design-card__preview studio-preview-landing">
+          <div class="studio-preview-stack">
+            <div class="studio-preview-line is-dark" style="width: 78%;"></div>
+            <div class="studio-preview-line" style="width: 92%;"></div>
+            <div class="studio-preview-line" style="width: 64%;"></div>
+            <div class="studio-preview-pill" style="width: 76px;"></div>
+          </div>
+          <div class="studio-preview-block"></div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Landing page</h2>
+              <p>Marketing page concepts requested as separate variations.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>4 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Marketing concepts</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/billing/index.html">
+        <div class="studio-design-card__preview studio-preview-billing">
+          <div class="studio-preview-line is-dark" style="width: 46%;"></div>
+          <div class="studio-preview-mini-grid">
+            <div class="studio-preview-block"></div>
+            <div class="studio-preview-block"></div>
+          </div>
+          <div class="studio-preview-line" style="width: 96%;"></div>
+          <div class="studio-preview-line" style="width: 82%;"></div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Billing settings</h2>
+              <p>Account billing and invoice management design group.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>2 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Account settings</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/admin-console/index.html">
+        <div class="studio-design-card__preview studio-preview-billing">
+          <div style="display: grid; grid-template-columns: 72px 1fr; gap: 10px; height: 100%;">
+            <div class="studio-preview-block" style="min-height: 100%;"></div>
+            <div class="studio-preview-stack">
+              <div class="studio-preview-line is-dark" style="width: 42%;"></div>
+              <div class="studio-preview-line" style="width: 100%;"></div>
+              <div class="studio-preview-line" style="width: 94%;"></div>
+              <div class="studio-preview-line" style="width: 86%;"></div>
+            </div>
+          </div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Admin console</h2>
+              <p>Operational layout for managing users, roles, and access.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>3 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Admin workflow</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/onboarding/index.html">
+        <div class="studio-design-card__preview studio-preview-landing">
+          <div class="studio-preview-stack">
+            <div class="studio-preview-line is-dark" style="width: 56%;"></div>
+            <div class="studio-preview-line" style="width: 86%;"></div>
+            <div class="studio-preview-line" style="width: 72%;"></div>
+            <div class="studio-preview-pill" style="width: 92px;"></div>
+          </div>
+          <div style="display: grid; gap: 8px;">
+            <div class="studio-preview-block"></div>
+            <div class="studio-preview-line" style="width: 88%;"></div>
+          </div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Onboarding flow</h2>
+              <p>First-run setup screens for connecting a workspace.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>5 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Setup flow</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/reports/index.html">
+        <div class="studio-design-card__preview studio-preview-billing">
+          <div class="studio-preview-line is-dark" style="width: 52%;"></div>
+          <div class="studio-preview-mini-grid">
+            <div class="studio-preview-block"></div>
+            <div class="studio-preview-block"></div>
+          </div>
+          <div class="studio-preview-mini-grid">
+            <div class="studio-preview-line" style="width: 92%;"></div>
+            <div class="studio-preview-line" style="width: 78%;"></div>
+          </div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Reports dashboard</h2>
+              <p>Analytics overview with charts, filters, and export controls.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>2 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Analytics</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/team-settings/index.html">
+        <div class="studio-design-card__preview studio-preview-billing">
+          <div class="studio-preview-line is-dark" style="width: 48%;"></div>
+          <div class="studio-preview-stack">
+            <div class="studio-preview-line" style="width: 100%;"></div>
+            <div class="studio-preview-line" style="width: 96%;"></div>
+            <div class="studio-preview-line" style="width: 88%;"></div>
+            <div class="studio-preview-line" style="width: 94%;"></div>
+          </div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Team settings</h2>
+              <p>Member management, invitations, and permission controls.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>3 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Settings</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/mobile-dashboard/index.html">
+        <div class="studio-design-card__preview studio-preview-login">
+          <div style="width: 126px; display: grid; gap: 8px; padding: 12px; border: 1px solid var(--color-border); border-radius: 14px; background: #fff;">
+            <div class="studio-preview-line is-dark" style="width: 54%;"></div>
+            <div class="studio-preview-block" style="min-height: 48px;"></div>
+            <div class="studio-preview-line" style="width: 100%;"></div>
+            <div class="studio-preview-line" style="width: 84%;"></div>
+          </div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Mobile dashboard</h2>
+              <p>Compact phone-first version of the operator dashboard.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>4 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Mobile views</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/search-results/index.html">
+        <div class="studio-design-card__preview studio-preview-billing">
+          <div class="studio-preview-line is-dark" style="width: 62%;"></div>
+          <div class="studio-preview-line" style="width: 100%; height: 28px;"></div>
+          <div class="studio-preview-stack">
+            <div class="studio-preview-line" style="width: 96%;"></div>
+            <div class="studio-preview-line" style="width: 88%;"></div>
+            <div class="studio-preview-line" style="width: 92%;"></div>
+          </div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Search results</h2>
+              <p>Global search view with filters, relevance, and quick actions.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>2 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Search</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/notifications/index.html">
+        <div class="studio-design-card__preview studio-preview-billing">
+          <div class="studio-preview-line is-dark" style="width: 44%;"></div>
+          <div class="studio-preview-stack">
+            <div class="studio-preview-line" style="width: 100%; height: 20px;"></div>
+            <div class="studio-preview-line" style="width: 92%; height: 20px;"></div>
+            <div class="studio-preview-line" style="width: 86%; height: 20px;"></div>
+          </div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Notifications</h2>
+              <p>Inbox and preference screens for system updates.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>3 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Inbox</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/import-flow/index.html">
+        <div class="studio-design-card__preview studio-preview-landing">
+          <div class="studio-preview-stack">
+            <div class="studio-preview-line is-dark" style="width: 50%;"></div>
+            <div class="studio-preview-block"></div>
+            <div class="studio-preview-pill" style="width: 94px;"></div>
+          </div>
+          <div class="studio-preview-stack">
+            <div class="studio-preview-line" style="width: 90%;"></div>
+            <div class="studio-preview-line" style="width: 78%;"></div>
+            <div class="studio-preview-line" style="width: 84%;"></div>
+          </div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Import flow</h2>
+              <p>Upload and mapping experience for CSV data imports.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>4 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Data import</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/error-states/index.html">
+        <div class="studio-design-card__preview studio-preview-login">
+          <div style="width: min(210px, 100%); display: grid; gap: 10px; padding: 14px; border: 1px solid var(--color-border); border-radius: 8px; background: #fff;">
+            <div class="studio-preview-line is-dark" style="width: 42%;"></div>
+            <div class="studio-preview-line" style="width: 100%;"></div>
+            <div class="studio-preview-line" style="width: 86%;"></div>
+            <div class="studio-preview-pill" style="width: 84px;"></div>
+          </div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Error states</h2>
+              <p>Empty, error, warning, and recovery patterns for core flows.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>5 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>System states</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="studio-design-card" href="designs/profile-page/index.html">
+        <div class="studio-design-card__preview studio-preview-billing">
+          <div style="display: grid; grid-template-columns: 52px 1fr; gap: 12px; align-items: start;">
+            <div class="studio-preview-block" style="min-height: 52px; border-radius: 999px;"></div>
+            <div class="studio-preview-stack">
+              <div class="studio-preview-line is-dark" style="width: 54%;"></div>
+              <div class="studio-preview-line" style="width: 88%;"></div>
+              <div class="studio-preview-line" style="width: 66%;"></div>
+            </div>
+          </div>
+          <div class="studio-preview-mini-grid">
+            <div class="studio-preview-block"></div>
+            <div class="studio-preview-block"></div>
+          </div>
+        </div>
+        <div class="studio-design-card__body">
+          <div class="studio-design-card__head">
+            <div>
+              <h2>Profile page</h2>
+              <p>User profile, account metadata, and personal preferences.</p>
+            </div>
+          </div>
+          <div class="studio-card-summary">
+            <span>2 pages</span>
+            <span class="studio-card-dot"></span>
+            <span>Account</span>
+          </div>
+        </div>
+      </a>
+    </section>
+
+    <footer class="studio-dashboard__footer">
+      <span><strong>Allen Design Studio</strong></span>
+      <span>© askallen.build</span>
+    </footer>
+  </main>
+</body>
+</html>

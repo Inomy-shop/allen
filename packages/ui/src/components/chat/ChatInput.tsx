@@ -29,6 +29,8 @@ export interface ChatInputHandle {
   setValue: (v: string) => void;
   getValue: () => string;
   focus: () => void;
+  /** Upload files and add them as attachments (e.g. from a page-level drop zone). */
+  uploadFiles: (files: FileList | File[]) => void;
 }
 
 interface ProviderInfo {
@@ -75,6 +77,8 @@ interface ChatInputProps {
   slashCommands?: SlashCommandOption[];
   onSlashCommand?: (command: SlashCommandOption, raw: string) => boolean | void;
   extraControls?: ReactNode;
+  hidePlanMode?: boolean;
+  hideRepoSelector?: boolean;
   maxVisibleLines?: number;
   fixedVisibleLines?: boolean;
   placeholder?: string;
@@ -280,6 +284,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     slashCommands = [],
     onSlashCommand,
     extraControls,
+    hidePlanMode,
+    hideRepoSelector,
     maxVisibleLines,
     fixedVisibleLines,
     placeholder,
@@ -439,18 +445,6 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     }
   }
 
-  useImperativeHandle(ref, () => ({
-    setValue: (v: string) => {
-      setValue(v);
-      setTimeout(() => {
-        const el = textareaRef.current;
-        if (el) { el.focus(); el.selectionStart = v.length; el.selectionEnd = v.length; }
-      }, 0);
-    },
-    getValue: () => value,
-    focus: () => textareaRef.current?.focus(),
-  }), [value]);
-
   // ── File upload ──
   const uploadFiles = useCallback(async (files: FileList | File[]) => {
     setUploading(true);
@@ -472,9 +466,25 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
+    // Stop the drop from also bubbling to a page-level drop zone (which would
+    // upload the same files a second time).
+    e.stopPropagation();
     setDragOver(false);
     if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
   }, [uploadFiles]);
+
+  useImperativeHandle(ref, () => ({
+    setValue: (v: string) => {
+      setValue(v);
+      setTimeout(() => {
+        const el = textareaRef.current;
+        if (el) { el.focus(); el.selectionStart = v.length; el.selectionEnd = v.length; }
+      }, 0);
+    },
+    getValue: () => value,
+    focus: () => textareaRef.current?.focus(),
+    uploadFiles,
+  }), [value, uploadFiles]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const files = Array.from(e.clipboardData.items)
@@ -947,7 +957,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
           {/* Plan (Planner) toggle — base assistant only, any provider.
               Hidden when a specific team agent is selected. */}
-          {!selectedAgent && (
+          {!hidePlanMode && !selectedAgent && (
             <button
               type="button"
               onClick={togglePlanMode}
@@ -984,7 +994,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           )}
 
           {/* Repo selector */}
-          {(repos && repos.length > 0) && (
+          {!hideRepoSelector && (repos && repos.length > 0) && (
             <div className="relative" ref={repoPickerRef}>
               <button
                 type="button"

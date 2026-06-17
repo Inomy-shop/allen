@@ -1,15 +1,19 @@
 import { useState, useEffect } from 'react';
 import { workspaces } from '../../services/workspaceService';
-import { Loader2, CheckCircle, XCircle, Terminal } from 'lucide-react';
+import { Loader2, X, XCircle } from 'lucide-react';
+import IconTooltipButton from '../common/IconTooltipButton';
 
 interface Props {
   workspaceId: string;
   onComplete: (ws: any) => void;
   onFailed: (error: string) => void;
+  onCancel?: (workspaceId: string) => void;
 }
 
-export function SetupProgressDialog({ workspaceId, onComplete, onFailed }: Props) {
+export function SetupProgressDialog({ workspaceId, onComplete, onFailed, onCancel }: Props) {
   const [ws, setWs] = useState<any>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState('');
 
   useEffect(() => {
     let alive = true;
@@ -29,6 +33,19 @@ export function SetupProgressDialog({ workspaceId, onComplete, onFailed }: Props
     return () => { alive = false; };
   }, [workspaceId]);
 
+  async function handleCancel() {
+    if (!onCancel || cancelling) return;
+    setCancelling(true);
+    setCancelError('');
+    try {
+      await workspaces.archive(workspaceId);
+      onCancel(workspaceId);
+    } catch (err: any) {
+      setCancelError(err?.message ?? 'Failed to cancel workspace creation.');
+      setCancelling(false);
+    }
+  }
+
   const progress = ws?.setupProgress;
   const log = progress?.log ?? [];
 
@@ -46,10 +63,23 @@ export function SetupProgressDialog({ workspaceId, onComplete, onFailed }: Props
             {ws?.status === 'failed' ? 'Setup Failed' : 'Setting up workspace...'}
           </span>
           <span className="text-[10px] font-mono text-theme-muted">{ws?.name}</span>
+          {onCancel && (
+            <IconTooltipButton
+              label="Cancel workspace creation"
+              onClick={handleCancel}
+              disabled={cancelling}
+              className="ml-auto h-8 w-8"
+            >
+              {cancelling ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+            </IconTooltipButton>
+          )}
         </div>
 
         {/* Progress */}
         <div className="px-4 py-3">
+          {cancelError && (
+            <div className="mb-3 rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">{cancelError}</div>
+          )}
           {progress && (
             <div className="mb-3">
               <div className="flex items-center justify-between text-[10px] text-theme-muted mb-1">
