@@ -7,6 +7,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useChat } from '../../hooks/useChat';
 import ChatInput, { type ChatInputHandle } from '../chat/ChatInput';
+import { useFileDropZone, FileDropOverlay } from '../../hooks/useFileDropZone';
 import ChatMessageList from '../chat/ChatMessageList';
 import AgentChatDropdown from '../chat/AgentChatDropdown';
 import { workspaces as wsApi } from '../../services/workspaceService';
@@ -116,8 +117,13 @@ export function EmbeddedChat({
 
   const agentLocked = !!activeSession?.activeAgent && (activeSession?.messageCount ?? 0) > 0;
 
+  const { dragActive, dropProps } = useFileDropZone(
+    (files) => chatInputRef.current?.uploadFiles(files),
+  );
+
   return (
-    <div className="workspace-embedded-chat">
+    <div className="workspace-embedded-chat relative" {...dropProps}>
+      {dragActive && <FileDropOverlay contained />}
       {/* Header */}
       <div className="workspace-embedded-chat-head">
         <MessageSquare className="w-3 h-3 text-accent" />

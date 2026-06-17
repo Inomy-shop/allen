@@ -989,6 +989,10 @@ export default function WorkspaceListPage() {
             repo={workspaceCreateRepo}
             onClose={() => setWorkspaceCreateRepo(null)}
             onCreatedPending={(workspace) => prependWorkspace(workspace as Workspace)}
+            onCancelledPending={(workspaceId) => {
+              setWorkspaceList(prev => prev.filter(item => item._id !== workspaceId));
+              void loadWorkspaces();
+            }}
             onCreated={(workspace) => {
               prependWorkspace(workspace as Workspace);
               setWorkspaceCreateRepo(null);
@@ -1002,6 +1006,7 @@ export default function WorkspaceListPage() {
             workspaceId={pendingWsId}
             onComplete={(ws) => { setPendingWsId(null); setActiveId(ws._id); loadWorkspaces(); navigate(workspaceChatPath(ws._id)); }}
             onFailed={() => { setPendingWsId(null); loadWorkspaces(); }}
+            onCancel={() => { setPendingWsId(null); loadWorkspaces(); }}
           />
         )}
       </div>
@@ -1352,6 +1357,7 @@ export default function WorkspaceListPage() {
           workspaceId={pendingWsId}
           onComplete={(ws) => { setPendingWsId(null); setActiveId(ws._id); loadWorkspaces(); navigate(workspaceChatPath(ws._id)); }}
           onFailed={() => { setPendingWsId(null); loadWorkspaces(); }}
+          onCancel={() => { setPendingWsId(null); loadWorkspaces(); }}
         />
       )}
       <DeleteConfirmDialog

@@ -600,6 +600,13 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { repoId: 1, agentName: 1, enabled: 1 },
     { sparse: true, name: 'idx_mandatory_repo_agent_enabled' },
   );
+  // Design Studio (Allen Design) — workspaces → sessions → versions → messages
+  await db.collection('dstudio_workspaces').createIndex({ ownerUserId: 1, updatedAt: -1 }, { sparse: true });
+  await db.collection('dstudio_workspaces').createIndex({ kind: 1, sourceRepoId: 1 }, { sparse: true });
+  await db.collection('dstudio_sessions').createIndex({ workspaceId: 1, lastMessageAt: -1 });
+  await db.collection('dstudio_versions').createIndex({ sessionId: 1, seq: 1 });
+  await db.collection('dstudio_versions').createIndex({ groupId: 1 }, { sparse: true });
+  await db.collection('dstudio_messages').createIndex({ sessionId: 1, createdAt: 1 });
 
   // ── Execution Watchers ──────────────────────────────────────────────────────
   // Deterministic Execution Watcher — see TDD §1.1 for index rationale.

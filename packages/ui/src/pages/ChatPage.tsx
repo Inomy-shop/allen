@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useChat, type SpawnedAgent } from '../hooks/useChat';
+import { useChat, type ChatSession, type SpawnedAgent } from '../hooks/useChat';
 import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
+import { useFileDropZone, FileDropOverlay } from '../hooks/useFileDropZone';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
@@ -32,6 +33,16 @@ export interface ChatPageConfig {
   disabled?: boolean;
   /** Reason shown in the ChatInput disabled banner. */
   disabledReason?: string;
+  /** Override new-session creation while preserving the normal composer/send flow. */
+  createSessionOverride?: (args: { provider?: string; model?: string; agentOverrides?: Record<string, unknown>; repoId?: string; workspaceId?: string }) => Promise<ChatSession>;
+  /** Preferred provider/model for the empty composer before a session exists. */
+  initialProviderModel?: { provider: string; model: string };
+  /** Hide the Planner toggle in the composer. */
+  hidePlanMode?: boolean;
+  /** Hide repository selection in the composer. */
+  hideRepoSelector?: boolean;
+  /** Default reasoning effort for a new unsent chat. */
+  defaultReasoningEffort?: ReasoningEffortValue;
 }
 
 type PendingSendOptions = {
@@ -234,7 +245,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const [pendingOverrides, setPendingOverrides] = useState<{
     reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
     planMode?: boolean | null;
-  }>({});
+  }>(config?.defaultReasoningEffort ? { reasoningEffort: config.defaultReasoningEffort } : {});
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const processedDeepLinkRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<ChatQueueItem[]>([]);
@@ -319,7 +330,22 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   useEffect(() => {
     chatApi.providers().then(p => {
       setProviders(p);
-      if (p.length > 0) { setSelectedProvider(p[0].provider); setSelectedModel(p[0].defaultModel); }
+      if (p.length > 0) {
+        const initialProviderModel = config?.initialProviderModel;
+        const preferred = initialProviderModel
+          ? p.find((provider: any) => provider.provider === initialProviderModel.provider)
+          : null;
+        const preferredModels = preferred
+          ? [...(preferred.models ?? []), ...(preferred.modelSuggestions ?? [])]
+          : [];
+        if (preferred && initialProviderModel && preferredModels.includes(initialProviderModel.model)) {
+          setSelectedProvider(initialProviderModel.provider);
+          setSelectedModel(initialProviderModel.model);
+        } else {
+          setSelectedProvider(p[0].provider);
+          setSelectedModel(p[0].defaultModel);
+        }
+      }
     }).catch(() => {});
     mcpApi.list().then(servers => {
       setMcpCount({ enabled: servers.filter((s: any) => s.enabled).length, connected: servers.filter((s: any) => s.status === 'connected').length });
@@ -348,7 +374,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   // different conversation — they only apply to a new chat that hasn't been
   // created yet.
   useEffect(() => {
-    setPendingOverrides({});
+    setPendingOverrides(config?.defaultReasoningEffort ? { reasoningEffort: config.defaultReasoningEffort } : {});
     setSelectedRepo(null);
     setQueuedMessages([]);
     setEditingQueuedId(null);
@@ -802,6 +828,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         Object.keys(overrides).length > 0 ? overrides : undefined,
         (options?.repoId ?? selectedRepo?._id) || undefined,
         wsIdToLink || undefined, // NEW: workspace linkage
+        config?.createSessionOverride,
       );
       navigate(`/${routeBase}/${session._id}`, { replace: true });
 
@@ -1302,8 +1329,15 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         ? { id: selectedRepo._id, name: selectedRepo.name, path: selectedRepo.path }
         : null;
 
+  const composerDisabled = activeSession?.source === 'slack' || Boolean(config?.disabled);
+  const { dragActive, dropProps } = useFileDropZone(
+    (files) => chatInputRef.current?.uploadFiles(files),
+    composerDisabled,
+  );
+
   return (
-    <div className={`chat-page-shell ${sidePanelOpen ? 'with-run-sidebar' : ''}`}>
+    <div className={`chat-page-shell ${sidePanelOpen ? 'with-run-sidebar' : ''}`} {...dropProps}>
+      {dragActive && <FileDropOverlay />}
       <div className="chat-main-shell">
       {/* Workspace tab strip (only in workspace mode) */}
       {activeWorkspace && openWorkspaceTabs.length > 0 && (
@@ -1547,7 +1581,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         )}
         <ChatInput
           ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming}
-          disabled={activeSession?.source === 'slack' || Boolean(config?.disabled)}
+          disabled={composerDisabled}
           disabledReason={
             config?.disabled && config?.disabledReason
               ? config.disabledReason
@@ -1564,6 +1598,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           repos={repos}
           selectedRepoName={archivedWorkspace ? `${archivedWorkspace.name ?? 'Workspace'} deleted` : activeSession?.repoName ?? selectedRepo?.name ?? null}
           repoLocked={!!activeSessionId}
+          hideRepoSelector={config?.hideRepoSelector}
           onRepoChange={(repo: RepoOption | null) => {
             if (!activeSessionId) setSelectedRepo(repo);
           }}
@@ -1580,6 +1615,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           inheritedEffort={selectedAgentDoc?.reasoningEffort ?? (activeProvider === 'codex' ? 'high' : 'medium')}
           inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
           onAgentOverridesChanged={handleOverridesChange}
+          hidePlanMode={config?.hidePlanMode}
           maxVisibleLines={4}
           placeholder={config?.placeholder}
           extraControls={config?.forcedAgent ? null : (() => {

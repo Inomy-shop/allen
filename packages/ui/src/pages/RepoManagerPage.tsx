@@ -992,6 +992,7 @@ function QuickWorkspaceDialog({ repo, onClose, onCreated }: { repo: Repo; onClos
         workspaceId={pendingId}
         onComplete={(ws) => onCreated(ws._id)}
         onFailed={() => { setPendingId(null); setCreating(false); setError('Setup failed'); }}
+        onCancel={() => { setPendingId(null); setCreating(false); onClose(); }}
       />
     );
   }

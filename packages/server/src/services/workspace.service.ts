@@ -88,6 +88,8 @@ export interface Workspace {
   chatSessionIds?: string[];
   createdAt: Date;
   updatedAt: Date;
+  /** Max lastMessageAt across linked chat sessions; set by list() for ordering. */
+  latestMessageAt?: Date;
 }
 
 export interface EnvFile {
@@ -272,6 +274,28 @@ export class WorkspaceManager {
 
   async list(): Promise<Workspace[]> {
     const rows = await this.col.find({ status: { $ne: 'archived' } }).sort({ updatedAt: -1 }).toArray() as Workspace[];
+
+    // Sort by most recent linked chat activity, falling back to updatedAt.
+    const wsIds = rows.map(ws => String(ws._id));
+    if (wsIds.length > 0) {
+      const chatMax = await this.db.collection('chat_sessions')
+        .aggregate<{ _id: string; latestMessageAt: Date }>([
+          { $match: { workspaceId: { $in: wsIds } } },
+          { $group: { _id: '$workspaceId', latestMessageAt: { $max: '$lastMessageAt' } } },
+        ])
+        .toArray();
+      const latestMessageByWsId = new Map(chatMax.map(r => [r._id, r.latestMessageAt]));
+      for (const ws of rows) {
+        const latest = latestMessageByWsId.get(String(ws._id));
+        if (latest) ws.latestMessageAt = latest;
+      }
+      rows.sort((a, b) => {
+        const aTime = latestMessageByWsId.get(String(a._id))?.getTime() ?? a.updatedAt?.getTime() ?? 0;
+        const bTime = latestMessageByWsId.get(String(b._id))?.getTime() ?? b.updatedAt?.getTime() ?? 0;
+        return bTime - aTime;
+      });
+    }
+
     const repoIds = Array.from(new Set(rows.map(ws => ws.repoId).filter((id): id is string => Boolean(id) && ObjectId.isValid(id))));
 
     const repoOr = [
@@ -363,23 +387,32 @@ export class WorkspaceManager {
     this.setupWorkspace(id.toString(), params.repoPath, worktreePath, params.branch, baseBranch, params.source === 'pr').catch(err => {
       const setupError = errorMessage(err);
       console.error(`[workspace] Setup failed for ${id}:`, err);
-      this.col.updateOne({ _id: id }, {
-        $set: {
-          status: 'failed',
-          setupError,
-          'setupProgress.status': 'failed',
-          'setupProgress.error': setupError,
-          updatedAt: new Date(),
+      this.col.updateOne(
+        { _id: id, status: { $nin: ['archiving', 'archived'] } },
+        {
+          $set: {
+            status: 'failed',
+            setupError,
+            'setupProgress.status': 'failed',
+            'setupProgress.error': setupError,
+            updatedAt: new Date(),
+          },
         },
-      }).catch(() => {});
+      ).catch(() => {});
     });
 
     return workspace;
   }
 
+  private async isWorkspaceArchivedOrArchiving(id: string): Promise<boolean> {
+    const ws = await this.get(id).catch(() => null);
+    return ws?.status === 'archiving' || ws?.status === 'archived';
+  }
+
   private async setupWorkspace(id: string, repoPath: string, worktreePath: string, branch: string, baseBranch: string, isPr: boolean): Promise<void> {
     const { ObjectId } = await import('mongodb');
     const oid = new ObjectId(id);
+    const stopIfCancelled = async (): Promise<boolean> => this.isWorkspaceArchivedOrArchiving(id);
 
     try {
       // Fetch latest from origin BEFORE creating the worktree — otherwise
@@ -407,6 +440,7 @@ export class WorkspaceManager {
           );
         }
       }
+      if (await stopIfCancelled()) return;
 
       // Resolve a real ref for `baseBranch`. We try, in order:
       //   1. origin/<baseBranch>   — remote branch, freshest tip (guaranteed fresh by the fetch above)
@@ -447,6 +481,7 @@ export class WorkspaceManager {
       if (!baseRef) {
         throw new Error(`Cannot resolve a base branch for ${repoPath}. Tried "${baseBranch}" and fallbacks [dev, development, main, master] — none exist.`);
       }
+      if (await stopIfCancelled()) return;
 
       // If we fell through to a different branch, keep the workspace
       // record honest so downstream git state queries use the real base.
@@ -477,6 +512,7 @@ export class WorkspaceManager {
             `Workspace creation aborted — PR branch is not reachable.`,
           );
         }
+        if (await stopIfCancelled()) return;
         baseCommit = await exec('git', ['merge-base', baseRef, `origin/${branch}`], { cwd: repoPath })
           .then(result => result.stdout.trim())
           .catch(() => baseCommit);
@@ -495,7 +531,16 @@ export class WorkspaceManager {
           branch = worktreeBranch;
           await this.col.updateOne({ _id: oid }, { $set: { branch, updatedAt: new Date() } }).catch(() => {});
         }
+        if (await stopIfCancelled()) return;
         await exec('git', ['worktree', 'add', '-b', branch, worktreePath, baseRef], { cwd: repoPath });
+      }
+
+      if (await stopIfCancelled()) {
+        try { await exec('git', ['worktree', 'remove', worktreePath, '--force'], { cwd: repoPath }); } catch {}
+        if (worktreePath && existsSync(worktreePath)) {
+          try { rmSync(worktreePath, { recursive: true, force: true }); } catch {}
+        }
+        return;
       }
 
       if (baseCommit) {
@@ -505,6 +550,7 @@ export class WorkspaceManager {
       // Load config for this repo
       const ws = await this.get(id);
       if (!ws) return;
+      if (ws.status === 'archiving' || ws.status === 'archived') return;
       const config = await this.getConfig(ws.repoId);
       const base = ws.basePort;
 
@@ -558,7 +604,7 @@ export class WorkspaceManager {
       const scriptSteps = config?.setupScript ?? [];
 
       if (allSteps.length > 0) {
-        await this.col.updateOne({ _id: oid }, { $set: { status: 'setting_up' } });
+        await this.col.updateOne({ _id: oid, status: { $nin: ['archiving', 'archived'] } }, { $set: { status: 'setting_up' } });
         const log: string[] = [];
 
         // Log env file generation
@@ -567,9 +613,10 @@ export class WorkspaceManager {
         }
 
         for (let i = 0; i < scriptSteps.length; i++) {
+          if (await stopIfCancelled()) return;
           const cmd = resolvePlaceholders(scriptSteps[i]);
           const stepNum = (config?.envFiles?.length ? 1 : 0) + i + 1;
-          await this.col.updateOne({ _id: oid }, {
+          await this.col.updateOne({ _id: oid, status: { $nin: ['archiving', 'archived'] } }, {
             $set: { setupProgress: { currentStep: stepNum, totalSteps: allSteps.length, currentCommand: cmd, log, status: 'running' } },
           });
 
@@ -580,9 +627,10 @@ export class WorkspaceManager {
             log.push(`✗ ${cmd}\n${err.stderr ?? err.message}`);
             throw err;
           }
+          if (await stopIfCancelled()) return;
         }
 
-        await this.col.updateOne({ _id: oid }, { $set: { 'setupProgress.status': 'completed', 'setupProgress.log': log } });
+        await this.col.updateOne({ _id: oid, status: { $nin: ['archiving', 'archived'] } }, { $set: { 'setupProgress.status': 'completed', 'setupProgress.log': log } });
       }
 
       // Step 3: Build service list — resolve port placeholders in commands
@@ -603,9 +651,10 @@ export class WorkspaceManager {
       // Get git state
       const gitState = await this.getGitState(worktreePath, baseBranch);
 
-      await this.col.updateOne({ _id: oid }, {
+      await this.col.updateOne({ _id: oid, status: { $nin: ['archiving', 'archived'] } }, {
         $set: { status: 'active', services, ...gitState, updatedAt: new Date() },
       });
+      if (await stopIfCancelled()) return;
 
       // Start file watcher for live diff
       watchWorkspace(id, worktreePath);
@@ -621,8 +670,9 @@ export class WorkspaceManager {
         }
       }
     } catch (err) {
+      if (await stopIfCancelled()) return;
       const setupError = errorMessage(err);
-      await this.col.updateOne({ _id: oid }, {
+      await this.col.updateOne({ _id: oid, status: { $nin: ['archiving', 'archived'] } }, {
         $set: {
           status: 'failed',
           setupError,

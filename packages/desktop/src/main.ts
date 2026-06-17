@@ -37,7 +37,8 @@ import { startManagedMongo, type ManagedMongoRuntime } from './managed-mongo.js'
 import { isAllowedExternalUrl } from './url-policy.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-let mainWindow: BrowserWindow | null = null;
+const windows = new Set<BrowserWindow>();
+let latestFocusedWindow: BrowserWindow | null = null;
 const trustedPopupWindows = new Set<BrowserWindow>();
 let serverHandle: AllenServerHandle | null = null;
 let mongoHandle: ManagedMongoRuntime | null = null;
@@ -156,6 +157,38 @@ if (userDataDirOverride) {
 const singleInstanceLock = app.requestSingleInstanceLock();
 if (!singleInstanceLock) {
   app.quit();
+}
+
+function getTargetWindow(): BrowserWindow | null {
+  const focused = BrowserWindow.getFocusedWindow();
+  if (focused && !focused.isDestroyed() && windows.has(focused)) {
+    return focused;
+  }
+  if (latestFocusedWindow && !latestFocusedWindow.isDestroyed() && windows.has(latestFocusedWindow)) {
+    return latestFocusedWindow;
+  }
+  // Fallback: newest non-destroyed member of windows (last in iteration order)
+  let newestAlive: BrowserWindow | null = null;
+  for (const win of windows) {
+    if (!win.isDestroyed()) newestAlive = win;
+  }
+  return newestAlive;
+}
+
+function createNewWindow(
+  source: 'file-menu' | 'dock-menu' | 'keyboard' | 'second-instance' | 'activate' | 'boot' | 'navigateTo' = 'file-menu',
+): BrowserWindow | null {
+  if (!serverHandle) {
+    console.warn('[desktop] window-creation-skipped-no-server', { source });
+    return null;
+  }
+  const newWin = createWindow(serverHandle.baseUrl);
+  windows.add(newWin);
+  console.info('[desktop] window-created', { windowCount: windows.size, source });
+  if (source === 'file-menu' || source === 'dock-menu' || source === 'keyboard') {
+    console.info('[desktop] new-window-from-menu', { source });
+  }
+  return newWin;
 }
 
 function desktopDataDir(): string {
@@ -370,13 +403,14 @@ function createTrustedPopupWindow(parent: BrowserWindow, targetUrl: string): voi
 function navigateTo(path: string): void {
   const url = appUrl(path);
   if (!url) return;
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    mainWindow = createWindow(url);
+  const win = getTargetWindow();
+  if (!win || win.isDestroyed()) {
+    createNewWindow('navigateTo');
     return;
   }
-  void mainWindow.loadURL(url);
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.focus();
+  void win.loadURL(url);
+  if (win.isMinimized()) win.restore();
+  win.focus();
 }
 
 async function openDirectory(path: string | null | undefined): Promise<void> {
@@ -476,6 +510,7 @@ function runtimeDiagnosticsText(): string {
     `Managed Mongo: ${mongoHandle ? 'yes' : 'no'}`,
     `Mongo data: ${mongoHandle?.dbPath ?? 'not ready'}`,
     `Mongo binary: ${mongoHandle?.systemBinary ?? 'managed cache or external MongoDB'}`,
+    `Active Windows: ${windows.size}`,
   ].join('\n');
 }
 
@@ -620,8 +655,9 @@ async function exportSupportBundle(targetPath?: string): Promise<SupportBundleRe
         defaultPath: `allen-support-bundle-${safeTimestamp()}.json`,
         filters: [{ name: 'JSON', extensions: ['json'] }],
       };
-      const result = mainWindow
-        ? await dialog.showSaveDialog(mainWindow, options)
+      const targetWin = getTargetWindow();
+      const result = targetWin
+        ? await dialog.showSaveDialog(targetWin, options)
         : await dialog.showSaveDialog(options);
       if (result.canceled || !result.filePath) return { ok: true, canceled: true };
       outputPath = result.filePath;
@@ -647,8 +683,9 @@ async function showDiagnostics(): Promise<void> {
     defaultId: 0,
     cancelId: 0,
   };
-  const { response } = mainWindow
-    ? await dialog.showMessageBox(mainWindow, options)
+  const targetWin = getTargetWindow();
+  const { response } = targetWin
+    ? await dialog.showMessageBox(targetWin, options)
     : await dialog.showMessageBox(options);
   if (response === 1) clipboard.writeText(detail);
 }
@@ -674,6 +711,8 @@ function setupApplicationMenu(): void {
     {
       label: 'File',
       submenu: [
+        { label: 'New Window', accelerator: 'CommandOrControl+N', click: () => { createNewWindow('file-menu'); } },
+        { type: 'separator' },
         { label: 'Open Chat', accelerator: 'CommandOrControl+1', click: () => navigateTo('/chat') },
         { label: 'Open Workspaces', accelerator: 'CommandOrControl+2', click: () => navigateTo('/workspaces') },
         { label: 'Open Settings', accelerator: 'CommandOrControl+,', click: () => navigateTo('/settings/integrations') },
@@ -696,7 +735,6 @@ function setupApplicationMenu(): void {
         { role: 'copy' },
         { role: 'paste' },
         { role: 'pasteAndMatchStyle' },
-        { role: 'delete' },
         { type: 'separator' },
         { role: 'selectAll' },
       ],
@@ -844,22 +882,24 @@ function createWindow(url: string): BrowserWindow {
     createTrustedPopupWindow(win, targetUrl);
   });
 
+  win.on('focus', () => { latestFocusedWindow = win; });
+
   win.webContents.on('render-process-gone', (_event, details) => {
     if (isQuitting || win.isDestroyed()) return;
-    console.error('[desktop] renderer process gone', details);
+    console.error('[desktop] renderer-crash-recovery', { windowCount: windows.size, reason: details.reason, exitCode: details.exitCode });
     void dialog.showMessageBox(win, {
       type: 'error',
       title: 'Allen window stopped responding',
       message: 'The Allen desktop window stopped unexpectedly.',
       detail: `Reason: ${details.reason}; exit code: ${details.exitCode}`,
-      buttons: ['Reload Window', 'Quit'],
+      buttons: ['Reload Window', 'Close Window'],
       defaultId: 0,
       cancelId: 1,
     }).then(({ response }) => {
       if (response === 0 && !win.isDestroyed()) {
         void win.loadURL(serverHandle?.baseUrl ?? url);
       } else {
-        app.quit();
+        if (!win.isDestroyed()) win.close();
       }
     });
   });
@@ -878,7 +918,9 @@ function createWindow(url: string): BrowserWindow {
   });
 
   win.on('closed', () => {
-    mainWindow = null;
+    windows.delete(win);
+    if (latestFocusedWindow === win) latestFocusedWindow = null;
+    console.info('[desktop] window-closed', { windowCount: windows.size, remainingWindows: windows.size });
   });
 
   void win.loadURL(url);
@@ -904,8 +946,9 @@ ipcMain.handle('allen:auth-clear', () => clearDesktopAuthSession());
 
 ipcMain.handle('allen:select-directory', async () => {
   const options: OpenDialogOptions = { properties: ['openDirectory', 'createDirectory'] };
-  const result = mainWindow
-    ? await dialog.showOpenDialog(mainWindow, options)
+  const targetWin = getTargetWindow();
+  const result = targetWin
+    ? await dialog.showOpenDialog(targetWin, options)
     : await dialog.showOpenDialog(options);
   return result.canceled ? null : result.filePaths[0] ?? null;
 });
@@ -1274,10 +1317,13 @@ async function showUpdateAvailablePrompt(
   update: UpdateMetadata,
   currentVersion: string,
 ): Promise<{ action: UpdatePromptAction; requestId: string }> {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    console.info('[updates] renderer window unavailable; postponing update prompt', { latestVersion: update.version });
+  const targetWindow = BrowserWindow.getFocusedWindow() ?? latestFocusedWindow ?? getTargetWindow();
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    console.warn('[updates] prompt-skipped-no-window', { latestVersion: update.version });
     return { action: 'update-later', requestId: '' };
   }
+
+  console.info('[desktop] update-prompt-target', { windowCount: windows.size, targetedFocused: BrowserWindow.getFocusedWindow() != null });
 
   // Load release notes (non-blocking — if it fails, we still show the prompt)
   let releaseNotes: ReleaseNotesEntry | null = null;
@@ -1319,7 +1365,7 @@ async function showUpdateAvailablePrompt(
     };
 
     ipcMain.on('allen:update-prompt-response', onResponse);
-    mainWindow!.webContents.send('allen:update-prompt', {
+    targetWindow.webContents.send('allen:update-prompt', {
       requestId,
       currentVersion,
       latestVersion: update.version,
@@ -1381,8 +1427,9 @@ async function doDownloadAndOpen(metadata: UpdateMetadata, requestId: string): P
   try {
     const dmgPath = await downloadUpdateInstaller(metadata, (progress) => {
       finalBytes = progress.downloadedBytes;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('allen:update-download-progress', {
+      const target = getTargetWindow();
+      if (target && !target.isDestroyed()) {
+        target.webContents.send('allen:update-download-progress', {
           requestId,
           ...progress,
           status: 'downloading',
@@ -1391,8 +1438,9 @@ async function doDownloadAndOpen(metadata: UpdateMetadata, requestId: string): P
     }, controller.signal);
 
     console.info('[updates] download-complete', { version, path: dmgPath, bytes: finalBytes });
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('allen:update-download-complete', { requestId, dmgPath });
+    const target = getTargetWindow();
+    if (target && !target.isDestroyed()) {
+      target.webContents.send('allen:update-download-complete', { requestId, dmgPath });
     }
 
     const openError = await shell.openPath(dmgPath);
@@ -1413,8 +1461,9 @@ async function doDownloadAndOpen(metadata: UpdateMetadata, requestId: string): P
     }
     const retryable = !/security policy|Failed to write/i.test(message);
     console.error('[updates] download-failed', { version, error: message, retryable });
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('allen:update-download-error', { requestId, error: message, retryable });
+    const target = getTargetWindow();
+    if (target && !target.isDestroyed()) {
+      target.webContents.send('allen:update-download-error', { requestId, error: message, retryable });
     }
   } finally {
     if (activeUpdateDownloads.get(requestId) === controller) {
@@ -1483,7 +1532,9 @@ async function boot(): Promise<void> {
       app.exit(0);
       return;
     }
-    mainWindow = createWindow(serverHandle.baseUrl);
+    const win = createWindow(serverHandle.baseUrl);
+    windows.add(win);
+    latestFocusedWindow = win;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[desktop] failed to start', err);
@@ -1507,25 +1558,32 @@ async function boot(): Promise<void> {
 app.whenReady().then(() => {
   setupLogging();
   setupApplicationMenu();
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setMenu(Menu.buildFromTemplate([
+      { label: 'New Window', click: () => { createNewWindow('dock-menu'); } },
+    ]));
+  }
   setupSecurityPolicy();
   setupAutoUpdates();
   void boot();
 });
 
 app.on('second-instance', () => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+  const target = latestFocusedWindow ?? getTargetWindow();
+  console.info('[desktop] second-instance-focused', { hadExistingWindow: target != null && !target.isDestroyed() });
+  if (target && !target.isDestroyed()) {
+    if (target.isMinimized()) target.restore();
+    target.focus();
     return;
   }
   if (serverHandle) {
-    mainWindow = createWindow(serverHandle.baseUrl);
+    createNewWindow('second-instance');
   }
 });
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0 && serverHandle) {
-    mainWindow = createWindow(serverHandle.baseUrl);
+  if (windows.size === 0 && serverHandle) {
+    createNewWindow('activate');
   }
 });
 
@@ -1537,5 +1595,6 @@ app.on('before-quit', (event) => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // All windows closed. Keep app alive — multi-window MVP relies on
+  // explicit Quit (Cmd+Q, dock Quit, menu Quit) to stop the shared runtime.
 });

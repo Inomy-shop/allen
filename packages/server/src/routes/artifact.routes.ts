@@ -141,6 +141,9 @@ export function artifactRoutes(db: Db): Router {
  * octet-stream so the browser prompts to save.
  */
 function mimeForArtifact(contentType: ArtifactContentType, filename: string): string {
+  // HTML artifacts (e.g. Design Studio prototypes) must render, not show source.
+  // The artifact contentType union has no "html", so key off the extension.
+  if (/\.html?$/i.test(filename)) return 'text/html; charset=utf-8';
   switch (contentType) {
     case 'markdown': return 'text/markdown; charset=utf-8';
     case 'json':     return 'application/json; charset=utf-8';

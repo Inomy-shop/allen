@@ -68,6 +68,15 @@ export interface ChatSession {
   repoPath?: string;   // Snapshot of repo.path at session creation time
   repoName?: string;   // Snapshot of repo.name for UI display
   workspaceId?: string;
+  /**
+   * Per-session system-prompt override (used by Design Studio to run the chat
+   * assistant as a "UI Designer" persona without a seeded agent). When set and
+   * no team agent is selected, this replaces the default assistant/planner
+   * persona. Like the planner, it's a system-prompt swap — not a seeded agent.
+   */
+  systemPromptOverride?: string;
+  /** Design Studio workspace this chat session belongs to, when applicable. */
+  studioWorkspaceId?: string;
   workspaceName?: string;
   workspaceRepoId?: string;
   workspaceRepoName?: string;
@@ -1077,6 +1086,7 @@ export class ChatService {
     agentOverrides?: Record<string, unknown>,
     repoId?: string,
     owner?: { userId?: string; name?: string; email?: string },
+    extras?: { systemPromptOverride?: string; studioWorkspaceId?: string; repoPath?: string },
   ): Promise<ChatSession> {
     const now = new Date();
     const effectiveModel = model ?? getDefaultChatModel(provider);
@@ -1103,6 +1113,10 @@ export class ChatService {
       ...(owner?.userId ? { ownerUserId: owner.userId } : {}),
       ...(owner?.name ? { ownerName: owner.name } : {}),
       ...(owner?.email ? { ownerEmail: owner.email } : {}),
+      ...(extras?.systemPromptOverride ? { systemPromptOverride: extras.systemPromptOverride } : {}),
+      ...(extras?.studioWorkspaceId ? { studioWorkspaceId: extras.studioWorkspaceId } : {}),
+      // Design Studio runs the agent in the workspace's design-system folder.
+      ...(extras?.repoPath ? { repoPath: extras.repoPath } : {}),
       createdAt: now, updatedAt: now,
     };
     const result = await this.sessions.insertOne(doc);
@@ -1119,6 +1133,8 @@ export class ChatService {
       // MongoDB: { field: null } matches both null and missing values.
       query.ownerUserId = filter.ownerUserId;
     }
+    // Design Studio sessions live in the Design Studio tab, not chat History.
+    query.studioWorkspaceId = { $exists: false };
     const sessions = await this.sessions
       .find(query)
       .sort({ lastMessageAt: -1 })
@@ -1778,6 +1794,19 @@ User: ${userMessage.slice(0, 500)}`;
         resolvedCwd = cwd;
       }
 
+      let designStudioSourceRepoPath: string | undefined;
+      if (session?.studioWorkspaceId) {
+        try {
+          const studioWorkspace = await this.db.collection('dstudio_workspaces').findOne(
+            { _id: new ObjectId(session.studioWorkspaceId as string) },
+            { projection: { sourceRepoPath: 1 } },
+          );
+          designStudioSourceRepoPath = typeof studioWorkspace?.sourceRepoPath === 'string'
+            ? studioWorkspace.sourceRepoPath
+            : undefined;
+        } catch {}
+      }
+
       // Register active session with resolved cwd — ALL tools in the chain read this
       registerActiveSession({
         chatSessionId: sessionId,
@@ -1804,6 +1833,8 @@ User: ${userMessage.slice(0, 500)}`;
             repoPath: session?.repoPath,
             repoName: session?.repoName,
             repo_path: session?.repoPath,
+            sourceRepoPath: designStudioSourceRepoPath,
+            source_repo_path: designStudioSourceRepoPath,
             worktree_path: resolvedCwd,
             worktreePath: resolvedCwd,
           },
@@ -1899,6 +1930,10 @@ User: ${userMessage.slice(0, 500)}`;
       let systemPrompt: string;
       if (effectiveAgent) {
         systemPrompt = await this.buildAgentSystemPrompt(effectiveAgent, provider, content, sessionId);
+      } else if (typeof session?.systemPromptOverride === 'string' && session.systemPromptOverride.trim()) {
+        // Per-session persona (e.g. Design Studio "UI Designer"). Like the
+        // planner, this is a system-prompt swap on the base assistant.
+        systemPrompt = session.systemPromptOverride;
       } else {
         const persona: ChatPersona = selectChatPersona(plannerActive);
         systemPrompt = await getSystemPrompt(provider, this.db, content, { rootType: 'chat', rootId: sessionId, agentName: persona }, persona);
@@ -1906,7 +1941,11 @@ User: ${userMessage.slice(0, 500)}`;
 
       // Inject workspace path constraint into system prompt
       if (resolvedCwd && resolvedCwd !== '/tmp/allen') {
-        systemPrompt += `\n\nWORKSPACE CONSTRAINT:\nYour working directory is: ${resolvedCwd}\nCRITICAL: ALL file operations (Read, Write, Edit, Grep, Glob, Bash) MUST use paths within this directory.\n- Use relative paths or paths starting with "${resolvedCwd}/"\n- NEVER read, write, or modify files outside this directory\n- If search results show paths outside this directory, replace the base with "${resolvedCwd}/"`;
+        if (session?.studioWorkspaceId && designStudioSourceRepoPath) {
+          systemPrompt += `\n\nWORKSPACE CONSTRAINT:\nYour writable Design Studio workspace is: ${resolvedCwd}\nOriginal source repository for read-only redesign lookup is: ${designStudioSourceRepoPath}\nCRITICAL:\n- Write/Edit operations MUST use paths within "${resolvedCwd}" only.\n- Read/Grep/Glob and read-only Bash inspection commands may use "${designStudioSourceRepoPath}" only when you need existing repository page content for a redesign request.\n- NEVER write, edit, delete, move, format, install, or run mutating commands in "${designStudioSourceRepoPath}".\n- Generated HTML/CSS/design artifacts always belong under "${resolvedCwd}".`;
+        } else {
+          systemPrompt += `\n\nWORKSPACE CONSTRAINT:\nYour working directory is: ${resolvedCwd}\nCRITICAL: ALL file operations (Read, Write, Edit, Grep, Glob, Bash) MUST use paths within this directory.\n- Use relative paths or paths starting with "${resolvedCwd}/"\n- NEVER read, write, or modify files outside this directory\n- If search results show paths outside this directory, replace the base with "${resolvedCwd}/"`;
+        }
       }
 
       // Use already-resolved cwd (workspace path or @repo path)

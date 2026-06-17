@@ -379,6 +379,7 @@ export function useChat() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [messageReloadNonce, setMessageReloadNonce] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  const sessionsRef = useRef<ChatSession[]>([]);
   const clearRestoredDraft = useCallback(() => setRestoredDraft(null), []);
 
   const spawnedRunSignature = spawnedAgents
@@ -444,6 +445,11 @@ export function useChat() {
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  // Keep sessionsRef in sync so sendMessage can look up workspaceId
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
 
   // Track whether sendMessage is actively managing state (skip fetch if so)
   const sendingRef = useRef(false);
@@ -753,8 +759,17 @@ export function useChat() {
   }, [streamText, thinkingText]);
 
   const createSession = useCallback(
-    async (provider?: string, model?: string, agentOverrides?: Record<string, unknown>, repoId?: string, workspaceId?: string) => {
-      const session = await api.createSession(provider, model, agentOverrides, repoId, workspaceId);
+    async (
+      provider?: string,
+      model?: string,
+      agentOverrides?: Record<string, unknown>,
+      repoId?: string,
+      workspaceId?: string,
+      createOverride?: (args: { provider?: string; model?: string; agentOverrides?: Record<string, unknown>; repoId?: string; workspaceId?: string }) => Promise<ChatSession>,
+    ) => {
+      const session = createOverride
+        ? await createOverride({ provider, model, agentOverrides, repoId, workspaceId })
+        : await api.createSession(provider, model, agentOverrides, repoId, workspaceId);
       setSessions(prev => [session, ...prev]);
       setActiveSessionId(session._id);
       setMessages([]);
@@ -842,6 +857,12 @@ export function useChat() {
       createdAt: new Date().toISOString(),
     };
     setMessages(prev => [...prev, userMsg]);
+
+    // Notify sidebar that a workspace-linked session has new activity
+    {
+      const ws = sessionsRef.current.find(s => s._id === sessionId);
+      window.dispatchEvent(new CustomEvent('allen:workspace-activity', { detail: { workspaceId: ws?.workspaceId ?? null } }));
+    }
 
     const abortController = new AbortController();
     abortRef.current = abortController;
@@ -946,6 +967,12 @@ export function useChat() {
                   setActiveToolCalls([]);
 
                   setAgentReports([]);
+
+                  // Notify sidebar that a workspace-linked session has new activity
+                  {
+                    const ws = sessionsRef.current.find(s => s._id === sessionId);
+                    window.dispatchEvent(new CustomEvent('allen:workspace-activity', { detail: { workspaceId: ws?.workspaceId ?? null } }));
+                  }
                   break;
                 }
 

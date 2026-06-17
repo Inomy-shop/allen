@@ -6,6 +6,35 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-06-17
+
+Highlights since `v0.1.12`.
+
+### Added
+
+- **Multi-window desktop support** (`packages/desktop/src/main.ts`): replaces the single-window `mainWindow` singleton with a `Set<BrowserWindow>` window collection supporting multiple independent windows, each connected to the same shared backend.
+  - **Window creation**: File → New Window (Cmd+N) menu item, macOS Dock right-click → New Window. No in-app new-window buttons (desktop-native entry points only, per PRD D9).
+  - **Shared runtime**: all windows load from the same `serverHandle.baseUrl` — one backend, multiple clients.
+  - **Independent navigation**: each window has its own `webContents`; navigating one does not affect others.
+  - **Lifecycle**: closing one window does not stop the shared runtime or close other windows. Explicit Quit (Cmd+Q) stops everything. `window-all-closed` is a no-op on all platforms.
+  - **Focused-window targeting**: menu actions (Open Chat, Open Workspaces, Open Settings) and dialogs (Show Diagnostics, Export Support Bundle, directory picker) target the focused window via `getTargetWindow()` fallback chain.
+  - **Update prompts**: routed to the focused window only; skipped and logged when no window exists.
+  - **Crash recovery**: renderer-crash dialog changed from "Reload Window / Quit" to "Reload Window / Close Window" — closing one crashed window does not affect others.
+  - **New test file** (`packages/desktop/src/main.test.ts`): 27 unit tests covering `getTargetWindow` fallback ordering, `handleWindowClosed` state updates, `getSecondInstanceTarget`, `shouldKeepAppAliveOnWindowClosed`, and `shouldCreateWindowOnActivate` predicates.
+  - **Covers**: AC1–AC19, R1–R15, D1–D9.
+
+- **Design Studio** (`packages/server`, `packages/ui`): a new Allen Design surface with design workspaces, sessions, profile review, discovery, generation, preview, variants, version history, and export. Adds repo-context and request modes so designs can be grounded in a repository. New backend routes/services and a full Design Studio UI; docs under `docs/design-studio.md`.
+
+- **Drag-and-drop file uploads everywhere** (`packages/ui`): the entire chat page, dashboard, and workspace embedded chat now act as file drop zones that upload and attach dropped files to that surface's composer, instead of only the small composer field. New `useFileDropZone` hook.
+
+- **PRD ensemble workflow seed** (`packages/engine`): seeded `requirement-to-prd-ensemble` workflow that takes a repo path and a requirement, fans out to three parallel `requirements-analyst` drafts (claude-opus-4-8, gpt-5.5, deepseek-v4-pro), and synthesizes a PRD.
+
+- **Workspace setup cancellation** (`packages/server`, `packages/ui`): in-progress workspace setup can now be cancelled from the setup progress dialog.
+
+### Fixed
+
+- **Workspace sidebar ordering** (`packages/server`, `packages/ui`): workspaces are now ordered by the most recent chat message linked to each workspace, kept live without polling.
+
 ## [0.1.12] - 2026-06-16
 
 ### Fixed

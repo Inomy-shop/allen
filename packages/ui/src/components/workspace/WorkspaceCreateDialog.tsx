@@ -22,6 +22,7 @@ interface Props {
   onClose: () => void;
   onCreated: (workspace: any) => void;
   onCreatedPending?: (workspace: any) => void;
+  onCancelledPending?: (workspaceId: string) => void;
 }
 
 const FORM_INPUT_CLASS = 'h-9 w-full rounded-md border border-app bg-app px-3 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]';
@@ -31,7 +32,7 @@ const DIALOG_PANEL_CLASS = 'overflow-hidden rounded-md border border-app bg-app-
 const SECONDARY_BUTTON_CLASS = 'inline-flex h-9 items-center justify-center rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:bg-app-muted hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-50';
 const PRIMARY_BUTTON_CLASS = 'inline-flex h-9 items-center justify-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50';
 
-export function WorkspaceCreateDialog({ repo, onClose, onCreated, onCreatedPending }: Props) {
+export function WorkspaceCreateDialog({ repo, onClose, onCreated, onCreatedPending, onCancelledPending }: Props) {
   const [branch, setBranch] = useState('');
   const defaultBaseBranch = workspaceCreateBaseBranch(repo);
   const [baseBranch, setBaseBranch] = useState(defaultBaseBranch);
@@ -90,6 +91,12 @@ export function WorkspaceCreateDialog({ repo, onClose, onCreated, onCreatedPendi
           setPendingId(null);
           setCreating(false);
           setError(message || 'Setup failed.');
+        }}
+        onCancel={(workspaceId) => {
+          setPendingId(null);
+          setCreating(false);
+          onCancelledPending?.(workspaceId);
+          onClose();
         }}
       />
     );

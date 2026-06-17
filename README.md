@@ -162,6 +162,8 @@ See [`docs/first-workflow.md`](docs/first-workflow.md) for a step-by-step walkth
 
 **Executions & traces.** The Executions page lists running and recent runs (paginated, filterable). Drill into any execution for the node timeline, per-node logs, tool calls with payloads, token usage breakdown (cached input, non-cached input, output — per-node and execution totals), cost accounting, checkpoints, and artifacts.
 
+**Multi-window desktop.** The Electron desktop app supports multiple independent windows (File → New Window, Cmd+N, or macOS Dock right-click → New Window). Each window shares the same backend but navigates independently — working in one window on Chat while another browses Workspaces, for instance. Closing a window does not shut down the shared runtime or affect other open windows. See [Desktop module](docs/modules/desktop.md).
+
 **Interventions.** When a workflow hits a human node it creates an intervention (approval / question / escalation) with a deadline. The Interventions page lists what needs you; answering resumes the run.
 
 **Tickets (Linear).** Browse and filter Linear issues, mark a preferred agent, and dispatch a ticket to an agent or a workflow. Allen creates a workspace from a chosen repo and runs the agent with the ticket as the prompt. Allen reads issues and tracks assignment locally; write-back happens through the Linear MCP server.

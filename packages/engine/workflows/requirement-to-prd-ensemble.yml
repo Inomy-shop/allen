@@ -1,0 +1,229 @@
+name: requirement-to-prd-ensemble
+description: >
+  Ensemble PRD creation workflow. Takes a raw user requirement and fans out
+  into three parallel requirements-analyst nodes (each on a different
+  configured model) to produce diverse draft PRDs. A product-manager
+  synthesizer combines the best elements from all drafts into a final PRD,
+  then routes it through a human review gate for approval, feedback-driven
+  retry, or rejection.
+
+version: 1
+
+context:
+  requires: []
+  tools: []
+  concurrency: 3
+
+input:
+  user_requirement:
+    type: string
+    required: true
+    widget: textarea
+    label: User requirement
+    description: The raw user requirement or feature request in natural language.
+    placeholder: "e.g. We need a way for users to bookmark their favourite workflows so they can quickly access them from a pinned list."
+  product_context:
+    type: string
+    required: false
+    widget: textarea
+    label: Product context (optional)
+    description: Background information about the product, existing features, or strategic goals.
+  target_audience_hint:
+    type: string
+    required: false
+    widget: text
+    label: Target audience hint (optional)
+    description: Who the feature is for — e.g. "internal admin users", "external customers on the free tier".
+  repo_path:
+    type: string
+    required: true
+    widget: repo_picker
+    label: Target repo
+    description: The repository path the PRD targets. Pass a registered repo path or worktree path so agents can inspect the existing codebase to ground the PRD in real project conventions, tech stack, and architecture.
+    placeholder: "e.g. /Users/me/.allen/repositories/my-project"
+
+nodes:
+  draft_prd_v1:
+    agent: requirements-analyst
+    agentOverrides:
+      model: claude-opus-4-8
+    prompt: |
+      You are writing a comprehensive Product Requirements Document (PRD).
+      Work from the user requirement and optional context below.
+
+      USER REQUIREMENT:
+      {{user_requirement}}
+
+      PRODUCT CONTEXT:
+      {{default product_context "Not provided."}}
+
+      TARGET AUDIENCE HINT:
+      {{default target_audience_hint "Not provided."}}
+
+      REPO PATH: {{repo_path}}
+
+      Inspect the repository to understand the existing codebase — read
+      package.json, config files, directory structure, and existing patterns —
+      and ground the PRD in real project conventions, tech stack, and
+      architecture.
+
+      Produce a detailed PRD with executive summary, problem statement, goals,
+      functional requirements (REQ-XXX), acceptance criteria (AC-XXX in
+      Given/When/Then form), edge cases (EC-XXX), non-functional requirements
+      (NFR-XXX), dependencies, and open questions.
+
+      Save the complete PRD as a markdown artifact and return only the artifact
+      URL plus a short summary (under 500 characters) of the key focus areas.
+    outputs:
+      draft_prd_1_artifact_url: "URL of the saved draft 1 PRD artifact."
+      draft_prd_1_summary: "Short summary (under 500 chars) of draft 1 focus areas."
+
+  draft_prd_v2:
+    agent: requirements-analyst
+    agentOverrides:
+      provider: codex
+      model: gpt-5.5
+    prompt: |
+      You are writing a comprehensive Product Requirements Document (PRD).
+      Work from the user requirement and optional context below.
+
+      USER REQUIREMENT:
+      {{user_requirement}}
+
+      PRODUCT CONTEXT:
+      {{default product_context "Not provided."}}
+
+      TARGET AUDIENCE HINT:
+      {{default target_audience_hint "Not provided."}}
+
+      REPO PATH: {{repo_path}}
+
+      Inspect the repository to understand the existing codebase — read
+      package.json, config files, directory structure, and existing patterns —
+      and ground the PRD in real project conventions, tech stack, and
+      architecture.
+
+      Produce a detailed PRD with executive summary, problem statement, goals,
+      functional requirements (REQ-XXX), acceptance criteria (AC-XXX in
+      Given/When/Then form), edge cases (EC-XXX), non-functional requirements
+      (NFR-XXX), dependencies, and open questions.
+
+      Save the complete PRD as a markdown artifact and return only the artifact
+      URL plus a short summary (under 500 characters) of the key focus areas.
+    outputs:
+      draft_prd_2_artifact_url: "URL of the saved draft 2 PRD artifact."
+      draft_prd_2_summary: "Short summary (under 500 chars) of draft 2 focus areas."
+
+  draft_prd_v3:
+    agent: requirements-analyst
+    agentOverrides:
+      provider: deepseek
+      model: deepseek-v4-pro[1m]
+    prompt: |
+      You are writing a comprehensive Product Requirements Document (PRD).
+      Work from the user requirement and optional context below.
+
+      USER REQUIREMENT:
+      {{user_requirement}}
+
+      PRODUCT CONTEXT:
+      {{default product_context "Not provided."}}
+
+      TARGET AUDIENCE HINT:
+      {{default target_audience_hint "Not provided."}}
+
+      REPO PATH: {{repo_path}}
+
+      Inspect the repository to understand the existing codebase — read
+      package.json, config files, directory structure, and existing patterns —
+      and ground the PRD in real project conventions, tech stack, and
+      architecture.
+
+      Produce a detailed PRD with executive summary, problem statement, goals,
+      functional requirements (REQ-XXX), acceptance criteria (AC-XXX in
+      Given/When/Then form), edge cases (EC-XXX), non-functional requirements
+      (NFR-XXX), dependencies, and open questions.
+
+      Save the complete PRD as a markdown artifact and return only the artifact
+      URL plus a short summary (under 500 characters) of the key focus areas.
+    outputs:
+      draft_prd_3_artifact_url: "URL of the saved draft 3 PRD artifact."
+      draft_prd_3_summary: "Short summary (under 500 chars) of draft 3 focus areas."
+
+  synthesize_prd:
+    agent: product-manager
+    agentOverrides:
+      model: claude-opus-4-8
+    prompt: |
+      You are the Product Manager. Three parallel requirements-analyst agents
+      (each on a different configured model) have produced independent PRD
+      draft artifacts. Fetch each draft URL, read the full content, and
+      synthesise the BEST elements into one coherent final PRD.
+
+      ORIGINAL USER REQUIREMENT:
+      {{user_requirement}}
+
+      PRODUCT CONTEXT:
+      {{default product_context "Not provided."}}
+
+      TARGET AUDIENCE HINT:
+      {{default target_audience_hint "Not provided."}}
+
+      REPO PATH: {{repo_path}}
+
+      Inspect the repository briefly to align the synthesised PRD with actual
+      project structure and existing patterns.
+
+      DRAFT 1 ARTIFACT URL: {{draft_prd_1_artifact_url}}
+      DRAFT 2 ARTIFACT URL: {{draft_prd_2_artifact_url}}
+      DRAFT 3 ARTIFACT URL: {{draft_prd_3_artifact_url}}
+
+      {{#if retry_context}}
+      HUMAN FEEDBACK (for retry):
+      {{retry_context}}
+      {{/if}}
+
+      Before synthesising, fetch the content of each draft artifact URL.
+      Then:
+      1. Resolve conflicts — prioritise completeness and clarity.
+      2. Merge overlapping requirements and acceptance criteria.
+      3. Renumber REQ/AC/EC/NFR IDs sequentially.
+      4. Fill gaps, remove contradictions.
+      5. Save the final synthesised PRD as a markdown artifact.
+    outputs:
+      final_prd_artifact_url: "URL of the saved final PRD artifact."
+      synthesis_notes: "Key synthesis decisions and rationale."
+
+  review_prd:
+    type: human
+    human:
+      kind: review
+      widget: approval_gate
+      title: "Review final PRD"
+      summary: "The ensemble PRD has been synthesised. Review and approve, request changes with feedback, or reject."
+      question: "Does the final PRD accurately capture the requirements?"
+      highlights:
+        - "Synthesis notes: {{synthesis_notes}}"
+      evidence:
+        - label: "Final PRD"
+          url: "{{final_prd_artifact_url}}"
+    prompt: |
+      The ensemble PRD has been synthesised from three independent drafts.
+      Review it and choose:
+      - **Approve** — the PRD is ready and complete.
+      - **Request changes** — provide feedback for the synthesizer to retry.
+      - **Reject** — the requirement cannot produce a valid PRD.
+
+edges:
+  - { from: START, to: [draft_prd_v1, draft_prd_v2, draft_prd_v3], parallel: true }
+
+  - { from: [draft_prd_v1, draft_prd_v2, draft_prd_v3], to: synthesize_prd }
+
+  - { from: synthesize_prd, to: review_prd }
+
+  # Human gate outcomes
+  - { from: review_prd, to: END, condition: "human.review_prd.latest.decision == 'approve'" }
+  - { from: review_prd, to: END, condition: "human.review_prd.latest.decision == 'reject'" }
+  - { from: review_prd, to: synthesize_prd, condition: "human.review_prd.latest.decision == 'request_changes'", max_retries: 3, retry_context: "Human feedback on final PRD:\n{{human.review_prd.latest.feedback.value}}" }
+  # Terminal fallback when retry budget is exhausted
+  - { from: review_prd, to: END, condition: "human.review_prd.latest.decision == 'request_changes' AND __retry_exhausted_from == 'review_prd'" }
