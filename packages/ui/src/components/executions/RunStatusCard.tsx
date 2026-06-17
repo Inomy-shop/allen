@@ -200,7 +200,7 @@ function MetaCell({
     </>
   );
 
-  const className = "flex min-w-0 items-center gap-2 rounded-md border border-app/70 bg-surface-50/60 px-2 py-1.5";
+  const className = "flex min-w-0 items-center gap-2 rounded-md border border-app bg-surface-50/60 px-2 py-1.5";
 
   if (!href) return <div className={className}>{body}</div>;
   if (external) {
