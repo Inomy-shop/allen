@@ -11,6 +11,7 @@ This is a **fresh build**, intentionally independent of the legacy `design_*`
 collections/services. It lives under its own namespace:
 
 - UI routes: `/studio`, `/studio/workspaces/:id`, `/studio/sessions/:id`
+- Sidebar panel: accessible from the left dot in the expanded app sidebar carousel — lists Design Studio workspaces with compact status badges, search/filter, and a + button to create new workspaces. On `/design` routes, the sidebar switches to a `DesignNavPanel` that shows design-session history instead.
 - API: `/api/design-studio/*`
 - Unauthenticated preview/static site: `/dstudio-preview/:token/:file`, `/dstudio-site/:workspaceId/:file`
 - Mongo collections: `dstudio_workspaces`, `dstudio_sessions`, `dstudio_versions`, `dstudio_messages`

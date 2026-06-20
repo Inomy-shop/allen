@@ -7,6 +7,7 @@ import ClarificationPanel, {
   type ClarificationField,
   type ClarificationSeverity,
 } from '../clarification/ClarificationPanel';
+import ModelRecoveryPrompt from './ModelRecoveryPrompt';
 
 export type WorkflowInterventionFieldLike = {
   name: string;
@@ -24,8 +25,8 @@ export type WorkflowInterventionLike = {
   intervention_id?: string;
   status?: string;
   stage?: string;
-  kind?: 'clarify' | 'review' | 'recover';
-  widget?: 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate';
+  kind?: 'clarify' | 'review' | 'recover' | 'model_recovery';
+  widget?: 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate' | 'model_recovery';
   severity?: string;
   title?: string;
   question?: string;
@@ -41,6 +42,18 @@ export type WorkflowInterventionLike = {
   review_content_type?: 'markdown' | 'json' | 'code' | 'text';
   review_language?: string;
   retry_exhaustion?: Record<string, unknown>;
+  /** Model recovery context — populated when kind is 'model_recovery'. */
+  recoveryContext?: {
+    failedProvider: string;
+    failedModel: string;
+    failureCategory: string;
+    sanitizedError: string;
+    isParallelBranch: boolean;
+    siblingBranches?: string[];
+    joinPolicy?: 'wait-all' | 'wait-any' | 'fail-fast';
+    attempt: number;
+    maxAttempts: number;
+  };
 };
 
 export type WorkflowInterventionRunLike = {
@@ -257,22 +270,48 @@ export function WorkflowInterventionDialog({
           </div>
         </div>
         <div className="min-h-0 overflow-auto">
-          <ClarificationPanel
-            layout="modal"
-            title={model.title ?? title}
-            subtitle={activeIntervention.stage ? `node · ${activeIntervention.stage}` : `execution · ${run.executionId.slice(0, 8)}`}
-            prompt={question}
-            severity={model.severity}
-            fields={model.visibleFields}
-            mode={model.mode}
-            docs={docs}
-            reviewContent={reviewContent.content}
-            reviewContentType={reviewContent.type}
-            reviewLanguage={activeIntervention.review_language}
-            submitting={submitting}
-            onSubmit={submit}
-            onCancel={onClose}
-          />
+          {activeIntervention.widget === 'model_recovery' && activeIntervention.recoveryContext ? (
+            <div className="p-4">
+              <ModelRecoveryPrompt
+                executionId={run.executionId}
+                interventionId={activeIntervention.intervention_id}
+                node={activeIntervention.stage ?? run.runContext?.progress?.currentStep ?? ''}
+                failedProvider={activeIntervention.recoveryContext.failedProvider}
+                failedModel={activeIntervention.recoveryContext.failedModel}
+                failureCategory={activeIntervention.recoveryContext.failureCategory}
+                sanitizedError={activeIntervention.recoveryContext.sanitizedError}
+                isParallelBranch={activeIntervention.recoveryContext.isParallelBranch}
+                siblingBranches={activeIntervention.recoveryContext.siblingBranches}
+                joinPolicy={activeIntervention.recoveryContext.joinPolicy}
+                attempt={activeIntervention.recoveryContext.attempt}
+                maxAttempts={activeIntervention.recoveryContext.maxAttempts}
+                onSubmitted={() => { onClose(); onAnswer?.({
+                  executionId: run.executionId,
+                  interventionId: activeIntervention.intervention_id,
+                  decision: 'answer',
+                  fieldValues: {},
+                }); }}
+                onCancelled={() => { onClose(); }}
+              />
+            </div>
+          ) : (
+            <ClarificationPanel
+              layout="modal"
+              title={model.title ?? title}
+              subtitle={activeIntervention.stage ? `node · ${activeIntervention.stage}` : `execution · ${run.executionId.slice(0, 8)}`}
+              prompt={question}
+              severity={model.severity}
+              fields={model.visibleFields}
+              mode={model.mode}
+              docs={docs}
+              reviewContent={reviewContent.content}
+              reviewContentType={reviewContent.type}
+              reviewLanguage={activeIntervention.review_language}
+              submitting={submitting}
+              onSubmit={submit}
+              onCancel={onClose}
+            />
+          )}
         </div>
         {error && (
           <div className="border-t border-app px-6 py-3 text-[12px] text-accent-red">

@@ -31,7 +31,8 @@ import { ExecutionService } from '../services/execution.service.js';
 import { ContextEvaluationService } from '../services/context/evaluation/context-evaluation.service.js';
 import { isContextEngineEnabled } from '../services/context/config/context-provider-config.js';
 import { param } from '../types.js';
-import { buildHumanResumeInput, renderHumanIntervention, type HumanInterventionPayload } from '@allen/engine';
+import { buildHumanResumeInput, renderHumanIntervention, sanitizeErrorSummary, type HumanInterventionPayload } from '@allen/engine';
+import { ModelRegistryService } from '../services/model-registry.service.js';
 
 export function interventionRoutes(db: Db): Router {
   const router = Router();
@@ -313,6 +314,48 @@ export function interventionRoutes(db: Db): Router {
         }
       }
 
+      // ── RETRY WITH MODEL → submit recovery override to engine ──
+      if (decision === 'retry_with_model') {
+        const nodeName = human_node_name ?? existing.stage;
+        const payloadProvider = req.body?.provider as string | undefined;
+        const payloadModel = req.body?.model as string | undefined;
+        const payloadEffort = req.body?.reasoning_effort as string | undefined;
+
+        if (!payloadProvider || !payloadModel) {
+          return res.status(400).json({ error: 'provider and model are required for retry_with_model', code: 'invalid_body' });
+        }
+
+        // Validate provider + model against registry
+        const modelReg = new ModelRegistryService(db);
+        const registryEntry = await modelReg.getByFullId(payloadProvider, payloadModel);
+        if (!registryEntry) {
+          const providerModels = await modelReg.list({ provider: payloadProvider, includeInactive: false });
+          if (providerModels.length === 0) {
+            return res.status(400).json({ error: `Unknown provider: ${payloadProvider}`, code: 'invalid_provider' });
+          }
+          return res.status(400).json({ error: `Model "${payloadModel}" not found for provider "${payloadProvider}"`, code: 'invalid_model' });
+        }
+
+        const recoveryPayload: Record<string, unknown> = {
+          provider: payloadProvider,
+          model: payloadModel,
+          reasoning_effort: payloadEffort,
+        };
+
+        try {
+          await executionService.submitInput(existing.workflow_run_id, nodeName, recoveryPayload);
+        } catch (err) {
+          console.error('[intervention.respond] model_recovery submitInput failed:', err);
+          return res.status(500).json({ error: sanitizeErrorSummary((err as Error).message), code: 'retry_failed' });
+        }
+
+        retry_triggered = {
+          target_node: nodeName,
+          retry_attempt: Number((existing.recoveryContext as Record<string, unknown> | undefined)?.attempt ?? 1),
+          retry_source: 'model_recovery',
+        };
+      }
+
       // ── REJECT → cancel ──
       if (decision === 'reject') {
         const originalFields = (existing as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
@@ -411,16 +454,17 @@ function toHumanInterventionPayload(doc: {
   actions?: Array<any>;
   evidence?: Array<any>;
   retry_exhaustion?: Record<string, unknown>;
+  recoveryContext?: Record<string, unknown>;
 }): HumanInterventionPayload {
   return {
-    kind: doc.kind === 'clarify' || doc.kind === 'review' || doc.kind === 'recover'
+    kind: doc.kind === 'clarify' || doc.kind === 'review' || doc.kind === 'recover' || doc.kind === 'model_recovery'
       ? doc.kind
       : doc.severity === 'approval'
         ? 'review'
         : doc.severity === 'escalation'
           ? 'recover'
         : 'clarify',
-    widget: doc.widget === 'dynamic_form' || doc.widget === 'approval_gate' || doc.widget === 'retry_exhausted_gate' || doc.widget === 'escalation_gate'
+    widget: doc.widget === 'dynamic_form' || doc.widget === 'approval_gate' || doc.widget === 'retry_exhausted_gate' || doc.widget === 'escalation_gate' || doc.widget === 'model_recovery'
       ? doc.widget
       : undefined,
     node: doc.stage,
@@ -453,6 +497,7 @@ function toHumanInterventionPayload(doc: {
     })).filter((action) => action.id),
     evidence: doc.evidence as HumanInterventionPayload['evidence'],
     retryExhaustion: doc.retry_exhaustion as HumanInterventionPayload['retryExhaustion'],
+    recoveryContext: doc.recoveryContext as HumanInterventionPayload['recoveryContext'],
   };
 }
 

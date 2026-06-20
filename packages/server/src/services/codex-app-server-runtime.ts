@@ -56,6 +56,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
   private threadId = '';
   private threadCwd = '';
   private threadModel = '';
+  private activeTurnId?: string;
   private providerSessionId = '';
   private latestThreadStatus: Record<string, unknown> = { type: 'notLoaded' };
   private latestTokenUsage?: Record<string, unknown>;
@@ -97,7 +98,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
       data: { threadId: this.threadId, promptPreview: prompt.slice(0, 300) },
     });
 
-    await this.request('turn/start', {
+    const turnStartResult = await this.request('turn/start', {
       threadId: this.threadId,
       cwd: input.cwd ?? AGENT_FALLBACK_CWD,
       model: input.model,
@@ -105,6 +106,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
       approvalPolicy: 'never',
       input: [{ type: 'text', text: prompt, text_elements: [] }],
     });
+    this.activeTurnId = typeof turnStartResult?.turnId === 'string' ? turnStartResult.turnId : (typeof turnStartResult?.id === 'string' ? turnStartResult.id : undefined);
 
     return completion;
   }
@@ -152,6 +154,76 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
     return completion;
   }
 
+  /** Inject a user message into the active turn mid-stream via Codex `turn/steer`.
+   *  Returns `true` if the injection was accepted, `false` if no active turn or turn id. */
+  steer(text: string): boolean {
+    if (!this.currentTurn) {
+      logRuntimeEvent({
+        db: this.createInput.db,
+        sessionId: this.createInput.chatSessionId,
+        provider: this.provider,
+        runtimeId: this.id,
+        eventType: 'lifecycle',
+        event: 'runtime_steer_declined',
+        data: { reason: 'no_current_turn', threadId: this.threadId },
+      });
+      return false;
+    }
+    if (!this.activeTurnId) {
+      logRuntimeEvent({
+        db: this.createInput.db,
+        sessionId: this.createInput.chatSessionId,
+        provider: this.provider,
+        runtimeId: this.id,
+        eventType: 'lifecycle',
+        event: 'runtime_steer_declined',
+        data: { reason: 'no_active_turn_id', threadId: this.threadId },
+      });
+      return false;
+    }
+    if (this.closed) {
+      logRuntimeEvent({
+        db: this.createInput.db,
+        sessionId: this.createInput.chatSessionId,
+        provider: this.provider,
+        runtimeId: this.id,
+        eventType: 'lifecycle',
+        event: 'runtime_steer_declined',
+        data: { reason: 'closed', threadId: this.threadId },
+      });
+      return false;
+    }
+
+    logRuntimeEvent({
+      db: this.createInput.db,
+      sessionId: this.createInput.chatSessionId,
+      provider: this.provider,
+      runtimeId: this.id,
+      eventType: 'lifecycle',
+      event: 'runtime_steer',
+      data: { threadId: this.threadId, expectedTurnId: this.activeTurnId, textPreview: text.slice(0, 300) },
+    });
+
+    // Fire-and-forget: the steered input flows through existing notifications.
+    this.request('turn/steer', {
+      threadId: this.threadId,
+      expectedTurnId: this.activeTurnId,
+      input: [{ type: 'text', text, text_elements: [] }],
+    }).catch((err) => {
+      logRuntimeEvent({
+        db: this.createInput.db,
+        sessionId: this.createInput.chatSessionId,
+        provider: this.provider,
+        runtimeId: this.id,
+        eventType: 'lifecycle',
+        event: 'runtime_steer_error',
+        data: { threadId: this.threadId, expectedTurnId: this.activeTurnId, error: (err as Error).message },
+      });
+    });
+
+    return true;
+  }
+
   async close(reason: string): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -171,6 +243,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
     this.pending.clear();
     this.currentTurn?.reject(new Error(`Codex runtime closed: ${reason}`));
     this.currentTurn = undefined;
+    this.activeTurnId = undefined;
     this.proc?.stdin.end();
     setTimeout(() => {
       try { this.proc?.kill('SIGTERM'); } catch {}
@@ -281,7 +354,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
       if (command.args.trim()) {
         items.push({ type: 'text', text: command.args.trim(), text_elements: [] });
       }
-      await this.request('turn/start', {
+      const skillTurnResult = await this.request('turn/start', {
         threadId: this.threadId,
         cwd: input.cwd ?? AGENT_FALLBACK_CWD,
         model: input.model,
@@ -289,6 +362,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
         approvalPolicy: 'never',
         input: items,
       });
+      this.activeTurnId = typeof skillTurnResult?.turnId === 'string' ? skillTurnResult.turnId : (typeof skillTurnResult?.id === 'string' ? skillTurnResult.id : undefined);
       return;
     }
 
@@ -411,6 +485,12 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
       return;
     }
 
+    if (method === 'turn/started') {
+      const turnId = typeof params.turnId === 'string' ? params.turnId : (typeof (params.turn as { id?: string } | undefined)?.id === 'string' ? (params.turn as { id?: string }).id : undefined);
+      if (turnId) this.activeTurnId = turnId;
+      return;
+    }
+
     if (!turn) return;
 
     if (method === 'item/agentMessage/delta') {
@@ -454,6 +534,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
       const done = this.currentTurn;
       if (!done) return;
       this.currentTurn = undefined;
+      this.activeTurnId = undefined;
       done.tokenUsage = normalizeCodexRuntimeUsage(params.usage ?? params.tokenUsage ?? done.tokenUsageSnapshot);
       if (!done.text.trim()) {
         const fallback = slashCommandFallback(done.slashCommand);
@@ -646,6 +727,7 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
     const done = this.currentTurn;
     if (!done) return;
     this.currentTurn = undefined;
+    this.activeTurnId = undefined;
     done.trace.push({ timestamp: new Date(), type: 'complete', text: reason });
     done.resolve({
       text: done.text,

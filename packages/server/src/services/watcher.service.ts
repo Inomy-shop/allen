@@ -246,6 +246,7 @@ export function generateStatusText(input: StatusTextInput): string {
 // ── WatcherService ─────────────────────────────────────────────────────────
 
 const COLLECTION = 'execution_watchers';
+const WATCHER_POLL_SWEEP_INTERVAL_MS = 10_000;
 
 export class WatcherService {
   private db: Db;
@@ -469,6 +470,66 @@ export class WatcherService {
     logger.info('[watcher] Replaced', {
       component: 'watcher',
       executionId,
+    });
+  }
+
+  // ── Chat-Owned Cancellation ───────────────────────────────────────────
+  // When the owning chat interrupts an execution, the watcher should leave
+  // the visible active/waiting set immediately. This is different from an
+  // execution reaching "cancelled" on its own: chat cancellation already is
+  // the user-facing event, so no hidden watcher_cancelled wake-up is needed.
+
+  async resolveForChatCancellation(executionId: string): Promise<void> {
+    const existing = await this.col.findOne({ executionId });
+    if (!existing) return;
+
+    const nowDate = now();
+    const updateSeq = existing.updateSeq + 1;
+    const latestStatusText = 'Execution cancelled because the owning chat was interrupted.';
+
+    await this.col.updateOne(
+      { executionId },
+      {
+        $set: {
+          watcherStatus: 'resolved',
+          executionState: 'cancelled',
+          triggerSentForState: 'cancelled',
+          latestStatusText,
+          nextPollAt: new Date(nowDate.getTime() + 86_400_000),
+          lastCheckedAt: nowDate,
+          updateSeq,
+          updatedAt: nowDate,
+        },
+      },
+    );
+
+    const updatePayload = {
+      executionId,
+      chatSessionId: existing.chatSessionId,
+      watcherStatus: 'resolved',
+      latestStatusText,
+      executionState: 'cancelled',
+      triggerSentForState: 'cancelled',
+      lastCheckedAt: nowDate.toISOString(),
+      updateSeq,
+    };
+
+    this.chatService.broadcastToSession(existing.chatSessionId, 'watcher_update', updatePayload);
+
+    try {
+      const { broadcastToExecution } = await import('./stream.service.js');
+      broadcastToExecution(executionId, {
+        event: 'watcher_update',
+        data: updatePayload,
+      });
+    } catch {
+      // stream.service not available — non-critical
+    }
+
+    logger.info('[watcher] Resolved after chat cancellation', {
+      component: 'watcher',
+      executionId,
+      chatSessionId: existing.chatSessionId,
     });
   }
 
@@ -834,7 +895,8 @@ export class WatcherService {
   }
 
   // ── Background Poller ──────────────────────────────────────────────────
-  // TDD §3.1 — sweep every 30s
+  // TDD §3.1 — sweep every 10s so open chat sessions receive live watcher
+  // updates without requiring manual refresh.
 
   startPoller(): void {
     if (this.pollTimer) return;
@@ -872,7 +934,7 @@ export class WatcherService {
       } finally {
         this.pollingInFlight = false;
       }
-    }, 30_000);
+    }, WATCHER_POLL_SWEEP_INTERVAL_MS);
   }
 
   stopPoller(): Promise<void> {

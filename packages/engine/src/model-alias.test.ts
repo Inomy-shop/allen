@@ -44,6 +44,20 @@ describe('normalizeModelAlias', () => {
     expect(normalizeModelAlias('deepseek-v4-pro[1m]')).toBe('deepseek-v4-pro[1m]');
   });
 
+  // ── Z.AI / GLM identity passthrough ──
+
+  it('passes through Z.AI model "glm-5.2[1m]" unchanged', () => {
+    expect(normalizeModelAlias('glm-5.2[1m]')).toBe('glm-5.2[1m]');
+  });
+
+  it('passes through Z.AI model "glm-4.7" unchanged', () => {
+    expect(normalizeModelAlias('glm-4.7')).toBe('glm-4.7');
+  });
+
+  it('passes through Z.AI model "glm-4.5-flash" unchanged', () => {
+    expect(normalizeModelAlias('glm-4.5-flash')).toBe('glm-4.5-flash');
+  });
+
   // ── Registry aliasMap resolution ──
 
   it('resolves alias via aliasMap when provided', () => {

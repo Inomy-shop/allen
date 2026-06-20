@@ -349,11 +349,23 @@ describe('Kimi provider registry', () => {
   });
 });
 
+describe('zai (GLM/Z.AI) provider', () => {
+  it('zai is in PROVIDERS with correct shape', () => {
+    const zai = PROVIDERS.find(p => p.provider === 'zai');
+    expect(zai).toBeDefined();
+    expect(zai?.label).toBe('GLM/Z.AI');
+    expect(zai?.open).toBe(true);
+    expect(zai?.modelSuggestions).toContain('glm-5.2[1m]');
+    expect(zai?.modelSuggestions).toContain('glm-4.7');
+    expect(zai?.requiresKey).toBe('ALLEN_ZAI_API_KEY');
+  });
+});
+
 describe('enabled provider registry', () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
-    for (const key of ['ALLEN_DEEPSEEK_API_KEY', 'ALLEN_XIAOMI_MIMO_API_KEY', 'ALLEN_KIMI_API_KEY']) {
+    for (const key of ['ALLEN_DEEPSEEK_API_KEY', 'ALLEN_XIAOMI_MIMO_API_KEY', 'ALLEN_KIMI_API_KEY', 'ALLEN_ZAI_API_KEY']) {
       if (originalEnv[key] === undefined) delete process.env[key];
       else process.env[key] = originalEnv[key];
     }
@@ -363,28 +375,33 @@ describe('enabled provider registry', () => {
     delete process.env.ALLEN_DEEPSEEK_API_KEY;
     delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
     delete process.env.ALLEN_KIMI_API_KEY;
+    delete process.env.ALLEN_ZAI_API_KEY;
 
     const providers = await getEnabledProvidersInDefaultOrder();
     expect(providers.map((provider) => provider.provider)).toEqual(expect.arrayContaining(['codex', 'claude']));
     expect(providers.some((provider) => provider.provider === 'deepseek')).toBe(false);
     expect(providers.some((provider) => provider.provider === 'xiaomi-mimo')).toBe(false);
     expect(providers.some((provider) => provider.provider === 'kimi')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'zai')).toBe(false);
   });
 
   it('shows a Claude-compatible API provider when its key is configured', async () => {
     process.env.ALLEN_DEEPSEEK_API_KEY = 'deepseek-key';
     delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
     delete process.env.ALLEN_KIMI_API_KEY;
+    delete process.env.ALLEN_ZAI_API_KEY;
 
     const providers = await getEnabledProvidersInDefaultOrder();
     expect(providers.some((provider) => provider.provider === 'deepseek')).toBe(true);
     expect(providers.some((provider) => provider.provider === 'xiaomi-mimo')).toBe(false);
     expect(providers.some((provider) => provider.provider === 'kimi')).toBe(false);
+    expect(providers.some((provider) => provider.provider === 'zai')).toBe(false);
   });
 
   it('shows Kimi when its key is configured', async () => {
     delete process.env.ALLEN_DEEPSEEK_API_KEY;
     delete process.env.ALLEN_XIAOMI_MIMO_API_KEY;
+    delete process.env.ALLEN_KIMI_API_KEY;
     process.env.ALLEN_KIMI_API_KEY = 'kimi-key';
 
     const providers = await getEnabledProvidersInDefaultOrder();
@@ -414,6 +431,11 @@ describe('buildDeepSeekEnvOverlay', () => {
       'ALLEN_KIMI_MODEL',
       'ALLEN_KIMI_OPUS_MODEL',
       'ALLEN_KIMI_FLASH_MODEL',
+      'ALLEN_ZAI_API_KEY',
+      'ALLEN_ZAI_BASE_URL',
+      'ALLEN_ZAI_MODEL',
+      'ALLEN_ZAI_OPUS_MODEL',
+      'ALLEN_ZAI_FLASH_MODEL',
       'ANTHROPIC_BASE_URL',
       'ANTHROPIC_AUTH_TOKEN',
       'ANTHROPIC_MODEL',
@@ -502,6 +524,99 @@ describe('buildDeepSeekEnvOverlay', () => {
   });
 });
 
+describe('Z.AI env overlay (via buildClaudeCompatibleEnvOverlay)', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    resetRuntimeProvidersForTests();
+    for (const key of [
+      'ALLEN_ZAI_API_KEY',
+      'ALLEN_ZAI_BASE_URL',
+      'ALLEN_ZAI_MODEL',
+      'ALLEN_ZAI_OPUS_MODEL',
+      'ALLEN_ZAI_FLASH_MODEL',
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_MODEL',
+    ]) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+    resetRuntimeProvidersForTests();
+  });
+
+  it('throws when ALLEN_ZAI_API_KEY is not set', async () => {
+    delete process.env.ALLEN_ZAI_API_KEY;
+    await expect(buildClaudeCompatibleEnvOverlay('zai')).rejects.toThrow('ALLEN_ZAI_API_KEY');
+  });
+
+  it('returns correct overlay env when key is set', async () => {
+    process.env.ALLEN_ZAI_API_KEY = 'za-test-key';
+    const overlay = await buildClaudeCompatibleEnvOverlay('zai');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://api.z.ai/anthropic');
+    expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('za-test-key');
+    expect(overlay.ANTHROPIC_MODEL).toBe('glm-5.2[1m]');
+    expect(overlay.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('glm-5.2[1m]');
+    expect(overlay.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('glm-5.2[1m]');
+    expect(overlay.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('glm-4.7');
+    expect(overlay.CLAUDE_CODE_SUBAGENT_MODEL).toBe('glm-4.7');
+    expect(overlay.CLAUDE_CODE_EFFORT_LEVEL).toBe('max');
+  });
+
+  it('uses explicit model arg override', async () => {
+    process.env.ALLEN_ZAI_API_KEY = 'za-test-key';
+    const overlay = await buildClaudeCompatibleEnvOverlay('zai', 'glm-4.7');
+    expect(overlay.ANTHROPIC_MODEL).toBe('glm-4.7');
+  });
+
+  it('ALLEN_ZAI_MODEL env override takes precedence over default', async () => {
+    process.env.ALLEN_ZAI_API_KEY = 'za-test-key';
+    process.env.ALLEN_ZAI_MODEL = 'glm-4.7-flash';
+    const overlay = await buildClaudeCompatibleEnvOverlay('zai');
+    expect(overlay.ANTHROPIC_MODEL).toBe('glm-4.7-flash');
+  });
+
+  it('ALLEN_ZAI_OPUS_MODEL env override takes precedence over defaultOpusModel', async () => {
+    process.env.ALLEN_ZAI_API_KEY = 'za-test-key';
+    process.env.ALLEN_ZAI_OPUS_MODEL = 'glm-5';
+    const overlay = await buildClaudeCompatibleEnvOverlay('zai');
+    expect(overlay.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('glm-5');
+  });
+
+  it('ALLEN_ZAI_FLASH_MODEL env override takes precedence over defaultFlashModel', async () => {
+    process.env.ALLEN_ZAI_API_KEY = 'za-test-key';
+    process.env.ALLEN_ZAI_FLASH_MODEL = 'glm-4.5-flash';
+    const overlay = await buildClaudeCompatibleEnvOverlay('zai');
+    expect(overlay.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('glm-4.5-flash');
+  });
+
+  it('ALLEN_ZAI_BASE_URL override takes precedence over defaultBaseUrl', async () => {
+    process.env.ALLEN_ZAI_API_KEY = 'za-test-key';
+    process.env.ALLEN_ZAI_BASE_URL = 'https://custom.z.ai/anthropic';
+    const overlay = await buildClaudeCompatibleEnvOverlay('zai');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://custom.z.ai/anthropic');
+  });
+
+  it('is excluded from enabled providers when key is missing', async () => {
+    delete process.env.ALLEN_ZAI_API_KEY;
+    const providers = await getEnabledProvidersInDefaultOrder();
+    expect(providers.some((p) => p.provider === 'zai')).toBe(false);
+  });
+
+  it('is included in enabled providers when key is present', async () => {
+    process.env.ALLEN_ZAI_API_KEY = 'za-test-key';
+    const providers = await getEnabledProvidersInDefaultOrder();
+    expect(providers.some((p) => p.provider === 'zai')).toBe(true);
+  });
+
+  it('does not mutate process.env', async () => {
+    process.env.ALLEN_ZAI_API_KEY = 'za-test-key';
+    const beforeAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    await buildClaudeCompatibleEnvOverlay('zai');
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe(beforeAuthToken);
+  });
+});
+
 describe('Codex MCP suppression for tool-less calls', () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -581,11 +696,12 @@ describe('getEnabledProvidersFromRegistry (REQ-014)', () => {
     process.env.ALLEN_DEEPSEEK_API_KEY = 'test-key';
     process.env.ALLEN_XIAOMI_MIMO_API_KEY = 'test-key';
     process.env.ALLEN_KIMI_API_KEY = 'test-key';
+    process.env.ALLEN_ZAI_API_KEY = 'test-key';
   });
 
   afterEach(() => {
     for (const key of [
-      'ALLEN_DEEPSEEK_API_KEY', 'ALLEN_XIAOMI_MIMO_API_KEY', 'ALLEN_KIMI_API_KEY',
+      'ALLEN_DEEPSEEK_API_KEY', 'ALLEN_XIAOMI_MIMO_API_KEY', 'ALLEN_KIMI_API_KEY', 'ALLEN_ZAI_API_KEY',
     ]) {
       if (originalEnv[key] === undefined) delete process.env[key];
       else process.env[key] = originalEnv[key];

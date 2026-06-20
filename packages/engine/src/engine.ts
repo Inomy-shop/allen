@@ -35,7 +35,15 @@ import {
   renderHumanHistory,
   renderHumanIntervention,
   renderHumanResumePrompt,
+  renderModelRecoveryIntervention,
 } from './human-intervention.js';
+import {
+  classifyFailure,
+  buildRecoveryState,
+  defaultMaxRecoveryAttempts,
+  sanitizeErrorSummary,
+} from './model-recovery.js';
+import type { RecoveryState } from './model-recovery.js';
 import { StateManager } from './state-manager.js';
 import { LearningManager, type ExtractionContext } from './learning-manager.js';
 import type { Db } from 'mongodb';
@@ -1429,10 +1437,18 @@ ${lines.join('\n')}
       aliasMap: this.config.aliasMap,
       costMap: this.config.costMap,
     };
+    // Effective model/provider for the node-start log.  agentOverrides win over
+    // agent document defaults — mirrors the resolution inside executeNode so the
+    // log reflects what the agent will actually run with, not just the role default.
+    const logAgent = nodeType === 'agent' && nodeDef.agent ? deps.agents[nodeDef.agent] : undefined;
+    const logRecoveryOverrides = exec.state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
+    const logRecoveryOverride = logRecoveryOverrides?.[nodeName]?.at(-1);
+    const logEffectiveProvider = logRecoveryOverride?.provider ?? nodeDef.agentOverrides?.provider ?? logAgent?.provider;
+    const logEffectiveModel = logRecoveryOverride?.model ?? nodeDef.agentOverrides?.model ?? logAgent?.model;
     this.log(exec.id, {
       category: 'system',
       node: nodeName,
-      message: `Node started (type: ${nodeType}${nodeDef.agent ? `, role: ${nodeDef.agent}` : ''}${nodeDef.agent && deps.agents[nodeDef.agent]?.model ? `, model: ${deps.agents[nodeDef.agent].model}` : ''})`,
+      message: `Node started (type: ${nodeType}${nodeDef.agent ? `, role: ${nodeDef.agent}` : ''}${logEffectiveProvider && logEffectiveProvider !== 'claude' && logEffectiveProvider !== 'claude-cli' ? `, provider: ${logEffectiveProvider}` : ''}${logEffectiveModel ? `, model: ${logEffectiveModel}` : ''})`,
     });
 
     try {
@@ -1902,12 +1918,296 @@ ${lines.join('\n')}
         ac.signal.aborted ||
         message === 'Execution cancelled' ||
         message === 'Branch cancelled by join policy';
-      const traceStatus: NodeStatus = wasCancelled ? 'cancelled' : 'failed';
 
+      // ── Model Recovery: detect recoverable provider/model failures ─────
+      // PRD refs: AC1 (recovery pause), AC15 (non-recoverable keeps existing behavior)
+      if (!wasCancelled) {
+        // Determine the effective provider and model for classification
+        const role = nodeDef.agent ? this.config.agents[nodeDef.agent] : undefined;
+        const recoveryOverrides = exec.state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
+        const latestOverride = recoveryOverrides?.[nodeName]?.at(-1);
+        const effectiveProvider = latestOverride?.provider ?? nodeDef.agentOverrides?.provider ?? role?.provider ?? 'claude';
+        const effectiveModel = latestOverride?.model ?? nodeDef.agentOverrides?.model ?? role?.model ?? 'sonnet';
+
+        const cls = classifyFailure(err, { provider: effectiveProvider, model: effectiveModel });
+
+        if (cls.recoverable) {
+          // Build or retrieve recovery state for this node
+          let recoveryState: RecoveryState = (exec.state.__recovery_state as RecoveryState) ?? buildRecoveryState({
+            nodeName,
+            classification: cls,
+            isParallelBranch: false,
+            maxAttempts: defaultMaxRecoveryAttempts(),
+          });
+
+          // Write a failure trace with modelRecoveryAttempt info so the
+          // trace history shows what triggered recovery (PRD ref: AC16).
+          const promptRender = nodeDef.prompt
+            ? renderTemplateWithBindings(nodeDef.prompt, exec.state)
+            : undefined;
+          const recoveryTrace: NodeTrace = {
+            node: nodeName,
+            executionTraceId,
+            attempt,
+            status: 'failed',
+            type: nodeDef.type ?? 'agent',
+            agent: nodeDef.agent,
+            inputState: { ...exec.state },
+            renderedPrompt: promptRender?.rendered,
+            output: {},
+            rawResponse: undefined,
+            activity: [],
+            cost: { actual: null, estimated: 0, method: 'unavailable' },
+            durationMs: Date.now() - traceStart.getTime(),
+            startedAt: traceStart,
+            completedAt: new Date(),
+            templateBindings: promptRender?.bindings,
+            learningsInjected: learningsInjectedTrace.length > 0 ? learningsInjectedTrace : undefined,
+            contextAttemptId: repoKnowledgePacket?.packetId,
+            error: message,
+            modelRecoveryAttempt: {
+              recoveryAttempt: recoveryState.attempt,
+              originalProvider: effectiveProvider,
+              originalModel: effectiveModel,
+              selectedProvider: effectiveProvider,
+              selectedModel: effectiveModel,
+              failureCategory: cls.category,
+              sanitizedError: cls.sanitizedSummary,
+            },
+          };
+          try {
+            await this.stateManager.saveTrace({ ...recoveryTrace, executionId: exec.id });
+          } catch {
+            // Best effort — must not mask the original error.
+          }
+
+          // Emit node_failed so the UI can show the failed attempt
+          this.emit({ event: 'node_failed', data: { node: nodeName, attempt, error: message } });
+
+          // Recovery loop — continue prompting the user until max attempts
+          // or until the user cancels.
+          while (recoveryState.attempt <= recoveryState.maxAttempts) {
+            if (recoveryState.attempt > recoveryState.maxAttempts) {
+              // Max attempts exhausted: fall through to terminal failure
+              recoveryState.overrideHistory.push({
+                attempt: recoveryState.attempt,
+                selectedProvider: effectiveProvider,
+                selectedModel: effectiveModel,
+                selectedAt: new Date().toISOString(),
+                outcome: 'unrecoverable_failure',
+                errorSummary: message,
+              });
+              exec.state.__recovery_state = recoveryState;
+              this.log(exec.id, {
+                level: 'error',
+                category: 'gate',
+                node: nodeName,
+                message: `Model recovery max attempts (${recoveryState.maxAttempts}) reached for node "${nodeName}"`,
+                data: { totalAttempts: recoveryState.attempt, history: recoveryState.overrideHistory },
+              });
+              break;
+            }
+
+            // Build recovery intervention and pause execution. Persist the
+            // recovery marker before writing the waiting status so reloads
+            // and /recover-model can reconstruct the dedicated recovery UI.
+            const intervention = renderModelRecoveryIntervention(nodeName, recoveryState);
+            exec.state.__recovery_state = recoveryState;
+            exec.status = 'waiting_for_input';
+            await this.stateManager.updateExecution(exec.id, {
+              status: 'waiting_for_input',
+              completedNodes: exec.completedNodes,
+              state: exec.state,
+              cost: exec.cost,
+            });
+
+            // Save checkpoint before awaiting input so a restart can resume
+            await this.stateManager.saveCheckpoint({
+              executionId: exec.id,
+              afterNode: nodeName,
+              state: { ...exec.state },
+              sessions: { ...exec.sessions },
+              retryCounts: { ...exec.retryCounts },
+              completedNodes: [...exec.completedNodes],
+              nodeAttempts: { ...exec.nodeAttempts },
+              createdAt: new Date(),
+            });
+
+            // Emit input_required SSE with the model recovery intervention
+            this.emit({
+              event: 'input_required',
+              data: {
+                node: nodeName,
+                prompt: intervention.question,
+                fields: intervention.fields,
+                intervention,
+              },
+            });
+
+            this.log(exec.id, {
+              level: 'warn',
+              category: 'gate',
+              node: nodeName,
+              message: `Model recovery entered for node "${nodeName}" (attempt ${recoveryState.attempt}/${recoveryState.maxAttempts}, category: ${recoveryState.failureCategory})`,
+            });
+
+            // Wait for human input (user picks replacement provider/model)
+            const humanData = await this.waitForInput(exec.id, nodeName);
+            this.emit({ event: 'input_received', data: { node: nodeName, data: humanData } });
+
+            // Parse the recovery selection
+            const selectedProvider = String(humanData.provider ?? effectiveProvider);
+            const selectedModel = String(humanData.model ?? effectiveModel);
+            const selectedEffort = humanData.reasoning_effort as 'off' | 'low' | 'medium' | 'high' | 'max' | undefined;
+
+            // Build and store NodeModelOverride
+            const nodeOverride: import('./model-recovery.js').NodeModelOverride = {
+              nodeName,
+              provider: selectedProvider,
+              model: selectedModel,
+              reasoningEffort: selectedEffort,
+              attempt: recoveryState.attempt,
+              createdAt: new Date().toISOString(),
+            };
+            const existingOverrides = (exec.state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]>) ?? {};
+            const prior = existingOverrides[nodeName] ?? [];
+            existingOverrides[nodeName] = [...prior, nodeOverride];
+            exec.state.__model_overrides = existingOverrides;
+
+            // Discard prior session by deleting the session key
+            const sessionKey = nodeDef.session_key
+              ? (() => { try { return renderTemplate(nodeDef.session_key, exec.state).trim() || nodeName; } catch { return nodeName; } })()
+              : nodeName;
+            delete exec.sessions[sessionKey];
+
+            // Emit recovery override applied event
+            this.emit({
+              event: 'node_recovery_override_applied',
+              data: { node: nodeName, provider: selectedProvider, model: selectedModel, attempt: recoveryState.attempt },
+            });
+
+            this.log(exec.id, {
+              level: 'info',
+              category: 'gate',
+              node: nodeName,
+              message: `Model recovery override selected — provider: ${selectedProvider}, model: ${selectedModel}, attempt: ${recoveryState.attempt}`,
+            });
+
+            // Set execution back to running
+            exec.status = 'running';
+            // Increment recovery attempt counter
+            recoveryState.attempt += 1;
+            recoveryState.overrideHistory.push({
+              attempt: recoveryState.attempt,
+              selectedProvider,
+              selectedModel,
+              selectedAt: new Date().toISOString(),
+              outcome: 'recoverable_failure', // will be updated on success
+            });
+            exec.state.__recovery_state = recoveryState;
+
+            // Increment node attempts for trace uniqueness
+            exec.nodeAttempts[nodeName] = (exec.nodeAttempts[nodeName] ?? recoveryState.attempt) + 1;
+
+            await this.stateManager.updateExecution(exec.id, {
+              status: 'running',
+              state: exec.state,
+              sessions: exec.sessions,
+            });
+
+            try {
+              // Re-invoke the same node with the recovery override in place.
+              // The override lives in exec.state.__model_overrides and will be
+              // picked up by node-executor's model resolution.
+              const retryResult = await this.executeSingleNode(nodeName, nodeDef, exec, nestingDepth, edges, workflow);
+
+              // Recovery succeeded — clear recovery state for this node
+              delete exec.state.__recovery_state;
+              // Update the override history entry to 'success'
+              const lastEntry = recoveryState.overrideHistory[recoveryState.overrideHistory.length - 1];
+              if (lastEntry) lastEntry.outcome = 'success';
+
+              this.log(exec.id, {
+                level: 'info',
+                category: 'gate',
+                node: nodeName,
+                message: `Model recovery succeeded for node "${nodeName}" after ${recoveryState.attempt} attempt(s)`,
+              });
+
+              // Return the auto-gate action from the retry
+              return retryResult;
+            } catch (retryErr: unknown) {
+              const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+              const retryCls = classifyFailure(retryErr, { provider: selectedProvider, model: selectedModel });
+
+              if (retryCls.recoverable && recoveryState.attempt <= recoveryState.maxAttempts) {
+                this.log(exec.id, {
+                  level: 'warn',
+                  category: 'gate',
+                  node: nodeName,
+                  message: `Model recovery failed again on attempt ${recoveryState.attempt} (${retryCls.category}): ${sanitizeErrorSummary(retryMessage)}`,
+                });
+                // Update recovery state and loop back for another prompt
+                recoveryState.failureCategory = retryCls.category;
+                recoveryState.sanitizedError = retryCls.sanitizedSummary;
+                recoveryState.failedProvider = selectedProvider;
+                recoveryState.failedModel = selectedModel;
+                // The loop continues; the next iteration will prompt the user again
+              } else {
+                // Non-recoverable or max attempts exceeded — mark terminal failure
+                recoveryState.overrideHistory.push({
+                  attempt: recoveryState.attempt,
+                  selectedProvider,
+                  selectedModel,
+                  selectedAt: new Date().toISOString(),
+                  outcome: 'unrecoverable_failure',
+                  errorSummary: sanitizeErrorSummary(retryMessage),
+                });
+                exec.state.__recovery_state = recoveryState;
+
+                this.log(exec.id, {
+                  level: 'error',
+                  category: 'gate',
+                  node: nodeName,
+                  message: `Model recovery failed terminally for node "${nodeName}" after ${recoveryState.attempt} attempt(s): ${retryCls.category}`,
+                });
+
+                // Fall through to terminal failure below
+                // Save the error and rethrow (existing terminal behavior)
+                const termMessage = `Model recovery exhausted: ${sanitizeErrorSummary(retryMessage)}`;
+                const termTrace: NodeTrace = {
+                  node: nodeName,
+                  executionTraceId: randomUUID(),
+                  attempt: exec.nodeAttempts[nodeName] ?? recoveryState.attempt + 1,
+                  status: 'failed',
+                  type: nodeDef.type ?? 'agent',
+                  agent: nodeDef.agent,
+                  inputState: { ...exec.state },
+                  output: {},
+                  activity: [],
+                  cost: { actual: null, estimated: 0, method: 'unavailable' },
+                  durationMs: 0,
+                  startedAt: new Date(),
+                  completedAt: new Date(),
+                  error: termMessage,
+                };
+                try {
+                  await this.stateManager.saveTrace({ ...termTrace, executionId: exec.id });
+                } catch { /* best effort */ }
+                this.emit({ event: 'node_failed', data: { node: nodeName, attempt: exec.nodeAttempts[nodeName] ?? 0, error: termMessage } });
+                throw new Error(termMessage);
+              }
+            }
+          } // end recovery while loop
+
+          // If we exit the while loop without a successful return, fall through
+          // to the terminal failure path below
+        }
+      }
+
+      // ── Terminal Failure Path (existing behavior for non-recoverable) ──
       // Write a trace row so the node stops showing "running" in the UI.
-      // Previously the catch block only emitted the SSE event and rethrew,
-      // leaving no DB footprint for failed/cancelled nodes — the timeline
-      // skipped them and execution-detail views left stale spinners.
+      const terminalTraceStatus: NodeStatus = wasCancelled ? 'cancelled' : 'failed';
       const promptRender = nodeDef.prompt
         ? renderTemplateWithBindings(nodeDef.prompt, exec.state)
         : undefined;
@@ -1915,7 +2215,7 @@ ${lines.join('\n')}
         node: nodeName,
         executionTraceId,
         attempt,
-        status: traceStatus,
+        status: terminalTraceStatus,
         type: nodeDef.type ?? 'agent',
         agent: nodeDef.agent,
         inputState: { ...exec.state },
@@ -1987,6 +2287,14 @@ ${lines.join('\n')}
       result: NodeResult;
       traceStart: Date;
       injectedLearningIds: any[];
+      /** Set when the branch failed with a recoverable model/provider error. */
+      recoveryNeeded?: {
+        err: unknown;
+        message: string;
+        cls: import('./model-recovery.js').ClassificationResult;
+        effectiveProvider: string;
+      effectiveModel: string;
+      };
     }
 
     const contextTags = (exec.state.__contextTags as string[]) ?? [];
@@ -2071,6 +2379,65 @@ ${lines.join('\n')}
           abortController.signal.aborted ||
           message === 'Execution cancelled' ||
           message === 'Branch cancelled by join policy';
+
+        // ── Model Recovery for parallel branches ─────────────────────
+        // Only wait-all supports recovery in this release (TDD §9.8).
+        // For recoverable failures, classify and capture recovery info
+        // in a synthetic BranchResult instead of throwing.
+        if (!wasCancelled) {
+          const role = nodeDef.agent ? this.config.agents[nodeDef.agent] : undefined;
+          const recoveryOverrides = exec.state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
+          const latestOverride = recoveryOverrides?.[nodeName]?.at(-1);
+          const effectiveProvider = latestOverride?.provider ?? nodeDef.agentOverrides?.provider ?? role?.provider ?? 'claude';
+          const effectiveModel = latestOverride?.model ?? nodeDef.agentOverrides?.model ?? role?.model ?? 'sonnet';
+          const cls = classifyFailure(err, { provider: effectiveProvider, model: effectiveModel });
+
+          if (cls.recoverable) {
+            // Save a failure trace with modelRecoveryAttempt info
+            const branchTrace: NodeTrace = {
+              node: nodeName,
+              attempt: 1,
+              status: 'failed',
+              type: nodeDef.type ?? 'agent',
+              agent: nodeDef.agent,
+              inputState: stateSnapshot,
+              renderedPrompt: nodeDef.prompt ? renderTemplate(nodeDef.prompt, stateSnapshot) : undefined,
+              output: {},
+              activity: [],
+              cost: { actual: null, estimated: 0, method: 'unavailable' },
+              durationMs: Date.now() - traceStart.getTime(),
+              startedAt: traceStart,
+              completedAt: new Date(),
+              error: message,
+              modelRecoveryAttempt: {
+                recoveryAttempt: 1,
+                originalProvider: effectiveProvider,
+                originalModel: effectiveModel,
+                selectedProvider: effectiveProvider,
+                selectedModel: effectiveModel,
+                failureCategory: cls.category,
+                sanitizedError: cls.sanitizedSummary,
+              },
+            };
+            try {
+              await this.stateManager.saveTrace({ ...branchTrace, executionId: exec.id });
+            } catch {
+              // Best effort — must not shadow the original error.
+            }
+            // Return a synthetic branch result indicating recovery needed.
+            // The sibling branches will continue running normally (AC6).
+            return {
+              node: nodeName,
+              outputs: {},
+              result: { outputs: {}, cost: { actual: null, estimated: 0, method: 'unavailable' }, durationMs: 0 },
+              traceStart,
+              injectedLearningIds: branchLearningIds,
+              recoveryNeeded: { err, message, cls, effectiveProvider, effectiveModel },
+            } as unknown as BranchResult;
+          }
+        }
+
+        // Non-recoverable or cancelled — save failure trace and rethrow as before
         const branchTrace: NodeTrace = {
           node: nodeName,
           attempt: 1,
@@ -2135,7 +2502,211 @@ ${lines.join('\n')}
             errors.push(r.reason);
           }
         }
-        if (errors.length > 0) {
+        // Separate branches that need recovery from completed ones
+        // PRD refs: AC5 (branch recovery pause), AC6 (siblings not cancelled)
+        const completedBranches: BranchResult[] = [];
+        const recoveryBranches: BranchResult[] = [];
+        for (const r of settled) {
+          if (r.status === 'fulfilled') {
+            if (r.value.recoveryNeeded) {
+              recoveryBranches.push(r.value);
+            } else {
+              completedBranches.push(r.value);
+            }
+          } else {
+            errors.push(r.reason);
+          }
+        }
+        // Process recoverable branches (only wait-all in first release per TDD §9.8)
+        if (recoveryBranches.length > 0) {
+          // Save completed sibling outputs before entering recovery loop
+          for (const br of completedBranches) {
+            exec.completedNodes.push(br.node);
+          }
+
+          // Process recovery branches one at a time (TDD assumption 9.3)
+          for (const recBr of recoveryBranches) {
+            if (!recBr.recoveryNeeded) continue;
+            const brName = recBr.node;
+            const { cls, message: recMessage, effectiveProvider, effectiveModel } = recBr.recoveryNeeded;
+            const recNodeDef = nodes[brName];
+            if (!recNodeDef) throw new Error(`Recovery node not found: ${brName}`);
+
+            // Build per-branch recovery state
+            const siblingNames = [...branchResults.map(br => br.node).filter(n => n !== brName)];
+            let recState: import('./model-recovery.js').RecoveryState = buildRecoveryState({
+              nodeName: brName,
+              classification: cls,
+              isParallelBranch: true,
+              siblingBranches: siblingNames,
+              joinPolicy: joinPolicy,
+              maxAttempts: defaultMaxRecoveryAttempts(),
+            });
+
+            this.emit({
+              event: 'parallel_branch_recovery_paused',
+              data: { failedBranch: brName, completedSiblings: siblingNames,
+                stillRunning: exec.currentNodes.filter(n => n !== brName) },
+            });
+
+            // Recovery prompt loop for this branch
+            while (recState.attempt <= recState.maxAttempts) {
+              const intervention = renderModelRecoveryIntervention(brName, recState);
+              exec.state.__recovery_state = exec.state.__recovery_state ?? {};
+              (exec.state.__recovery_state as Record<string, unknown>)[brName] = recState;
+              exec.status = 'waiting_for_input';
+              await this.stateManager.updateExecution(exec.id, {
+                status: 'waiting_for_input',
+                completedNodes: exec.completedNodes,
+                state: exec.state,
+                cost: exec.cost,
+              });
+
+              await this.stateManager.saveCheckpoint({
+                executionId: exec.id,
+                afterNode: brName,
+                state: { ...exec.state },
+                sessions: { ...exec.sessions },
+                retryCounts: { ...exec.retryCounts },
+                completedNodes: [...exec.completedNodes],
+                nodeAttempts: { ...exec.nodeAttempts },
+                createdAt: new Date(),
+              });
+
+              this.emit({
+                event: 'input_required',
+                data: { node: brName, prompt: intervention.question,
+                  fields: intervention.fields, intervention },
+              });
+
+              this.log(exec.id, {
+                level: 'warn', category: 'gate', node: brName,
+                message: `Parallel branch recovery entered for "${brName}" (attempt ${recState.attempt}/${recState.maxAttempts}, category: ${recState.failureCategory})`,
+              });
+
+              const humanData = await this.waitForInput(exec.id, brName);
+              this.emit({ event: 'input_received', data: { node: brName, data: humanData } });
+
+              const selectedProvider = String(humanData.provider ?? effectiveProvider);
+              const selectedModel = String(humanData.model ?? effectiveModel);
+              const selectedEffort = humanData.reasoning_effort as 'off' | 'low' | 'medium' | 'high' | 'max' | undefined;
+
+              const nodeOverride: import('./model-recovery.js').NodeModelOverride = {
+                nodeName: brName,
+                provider: selectedProvider,
+                model: selectedModel,
+                reasoningEffort: selectedEffort,
+                attempt: recState.attempt,
+                createdAt: new Date().toISOString(),
+              };
+              const existingOverrides = (exec.state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]>) ?? {};
+              const prior = existingOverrides[brName] ?? [];
+              existingOverrides[brName] = [...prior, nodeOverride];
+              exec.state.__model_overrides = existingOverrides;
+
+              // Discard prior session
+              const sessionKey = recNodeDef.session_key
+                ? (() => { try { return renderTemplate(recNodeDef.session_key, exec.state).trim() || brName; } catch { return brName; } })()
+                : brName;
+              delete exec.sessions[sessionKey];
+
+              this.emit({
+                event: 'node_recovery_override_applied',
+                data: { node: brName, provider: selectedProvider, model: selectedModel, attempt: recState.attempt },
+              });
+
+              exec.status = 'running';
+              recState.attempt += 1;
+              recState.overrideHistory.push({
+                attempt: recState.attempt, selectedProvider, selectedModel,
+                selectedAt: new Date().toISOString(),
+                outcome: 'recoverable_failure',
+              });
+              exec.state.__recovery_state = (exec.state.__recovery_state as Record<string, unknown>) ?? {};
+              (exec.state.__recovery_state as Record<string, unknown>)[brName] = recState;
+              exec.nodeAttempts[brName] = (exec.nodeAttempts[brName] ?? 0) + 1;
+
+              await this.stateManager.updateExecution(exec.id, {
+                status: 'running', state: exec.state, sessions: exec.sessions,
+              });
+
+              try {
+                // Re-run the failed branch with the override in place
+                const deps: NodeExecutorDeps = {
+                  agents: this.config.agents,
+                  builtIns: this.config.builtIns,
+                  workflows: this.config.workflows,
+                  emitter: this.config.emitter,
+                  runWorkflow: (wf, input) => this.run(wf, input, nestingDepth + 1, {
+                    parentExecutionId: exec.id,
+                    rootExecutionId: exec.rootExecutionId ?? exec.id,
+                  }),
+                  executionId: exec.id,
+                  nodeContext: '',
+                  db: this.config.db,
+                  services: this.config.services,
+                  abortSignal: new AbortController().signal,
+                  discoverMcpToolNames: this.config.discoverMcpToolNames,
+                  claudeCodeExecutable: this.config.claudeCodeExecutable,
+                  buildClaudeCompatibleEnvOverlay: this.config.buildClaudeCompatibleEnvOverlay,
+                  aliasMap: this.config.aliasMap,
+                  costMap: this.config.costMap,
+                };
+                const retryResult = await executeNode(brName, recNodeDef, stateSnapshot, exec.sessions, deps);
+
+                // Recovery succeeded — record as a completed branch
+                const lastEntry = recState.overrideHistory[recState.overrideHistory.length - 1];
+                if (lastEntry) lastEntry.outcome = 'success';
+                delete (exec.state.__recovery_state as Record<string, unknown>)[brName];
+
+                completedBranches.push({
+                  node: brName,
+                  outputs: retryResult.outputs,
+                  result: retryResult,
+                  traceStart: new Date(),
+                  injectedLearningIds: [],
+                });
+
+                this.log(exec.id, {
+                  level: 'info', category: 'gate', node: brName,
+                  message: `Parallel branch recovery succeeded for "${brName}" after ${recState.attempt} attempt(s)`,
+                });
+
+                // Break out of the recovery loop for this branch
+                break;
+              } catch (retryErr: unknown) {
+                const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+                const retryCls = classifyFailure(retryErr, { provider: selectedProvider, model: selectedModel });
+                if (retryCls.recoverable && recState.attempt <= recState.maxAttempts) {
+                  this.log(exec.id, {
+                    level: 'warn', category: 'gate', node: brName,
+                    message: `Branch model recovery failed again on attempt ${recState.attempt} (${retryCls.category}): ${sanitizeErrorSummary(retryMsg)}`,
+                  });
+                  recState.failureCategory = retryCls.category;
+                  recState.sanitizedError = retryCls.sanitizedSummary;
+                  recState.failedProvider = selectedProvider;
+                  recState.failedModel = selectedModel;
+                } else {
+                  // Terminal failure for this recovery attempt
+                  recState.overrideHistory.push({
+                    attempt: recState.attempt, selectedProvider, selectedModel,
+                    selectedAt: new Date().toISOString(),
+                    outcome: 'unrecoverable_failure',
+                    errorSummary: sanitizeErrorSummary(retryMsg),
+                  });
+                  this.log(exec.id, {
+                    level: 'error', category: 'gate', node: brName,
+                    message: `Branch model recovery failed terminally for "${brName}": ${retryCls.category}`,
+                  });
+                  const termMsg = `Branch model recovery exhausted: ${sanitizeErrorSummary(retryMsg)}`;
+                  throw new Error(termMsg);
+                }
+              }
+            } // end recovery while loop
+          } // end for each recovery branch
+
+          branchResults = completedBranches;
+        } else if (errors.length > 0) {
           throw errors[0];
         }
       }

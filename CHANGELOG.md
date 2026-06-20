@@ -6,6 +6,27 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-06-20
+
+### Added
+
+- **Steer — inject messages into a running agent** (`packages/server`): a per-message "Steer" action injects a typed message into the currently running agent turn mid-stream instead of queuing it behind the in-flight turn. Works for Claude (a `control_request` interrupt followed by the new user message on the persistent `claude -p` runtime) and Codex (`turn/steer` JSON-RPC).
+- **Z.AI (GLM) provider** (`packages/server`): Z.AI added as a first-class Claude-compatible provider (identifier `zai`, displayed as GLM/Z.AI), seeding 15 GLM text models with current pricing into the model registry.
+- **Node-level model recovery for workflow agent failures** (`packages/server`, `packages/engine`): when an agent/model-backed workflow node fails with a recoverable model/provider error (rate limit, server error, model unavailable, insufficient balance), Allen pauses execution for human recovery instead of failing the run.
+- **Design Studio sidebar panel** (`packages/ui`): a third sidebar carousel panel for Design Studio workspaces (left dot), alongside main navigation (center) and workspaces (right).
+
+### Changed
+
+- **Reduced `wait_for_execution` response payload** (`packages/server`): the `wait_for_execution` MCP tool now returns a slimmer payload.
+
+### Fixed
+
+- **Live chat watcher updates** (`packages/server`, `packages/ui`): chat watcher status lines now stream live.
+- **Honor agent override model in engine metadata** (`packages/engine`).
+- **deepeval script paths** (`packages/desktop`): resolved outside `app.asar` for the packaged desktop app, and a blocking import guard was dropped.
+- **Workspace sidebar groups** (`packages/ui`): capped to avoid unbounded growth.
+- **Full-page file-drop overlay** (`packages/ui`): cleared after a composer drop.
+
 ## [0.1.13] - 2026-06-17
 
 Highlights since `v0.1.12`.

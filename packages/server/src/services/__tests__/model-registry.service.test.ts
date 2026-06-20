@@ -188,10 +188,10 @@ describe('ModelRegistryService', () => {
   describe('syncSeedModels (AC-001)', () => {
     it('seeds all models into an empty collection with seededWith snapshots', async () => {
       const result = await service.syncSeedModels();
-      expect(result.inserted).toBe(20);
+      expect(result.inserted).toBe(35);
       expect(result.refreshed).toBe(0);
       const all = await service.list({ includeInactive: true });
-      expect(all).toHaveLength(20);
+      expect(all).toHaveLength(35);
       expect(all.every((m) => (m as any).seededWith)).toBe(true);
     });
 
@@ -199,7 +199,7 @@ describe('ModelRegistryService', () => {
       await service.syncSeedModels();
       const second = await service.syncSeedModels();
       expect(second).toEqual({ inserted: 0, refreshed: 0, preserved: 0 });
-      expect(mockDb.store.model_registry).toHaveLength(20);
+      expect(mockDb.store.model_registry).toHaveLength(35);
     });
 
     it('refreshes untouched rows when the seed catalog prices change', async () => {
@@ -240,7 +240,7 @@ describe('ModelRegistryService', () => {
       const result = await service.syncSeedModels();
       const opus = mockDb.store.model_registry.find((m: any) => m.fullId === 'claude-opus-4-7') as any;
       expect(result.refreshed).toBe(1);
-      expect(result.inserted).toBe(19); // the other 19 seed rows
+      expect(result.inserted).toBe(34); // the other 34 seed rows
       expect(opus.costInputPerMTok).toBe(5);
       expect('costPerTurn' in opus).toBe(false);
       expect(opus.seededWith).toBeTruthy();
@@ -440,7 +440,7 @@ describe('ModelRegistryService', () => {
       expect(rows[0].sortOrder).toBeGreaterThanOrEqual(1);
     });
 
-    it('seed data includes models from all 5 providers with correct counts', async () => {
+    it('seed data includes models from all 6 providers with correct counts', async () => {
       await service.syncSeedModels();
       const all = await service.list({ includeInactive: true });
       expect(all.filter((m) => m.provider === 'claude')).toHaveLength(5);
@@ -448,6 +448,82 @@ describe('ModelRegistryService', () => {
       expect(all.filter((m) => m.provider === 'deepseek')).toHaveLength(2);
       expect(all.filter((m) => m.provider === 'xiaomi-mimo')).toHaveLength(1);
       expect(all.filter((m) => m.provider === 'kimi')).toHaveLength(2);
+      expect(all.filter((m) => m.provider === 'zai')).toHaveLength(15);
+    });
+
+    // ── REQ-005 / R1, R5, R6: Z.AI seed models ──
+
+    describe('Z.AI seed models (R1, R5, R6)', () => {
+      it('all 15 ZAI fullIds are present with provider zai and providerDisplayName GLM/Z.AI', async () => {
+        await service.syncSeedModels();
+        const zaiModels = await service.list({ provider: 'zai', includeInactive: true });
+        expect(zaiModels).toHaveLength(15);
+        const fullIds = zaiModels.map((m) => m.fullId);
+        expect(fullIds).toContain('glm-5.2[1m]');
+        expect(fullIds).toContain('glm-5.2');
+        expect(fullIds).toContain('glm-5.1');
+        expect(fullIds).toContain('glm-5');
+        expect(fullIds).toContain('glm-5-turbo');
+        expect(fullIds).toContain('glm-4.7');
+        expect(fullIds).toContain('glm-4.7-flashx');
+        expect(fullIds).toContain('glm-4.7-flash');
+        expect(fullIds).toContain('glm-4.6');
+        expect(fullIds).toContain('glm-4.5');
+        expect(fullIds).toContain('glm-4.5-x');
+        expect(fullIds).toContain('glm-4.5-air');
+        expect(fullIds).toContain('glm-4.5-airx');
+        expect(fullIds).toContain('glm-4.5-flash');
+        expect(fullIds).toContain('glm-4-32b-0414-128k');
+        expect(zaiModels.every((m) => m.provider === 'zai')).toBe(true);
+        expect(zaiModels.every((m) => m.providerDisplayName === 'GLM/Z.AI')).toBe(true);
+      });
+
+      it('glm-5.2[1m] has correct costs and tier default', async () => {
+        await service.syncSeedModels();
+        const all = await service.list({ includeInactive: true });
+        const m = all.find((x) => x.fullId === 'glm-5.2[1m]')!;
+        expect(m.costInputPerMTok).toBe(1.40);
+        expect(m.costCacheReadPerMTok).toBe(0.26);
+        expect(m.costOutputPerMTok).toBe(4.40);
+        expect(m.tier).toBe('default');
+      });
+
+      it('glm-4.7 has correct costs and tier flash', async () => {
+        await service.syncSeedModels();
+        const all = await service.list({ includeInactive: true });
+        const m = all.find((x) => x.fullId === 'glm-4.7')!;
+        expect(m.costInputPerMTok).toBe(0.60);
+        expect(m.costOutputPerMTok).toBe(2.20);
+        expect(m.tier).toBe('flash');
+      });
+
+      it('glm-4.7-flash and glm-4.5-flash have all zero costs', async () => {
+        await service.syncSeedModels();
+        const all = await service.list({ includeInactive: true });
+        for (const id of ['glm-4.7-flash', 'glm-4.5-flash']) {
+          const m = all.find((x) => x.fullId === id)!;
+          expect(m.costInputPerMTok).toBe(0);
+          expect(m.costCacheReadPerMTok).toBe(0);
+          expect(m.costOutputPerMTok).toBe(0);
+        }
+      });
+
+      it('glm-4-32b-0414-128k has costCacheReadPerMTok null (unavailable — R6)', async () => {
+        await service.syncSeedModels();
+        const all = await service.list({ includeInactive: true });
+        const m = all.find((x) => x.fullId === 'glm-4-32b-0414-128k')!;
+        expect(m.costInputPerMTok).toBe(0.10);
+        expect(m.costCacheReadPerMTok).toBeNull();
+        expect(m.costOutputPerMTok).toBe(0.10);
+      });
+
+      it('re-running syncSeedModels keeps registry count at 35 (idempotent)', async () => {
+        await service.syncSeedModels();
+        const second = await service.syncSeedModels();
+        expect(second).toEqual({ inserted: 0, refreshed: 0, preserved: 0 });
+        const all = await service.list({ includeInactive: true });
+        expect(all).toHaveLength(35);
+      });
     });
   });
 
@@ -661,9 +737,9 @@ describe('ModelRegistryService', () => {
   // ── LEGACY_ALIAS_LOOKUP_MAP ──
 
   describe('LEGACY_ALIAS_LOOKUP_MAP', () => {
-    it('contains all 20 seed entries', () => {
+    it('contains all 35 seed entries', () => {
       const keys = Object.keys(LEGACY_ALIAS_LOOKUP_MAP);
-      expect(keys).toHaveLength(20);
+      expect(keys).toHaveLength(35);
       expect(keys).toContain('fable');
       expect(keys).toContain('sonnet');
       expect(keys).toContain('opus');

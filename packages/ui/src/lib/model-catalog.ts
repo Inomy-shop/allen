@@ -43,6 +43,7 @@ export const PROVIDER_COLORS: Record<string, { color: string; dotBg: string }> =
   deepseek: { color: 'text-accent-blue', dotBg: 'bg-accent-blue' },
   'xiaomi-mimo': { color: 'text-accent-blue', dotBg: 'bg-accent-blue' },
   kimi: { color: 'text-accent-blue', dotBg: 'bg-accent-blue' },
+  zai: { color: 'text-accent-purple', dotBg: 'bg-accent-purple' },
 };
 
 /** Minimal structural shape of an enabled provider (see useEnabledProviders). */

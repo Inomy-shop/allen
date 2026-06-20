@@ -40,6 +40,9 @@ export interface PersistentChatRuntime {
   readonly key: string;
   sendTurn(input: RuntimeTurnInput): Promise<RuntimeTurnResult>;
   sendSlashCommand?(input: RuntimeTurnInput, command: RuntimeSlashCommand): Promise<RuntimeTurnResult>;
+  /** Inject a user message into an ACTIVE turn without starting a new one.
+   *  Returns `true` if the injection was accepted, `false` if no active turn exists. */
+  steer?(text: string): boolean;
   close(reason: string): Promise<void>;
 }
 

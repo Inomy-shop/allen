@@ -8,6 +8,8 @@ import type { Db } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { PROVIDERS, type ChatProvider } from '../services/chat-providers.js';
+import { ModelRegistryService } from '../services/model-registry.service.js';
+import { sanitizeErrorSummary } from '@allen/engine';
 
 export function executionRoutes(db: Db): Router {
   const router = Router();
@@ -15,6 +17,7 @@ export function executionRoutes(db: Db): Router {
   const interventionService = new InterventionService(db);
   const userService = new UserService(db);
   const repoKnowledge = new RepoContextPacketService(db);
+  const modelRegistry = new ModelRegistryService(db);
 
   // POST /api/executions
   router.post('/', async (req: AuthedRequest, res: Response) => {
@@ -370,6 +373,148 @@ export function executionRoutes(db: Db): Router {
       res.json({ status: 'input_received' });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/executions/:id/recover-model
+  //
+  // Submit a model-recovery override for a failed node. The execution must
+  // be in `waiting_for_input` status with an active `__recovery_state` for
+  // the specified node. Validates provider and model against the registry,
+  // then calls engine.submitInput to resume the paused recovery loop.
+  //
+  // Request body:
+  //   { node, provider, model, reasoningEffort? }
+  //
+  // Error codes (TDD §4):
+  //   400: invalid_node, invalid_provider, invalid_model, max_recovery_attempts
+  //   404: execution_not_found
+  //   409: not_in_recovery
+  //   500: retry_failed
+  router.post('/:id/recover-model', async (req: AuthedRequest, res: Response) => {
+    try {
+      const executionId = param(req, 'id');
+      const { node, provider, model, reasoningEffort } = req.body ?? {};
+
+      // ── Body validation ──
+      if (!node || typeof node !== 'string') {
+        return res.status(400).json({ error: 'node is required', code: 'invalid_node' });
+      }
+      if (!provider || typeof provider !== 'string') {
+        return res.status(400).json({ error: 'provider is required', code: 'invalid_provider' });
+      }
+      if (!model || typeof model !== 'string') {
+        return res.status(400).json({ error: 'model is required', code: 'invalid_model' });
+      }
+      if (reasoningEffort !== undefined &&
+        !['off', 'low', 'medium', 'high', 'max'].includes(reasoningEffort)) {
+        return res.status(400).json({ error: 'invalid reasoningEffort value', code: 'invalid_reasoning_effort' });
+      }
+
+      // ── Resolve execution ──
+      const exec = await service.getById(executionId);
+      if (!exec) {
+        return res.status(404).json({ error: 'Execution not found', code: 'execution_not_found' });
+      }
+
+      // ── Check execution is in recovery state ──
+      if (exec.status !== 'waiting_for_input') {
+        return res.status(409).json({ error: 'Execution is not waiting for input', code: 'not_in_recovery' });
+      }
+
+      const state = (exec.state ?? {}) as Record<string, unknown>;
+      const recoveryStateRaw = state.__recovery_state;
+
+      // Determine if node is in recovery (flat RecoveryState or parallel-branch sub-key).
+      // Older paused executions may have entered waiting_for_input before the engine
+      // persisted __recovery_state; for those, fall back to the latest recovery trace
+      // so the operator can still approve a model change without rerunning the workflow.
+      let nodeRecovery: Record<string, unknown> | undefined;
+      if (typeof recoveryStateRaw === 'object' && recoveryStateRaw !== null && !Array.isArray(recoveryStateRaw)) {
+        const rs = recoveryStateRaw as Record<string, unknown>;
+        if ((rs as { nodeName?: string }).nodeName === node) {
+          nodeRecovery = rs as Record<string, unknown>;
+        } else if (typeof rs[node] === 'object' && rs[node] !== null) {
+          nodeRecovery = rs[node] as Record<string, unknown>;
+        }
+      }
+
+      if (!nodeRecovery) {
+        const currentNodes = Array.isArray(exec.currentNodes) ? exec.currentNodes : [];
+        const nodeIsWaiting = currentNodes.length === 0 || currentNodes.includes(node);
+        if (nodeIsWaiting) {
+          const latestRecoveryTrace = await db.collection('execution_traces')
+            .find({ executionId, node, modelRecoveryAttempt: { $exists: true } })
+            .sort({ completedAt: -1, startedAt: -1, _id: -1 })
+            .limit(1)
+            .next();
+          const traceRecovery = latestRecoveryTrace?.modelRecoveryAttempt;
+          if (traceRecovery && typeof traceRecovery === 'object' && !Array.isArray(traceRecovery)) {
+            const attemptInfo = traceRecovery as Record<string, unknown>;
+            nodeRecovery = {
+              nodeName: node,
+              attempt: Number(attemptInfo.recoveryAttempt ?? 1),
+              maxAttempts: Number(attemptInfo.maxAttempts ?? 3),
+              failedProvider: attemptInfo.originalProvider,
+              failedModel: attemptInfo.originalModel,
+              failureCategory: attemptInfo.failureCategory,
+            };
+          }
+        }
+      }
+
+      if (!nodeRecovery) {
+        if (!recoveryStateRaw) {
+          return res.status(409).json({ error: 'No active recovery state for this execution', code: 'not_in_recovery' });
+        }
+        return res.status(400).json({ error: `Node "${node}" is not in recovery`, code: 'invalid_node' });
+      }
+
+      // ── Check max recovery attempts ──
+      const attempt = Number(nodeRecovery.attempt ?? 0);
+      const maxAttempts = Number(nodeRecovery.maxAttempts ?? 3);
+      if (attempt > maxAttempts) {
+        return res.status(400).json({
+          error: `Max recovery attempts (${maxAttempts}) reached for node "${node}"`,
+          code: 'max_recovery_attempts',
+        });
+      }
+
+      // ── Validate provider + model against registry ──
+      const registryEntry = await modelRegistry.getByFullId(provider, model);
+      if (!registryEntry) {
+        // Check if provider itself is known
+        const providerModels = await modelRegistry.list({ provider, includeInactive: false });
+        if (providerModels.length === 0) {
+          return res.status(400).json({ error: `Unknown provider: ${provider}`, code: 'invalid_provider' });
+        }
+        return res.status(400).json({ error: `Model "${model}" not found for provider "${provider}"`, code: 'invalid_model' });
+      }
+
+      // ── Build payload and submit ──
+      const payload: Record<string, unknown> = {
+        provider,
+        model,
+        reasoning_effort: reasoningEffort,
+      };
+
+      const delivered = await service.submitInput(executionId, node, payload);
+      if (!delivered) {
+        return res.status(500).json({ error: 'Failed to deliver recovery override to engine', code: 'retry_failed' });
+      }
+
+      res.json({
+        executionId,
+        node,
+        status: 'running',
+        recoveryAttempt: attempt,
+        selectedProvider: provider,
+        selectedModel: model,
+        action: 'retry_with_model',
+      });
+    } catch (err: unknown) {
+      const msg = (err as Error).message;
+      res.status(500).json({ error: sanitizeErrorSummary(msg), code: 'retry_failed' });
     }
   });
 

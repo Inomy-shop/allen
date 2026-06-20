@@ -8,10 +8,26 @@ import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { hasRepoContextLoadingGuidance, withArtifactsGuidance, withMandatoryRepoContext, withNonInteractiveGuidance, withRepoContextLoadingGuidance } from './agent-file-writer.js';
 import { MCP_SERVER_NAME } from './brand.js';
 import { renderClarificationResumePrompt, renderHumanResumePrompt, renderResumeContextPrompt, renderReviewFeedbackRetryPrompt } from './human-intervention.js';
+import type { NodeModelOverride } from './model-recovery.js';
 
 /** Scratch dir when no worktree/repo is in scope. Never fall back to
  * process.cwd() — that's the engine's own source tree. */
 const AGENT_FALLBACK_CWD = '/tmp/allen';
+
+export function resolveCodexNodeRuntimeSettings(
+  nodeName: string,
+  nodeDef: NodeDef,
+  state: Record<string, unknown>,
+  role: AgentDef | undefined,
+): { model: string; reasoningEffort?: string } {
+  const recoveryOverrides = state.__model_overrides as Record<string, NodeModelOverride[]> | undefined;
+  const latestRecoveryOverride = recoveryOverrides?.[nodeName]?.at(-1);
+  const override = nodeDef.agentOverrides ?? {};
+  return {
+    model: (latestRecoveryOverride?.model ?? override.model ?? role?.model) ?? 'default',
+    reasoningEffort: (latestRecoveryOverride?.reasoningEffort ?? override.reasoningEffort ?? role?.reasoningEffort) ?? undefined,
+  };
+}
 
 interface CodexResult {
   outputs: Record<string, unknown>;
@@ -88,10 +104,8 @@ export async function executeCodexNode(
   },
 ): Promise<CodexResult> {
   const start = Date.now();
-  // Apply per-node overrides first, then agent defaults.
-  const override = nodeDef.agentOverrides ?? {};
-  const model = (override.model ?? role?.model) ?? 'default';
-  const reasoningEffort = (override.reasoningEffort ?? role?.reasoningEffort) ?? undefined;
+  // Apply recovery overrides first, then per-node overrides, then agent defaults.
+  const { model, reasoningEffort } = resolveCodexNodeRuntimeSettings(nodeName, nodeDef, state, role);
   // Codex doesn't support 'max' — clamp to 'high'. 'off' means "don't emit".
   const codexEffort =
     reasoningEffort && reasoningEffort !== 'off'

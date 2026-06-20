@@ -50,6 +50,10 @@ extraResources:
     to: scripts/setup-context-engine.sh
   - from: packages/server/src/scripts/cognee-context-provider.py
     to: server-scripts/cognee-context-provider.py
+  - from: packages/server/src/scripts/deepeval-workflow-evaluator.py
+    to: server-scripts/deepeval-workflow-evaluator.py
+  - from: packages/server/src/scripts/deepeval-context-evaluator.py
+    to: server-scripts/deepeval-context-evaluator.py
   - from: packages/server/src/scripts/cognee_context_provider
     to: server-scripts/cognee_context_provider
     filter:

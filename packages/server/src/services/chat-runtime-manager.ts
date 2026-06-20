@@ -97,6 +97,28 @@ export async function runPersistentChatSlashCommand(input: RuntimeTurnInput, com
   return turn;
 }
 
+/** Inject a message into an active persistent runtime turn for the given chat session.
+ *  Returns `true` if the steering injection was accepted, `false` if no runtime or no active turn.
+ *  Does NOT enqueue onto the runtime's chain — steering joins the in-flight turn. */
+export function steerPersistentChat(chatSessionId: string, text: string): boolean {
+  const match = [...runtimes.keys()].find((key) => key.includes(`session=${chatSessionId}|`));
+  if (!match) return false;
+  const entry = runtimes.get(match);
+  if (!entry || typeof entry.runtime.steer !== 'function') return false;
+
+  const result = entry.runtime.steer(text);
+
+  logRuntimeEvent({
+    provider: entry.runtime.provider,
+    runtimeId: entry.runtime.id,
+    eventType: 'lifecycle',
+    event: 'runtime_steer_attempt',
+    data: { key: match, accepted: result },
+  });
+
+  return result;
+}
+
 export async function closeRuntimeForChatSession(chatSessionId: string, reason: string): Promise<void> {
   const matches = [...runtimes.keys()].filter((key) => key.includes(`session=${chatSessionId}|`));
   await Promise.all(matches.map((key) => closeRuntime(key, reason)));

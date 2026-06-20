@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { param } from '../types.js';
 import { logger } from '../logger.js';
-import { ChatService, cancelChatSession, type ChatMessageSender } from '../services/chat.service.js';
+import { ChatService, cancelChatSession, type ChatMessageSender, type ChatQueueItem } from '../services/chat.service.js';
 import { executeChatTool } from '../services/chat-tools.js';
 import { ExecutionService } from '../services/execution.service.js';
 import { InterventionService } from '../services/intervention.service.js';
@@ -166,6 +166,33 @@ export function chatRoutes(db: Db): Router {
     const sessionId = param(req, 'id');
     const result = await cancelChatSession(sessionId, db);
     res.json(result);
+  });
+
+  // POST /api/chat/sessions/:id/steer — Inject a message into the running agent mid-turn.
+  // Falls back to the existing queue if no active turn / non-persistent path.
+  // Auth is enforced by the global requireAuth middleware registered at
+  // app.use('/api', requireAuth) in app.ts — there is no inline middleware here.
+  router.post('/sessions/:id/steer', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      const { content } = req.body ?? {};
+      if (!content || typeof content !== 'string' || !content.trim()) {
+        return res.status(400).json({ error: 'content is required' });
+      }
+      const sender = await readSender(req as AuthedRequest);
+      const result = await chatService.steerRunningAgent(sessionId, content, sender);
+      if ('steered' in result) {
+        return res.json({ steered: true, messageId: (result as { steered: true; messageId: string }).messageId });
+      }
+      const queued = result as { queued: true; item: ChatQueueItem };
+      return res.json({ queued: true, item: queued.item });
+    } catch (err: unknown) {
+      const message = (err as Error).message;
+      if (message.includes('Session not found')) return res.status(404).json({ error: message });
+      if (message.includes('Invalid session id')) return res.status(400).json({ error: message });
+      if (message.includes('Queue limit')) return res.status(409).json({ error: message });
+      res.status(500).json({ error: message });
+    }
   });
 
   // Helper — pull the Allen MCP's x-allen-* context headers off an

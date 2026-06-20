@@ -238,6 +238,12 @@ export interface ModelRegistryEntry {
   updatedAt?: string;
 }
 
+export interface ModelRecoveryProviderGroup {
+  provider: string;
+  providerDisplayName: string;
+  models: Array<{ fullId: string; displayName: string; tier?: 'default' | 'opus' | 'flash' | string | null }>;
+}
+
 // ── System ────────────────────────────────────────────────────────────────
 export type DesktopRuntimeSettingsResponse = {
   desktop: boolean;
@@ -418,6 +424,7 @@ export const system = {
       const q = qs.toString();
       return request<{ models: ModelRegistryEntry[] }>(`/system/models${q ? `?${q}` : ''}`);
     },
+    recovery: () => request<{ providers: ModelRecoveryProviderGroup[] }>('/system/models/recovery'),
     get: (id: string) => request<ModelRegistryEntry>(`/system/models/${id}`),
     create: (data: Record<string, unknown>) =>
       request<ModelRegistryEntry>('/system/models', { method: 'POST', body: JSON.stringify(data) }),

@@ -138,7 +138,31 @@ const SEED_MODELS: SeedEntry[] = [
   { provider: 'kimi', fullId: 'kimi-k2.6', displayName: 'Kimi K2.6', providerDisplayName: 'Kimi', tier: 'opus', costInputPerMTok: 0.95, costOutputPerMTok: 4.00, costCacheReadPerMTok: 0.16 },
   // K2.5: $0.60/M input, $3.00/M output, $0.10/M cached input
   { provider: 'kimi', fullId: 'kimi-k2.5', displayName: 'Kimi K2.5', providerDisplayName: 'Kimi', tier: 'default', costInputPerMTok: 0.60, costOutputPerMTok: 3.00, costCacheReadPerMTok: 0.10 },
+
+  // ── Z.AI / GLM (provider: 'zai') ──
+  // Pricing: https://platform.zai.com/pricing (verified 2026-06-19)
+  { provider: 'zai', fullId: 'glm-5.2[1m]', displayName: 'GLM-5.2 [1M]', providerDisplayName: 'GLM/Z.AI', tier: 'default', costInputPerMTok: 1.40, costOutputPerMTok: 4.40, costCacheReadPerMTok: 0.26 },
+  { provider: 'zai', fullId: 'glm-5.2', displayName: 'GLM-5.2', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 1.40, costOutputPerMTok: 4.40, costCacheReadPerMTok: 0.26 },
+  { provider: 'zai', fullId: 'glm-5.1', displayName: 'GLM-5.1', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 1.40, costOutputPerMTok: 4.40, costCacheReadPerMTok: 0.26 },
+  { provider: 'zai', fullId: 'glm-5', displayName: 'GLM-5', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 1.00, costOutputPerMTok: 3.20, costCacheReadPerMTok: 0.20 },
+  { provider: 'zai', fullId: 'glm-5-turbo', displayName: 'GLM-5 Turbo', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 1.20, costOutputPerMTok: 4.00, costCacheReadPerMTok: 0.24 },
+  { provider: 'zai', fullId: 'glm-4.7', displayName: 'GLM-4.7', providerDisplayName: 'GLM/Z.AI', tier: 'flash', costInputPerMTok: 0.60, costOutputPerMTok: 2.20, costCacheReadPerMTok: 0.11 },
+  { provider: 'zai', fullId: 'glm-4.7-flashx', displayName: 'GLM-4.7 FlashX', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 0.07, costOutputPerMTok: 0.40, costCacheReadPerMTok: 0.01 },
+  { provider: 'zai', fullId: 'glm-4.7-flash', displayName: 'GLM-4.7 Flash', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 0.00, costOutputPerMTok: 0.00, costCacheReadPerMTok: 0.00 },
+  { provider: 'zai', fullId: 'glm-4.6', displayName: 'GLM-4.6', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 0.60, costOutputPerMTok: 2.20, costCacheReadPerMTok: 0.11 },
+  { provider: 'zai', fullId: 'glm-4.5', displayName: 'GLM-4.5', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 0.60, costOutputPerMTok: 2.20, costCacheReadPerMTok: 0.11 },
+  { provider: 'zai', fullId: 'glm-4.5-x', displayName: 'GLM-4.5 X', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 2.20, costOutputPerMTok: 8.90, costCacheReadPerMTok: 0.45 },
+  { provider: 'zai', fullId: 'glm-4.5-air', displayName: 'GLM-4.5 Air', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 0.20, costOutputPerMTok: 1.10, costCacheReadPerMTok: 0.03 },
+  { provider: 'zai', fullId: 'glm-4.5-airx', displayName: 'GLM-4.5 AirX', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 1.10, costOutputPerMTok: 4.50, costCacheReadPerMTok: 0.22 },
+  { provider: 'zai', fullId: 'glm-4.5-flash', displayName: 'GLM-4.5 Flash', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 0.00, costOutputPerMTok: 0.00, costCacheReadPerMTok: 0.00 },
+  { provider: 'zai', fullId: 'glm-4-32b-0414-128k', displayName: 'GLM-4 32B 0414 128K', providerDisplayName: 'GLM/Z.AI', costInputPerMTok: 0.10, costOutputPerMTok: 0.10 },
 ];
+
+function defaultProviderDisplayName(provider: string): string {
+  return SEED_MODELS.find((model) => model.provider === provider)?.providerDisplayName
+    ?? CLAUDE_COMPATIBLE_PROVIDER_CONFIGS.find((config) => config.provider === provider)?.label
+    ?? provider;
+}
 
 /**
  * Static fullIds from the seed list for one provider, in seed order.
@@ -175,6 +199,21 @@ export const LEGACY_ALIAS_LOOKUP_MAP: Record<string, string> = {
   'deepseek-v4-flash': 'deepseek-v4-flash',
   'mimo-v2.5-pro': 'mimo-v2.5-pro',
   'kimi-k2.6': 'kimi-k2.6', 'kimi-k2.5': 'kimi-k2.5',
+  'glm-5.2[1m]': 'glm-5.2[1m]',
+  'glm-5.2': 'glm-5.2',
+  'glm-5.1': 'glm-5.1',
+  'glm-5': 'glm-5',
+  'glm-5-turbo': 'glm-5-turbo',
+  'glm-4.7': 'glm-4.7',
+  'glm-4.7-flashx': 'glm-4.7-flashx',
+  'glm-4.7-flash': 'glm-4.7-flash',
+  'glm-4.6': 'glm-4.6',
+  'glm-4.5': 'glm-4.5',
+  'glm-4.5-x': 'glm-4.5-x',
+  'glm-4.5-air': 'glm-4.5-air',
+  'glm-4.5-airx': 'glm-4.5-airx',
+  'glm-4.5-flash': 'glm-4.5-flash',
+  'glm-4-32b-0414-128k': 'glm-4-32b-0414-128k',
 };
 
 export interface MigrationCounts {
@@ -577,6 +616,55 @@ export class ModelRegistryService {
 
     console.log(`${LOG} Seed sync: ${inserted} inserted, ${refreshed} refreshed, ${preserved} admin-customized preserved`);
     return { inserted, refreshed, preserved };
+  }
+
+  /**
+   * Find a model by provider + fullId. Returns null if not found or inactive.
+   */
+  async getByFullId(provider: string, fullId: string): Promise<ModelRegistryEntry | null> {
+    return this.collection.findOne({ provider, fullId, isActive: true }) as Promise<ModelRegistryEntry | null>;
+  }
+
+  /**
+   * Return active models grouped by provider, used by the UI to populate
+   * the model recovery dropdown. Each group has a `providerDisplayName`
+   * and an array of models with `fullId`, `displayName`, and optional `tier`.
+   */
+  async listAvailableForRecovery(): Promise<Array<{
+    provider: string;
+    providerDisplayName: string;
+    models: Array<{ fullId: string; displayName: string; tier?: string | null }>;
+  }>> {
+    const active = await this.collection
+      .find({ isActive: true })
+      .sort({ provider: 1, sortOrder: 1 })
+      .toArray() as ModelRegistryEntry[];
+    const grouped = new Map<string, { providerDisplayName: string; models: Array<{ fullId: string; displayName: string; tier?: string | null }> }>();
+    for (const entry of active) {
+      const provider = typeof entry.provider === 'string' ? entry.provider.trim() : '';
+      if (!provider) continue;
+
+      const providerDisplayName = typeof entry.providerDisplayName === 'string'
+        ? entry.providerDisplayName.trim()
+        : '';
+      if (!grouped.has(provider)) {
+        grouped.set(provider, { providerDisplayName, models: [] });
+      }
+      const group = grouped.get(provider)!;
+      if (!group.providerDisplayName && providerDisplayName) {
+        group.providerDisplayName = providerDisplayName;
+      }
+      group.models.push({
+        fullId: entry.fullId,
+        displayName: entry.displayName,
+        tier: entry.tier,
+      });
+    }
+    return Array.from(grouped.entries()).map(([provider, group]) => ({
+      provider,
+      providerDisplayName: group.providerDisplayName || defaultProviderDisplayName(provider),
+      models: group.models,
+    }));
   }
 
   // ── Validation ──

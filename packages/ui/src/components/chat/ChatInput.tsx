@@ -465,13 +465,14 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
+    if (disabled) return;
     e.preventDefault();
-    // Stop the drop from also bubbling to a page-level drop zone (which would
-    // upload the same files a second time).
-    e.stopPropagation();
+    // Intentionally NOT stopping propagation — parent drop zones (page-level
+    // useFileDropZone) need the event to bubble so they can reset overlay
+    // state. The parent checks e.defaultPrevented to skip duplicate uploads.
     setDragOver(false);
     if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
-  }, [uploadFiles]);
+  }, [uploadFiles, disabled]);
 
   useImperativeHandle(ref, () => ({
     setValue: (v: string) => {
@@ -740,8 +741,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
       {/* Input container with model selector inside */}
       <div
         className={`chat-composer-field relative transition-colors ${dragOver ? 'is-dragging' : ''}`}
-        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
+        onDragOver={e => { if (disabled) return; e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => { if (disabled) return; setDragOver(false); }}
         onDrop={handleDrop}
       >
         {dragOver && (

@@ -2882,7 +2882,7 @@ export class ExecutionService {
               started_by_user_id: (input.started_by_user_id as string | undefined),
               started_by_user_email: (input.started_by_user_email as string | undefined),
               stage: nodeName,
-              kind: normalizedIntervention?.kind === 'clarify' || normalizedIntervention?.kind === 'review' || normalizedIntervention?.kind === 'recover'
+              kind: normalizedIntervention?.kind === 'clarify' || normalizedIntervention?.kind === 'review' || normalizedIntervention?.kind === 'recover' || normalizedIntervention?.kind === 'model_recovery'
                 ? normalizedIntervention.kind
                 : undefined,
               severity,
@@ -2899,6 +2899,9 @@ export class ExecutionService {
               evidence: normalizedEvidence,
               retry_exhaustion: normalizedIntervention?.retryExhaustion && typeof normalizedIntervention.retryExhaustion === 'object' && !Array.isArray(normalizedIntervention.retryExhaustion)
                 ? normalizedIntervention.retryExhaustion as Record<string, unknown>
+                : undefined,
+              recoveryContext: normalizedIntervention?.recoveryContext && typeof normalizedIntervention.recoveryContext === 'object' && !Array.isArray(normalizedIntervention.recoveryContext)
+                ? normalizedIntervention.recoveryContext as Record<string, unknown>
                 : undefined,
               docs: dedupedDocs,
               round_info: roundInfo,

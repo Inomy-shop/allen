@@ -707,7 +707,9 @@ function workflowAuditSummary(job: Partial<WorkflowSemanticJob>): Record<string,
 function resolveWorkflowDeepEvalScript(): string {
   if (process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT) return process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT;
   const here = dirname(fileURLToPath(import.meta.url));
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   const candidates = [
+    ...(resourcesPath ? [join(resourcesPath, 'server-scripts/deepeval-workflow-evaluator.py')] : []),
     join(here, '../../../scripts/deepeval-workflow-evaluator.py'),
     ...(process.env.ALLEN_DESKTOP === '1' ? [join(here, '../../../../src/scripts/deepeval-workflow-evaluator.py')] : []),
     join(process.cwd(), 'packages/server/src/scripts/deepeval-workflow-evaluator.py'),
