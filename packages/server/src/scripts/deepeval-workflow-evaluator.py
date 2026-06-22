@@ -104,11 +104,6 @@ def main() -> None:
     if not prompt or not judge_url or not judge_secret:
         raise SystemExit("prompt, judgeUrl, and judgeSecret are required")
 
-    try:
-        from deepeval.test_case import LLMTestCase  # noqa: F401
-    except Exception as exc:
-        raise SystemExit(f"DeepEval is not installed or failed to import: {exc}") from exc
-
     judge = AllenDeepEvalJudge(judge_url, judge_secret, provider, model, timeout_ms)
     text = judge.generate(prompt)
     result = parse_json_object(text)

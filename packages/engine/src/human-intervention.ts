@@ -14,6 +14,8 @@ import type {
   NodeDef,
   RetryExhaustionContext,
   WorkflowDef,
+  ModelRecoveryContext,
+  RecoveryState,
 } from './types.js';
 import { renderTemplate } from './template.js';
 
@@ -90,6 +92,122 @@ export function renderClarifyIntervention(
       actions: [{ id: 'answer', label: 'Submit answer', intent: 'submit', route: { type: 'retry', targetNode: nodeName } }],
     },
   );
+}
+
+/**
+ * Build a HumanInterventionPayload for a model_recovery event.
+ * Renders provider + model selectors, an optional reasoning-effort dropdown,
+ * and retry/cancel actions. Attaches a recoveryContext for the UI to consume.
+ *
+ * PRD refs: AC10 (identify failed node/branch), AC11 (model selection),
+ *           R6 (recovery prompt), R7 (user chooses replacement)
+ */
+export function renderModelRecoveryIntervention(
+  nodeName: string,
+  recoveryState: RecoveryState,
+  availableProviders?: string[],
+  availableModels?: string[],
+): HumanInterventionPayload {
+  const humanName = humanizeNodeName(nodeName);
+  const topologyHint = recoveryState.isParallelBranch
+    ? `Branch (${recoveryState.siblingBranches?.length ?? 0} sibling${(recoveryState.siblingBranches?.length ?? 0) !== 1 ? 's' : ''}: ${(recoveryState.siblingBranches ?? []).join(', ')}) — join policy: ${recoveryState.joinPolicy ?? 'wait-all'}`
+    : 'Sequential node';
+
+  // Build failure description
+  const failureDesc = humanReadableFailure(recoveryState.failureCategory, recoveryState.failedProvider, recoveryState.failedModel);
+  const question = [
+    `Agent node "${humanName}" (${topologyHint}) failed due to a model/provider error.`,
+    '',
+    failureDesc,
+    recoveryState.sanitizedError ? `Error: ${recoveryState.sanitizedError}` : undefined,
+    '',
+    `Recovery attempt ${recoveryState.attempt} of ${recoveryState.maxAttempts}. Select a replacement provider and model to retry.`,
+  ].filter(Boolean).join('\n');
+
+  const fields: HumanField[] = [
+    {
+      name: 'provider',
+      type: 'select',
+      label: 'Provider',
+      options: availableProviders ?? [recoveryState.failedProvider || 'claude', 'codex', 'openai'],
+      required: true,
+    },
+    {
+      name: 'model',
+      type: 'select',
+      label: 'Model',
+      options: availableModels ?? [recoveryState.failedModel || 'sonnet'],
+      required: true,
+    },
+    {
+      name: 'reasoning_effort',
+      type: 'select',
+      label: 'Reasoning Effort',
+      options: ['off', 'low', 'medium', 'high', 'max'],
+      required: false,
+    },
+  ];
+
+  const actions: HumanAction[] = [
+    {
+      id: 'retry_with_model',
+      label: 'Retry with selected model',
+      intent: 'retry',
+      route: { type: 'retry', targetNode: nodeName },
+    },
+    {
+      id: 'cancel',
+      label: 'Cancel workflow',
+      intent: 'reject',
+      route: { type: 'end' },
+    },
+  ];
+
+  const recoveryContext: ModelRecoveryContext = {
+    failedProvider: recoveryState.failedProvider,
+    failedModel: recoveryState.failedModel,
+    failureCategory: recoveryState.failureCategory,
+    sanitizedError: recoveryState.sanitizedError,
+    isParallelBranch: recoveryState.isParallelBranch,
+    siblingBranches: recoveryState.siblingBranches,
+    joinPolicy: recoveryState.joinPolicy,
+    attempt: recoveryState.attempt,
+    maxAttempts: recoveryState.maxAttempts,
+  };
+
+  return {
+    kind: 'model_recovery',
+    widget: 'model_recovery',
+    node: nodeName,
+    title: `Model Recovery — ${nodeName}`,
+    question,
+    severity: 'escalation',
+    fields,
+    actions,
+    recoveryContext,
+  };
+}
+
+/** Human-readable description of a failure category. */
+function humanReadableFailure(category: string, provider?: string, model?: string): string {
+  const providerModel = [provider, model].filter(Boolean).join('/');
+  const suffix = providerModel ? ` for ${providerModel}` : '';
+  switch (category) {
+    case 'provider_server_error':
+      return `The provider's servers returned an error${suffix}. Select a different provider or model to retry.`;
+    case 'rate_limit_exhausted':
+      return `Rate limit or quota was exhausted${suffix}. Try a different provider or model.`;
+    case 'session_limit_exhausted':
+      return `Session count limit reached${suffix}. Select a different provider.`;
+    case 'insufficient_balance':
+      return `Insufficient credits or balance${suffix}. Select a different provider, or top up.`;
+    case 'model_unavailable':
+      return `Model "${model ?? 'unknown'}" is unavailable, disabled, or deprecated${provider ? ` on ${provider}` : ''}. Select a different model.`;
+    case 'transient_connectivity':
+      return `Could not reach the provider${suffix}. Select a different provider to retry.`;
+    default:
+      return `The node failed due to a ${category} error${suffix}.`;
+  }
 }
 
 export function buildHumanEvent(
@@ -400,6 +518,7 @@ function widgetForKind(
 ): HumanWidget {
   if (kind === 'clarify') return 'dynamic_form';
   if (kind === 'review') return 'approval_gate';
+  if (kind === 'model_recovery') return 'model_recovery';
   if (retryExhaustion) return 'retry_exhausted_gate';
   return 'escalation_gate';
 }
@@ -435,6 +554,31 @@ function fieldsForWidget(widget: HumanWidget | undefined, kind: HumanInterventio
         name: 'feedback',
         label: 'Feedback',
         type: 'textarea',
+        required: false,
+      },
+    ];
+  }
+  if (widget === 'model_recovery' || kind === 'model_recovery') {
+    return [
+      {
+        name: 'provider',
+        label: 'Provider',
+        type: 'select',
+        options: ['claude', 'codex', 'openai'],
+        required: true,
+      },
+      {
+        name: 'model',
+        label: 'Model',
+        type: 'select',
+        options: ['sonnet'],
+        required: true,
+      },
+      {
+        name: 'reasoning_effort',
+        label: 'Reasoning Effort',
+        type: 'select',
+        options: ['off', 'low', 'medium', 'high', 'max'],
         required: false,
       },
     ];

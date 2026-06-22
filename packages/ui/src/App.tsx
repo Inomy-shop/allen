@@ -9,7 +9,7 @@ import {
   ChevronRight, Plus, Palette, PenTool,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
   SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain, Cpu,
-  Trash2, AlertTriangle, Copy, Check, BarChart3, X,
+  Trash2, AlertTriangle, Copy, Check, BarChart3, X, Lightbulb, Loader2,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
@@ -27,6 +27,8 @@ import { WorkspaceCreateDialog, type WorkspaceCreateRepo } from './components/wo
 import { workspaceChatPath } from './lib/workspace-routes';
 import { workspaceCreateBaseBranch } from './lib/workspace-create';
 import DesignNavPanel from './components/design/DesignNavPanel';
+import DesignStudioCreateDialog from './components/design/DesignStudioCreateDialog';
+import { designStudio, type Workspace as DesignStudioWorkspace } from './services/designStudioService';
 
 interface NavItem {
   to: string;
@@ -51,7 +53,7 @@ interface CommandItem {
   icon: React.ComponentType<{ className?: string }>;
 }
 
-type SidebarPanelId = 'workspaces' | 'navigation';
+type SidebarPanelId = 'design-studio' | 'workspaces' | 'navigation';
 
 interface SidebarWorkspace {
   _id: string;
@@ -190,12 +192,14 @@ const COMMANDS: CommandItem[] = [
   { id: 'agents', label: 'Open teams & agents', group: 'Studio', to: '/agents?section=teams-agents', icon: UsersRound },
 ];
 
-const SIDEBAR_PANEL_ORDER: SidebarPanelId[] = ['navigation', 'workspaces'];
+const SIDEBAR_PANEL_ORDER: SidebarPanelId[] = ['design-studio', 'navigation', 'workspaces'];
 const SIDEBAR_PANEL_LABELS: Record<SidebarPanelId, string> = {
+  'design-studio': 'Design Studio',
   workspaces: 'Workspaces',
   navigation: 'App navigation',
 };
 const WORKSPACE_REPO_COLLAPSE_KEY = 'allen-app-sidebar-collapsed-workspace-repos';
+const WORKSPACE_REPO_RECENT_LIMIT = 5;
 const SETTINGS_ROUTE_DETAILS: Array<{ prefix: string; label: string }> = [
   { prefix: '/settings/runtime', label: 'Runtime' },
   { prefix: '/settings/models', label: 'Models' },
@@ -238,6 +242,17 @@ function workspaceRepoLabel(workspace: SidebarWorkspace): string {
   return workspace.repoName
     ?? workspace.repoPath?.split('/').filter(Boolean).at(-1)
     ?? 'Unknown repo';
+}
+
+function dsStatusInfo(status: DesignStudioWorkspace['profileStatus']): { label: string; cls: string } {
+  switch (status) {
+    case 'pending': return { label: 'Setup needed', cls: 'bg-amber-500/15 text-amber-500' };
+    case 'analyzing': return { label: 'Analyzing…', cls: 'bg-blue-500/15 text-blue-400' };
+    case 'needs_review': return { label: 'Review profile', cls: 'bg-amber-500/15 text-amber-500' };
+    case 'needs_choice': return { label: 'Action needed', cls: 'bg-orange-500/15 text-orange-500' };
+    case 'confirmed': return { label: 'Ready', cls: 'bg-emerald-500/15 text-emerald-500' };
+    default: return { label: 'Unknown', cls: 'bg-theme-subtle/15 text-theme-subtle' };
+  }
 }
 
 function routeTitle(pathname: string, search = ''): string {
@@ -765,7 +780,12 @@ export default function App() {
   const [confirmDeleteWorkspace, setConfirmDeleteWorkspace] = useState<SidebarWorkspace | null>(null);
   const [workspaceCreateRepo, setWorkspaceCreateRepo] = useState<WorkspaceCreateRepo | null>(null);
   const [collapsedWorkspaceRepos, setCollapsedWorkspaceRepos] = useState<Set<string>>(() => loadCollapsedWorkspaceRepos());
+  const [expandedWorkspaceRepos, setExpandedWorkspaceRepos] = useState<Set<string>>(() => new Set());
   const [appVersion, setAppVersion] = useState(__ALLEN_APP_VERSION__);
+  const [dsWorkspaces, setDsWorkspaces] = useState<DesignStudioWorkspace[]>([]);
+  const [dsWorkspacesLoading, setDsWorkspacesLoading] = useState(false);
+  const [dsWorkspaceSearch, setDsWorkspaceSearch] = useState('');
+  const [dsCreateOpen, setDsCreateOpen] = useState(false);
   const sidebarGestureLockRef = useRef(false);
   const sidebarWheelGestureActiveRef = useRef(false);
   const sidebarWheelCanRearmRef = useRef(true);
@@ -792,6 +812,7 @@ export default function App() {
   const workspaceIdFromPath = location.pathname.match(/^\/workspaces\/([^/]+)/)?.[1] ?? null;
   const workspaceIdFromSearch = new URLSearchParams(location.search).get('workspaceId');
   const activeWorkspaceId = workspaceIdFromPath ?? workspaceIdFromSearch ?? chatSessionWorkspaceId;
+  const dsWorkspaceIdFromPath = location.pathname.match(/^\/studio\/workspaces\/([^/]+)/)?.[1] ?? null;
   const routeChatConversationId = location.pathname.match(/^\/chat\/([^/]+)/)?.[1] ?? null;
   const copyableChatConversationId = location.pathname.startsWith('/chat') ? routeChatConversationId ?? activeChatConversationId : null;
   const isWorkspaceChatRoute = location.pathname.startsWith('/chat') && Boolean(activeWorkspaceId);
@@ -827,6 +848,12 @@ export default function App() {
     }
     return ordered.sort((a, b) => b.latest - a.latest);
   }, [sidebarRepos, sidebarWorkspaces, workspaceSearch]);
+
+  const filteredDsWorkspaces = useMemo(() => {
+    const q = dsWorkspaceSearch.trim().toLowerCase();
+    if (!q) return dsWorkspaces;
+    return dsWorkspaces.filter((ws) => ws.name.toLowerCase().includes(q));
+  }, [dsWorkspaces, dsWorkspaceSearch]);
 
   async function openCreateWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
     if (!repo) return;
@@ -1083,10 +1110,28 @@ export default function App() {
     if (!quiet) setSidebarWorkspacesLoading(false);
   }, []);
 
+  const loadDsWorkspaces = useCallback(async (quiet = false) => {
+    if (!quiet) setDsWorkspacesLoading(true);
+    try {
+      const items = await designStudio.listWorkspaces();
+      setDsWorkspaces(items ?? []);
+    } catch (err) {
+      console.error('[design-studio-sidebar] failed to load workspaces', err);
+      if (!quiet) setDsWorkspaces([]);
+    } finally {
+      if (!quiet) setDsWorkspacesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (sidebarPanel !== 'workspaces') return;
     void loadSidebarWorkspaces(false);
   }, [sidebarPanel, loadSidebarWorkspaces]);
+
+  useEffect(() => {
+    if (sidebarPanel !== 'design-studio') return;
+    void loadDsWorkspaces(false);
+  }, [sidebarPanel, loadDsWorkspaces]);
 
   // Keep the sidebar ordered by recent chat activity in real time while it is
   // open: refresh on the workspace-activity event (fired when a chat message is
@@ -1241,6 +1286,14 @@ export default function App() {
       const next = new Set(current);
       next.has(repoKey) ? next.delete(repoKey) : next.add(repoKey);
       saveCollapsedWorkspaceRepos(next);
+      return next;
+    });
+  }
+
+  function toggleWorkspaceRepoMore(repoKey: string) {
+    setExpandedWorkspaceRepos((current) => {
+      const next = new Set(current);
+      next.has(repoKey) ? next.delete(repoKey) : next.add(repoKey);
       return next;
     });
   }
@@ -1423,7 +1476,7 @@ export default function App() {
               className="flex h-full transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
               style={{ transform: `translate3d(-${sidebarPanelIndex * 100}%, 0, 0)` }}
             >
-              <div className="order-2 min-w-0 w-full shrink-0">
+              <div className="order-3 min-w-0 w-full shrink-0">
                 <div className="flex min-h-0 h-full flex-col">
                   <div className="px-4 pb-3 pt-2">
                     <div className="relative">
@@ -1449,6 +1502,13 @@ export default function App() {
                       const collapsed = collapsedWorkspaceRepos.has(group.key);
                       const hasActive = group.items.some((workspace) => workspace._id === activeWorkspaceId);
                       const showItems = !collapsed || hasActive;
+                      const searchingWorkspaces = Boolean(workspaceSearch.trim());
+                      const moreExpanded = expandedWorkspaceRepos.has(group.key) || searchingWorkspaces;
+                      const hiddenWorkspaceCount = Math.max(0, group.items.length - WORKSPACE_REPO_RECENT_LIMIT);
+                      const visibleWorkspaces = moreExpanded
+                        ? group.items
+                        : group.items.slice(0, WORKSPACE_REPO_RECENT_LIMIT);
+                      const showMoreControl = hiddenWorkspaceCount > 0 && !searchingWorkspaces;
                       const repoWorkspace = group.items.find((workspace) => workspace.repoId) ?? group.items[0] ?? null;
                       const savedRepo = group.repo ?? sidebarRepoForWorkspace(sidebarRepos, repoWorkspace, group.label);
                       const repo = savedRepo
@@ -1513,7 +1573,7 @@ export default function App() {
                           </div>
                           {showItems && (
                             <div className="mt-1 space-y-1 pl-4">
-                              {group.items.map((workspace) => {
+                              {visibleWorkspaces.map((workspace) => {
                                 const active = workspace._id === activeWorkspaceId;
                                 const deleting = deletingWorkspaceId === workspace._id;
                                 return (
@@ -1549,6 +1609,20 @@ export default function App() {
                                   </div>
                                 );
                               })}
+                              {showMoreControl && (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleWorkspaceRepoMore(group.key)}
+                                  className="mt-[3px] flex w-full items-center gap-1.5 rounded-[7px] border-0 bg-transparent px-2 py-1.5 text-left font-mono text-[11px] font-medium text-accent transition-colors hover:bg-accent/10"
+                                  aria-expanded={moreExpanded}
+                                >
+                                  <span className="grid place-items-center">
+                                    <ChevronRight className={`h-3 w-3 transition-transform ${moreExpanded ? '-rotate-90' : 'rotate-90'}`} />
+                                  </span>
+                                  <span>{moreExpanded ? 'Show less' : `Show ${hiddenWorkspaceCount} more`}</span>
+                                  <span className="ml-0.5 h-px flex-1 bg-border" />
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1559,6 +1633,88 @@ export default function App() {
               </div>
 
               <div className="order-1 min-w-0 w-full shrink-0">
+                <div className="flex min-h-0 h-full flex-col">
+                  {/* ── Design Studio sidebar panel ── */}
+                  <div className="flex items-center justify-between px-4 pb-2 pt-2">
+                    <div className="flex items-center gap-1.5">
+                      <Palette className="h-3.5 w-3.5 text-theme-muted" />
+                      <span className="text-[12.5px] font-medium text-theme-secondary">Design Studio</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="flex h-6 w-6 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-accent"
+                      title="New design"
+                      aria-label="New design"
+                      onClick={() => setDsCreateOpen(true)}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  {/* Search */}
+                  <div className="px-4 pb-3 pt-1">
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
+                      <input
+                        value={dsWorkspaceSearch}
+                        onChange={(e) => setDsWorkspaceSearch(e.target.value)}
+                        placeholder="Search design workspaces"
+                        className="input h-9 w-full pl-8 pr-3 text-[12px]"
+                        aria-label="Search design workspaces"
+                      />
+                    </div>
+                  </div>
+                  {/* List */}
+                  <div className="scroll-hide flex-1 space-y-1 overflow-y-auto px-2 pb-3">
+                    {dsWorkspacesLoading && (
+                      <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">Loading design workspaces…</div>
+                    )}
+                    {!dsWorkspacesLoading && dsWorkspaces.length === 0 && (
+                      <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">
+                        No design workspaces yet.
+                        <button
+                          type="button"
+                          className="ml-1 text-accent hover:underline"
+                          onClick={() => setDsCreateOpen(true)}
+                        >
+                          Create one
+                        </button>
+                        .
+                      </div>
+                    )}
+                    {!dsWorkspacesLoading && dsWorkspaces.length > 0 && filteredDsWorkspaces.length === 0 && (
+                      <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">No matching workspaces.</div>
+                    )}
+                    {filteredDsWorkspaces.map((ws) => {
+                      const active = ws._id === dsWorkspaceIdFromPath;
+                      const statusInfo = dsStatusInfo(ws.profileStatus);
+                      return (
+                        <button
+                          key={ws._id}
+                          type="button"
+                          tabIndex={0}
+                          onClick={() => navigate(`/studio/workspaces/${ws._id}`)}
+                          className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors ${
+                            active
+                              ? 'border-transparent bg-transparent text-accent'
+                              : 'border-transparent text-theme-muted hover:bg-app-muted hover:text-theme-secondary'
+                          }`}
+                          aria-current={active ? 'true' : undefined}
+                        >
+                          {ws.kind === 'repo'
+                            ? <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-theme-muted" />
+                            : <Lightbulb className="h-3.5 w-3.5 shrink-0 text-theme-muted" />}
+                          <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-5">{ws.name}</span>
+                          <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px] font-medium ${statusInfo.cls}`}>
+                            {statusInfo.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="order-2 min-w-0 w-full shrink-0">
                 <div className="sidebar-inner scroll-hide">
                   {NAV_GROUPS.map(group => (
                     <div key={group.id} className={`nav-group ${group.dividerBefore ? 'mt-2 pt-2 before:mx-3 before:mb-2 before:block before:border-t before:border-app before:content-[""]' : ''}`}>
@@ -1632,6 +1788,17 @@ export default function App() {
               </NavLink>
             )}
           </div>
+
+          {dsCreateOpen && (
+            <DesignStudioCreateDialog
+              onClose={() => setDsCreateOpen(false)}
+              onCreated={(id) => {
+                setDsCreateOpen(false);
+                void loadDsWorkspaces(true);
+                navigate(`/studio/workspaces/${id}`);
+              }}
+            />
+          )}
         </nav>
       )}
 

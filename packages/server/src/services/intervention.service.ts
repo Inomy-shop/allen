@@ -37,7 +37,8 @@ export type InterventionDecision =
   | 'approve'
   | 'request_changes'
   | 'reject'
-  | 'answer';
+  | 'answer'
+  | 'retry_with_model';
 
 export type InterventionScope =
   | 'requirements'
@@ -84,8 +85,8 @@ export interface InterventionDoc {
   started_by_user_id?: string;
   started_by_user_email?: string;
   stage: string;
-  kind?: 'clarify' | 'review' | 'recover';
-  widget?: 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate';
+  kind?: 'clarify' | 'review' | 'recover' | 'model_recovery';
+  widget?: 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate' | 'model_recovery';
   severity: InterventionSeverity;
   title: string;
   summary?: string;
@@ -96,6 +97,7 @@ export interface InterventionDoc {
   actions?: Array<Record<string, unknown>>;
   highlights?: string[];
   evidence?: Array<Record<string, unknown>>;
+  recoveryContext?: Record<string, unknown>;
   retry_exhaustion?: Record<string, unknown>;
   docs: InterventionDocLink[];
   round_info?: { current: number; max: number };
@@ -130,8 +132,8 @@ export interface CreateInterventionInput {
   started_by_user_id?: string;
   started_by_user_email?: string;
   stage: string;
-  kind?: 'clarify' | 'review' | 'recover';
-  widget?: 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate';
+  kind?: 'clarify' | 'review' | 'recover' | 'model_recovery';
+  widget?: 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate' | 'model_recovery';
   severity: InterventionSeverity;
   title: string;
   summary?: string;
@@ -143,6 +145,7 @@ export interface CreateInterventionInput {
   highlights?: string[];
   evidence?: Array<Record<string, unknown>>;
   retry_exhaustion?: Record<string, unknown>;
+  recoveryContext?: Record<string, unknown>;
   docs?: InterventionDocLink[];
   round_info?: { current: number; max: number };
   user_request?: string;
@@ -189,6 +192,7 @@ export class InterventionService {
       highlights: input.highlights,
       evidence: input.evidence,
       retry_exhaustion: input.retry_exhaustion,
+      recoveryContext: input.recoveryContext,
       docs: input.docs ?? [],
       round_info: input.round_info,
       user_request: input.user_request,

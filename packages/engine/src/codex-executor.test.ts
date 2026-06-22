@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { normalizeCodexUsage, aggregateTokenUsage } from './token-usage.js';
+import { resolveCodexNodeRuntimeSettings } from './codex-executor.js';
 
 describe('Codex multi-turn token accumulation', () => {
   it('simulates two turns, aggregates usage correctly', () => {
@@ -28,5 +29,34 @@ describe('Codex multi-turn token accumulation', () => {
     expect(acc?.inputCachedTokens).toBeNull();
     expect(acc?.inputNonCachedTokens).toBe(800);
     expect(acc?.outputTokens).toBe(300);
+  });
+});
+
+
+describe('Codex model recovery override resolution', () => {
+  it('uses execution-scoped recovery model before node and agent defaults', () => {
+    const settings = resolveCodexNodeRuntimeSettings(
+      'plan',
+      {
+        type: 'agent',
+        agent: 'ceo',
+        agentOverrides: { model: 'deepseek-v4-flash', reasoningEffort: 'high' },
+      },
+      {
+        __model_overrides: {
+          plan: [{
+            nodeName: 'plan',
+            provider: 'codex',
+            model: 'gpt-5.4',
+            reasoningEffort: 'medium',
+            attempt: 1,
+            createdAt: '2026-06-20T00:00:00.000Z',
+          }],
+        },
+      },
+      { name: 'ceo', model: 'claude-sonnet-4-6', reasoningEffort: 'low' } as any,
+    );
+
+    expect(settings).toEqual({ model: 'gpt-5.4', reasoningEffort: 'medium' });
   });
 });

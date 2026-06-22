@@ -143,6 +143,22 @@ export const CLAUDE_COMPATIBLE_PROVIDER_CONFIGS: ClaudeCompatibleProviderConfig[
     apiKeyPlaceholder: 'sk-...',
     baseUrlDescription: 'Leave blank to use the default Kimi Anthropic-compatible endpoint (https://api.moonshot.ai/anthropic).',
   },
+  {
+    provider: 'zai',
+    label: 'GLM/Z.AI',
+    apiKeyEnv: 'ALLEN_ZAI_API_KEY',
+    baseUrlEnv: 'ALLEN_ZAI_BASE_URL',
+    modelEnv: 'ALLEN_ZAI_MODEL',
+    opusModelEnv: 'ALLEN_ZAI_OPUS_MODEL',
+    flashModelEnv: 'ALLEN_ZAI_FLASH_MODEL',
+    defaultBaseUrl: 'https://api.z.ai/anthropic',
+    defaultModel: 'glm-5.2[1m]',
+    defaultOpusModel: 'glm-5.2[1m]',
+    defaultFlashModel: 'glm-4.7',
+    modelSuggestions: ['glm-5.2[1m]', 'glm-4.7'],
+    apiKeyPlaceholder: 'za-...',
+    baseUrlDescription: 'Leave blank to use the default Z.AI Anthropic-compatible endpoint (https://api.z.ai/anthropic).',
+  },
 ];
 
 const CLAUDE_COMPATIBLE_PROVIDER_BY_ID = new Map(

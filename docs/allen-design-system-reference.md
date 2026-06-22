@@ -192,17 +192,38 @@ Wordmark:
 
 ### Sidebar
 
-Source: `ui_kits/allen-app/Sidebar.jsx`.
+Source: `packages/ui/src/App.tsx` (the sidebar carousel lives in the `App` component).
 
-Structure:
+Structure — the expanded sidebar is a three-panel **carousel** with a dot selector at the bottom:
 
-- Brand row with `[a]`, `allen`, and mono version like `v0.2`.
-- Navigation groups:
-  - Primary: `new chat`, `executions`, `chats`.
-  - `Sources`: `tickets`, `pull requests`, `workspaces`.
-  - `Org`: `library`, `workflows`.
-  - `Personal`: `settings`.
-- Footer with avatar, user name, email, sign-out icon.
+| Dot | Panel | Contents |
+| --- | --- | --- |
+| Left | Design Studio | Compact list of Design Studio workspaces with status badges, search input, and a + button to create new design workspaces |
+| Center | App navigation | Original nav groups: dashboard, chat, executions, tickets, PRs, workspaces, design, design studio, teams & agents, workflows, settings |
+| Right | Workspaces | Workspace list grouped by repo, with collapse/expand toggles, per-workspace chat links, and per-repo create buttons |
+
+The active panel is controlled by `sidebarPanel` state and changes are animated via `translate3d` with a 300ms cubic-bezier transition. Users switch between panels by:
+
+- Clicking one of the three dots at the bottom of the sidebar.
+- Horizontal scroll (trackpad or mouse wheel) inside the carousel area.
+- Touch swipe (mobile/tablet).
+
+When the sidebar is **collapsed** (icon-only mode), the carousel is hidden and only nav icons are shown with `data-sidebar-tooltip` labels.
+
+When the user is on a `/design` route and the sidebar is expanded, the carousel is replaced with a `DesignNavPanel` that lists design sessions with search and delete.
+
+Brand row with `[a]`, `allen`, and mono version like `v0.2`.
+
+Navigation groups in the center panel:
+
+- `Primary`: `new chat`, `executions`, `chats`.
+- `Sources`: `tickets`, `pull requests`, `workspaces`.
+- `Design`: `design`, `design studio`.
+- `Org`: `library`, `workflows`.
+- `Personal`: `settings`. (Other org/admin items appear in the studio group below.)
+- `Settings` (when on a settings route): `general`, `runtime`, `models`, `usage`, `mcp servers`, plus an `Allen` sub-group for integrations, auth, users, and cron.
+
+Footer with avatar, user name, email, sign-out icon.
 
 Rules:
 

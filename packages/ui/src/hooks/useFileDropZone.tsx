@@ -24,9 +24,9 @@ function isFileDrag(e: DragEvent): boolean {
  * counter so moving the cursor across nested children does not flicker the
  * overlay, and ignores non-file drags (text, links, internal DnD).
  *
- * The composer (ChatInput) stops propagation on its own drop, so dropping
- * directly on it is handled there and never reaches this zone — no double
- * upload.
+ * Composer drops bubble intentionally so this hook can reset its overlay
+ * state; the hook checks `e.defaultPrevented` to avoid double-uploading a
+ * drop the composer already handled.
  */
 export function useFileDropZone(
   onFiles: (files: FileList | File[]) => void,
@@ -59,10 +59,14 @@ export function useFileDropZone(
 
   const onDrop = useCallback((e: DragEvent) => {
     if (disabled) return;
+    // Capture before preventDefault — child handlers (e.g. ChatInput) may
+    // have already handled the drop. The hook uses this flag to skip
+    // duplicate uploads while still resetting overlay state.
+    const alreadyHandled = e.defaultPrevented;
     e.preventDefault();
     counter.current = 0;
     setDragActive(false);
-    if (e.dataTransfer.files?.length) onFiles(e.dataTransfer.files);
+    if (!alreadyHandled && e.dataTransfer.files?.length) onFiles(e.dataTransfer.files);
   }, [disabled, onFiles]);
 
   return { dragActive, dropProps: { onDragEnter, onDragOver, onDragLeave, onDrop } };

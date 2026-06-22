@@ -166,6 +166,9 @@ if [ "$WITH_RERANKER" -eq 1 ]; then
   ok "Installed sentence-transformers"
 fi
 
+"$ALLEN_PYTHON_PATH" -m pip install deepeval
+ok "Installed deepeval"
+
 step "Verifying Python imports"
 "$ALLEN_PYTHON_PATH" - <<'PY'
 import cognee  # noqa: F401

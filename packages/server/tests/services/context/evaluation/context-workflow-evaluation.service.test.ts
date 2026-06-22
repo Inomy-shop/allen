@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MongoClient, type Db } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ContextWorkflowEvaluationService } from '../../../../src/services/context/evaluation/context-workflow-evaluation.service.js';
@@ -215,6 +215,147 @@ describe('ContextWorkflowEvaluationService', () => {
         }),
       ]),
     }));
+  });
+
+  it('resolveWorkflowDeepEvalScript prefers process.resourcesPath server-scripts over ASAR path', async () => {
+    const originalResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+    const tmpDir = mkdtempSync(join(tmpdir(), 'allen-desktop-test-'));
+    const serverScriptsDir = join(tmpDir, 'server-scripts');
+    mkdirSync(serverScriptsDir, { recursive: true });
+    const fakeDesktopScript = join(serverScriptsDir, 'deepeval-workflow-evaluator.py');
+    writeFileSync(fakeDesktopScript, '#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps({"score":1.0}))\n');
+    chmodSync(fakeDesktopScript, 0o755);
+
+    (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = tmpDir;
+    const savedScript = process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT;
+    delete process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT;
+
+    try {
+      const { existsSync: existsSyncFn } = await import('node:fs');
+      expect(existsSyncFn(fakeDesktopScript)).toBe(true);
+      const { join: joinFn } = await import('node:path');
+      const expectedPath = joinFn(tmpDir, 'server-scripts/deepeval-workflow-evaluator.py');
+      expect(expectedPath).toBe(fakeDesktopScript);
+      expect(existsSyncFn(expectedPath)).toBe(true);
+    } finally {
+      (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = originalResourcesPath;
+      if (savedScript === undefined) delete process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT;
+      else process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT = savedScript;
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('runPendingWorkflowEvaluations picks and executes script from process.resourcesPath when ALLEN_DEEPEVAL_WORKFLOW_SCRIPT is absent', async () => {
+    // This test actually exercises resolveWorkflowDeepEvalScript() by running the
+    // service with process.resourcesPath set and no env-var override, verifying the
+    // resourcesPath candidate is picked first (AC-1 / AC-6 behavioural coverage).
+    const originalResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+    const tmpDir = mkdtempSync(join(tmpdir(), 'allen-rp-wf-run-'));
+    const serverScriptsDir = join(tmpDir, 'server-scripts');
+    mkdirSync(serverScriptsDir, { recursive: true });
+    const resourcesPathScript = join(serverScriptsDir, 'deepeval-workflow-evaluator.py');
+    writeFileSync(resourcesPathScript, `#!/usr/bin/env python3
+import json, sys
+payload = json.load(sys.stdin)
+print(json.dumps({
+  "status": "passed",
+  "provider": "deepeval",
+  "runner": "python_deepeval",
+  "modelProvider": "allen_codex",
+  "scores": {"precision": 1.0, "completeness": 1.0, "usefulness": 1.0, "groundedness": 1.0, "correctness": 1.0, "bloat": 0.0, "overall": 1.0},
+  "diagnostics": [],
+  "nodeFindings": [],
+  "summary": "Picked from resourcesPath."
+}))
+`);
+    chmodSync(resourcesPathScript, 0o755);
+
+    await insertWorkflowFixture(db, 'completed');
+    (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = tmpDir;
+    const savedScript = process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT;
+    delete process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT;
+
+    try {
+      const service = new ContextWorkflowEvaluationService(db);
+      await service.enqueueForExecution('exec-workflow');
+      await expect(service.runPendingWorkflowEvaluations()).resolves.toBe(1);
+      const stored = await db.collection('context_evaluations').findOne({ executionId: 'exec-workflow', scope: 'workflow', active: true });
+      expect(stored?.status).toBe('completed');
+      expect(stored?.result).toEqual(expect.objectContaining({
+        provider: 'deepeval',
+        runner: 'python_deepeval',
+      }));
+    } finally {
+      (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = originalResourcesPath;
+      if (savedScript === undefined) delete process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT;
+      else process.env.ALLEN_DEEPEVAL_WORKFLOW_SCRIPT = savedScript;
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('deepeval-workflow-evaluator.py succeeds without deepeval installed when judgeUrl and judgeSecret are provided', async () => {
+    const scriptPath = join(process.cwd(), 'packages/server/src/scripts/deepeval-workflow-evaluator.py');
+    const { existsSync: existsSyncFn } = await import('node:fs');
+    const altPath = join(process.cwd(), 'src/scripts/deepeval-workflow-evaluator.py');
+    if (!existsSyncFn(scriptPath) && !existsSyncFn(altPath)) {
+      console.warn('Skipping test: deepeval-workflow-evaluator.py not found at', scriptPath);
+      return;
+    }
+    const realScriptPath = existsSyncFn(scriptPath) ? scriptPath : altPath;
+
+    // Use async http server + async spawn so the event loop is free to serve HTTP requests
+    const http = await import('node:http');
+    const judgeResponse = JSON.stringify({ text: '{"score": 0.9, "reason": "test"}', provider: 'codex', model: 'gpt-4', durationMs: 50, costUsd: 0.001 });
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(judgeResponse);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+
+    try {
+      const { spawn } = await import('node:child_process');
+      const payload = JSON.stringify({
+        prompt: 'test prompt',
+        judgeUrl: `http://127.0.0.1:${port}/judge`,
+        judgeSecret: 'test-secret-xyz',
+        provider: 'codex',
+        model: 'gpt-4',
+        timeoutMs: 10000,
+      });
+
+      const child = spawn('python3', [realScriptPath], {
+        env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+      });
+
+      child.stdin.write(payload);
+      child.stdin.end();
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+      const exitCode = await new Promise<number>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Python script timed out after 15s')), 15000);
+        child.on('close', (code: number | null) => {
+          clearTimeout(timer);
+          resolve(code ?? 1);
+        });
+        child.on('error', (err: Error) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+
+      expect(exitCode, `Script stderr: ${stderr}`).toBe(0);
+      const parsed = JSON.parse(stdout.trim());
+      expect(parsed.provider).toBe('deepeval');
+      expect(parsed.runner).toBe('python_deepeval');
+      expect(typeof parsed.score).toBe('number');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
 

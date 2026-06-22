@@ -495,6 +495,11 @@ export const executions = {
     const qs = params.toString() ? `?${params.toString()}` : '';
     return request<{ events: ActivityEvent[] }>(`/executions/${id}/activity${qs}`);
   },
+  /** Recover a failed node by retrying with a different provider/model. */
+  recoverModel: (executionId: string, body: { node: string; provider: string; model: string; reasoningEffort?: string }) =>
+    request<{ executionId: string; node: string; status: string; recoveryAttempt: number; selectedProvider: string; selectedModel: string; action: string }>(
+      `/executions/${executionId}/recover-model`, { method: 'POST', body: JSON.stringify(body) },
+    ),
   streamUrl: (id: string) => `${BASE}/executions/${id}/stream`,
 };
 
@@ -931,6 +936,11 @@ export const chat = {
   getQueue: (id: string) => request<ChatQueueItem[]>(`/chat/sessions/${id}/queue`),
   enqueueMessage: (id: string, body: { content: string; agent?: string | null; cwd?: string | null }) =>
     request<ChatQueueItem>(`/chat/sessions/${id}/queue`, { method: 'POST', body: JSON.stringify(body) }),
+  steerExecution: (id: string, body: { content: string }) =>
+    request<{ steered?: boolean; queued?: boolean; messageId?: string; item?: ChatQueueItem }>(
+      `/chat/sessions/${id}/steer`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
   updateQueuedMessage: (id: string, queueId: string, body: { content?: string; status?: 'queued' | 'editing' }) =>
     request<ChatQueueItem>(`/chat/sessions/${id}/queue/${queueId}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteQueuedMessage: (id: string, queueId: string) =>

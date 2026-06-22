@@ -12,7 +12,7 @@ import { ToolCallLog } from '../components/common/ToolCallLog';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, type ChatQueueItem } from '../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
 import WorkspaceChatTabs, { type WorkspaceChatTab, getTabKey } from '../components/chat/WorkspaceChatTabs';
-import { AppWindow, BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Server, Terminal, X } from 'lucide-react';
+import { AppWindow, BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Server, Terminal, X, Check, Navigation2, Pencil, Trash2 } from 'lucide-react';
 import { XTerminal } from '../components/workspace/XTerminal';
 import WorkspaceServersTab from '../components/workspace/WorkspaceServersTab';
 
@@ -887,6 +887,28 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     await sendNow(content, agentOverride, cwdOverride, options);
   }
 
+  // Steer a queued message into the running agent. The item is already persisted
+  // in the queue, so on a successful steer we remove it (otherwise it would also
+  // run when the queue drains). If there is no active turn to steer (race), the
+  // server re-queues it — we de-dupe by dropping the original and keeping the
+  // server's item.
+  async function handleSteerQueued(item: ChatQueueItem) {
+    if (!activeSessionId) return;
+    try {
+      const result = await chatApi.steerExecution(activeSessionId, { content: item.content });
+      if (result?.steered) {
+        await chatApi.deleteQueuedMessage(activeSessionId, item.id).catch(() => {});
+        setQueuedMessages(prev => prev.filter(q => q.id !== item.id));
+        // The steered user message arrives via the steered_message SSE event in useChat.
+      } else if (result?.queued && result?.item) {
+        await chatApi.deleteQueuedMessage(activeSessionId, item.id).catch(() => {});
+        setQueuedMessages(prev => [...prev.filter(q => q.id !== item.id), result.item!]);
+      }
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Failed to steer message');
+    }
+  }
+
   useEffect(() => {
     void refreshQueue(activeSessionId);
     if (!activeSessionId) return;
@@ -1520,8 +1542,9 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
                               })().catch(err => window.alert(err instanceof Error ? err.message : 'Failed to save queued message'));
                             }}
                             title="Save queued message"
+                            aria-label="Save"
                           >
-                            Save
+                            <Check className="w-3.5 h-3.5" />
                           </button>
                           <button
                             type="button"
@@ -1536,12 +1559,23 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
                               })().catch(err => window.alert(err instanceof Error ? err.message : 'Failed to resume queued message'));
                             }}
                             title="Cancel edit"
+                            aria-label="Cancel edit"
                           >
-                            Cancel
+                            <X className="w-3.5 h-3.5" />
                           </button>
                         </>
                       ) : (
                         <>
+                          {streaming && (
+                            <button
+                              type="button"
+                              onClick={() => { void handleSteerQueued(item); }}
+                              title="Steer (inject this message into the running turn)"
+                              aria-label="Steer"
+                            >
+                              <Navigation2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
@@ -1554,8 +1588,9 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
                               })().catch(err => window.alert(err instanceof Error ? err.message : 'Failed to edit queued message'));
                             }}
                             title="Edit queued message"
+                            aria-label="Edit"
                           >
-                            Edit
+                            <Pencil className="w-3.5 h-3.5" />
                           </button>
                           <button
                             type="button"
@@ -1567,8 +1602,9 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
                               })().catch(err => window.alert(err instanceof Error ? err.message : 'Failed to remove queued message'));
                             }}
                             title="Remove queued message"
+                            aria-label="Remove"
                           >
-                            Remove
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </>
                       )}

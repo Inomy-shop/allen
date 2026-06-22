@@ -1,4 +1,4 @@
-import { Circle, CheckCircle, XCircle, Clock, Pause, Loader2 } from 'lucide-react';
+import { Circle, CheckCircle, XCircle, Clock, Pause, Loader2, Cpu } from 'lucide-react';
 
 // v2 Linear-clean: status pills use the .badge-* classes from index.css
 // (soft tint backgrounds, sentence-case, mono font). Cancelled/skipped fall
@@ -12,6 +12,7 @@ const statusConfig: Record<string, { icon: any; cls: string }> = {
   waiting_for_input: { icon: Pause,       cls: 'badge-human' },
   pending:           { icon: Circle,      cls: 'badge-muted' },
   skipped:           { icon: Circle,      cls: 'badge-muted' },
+  model_recovery:    { icon: Cpu,         cls: 'badge-warn' },
 };
 
 export default function StatusBadge({ status }: { status: string }) {
@@ -19,10 +20,12 @@ export default function StatusBadge({ status }: { status: string }) {
   const Icon = cfg.icon;
   const isSpinning = status === 'running';
 
+  const label = status === 'model_recovery' ? 'Model Recovery' : status.replace(/_/g, ' ');
+
   return (
     <span className={`badge ${cfg.cls}`}>
       <Icon className={`w-3 h-3 ${isSpinning ? 'animate-spin' : ''}`} />
-      {status.replace(/_/g, ' ')}
+      {label}
     </span>
   );
 }

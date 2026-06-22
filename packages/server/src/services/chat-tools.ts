@@ -24,6 +24,14 @@ import { AGENT_FALLBACK_CWD } from './chat-providers.js';
 import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
 import { resolveCostUsd } from './model-cost.service.js';
 import { CostRollupService } from './cost-rollup.service.js';
+import {
+  activityToWaitMessage,
+  compactWaitMessages,
+  errorToWaitMessage,
+  finalResponseToWaitMessage,
+  inputRequestToWaitMessage,
+  logToWaitMessage,
+} from './execution-wait-messages.js';
 import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload, type MaterializedAgentFileMetadata, normalizeClaudeUsage, normalizeCodexUsage, aggregateTokenUsage, type TokenUsageInfo } from '@allen/engine';
 import {
   getRuntimeApiBaseUrl,
@@ -538,13 +546,6 @@ function sanitizeFilter(obj: Record<string, unknown>, forbidden: string[]): Reco
   return clean;
 }
 
-function trimForTool(value: unknown, max = 220): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  if (!normalized) return undefined;
-  return normalized.length > max ? `${normalized.slice(0, max)}...` : normalized;
-}
-
 function hasMeaningfulRepoContextUsage(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
@@ -562,64 +563,20 @@ function hasMeaningfulRepoContextUsage(value: unknown): boolean {
   });
 }
 
-function formatActivityForCaller(row: Record<string, unknown>): string | undefined {
-  const agent = trimForTool(row.agent, 60) ?? 'agent';
-  const type = row.type;
-  if (type === 'tool_call') {
-    const tool = trimForTool(row.tool, 80) ?? 'tool';
-    const content = trimForTool(row.content, 140);
-    return content ? `${agent} called ${tool}: ${content}` : `${agent} called ${tool}`;
-  }
-  if (type === 'tool_result') {
-    const tool = trimForTool(row.tool, 80) ?? 'tool';
-    const content = trimForTool(row.content, 140);
-    return content ? `${agent} got ${tool} result: ${content}` : `${agent} received ${tool} result`;
-  }
-  const content = trimForTool(row.content, 180);
-  if (!content) return undefined;
-  return `${agent}: ${content}`;
-}
-
-function formatLogForCaller(log: Record<string, unknown>): string | undefined {
-  const msg = trimForTool(log.message ?? log.content ?? log.command ?? log.tool ?? log.type, 220);
-  if (!msg) return undefined;
-  const node = trimForTool(log.node, 60);
-  const category = trimForTool(log.category, 40);
-  const prefix = node ? `[${node}]` : category ? `[${category}]` : '';
-  return prefix ? `${prefix} ${msg}` : msg;
-}
-
-async function readExecutionLogWindow(
+async function readExecutionLogMessages(
   db: Db,
   executionId: string,
   since?: Date,
-): Promise<{ top_logs: Array<Record<string, unknown>>; log_summary: string[]; latest_log_at?: string }> {
+): Promise<Record<string, unknown>[]> {
   const filter: Record<string, unknown> = { executionId };
   if (since && !Number.isNaN(since.getTime())) filter.timestamp = { $gt: since };
   const logs = await db.collection('execution_logs')
     .find(filter)
     .sort({ timestamp: -1, createdAt: -1 })
-    .limit(8)
+    .limit(10)
     .toArray();
   logs.reverse();
-  const topLogs = logs.map((log) => ({
-    timestamp: log.timestamp ?? log.createdAt,
-    level: log.level,
-    category: log.category ?? log.type,
-    node: log.node ?? null,
-    message: trimForTool(log.message ?? log.content ?? log.command ?? log.tool ?? log.type, 300) ?? '',
-  }));
-  const logSummary = logs
-    .map((log) => formatLogForCaller(log))
-    .filter((line): line is string => Boolean(line))
-    .slice(-5);
-  const latest = logs.length > 0 ? logs[logs.length - 1] : null;
-  const latestAt = latest?.timestamp instanceof Date
-    ? latest.timestamp.toISOString()
-    : latest?.createdAt instanceof Date
-      ? latest.createdAt.toISOString()
-      : undefined;
-  return { top_logs: topLogs, log_summary: logSummary, latest_log_at: latestAt };
+  return logs;
 }
 
 // ── Tool Implementations ──
@@ -806,12 +763,12 @@ const runWorkflow: ChatTool = {
 
 const getExecution: ChatTool = {
   name: 'wait_for_execution',
-  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion. If status="waiting", call again. When completed, includes the agent's response. Also returns recent_activity, top_logs, and activity_summary since activity_since so the caller can narrate what is happening inside the execution — pass the returned activity_cursor back as activity_since on the next call to stream forward.`,
+  description: `Get the status of a workflow or spawned agent execution. If still running, blocks up to 90 seconds waiting for completion. If status="waiting", call again. Returns only status plus up to the last 10 structured messages; completed responses, failures, and input requests are included as messages.`,
   inputSchema: {
     type: 'object',
     properties: {
       execution_id: { type: 'string', description: 'The execution ID to check' },
-      activity_since: { type: 'string', description: 'ISO timestamp cursor. Pass activity_cursor from the previous wait_for_execution response to fetch only newer events.' },
+      activity_since: { type: 'string', description: 'Optional ISO timestamp cursor for compatibility with older callers.' },
     },
     required: ['execution_id'],
   },
@@ -820,33 +777,26 @@ const getExecution: ChatTool = {
     const activitySince = typeof args.activity_since === 'string' ? new Date(args.activity_since) : undefined;
     const executionService = new ExecutionService(db);
 
-    // Helper — pulls the latest activity window for this execution. Used
-    // both when the execution has finished (so the tool's final response
-    // still includes recent events) and when we're about to return
-    // status: "waiting" (so the caller can narrate progress).
-    const { AgentActivityService } = await import('./agent-activity.service.js');
     const activityService = new AgentActivityService(db);
-    const readActivity = async () => {
+    const readMessages = async (
+      exec?: Record<string, unknown>,
+      response?: string,
+    ) => {
       const rows = await activityService.recent(executionId, { since: activitySince, limit: 10 });
-      const logWindow = await readExecutionLogWindow(db, executionId, activitySince);
-      const activitySummary = [
-        ...rows.map((row) => formatActivityForCaller(row as unknown as Record<string, unknown>)),
-        ...logWindow.log_summary,
-      ].filter((line): line is string => Boolean(line)).slice(-8);
-      const cursorCandidates = [
-        rows.length > 0 ? rows[rows.length - 1].at : undefined,
-        logWindow.latest_log_at,
-        activitySince?.toISOString(),
-      ].filter((value): value is string => Boolean(value));
-      const activityCursor = cursorCandidates
-        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
-      return {
-        recent_activity: rows,
-        top_logs: logWindow.top_logs,
-        activity_summary: activitySummary,
-        progress_message: activitySummary.length > 0 ? activitySummary[activitySummary.length - 1] : undefined,
-        activity_cursor: activityCursor,
-      };
+      const logs = await readExecutionLogMessages(db, executionId, activitySince);
+      return compactWaitMessages([
+        ...rows.map((row) => activityToWaitMessage(row as unknown as Record<string, unknown>)),
+        ...logs.map((log) => logToWaitMessage(log)),
+        exec?.status === 'completed'
+          ? finalResponseToWaitMessage(response, exec.completedAt ?? exec.updatedAt, exec.workflowName)
+          : undefined,
+        exec?.status === 'failed'
+          ? errorToWaitMessage(exec.errorMessage, exec.completedAt ?? exec.updatedAt, exec.failedNode ?? exec.workflowName)
+          : undefined,
+        exec?.status === 'waiting_for_input'
+          ? inputRequestToWaitMessage(exec)
+          : undefined,
+      ]);
     };
 
     // Long-poll: wait up to 90s for completion (under MCP 120s timeout)
@@ -856,12 +806,18 @@ const getExecution: ChatTool = {
 
     while (Date.now() < deadline) {
       const exec = await executionService.getById(executionId);
-      if (!exec) return { error: `Execution "${executionId}" not found.` };
+      if (!exec) {
+        return {
+          status: 'not_found',
+          messages: compactWaitMessages([
+            errorToWaitMessage(`Execution "${executionId}" not found.`),
+          ]),
+        };
+      }
 
       if (exec.status !== 'running' && exec.status !== 'queued') {
         // Completed/failed — fetch the agent response from traces
         let response: string | undefined;
-        let sessionId: string | undefined;
         if (exec.status === 'completed') {
           const trace = await db.collection('execution_traces')
             .findOne({ executionId, status: 'completed' }, { sort: { completedAt: -1 } });
@@ -869,80 +825,11 @@ const getExecution: ChatTool = {
             response = (trace.output as Record<string, unknown>)?.response as string
               ?? trace.rawResponse as string
               ?? undefined;
-            sessionId = (trace.output as Record<string, unknown>)?.session_id as string ?? undefined;
           }
         }
-
-        // When paused waiting for input, surface the clarify payload so the
-        // LLM can explain to the user what the workflow is asking for.
-        let inputRequest: Record<string, unknown> | undefined;
-        let pendingIntervention: Record<string, unknown> | undefined;
-        if (exec.status === 'waiting_for_input') {
-          const st = (exec.state ?? {}) as Record<string, unknown>;
-          const waitingNode = Array.isArray(exec.currentNodes) && exec.currentNodes[0] ? exec.currentNodes[0] : undefined;
-          const reason = (st.__reason as string) ?? 'The workflow is waiting for your input.';
-          const fields = (st.__clarify_fields as unknown[]) ?? [
-            { name: 'response', type: 'text', label: 'Your response', required: true },
-          ];
-          const reviewContent = typeof st.__clarify_content === 'string'
-            ? st.__clarify_content
-            : st.__clarify_content != null
-              ? JSON.stringify(st.__clarify_content, null, 2)
-              : undefined;
-          inputRequest = {
-            node: waitingNode,
-            prompt: reason,
-            fields,
-            review_content: reviewContent,
-            review_content_type: st.__clarify_content_type ?? 'markdown',
-            clarify_action: st.__clarify_action ?? 'retry',
-          };
-
-          // Also look up any pending intervention for this execution so the
-          // LLM can offer intervention_id shortcuts (used by InterventionsPage).
-          try {
-            const interventionService = new InterventionService(db);
-            const pending = await interventionService.listForWorkflowRun(executionId);
-            const active = pending.find(p => p.status === 'pending');
-            if (active) {
-              pendingIntervention = {
-                intervention_id: active.intervention_id,
-                severity: active.severity,
-                title: active.title,
-                stage: active.stage,
-              };
-            }
-          } catch {
-            // Intervention service lookup is best-effort — not fatal if it fails.
-          }
-        }
-
-        const finalActivity = await readActivity();
-        // Execution rows store no cost — roll up own + descendant traces on
-        // demand so the caller sees what this run (and anything it spawned)
-        // actually cost.
-        const treeCost = await new CostRollupService(db)
-          .getExecutionTreeCost(executionId)
-          .catch(() => null);
         return {
-          id: exec.id,
-          workflow_name: exec.workflowName,
           status: exec.status,
-          response,
-          session_id: sessionId,
-          completed_nodes: exec.completedNodes,
-          current_nodes: exec.currentNodes,
-          failed_node: exec.failedNode,
-          error: exec.errorMessage,
-          cost: treeCost
-            ? { actual: treeCost.total.costUsd, estimated: treeCost.total.estimatedUsd }
-            : null,
-          duration_ms: exec.durationMs,
-          started_at: exec.startedAt,
-          completed_at: exec.completedAt,
-          input_request: inputRequest,
-          pending_intervention: pendingIntervention,
-          ...finalActivity,
+          messages: await readMessages(exec as unknown as Record<string, unknown>, response),
         };
       }
 
@@ -952,14 +839,9 @@ const getExecution: ChatTool = {
     }
 
     // Still running after 90s — return "waiting" so LLM calls again.
-    // Include the latest activity window so the caller can narrate what
-    // the spawned agent is doing instead of silently polling.
-    const waitingActivity = await readActivity();
     return {
-      id: executionId,
       status: 'waiting',
-      message: 'Execution is still running. Call wait_for_execution again — it will continue waiting.',
-      ...waitingActivity,
+      messages: await readMessages(),
     };
   },
 };
@@ -1441,7 +1323,7 @@ async function runSpawnInBackground(
   const activity: { type: string; tool?: string; timestamp: Date }[] = [];
 
   // Persist spawn activity to agent_activity so the wait tools can return
-  // a `recent_activity` cursor and the UI replay route can hydrate this
+  // compact recent messages and the UI replay route can hydrate this
   // execution's event log on refresh. Fire-and-forget — failures here
   // must never stall the spawn activity stream.
   const activityService = new AgentActivityService(db);

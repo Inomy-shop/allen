@@ -15,6 +15,7 @@ import { evaluateCondition } from './condition-parser.js';
 import { executeCodexNode } from './codex-executor.js';
 import { buildToolCallRecord, type ToolCallRecord } from './tool-call.js';
 import { normalizeModelAlias } from './model-alias.js';
+import { sanitizeErrorSummary } from './model-recovery.js';
 import { buildCostInfo } from './cost-calculator.js';
 import { hasRepoContextLoadingGuidance, withArtifactsGuidance, withMandatoryRepoContext, withNonInteractiveGuidance, withRepoContextLoadingGuidance } from './agent-file-writer.js';
 import { withRepoContextUsageOutput } from './repo-context-usage.js';
@@ -27,6 +28,55 @@ import { statSync, mkdirSync } from 'node:fs';
  * import from the server package. Never fall back to process.cwd() because
  * that's the server's source tree. */
 const AGENT_FALLBACK_CWD = '/tmp/allen';
+
+export const MAIN_AGENT_CALL_MAX_ATTEMPTS = 2;
+const AGENT_RETRY_DIAGNOSTIC_LIMIT = 8;
+
+export function redactAgentRetryDiagnostic(input: string): string {
+  return sanitizeErrorSummary(input)
+    .replace(/(api\s*key\s*[:=]\s*)([^\s,;]+)/gi, '$1<REDACTED>')
+    .replace(/(key\s*[:=]\s*)(sk-[^\s,;]+)/gi, '$1<REDACTED>')
+    .replace(/([A-Za-z0-9_-]{6})[A-Za-z0-9_-]{12,}([A-Za-z0-9_-]{4})/g, '$1…$2');
+}
+
+function compactAgentRetryDiagnostic(input: string): string {
+  return redactAgentRetryDiagnostic(input.replace(/\s+/g, ' ').trim()).slice(0, 600);
+}
+
+function isRetryableAgentFailure(message: string, diagnostics: string[]): boolean {
+  const evidence = [message, ...diagnostics].join('\n');
+  return /exited with code 1\b|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up/i.test(message) ||
+    /\b401\b.*\b(auth|authentication|unauthori[sz]ed|api\s*key|credential)/i.test(evidence) ||
+    /\b(auth|authentication|unauthori[sz]ed|api\s*key|credential).*\b401\b/i.test(evidence) ||
+    /\bauthentication\s+(fails?|failed|error)\b/i.test(evidence) ||
+    /\binvalid\s+(api\s*)?key\b/i.test(evidence) ||
+    /\bapi\s*key\b[^\n.]{0,120}\binvalid\b/i.test(evidence) ||
+    /\binvalid\s+model\b/i.test(evidence) ||
+    /\bmodel\s+not\s+found\b/i.test(evidence) ||
+    /\bmodel\s+unavailable\b/i.test(evidence) ||
+    /\bunknown\s+model\b/i.test(evidence) ||
+    /\bunsupported\s+model\b/i.test(evidence) ||
+    /\bmodel\s+is\s+not\s+supported\b/i.test(evidence);
+}
+
+export function buildAgentRetryExhaustedError(args: {
+  attempts: number;
+  lastError: Error;
+  latestDiagnostics?: string[];
+}): Error {
+  const latestDiagnostics = (args.latestDiagnostics ?? [])
+    .map(compactAgentRetryDiagnostic)
+    .filter(Boolean)
+    .slice(-AGENT_RETRY_DIAGNOSTIC_LIMIT);
+  const lastMessage = compactAgentRetryDiagnostic(args.lastError.message || 'unknown');
+  const details = latestDiagnostics.length > 0
+    ? ` Latest diagnostic logs: ${latestDiagnostics.join(' | ')}`
+    : '';
+  const error = new Error(`_RETRY_EXHAUSTED Agent call failed after ${args.attempts} attempts. Last error: ${lastMessage}.${details}`);
+  (error as Error & { cause?: unknown }).cause = args.lastError;
+  (error as Error & { diagnosticEvidence?: string }).diagnosticEvidence = latestDiagnostics.join('\n');
+  return error;
+}
 type ClaudeCompatibleAgentProvider = string;
 
 function isClaudeCompatibleAgentProvider(provider: unknown): provider is ClaudeCompatibleAgentProvider {
@@ -269,6 +319,9 @@ export interface NodeResult {
     sources: Partial<Record<'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>>;
   };
 
+  /** When a recovery override causes the old session to be discarded, record which session was dropped. */
+  discardedSessionId?: string;
+
   /** Auto-gate verdict if the agent emitted one. */
   gateDecision?: {
     action: 'stop' | 'skip' | 'clarify';
@@ -304,10 +357,14 @@ export async function executeNode(
   switch (type) {
     case 'agent': {
       const role = effectiveNodeDef.agent ? deps.agents[effectiveNodeDef.agent] : undefined;
-      // Effective provider: per-node override wins over agent default.
-      // This lets a workflow cross-override a Claude agent to run on Codex
-      // (or vice versa) without mutating the agent document.
-      const overrideProvider = nodeDef.agentOverrides?.provider;
+      // Effective provider: recovery override wins, then per-node override,
+      // then agent default. This lets a workflow cross-override a Claude agent
+      // to run on Codex (or vice versa) without mutating the agent document.
+      // Recovery overrides are execution-scoped and never persist.
+      // PRD refs: AC12 (execution-scoped override), AC17 (no persistent mutation)
+      const recoveryOverrides = state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
+      const latestRecoveryOverride = recoveryOverrides?.[nodeName]?.at(-1);
+      const overrideProvider = latestRecoveryOverride?.provider ?? nodeDef.agentOverrides?.provider;
       const effectiveProvider =
         isAgentProviderOverride(overrideProvider)
           ? overrideProvider
@@ -369,6 +426,7 @@ async function executeAgentNode(
   deps: NodeExecutorDeps,
 ): Promise<NodeResult> {
   const start = Date.now();
+  let discardedSessionId: string | undefined;
   const role = nodeDef.agent ? deps.agents[nodeDef.agent] : undefined;
   if (nodeDef.agent && !role) {
     throw new Error(`Role not found: ${nodeDef.agent}`);
@@ -376,7 +434,10 @@ async function executeAgentNode(
 
   // Detect Claude-compatible API providers so queryViaCli can receive an env
   // overlay that redirects the Claude Code CLI away from Anthropic.
-  const overrideProviderForAgent = nodeDef.agentOverrides?.provider;
+  // Recovery overrides (execution-scoped) take highest precedence.
+  const recoveryOverridesForAgent = state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
+  const latestRecoveryOverrideForAgent = recoveryOverridesForAgent?.[nodeName]?.at(-1);
+  const overrideProviderForAgent = latestRecoveryOverrideForAgent?.provider ?? nodeDef.agentOverrides?.provider;
   const claudeCompatibleProvider = isClaudeCompatibleAgentProvider(overrideProviderForAgent)
     ? overrideProviderForAgent
     : isClaudeCompatibleAgentProvider(role?.provider)
@@ -653,6 +714,15 @@ ${context}
   // Throttle agent text logs: buffer text and emit when >= 100 chars or every 5th chunk
   let agentTextBuffer = '';
   let agentTextChunkCount = 0;
+  let currentAttemptDiagnostics: string[] = [];
+  const recordAttemptDiagnostic = (message: string) => {
+    const compact = compactAgentRetryDiagnostic(message);
+    if (!compact) return;
+    currentAttemptDiagnostics.push(compact);
+    if (currentAttemptDiagnostics.length > AGENT_RETRY_DIAGNOSTIC_LIMIT) {
+      currentAttemptDiagnostics = currentAttemptDiagnostics.slice(-AGENT_RETRY_DIAGNOSTIC_LIMIT);
+    }
+  };
 
   const { query } = await import('@anthropic-ai/claude-code');
 
@@ -788,14 +858,41 @@ ${context}
     // `agentOverrides` to override the agent's default model / reasoning
     // effort / plan mode for just this node. The agent document itself is
     // read-only from here.
+    //
+    // Execution-scoped recovery overrides (NodeModelOverride from
+    // state.__model_overrides) take highest precedence. They are set
+    // by the model-recovery system when a user retries a failed node
+    // with a different provider/model at execution time.
+    // PRD refs: AC12 (execution-scoped override), AC17 (no persistent mutation)
+    const recoveryOverrides = state.__model_overrides as Record<string, import("./model-recovery.js").NodeModelOverride[]> | undefined;
+    const latestRecoveryOverride = recoveryOverrides?.[nodeName]?.at(-1);
     const override = nodeDef.agentOverrides ?? {};
-    // Normalize aliases (haiku/sonnet/opus) to fully-qualified model IDs so
-    // we don't depend on Claude Code CLI's (possibly stale) alias tables and
-    // trigger API 404s on deprecated versions like claude-3-5-haiku-20241022.
-    const rawModel = (override.model ?? role?.model) ?? 'sonnet';
+    // Recovery override wins, then node-level agentOverrides, then agent default.
+    const rawModel = (latestRecoveryOverride?.model ?? override.model ?? role?.model) ?? 'sonnet';
     const resolvedModel = normalizeModelAlias(rawModel, deps.aliasMap) ?? rawModel;
-    const resolvedEffort = override.reasoningEffort ?? role?.reasoningEffort;
+    const resolvedEffort = latestRecoveryOverride?.reasoningEffort ?? override.reasoningEffort ?? role?.reasoningEffort;
     const resolvedPlanMode = override.planMode ?? role?.planMode ?? false;
+    /**
+     * When the node is running with a recovery override that changes
+     * the provider or model, AND is entering on a retry (existing
+     * session from a prior attempt with a different model), discard
+     * the old session so the agent starts fresh with the replacement
+     * model.
+     *
+     * PRD refs: AC13 (fresh session after model change)
+     */
+    const isRecoveryRetry = latestRecoveryOverride !== undefined && latestRecoveryOverride.attempt > 0;
+    // Capture discarded session id before deletion so the engine can
+    // record it on the NodeTrace (PRD AC13: fresh session after model change).
+    if (isRecoveryRetry) {
+      // Delete the stale session so the next resume query returns
+      // undefined, forcing a full fresh start.
+      const prevSessionKey = resolveSessionKey(nodeName, nodeDef, state);
+      if (sessions[prevSessionKey]) {
+        discardedSessionId = sessions[prevSessionKey];
+        delete sessions[prevSessionKey];
+      }
+    }
 
     // Map effort to Anthropic's documented prompt-keyword triggers. The
     // Claude Code SDK's bundled cli.js doesn't accept --effort in any
@@ -918,7 +1015,11 @@ ${context}
             },
           });
         },
-        stderr: (chunk) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[claude-cli stderr] ${chunk.slice(0, 4000)}` }),
+        stderr: (chunk) => {
+          const message = `[claude-cli stderr] ${chunk.slice(0, 4000)}`;
+          recordAttemptDiagnostic(message);
+          emitLog(deps, nodeName, { level: 'debug', category: 'system', message });
+        },
       });
     } else {
       conv = query({
@@ -951,10 +1052,12 @@ ${context}
               agentTextBuffer += block.text;
               agentTextChunkCount++;
               if (agentTextBuffer.length >= 100 || agentTextChunkCount % 5 === 0) {
+                const message = agentTextBuffer.slice(0, 200);
+                recordAttemptDiagnostic(`[agent] ${message}`);
                 emitLog(deps, nodeName, {
                   category: 'agent',
                   level: 'debug',
-                  message: agentTextBuffer.slice(0, 200),
+                  message,
                 });
                 agentTextBuffer = '';
               }
@@ -1133,7 +1236,7 @@ ${context}
   // spawn in rapid succession (e.g. after a parallel fork that just completed).
   // Retry transparently with a cooldown so transient failures don't crash the
   // whole workflow execution.
-  const MAIN_CALL_MAX_ATTEMPTS = 3;
+  const MAIN_CALL_MAX_ATTEMPTS = MAIN_AGENT_CALL_MAX_ATTEMPTS;
   let initial: Awaited<ReturnType<typeof callAgent>> | null = null;
   let lastMainError: Error | null = null;
   for (let attempt = 1; attempt <= MAIN_CALL_MAX_ATTEMPTS; attempt++) {
@@ -1150,6 +1253,7 @@ ${context}
       });
       throw new Error('Execution cancelled');
     }
+    currentAttemptDiagnostics = [];
     try {
       if (attempt > 1) {
         emitLog(deps, nodeName, {
@@ -1167,6 +1271,8 @@ ${context}
       break; // success
     } catch (err) {
       lastMainError = err instanceof Error ? err : new Error(String(err));
+      recordAttemptDiagnostic(`[agent-call error] ${lastMainError.message}`);
+      const latestDiagnostics = [...currentAttemptDiagnostics];
       const msg = lastMainError.message;
 
       // Cancel path: if the abort fired mid-call the subprocess was
@@ -1185,17 +1291,31 @@ ${context}
         throw new Error('Execution cancelled');
       }
 
-      // Only retry transient SDK errors — not genuine logic errors or
-      // cancels. The `\b` boundary prevents "exited with code 143" from
-      // being matched as a substring of "exited with code 1".
-      const isTransient = /exited with code 1\b|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up/i.test(msg);
-      if (!isTransient || attempt === MAIN_CALL_MAX_ATTEMPTS) {
+      // Retry only provider/model/runtime errors that can plausibly be
+      // resolved by a second attempt or by model-selection HITL after
+      // exhaustion. Genuine task/logic errors keep their original shape.
+      const isRetryable = isRetryableAgentFailure(msg, latestDiagnostics);
+      if (!isRetryable) {
         throw lastMainError;
+      }
+      if (attempt === MAIN_CALL_MAX_ATTEMPTS) {
+        throw buildAgentRetryExhaustedError({
+          attempts: attempt,
+          lastError: lastMainError,
+          latestDiagnostics,
+        });
       }
     }
   }
   if (!initial) {
-    throw lastMainError ?? new Error('Agent call failed after retries');
+    if (lastMainError) {
+      throw buildAgentRetryExhaustedError({
+        attempts: MAIN_CALL_MAX_ATTEMPTS,
+        lastError: lastMainError,
+        latestDiagnostics: currentAttemptDiagnostics,
+      });
+    }
+    throw new Error('Agent call failed after retries');
   }
   allToolCalls.push(...initial.toolCalls);
 
@@ -1207,14 +1327,17 @@ ${context}
 
   // Flush remaining agent text buffer
   if (agentTextBuffer.length > 0) {
+    const message = agentTextBuffer.slice(0, 200);
+    recordAttemptDiagnostic(`[agent] ${message}`);
     emitLog(deps, nodeName, {
       category: 'agent',
       level: 'debug',
-      message: agentTextBuffer.slice(0, 200),
+      message,
     });
   }
 
-  const model = role?.model ?? 'sonnet';
+  // NOTE: do NOT read model here — the effective model (considering agentOverrides)
+  // is computed in the Phase 2 block below as `resolvedModel2` and used for cost.
   const extractLog = (msg: string) => emitLog(deps, nodeName, { level: 'debug', category: 'system', message: `[extraction] ${msg}` });
   const requiredOutputs = outputKeys(nodeDef.outputs).filter(k => !k.startsWith('__'));
   const extractionFailed = (out: Record<string, unknown>) => {
@@ -1399,10 +1522,13 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
   // Re-derive the settings the same way callAgent does internally (see
   // line ~527). These aren't visible in the outer scope so we recompute
   // them here from nodeDef + role.
+  const recoveryOverrides2 = state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
+  const latestRecoveryOverride2 = recoveryOverrides2?.[nodeName]?.at(-1);
   const override2 = nodeDef.agentOverrides ?? {};
-  const rawModel2 = (override2.model ?? role?.model) ?? 'sonnet';
-  const resolvedModel2 = normalizeModelAlias(rawModel2) ?? rawModel2;
-  const resolvedEffort2 = override2.reasoningEffort ?? role?.reasoningEffort;
+  const rawModel2 = (latestRecoveryOverride2?.model ?? override2.model ?? role?.model) ?? 'sonnet';
+  // Pass deps.aliasMap so the re-derived model matches exactly what callAgent used above.
+  const resolvedModel2 = normalizeModelAlias(rawModel2, deps.aliasMap) ?? rawModel2;
+  const resolvedEffort2 = latestRecoveryOverride2?.reasoningEffort ?? override2.reasoningEffort ?? role?.reasoningEffort;
   const resolvedPlanMode2 = override2.planMode ?? role?.planMode ?? false;
   const systemPromptMode2: 'append' | 'custom' =
     process.env.ALLEN_SYSTEM_PROMPT_MODE === 'custom' ? 'custom' : 'append';
@@ -1413,9 +1539,9 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
     'cli';
 
   const overrideSources: Partial<Record<'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>> = {};
-  if (override2.model !== undefined) overrideSources.model = 'node';
+  if (latestRecoveryOverride2?.model !== undefined || override2.model !== undefined) overrideSources.model = 'node';
   else if (role?.model !== undefined) overrideSources.model = 'agent-default';
-  if (override2.reasoningEffort !== undefined) overrideSources.reasoningEffort = 'node';
+  if (latestRecoveryOverride2?.reasoningEffort !== undefined || override2.reasoningEffort !== undefined) overrideSources.reasoningEffort = 'node';
   else if (role?.reasoningEffort !== undefined) overrideSources.reasoningEffort = 'agent-default';
   if (override2.planMode !== undefined) overrideSources.planMode = 'node';
   else if (role?.planMode !== undefined) overrideSources.planMode = 'agent-default';
@@ -1470,9 +1596,11 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
     sessionKey,
     cost: buildCostInfo({
       usage: executionTokenUsage,
-      costInfo: deps.costMap?.[model] ?? (resolvedModel2 ? deps.costMap?.[resolvedModel2] : undefined),
+      // resolvedModel2 is override-aware (agentOverrides.model wins over role?.model)
+      // and normalized via aliasMap — it matches exactly what callAgent ran with.
+      costInfo: deps.costMap?.[resolvedModel2],
       reported: actualCost,
-      model,
+      model: resolvedModel2,
       turns,
     }),
     tokenUsage: executionTokenUsage,
@@ -1483,6 +1611,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
     runtimeContext,
     agentOverrides,
     gateDecision,
+    discardedSessionId,
   };
 }
 

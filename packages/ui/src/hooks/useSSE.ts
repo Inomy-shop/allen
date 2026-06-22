@@ -27,6 +27,7 @@ export function useSSE(url: string | null, onEvent: (e: SSEEvent) => void) {
       'agent_text', 'agent_tool_start', 'agent_tool_complete',
       'input_required', 'input_received',
       'parallel_started', 'parallel_branch_done', 'parallel_joined',
+      'parallel_branch_recovery_paused', 'node_recovery_override_applied',
       'execution_log',
     ];
 

@@ -64,7 +64,7 @@ This separation keeps the product understandable: teams describe ownership, agen
 
 Allen persists product and execution state in MongoDB. Important records include users, teams, agents, repositories, workspaces, chat sessions, workflows, executions, execution traces, interventions, artifacts, uploaded files, settings, and learnings.
 
-Execution observability is a first-class product surface. Users should be able to see what ran, which agent or workflow produced output, what artifacts were saved, what checkpoints were reached, and what changed in the workspace.
+Execution observability is a first-class product surface. Users should be able to see what ran, which agent or workflow produced output, what artifacts were saved, what checkpoints were reached, what changed in the workspace, and — when a model-recovery retry occurred — which provider/model was originally used, why it failed, which replacement was selected, and how many attempts were made.
 
 Important server files:
 
@@ -80,7 +80,7 @@ Important server files:
 - `src/services/soft-delete.ts` — Shared interface (`SoftDeleteFields`), helpers (`softDeleteSet`, `restoreSet`), and the `notDeletedFilter` constant used by route handlers and services to exclude soft-deleted records from queries. Applied across agents, workflows, teams, and skills.
 - `src/services/watcher.service.ts` — Deterministic Execution Watcher: monitors chat-started workflow and agent executions, generates factual status text from execution logs and known milestones, publishes SSE `watcher_update` events, and sends hidden Assistant triggers when execution reaches a terminal or waiting-for-input state. Includes boot-time reconciliation to recover watchers after server restart. See TDD §1–§3 for full design.
 - `src/services/chat-tools.ts` — Implements all 16+ MCP tool handlers (`spawn_agent`, `wait_for_execution`, `resume_execution`, `allen_save_artifact`, etc.). `resume_execution` resolves the resumed agent's LLM session ID through a three-layer fallback: (1) `executions.sessions[agentName]`, (2) `output.session_id` from the latest `execution_traces` document (sorted `{ completedAt: -1, createdAt: -1 }`), (3) `exec.input.session_id`. When a session ID is found via layer 2 or 3, it is written back to the sessions map before the spawn so future resumes use the fast primary path. Chat-started workflow executions (`source === 'chat'` with a truthy `workflowId`) are routed to the checkpoint-based workflow-resume path rather than the agent-resume path. `spawn_agent` captures provider token usage from Codex `turn.completed` events and Claude SDK `result` messages, aggregates across turns using `aggregateTokenUsage`, and persists the normalized `TokenUsageInfo` onto the execution row.
-- `src/services/chat.service.ts` — `resolveMentions()` resolves `@ENG-123`-style tokens to Linear ticket context and `@name` tokens to workflow/repo/agent context before the LLM call. `ChatSession.source` accepts `'ui' | 'slack' | 'automation'`; automation sessions carry an `automationKey` field used as a deduplication key. `appendAutomationMessage(sessionId, role, content)` inserts a message into an automation thread without starting a live LLM session (content capped at 1 MB, `role:admin` rejected, throws `'Not an automation session'` if `session.source !== 'automation'`).
+- `src/services/chat.service.ts` — `resolveMentions()` resolves `@ENG-123`-style tokens to Linear ticket context and `@name` tokens to workflow/repo/agent context before the LLM call. `ChatSession.source` accepts `'ui' | 'slack' | 'automation'`; automation sessions carry an `automationKey` field used as a deduplication key. `appendAutomationMessage(sessionId, role, content)` inserts a message into an automation thread without starting a live LLM session (content capped at 1 MB, `role:admin` rejected, throws `'Not an automation session'` if `session.source !== 'automation'`). `steerRunningAgent(sessionId, content, sender?)` injects a user message into the running agent turn mid-turn; if the persistent runtime cannot accept steering, it transparently falls back to `enqueueQueuedMessage`.
 - `src/services/cron.service.ts` — Scheduler using `node-cron`. For agent-target jobs where `agentName === job.name`, `ensureLinkedSession()` upserts a persistent `chat_sessions` document keyed by `automationKey` (race-safe via `$setOnInsert` + E11000 fallback), then injects an `AUTOMATION_CONTEXT` block into the agent prompt (`LINKED_CHAT_SESSION_ID`, `AUTOMATION_API_TOKEN`, `AUTOMATION_MESSAGE_URL`) so the agent can POST its output back to the linked thread. The `AUTOMATION_API_TOKEN` is minted with a 5-minute TTL (via `signAccessToken(..., '5m')`) to avoid persisting a long-lived credential in the `chat_messages` collection. A stale-pointer recovery path re-links `cron_jobs.linkedChatSessionId` if the session was deleted and recreated.
 - `src/services/cron-seed.service.ts` — Seeds built-in cron jobs covering repo scans/pulls, PR sync, MCP bundle cleanup, CodeRabbit PR-comment sweeps, and the hourly self-healing monitor. When `SEED_OVERRIDE` is set, display fields and schedules are refreshed on existing rows, but `linkedChatSessionId` is intentionally excluded from the `$set` so any persistent automation chat thread survives restarts.
 - `services/slack.service.ts`, `services/slack-notifier.ts` - Slack integrations.
@@ -105,6 +105,7 @@ Responsibilities:
 - Repo manager.
 - Ticket and PR views.
 - **Design tab** (`/design`, `/design/:designSessionId`): design-session list, active conversation, composer, routing selector, design/source repo selectors, run-progress panel, artifact list, and optional preview panel. When no design repo is configured, shows a setup panel with options to onboard an existing repo or bootstrap a `ui-designs` template.
+- **Sidebar carousel**: the expanded sidebar shows three panels switched via a dot selector at the bottom: Design Studio (left dot, lists Design Studio workspaces with status badges and search), main app navigation (center dot, default), and code workspaces (right dot). On `/design` routes the carousel is replaced by a dedicated `DesignNavPanel` for design-session history. When collapsed, the sidebar shows only icon navigation with tooltips.
 - Settings for agents, MCP (including preset and repo-based registration with Python MCP support), integrations, and users.
 
 Key activity page components:
@@ -180,11 +181,12 @@ MongoDB stores all operational state. Collections are created and indexed by ser
 4. Engine loads the workflow YAML and initial input.
 5. Nodes run in order, with condition and parallel support.
 6. Agent nodes spawn Claude Code CLI or SDK sessions.
-7. Human nodes create interventions/checkpoints when input is required.
-8. Node logs and state changes stream to the UI.
-9. The watcher polls execution status, generates factual status text from execution logs and milestone terms, and emits `watcher_update` SSE events. Reaching terminal or waiting-for-input states triggers a hidden Assistant trigger (deduplicated per state).
-10. Outputs and artifacts are persisted.
-11. Final status and summaries are visible in the execution detail page.
+7. **Model recovery** — if an agent node fails with a recoverable provider error (rate limit, server error, model unavailable, transient connectivity, or session exhaustion), the engine classifies the failure, pauses the node, and emits an `input_required` SSE event with `kind: 'model_recovery'`. The operator selects a replacement provider/model; the engine reruns only the failed node with an execution-scoped override. In parallel forks, completed sibling branches are preserved while the failed branch recovers. After bounded retries (default 3), unrecovered nodes escalate as terminal failures.
+8. Human nodes create interventions/checkpoints when input is required.
+9. Node logs and state changes stream to the UI.
+10. The watcher polls execution status, generates factual status text from execution logs and milestone terms, and emits `watcher_update` SSE events. Reaching terminal or waiting-for-input states triggers a hidden Assistant trigger (deduplicated per state).
+11. Outputs and artifacts are persisted.
+12. Final status and summaries are visible in the execution detail page.
 
 ## Workspace Lifecycle
 

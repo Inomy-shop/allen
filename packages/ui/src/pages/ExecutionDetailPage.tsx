@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useExecution, type TimelineEvent, type NodeState } from '../hooks/useExecution';
 import { useResizable } from '../hooks/useResizable';
-import { executions as api, authHeaders, interventions as interventionsApi, repos as reposApi, system as systemApi, type RunStatus, type SpawnedChild } from '../services/api';
+import { executions as api, authHeaders, interventions as interventionsApi, repos as reposApi, system as systemApi, type ModelRecoveryProviderGroup, type RunStatus, type SpawnedChild } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import CostDisplay from '../components/common/CostDisplay';
 import TokenUsageDisplay from '../components/common/TokenUsageDisplay';
@@ -32,6 +32,7 @@ import { ToolCallRow, type ToolCall } from '../components/common/ToolCallLog';
 import { buildTracesForTimeline } from '../utils/executionState';
 import { workspaceChatPath } from '../lib/workspace-routes';
 import { registryDefaultModelForProvider, getModelDisplay } from '../hooks/useModelRegistry';
+import { pickRecoveryDefaultModel } from '../utils/modelRecoveryDefaults';
 
 type ExecutionRightPanelView = 'node' | 'rerun' | 'artifacts';
 
@@ -199,6 +200,260 @@ function looksLikeApprovalInput(
   });
 }
 
+type ModelRecoveryStateView = Record<string, unknown>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function resolveModelRecoveryState(raw: unknown, node?: string): ModelRecoveryStateView | null {
+  if (!isRecord(raw)) return null;
+  if (asString(raw.nodeName) === node || (raw.failureCategory && (raw.failedProvider || raw.failedModel))) {
+    return raw;
+  }
+  if (node && isRecord(raw[node])) return raw[node] as ModelRecoveryStateView;
+  for (const value of Object.values(raw)) {
+    if (isRecord(value) && (value.failureCategory || value.failedProvider || value.failedModel)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function modelRecoveryStateFromTrace(trace: unknown, node?: string): ModelRecoveryStateView | null {
+  if (!isRecord(trace)) return null;
+  if (node && asString(trace.node) !== node) return null;
+  const attempt = isRecord(trace.modelRecoveryAttempt)
+    ? trace.modelRecoveryAttempt as Record<string, unknown>
+    : null;
+  if (!attempt) return null;
+  return {
+    nodeName: asString(trace.node) ?? node,
+    attempt: attempt.recoveryAttempt ?? 1,
+    maxAttempts: attempt.maxAttempts ?? 3,
+    failedProvider: attempt.originalProvider,
+    failedModel: attempt.originalModel,
+    failureCategory: attempt.failureCategory,
+    sanitizedError: attempt.errorSummary ?? attempt.sanitizedError,
+  };
+}
+
+function ModelRecoveryDialog({
+  executionId,
+  node,
+  recoveryState,
+  intervention,
+  onClose,
+  onSubmitted,
+}: {
+  executionId: string;
+  node: string;
+  recoveryState: ModelRecoveryStateView;
+  intervention?: Record<string, unknown> | null;
+  onClose: () => void;
+  onSubmitted: () => void;
+}) {
+  const failedProvider = asString(recoveryState.failedProvider);
+  const failedModel = asString(recoveryState.failedModel);
+  const failureCategory = asString(recoveryState.failureCategory) ?? 'model_provider_failure';
+  const sanitizedError = asString(recoveryState.sanitizedError);
+  const attempt = Number(recoveryState.attempt ?? 1);
+  const maxAttempts = Number(recoveryState.maxAttempts ?? 1);
+  const prompt = asString(intervention?.question);
+
+  const [providerGroups, setProviderGroups] = useState<ModelRecoveryProviderGroup[]>([]);
+  const [loadingModels, setLoadingModels] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState('');
+  const [selectedModel, setSelectedModel] = useState('');
+  const [reasoningEffort, setReasoningEffort] = useState('off');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingModels(true);
+    setLoadError(null);
+    systemApi.models.recovery()
+      .then((result) => {
+        if (cancelled) return;
+        setProviderGroups((result.providers ?? []).filter((group) => group.models.length > 0));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLoadError((err as Error).message || 'Failed to load model registry');
+        setProviderGroups([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingModels(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (providerGroups.length === 0) return;
+    setSelectedProvider((current) => {
+      if (current && providerGroups.some((group) => group.provider === current)) return current;
+      const preferred = providerGroups.find((group) => group.provider === 'claude' && group.provider !== failedProvider)
+        ?? providerGroups.find((group) => group.provider !== failedProvider)
+        ?? providerGroups.find((group) => group.provider === failedProvider)
+        ?? providerGroups[0];
+      return preferred?.provider ?? '';
+    });
+  }, [failedProvider, providerGroups]);
+
+  const selectedProviderGroup = useMemo(
+    () => providerGroups.find((group) => group.provider === selectedProvider) ?? null,
+    [providerGroups, selectedProvider],
+  );
+
+  useEffect(() => {
+    if (!selectedProviderGroup) {
+      setSelectedModel('');
+      return;
+    }
+    setSelectedModel((current) => {
+      if (current && selectedProviderGroup.models.some((model) => model.fullId === current)) return current;
+      if (selectedProviderGroup.provider === failedProvider && failedModel
+        && selectedProviderGroup.models.some((model) => model.fullId === failedModel)) {
+        return failedModel;
+      }
+      return pickRecoveryDefaultModel(selectedProviderGroup.provider, selectedProviderGroup.models);
+    });
+  }, [failedModel, failedProvider, selectedProviderGroup]);
+
+  const submit = async () => {
+    if (!selectedProvider || !selectedModel) return;
+    setSubmitting(true);
+    try {
+      await api.recoverModel(executionId, {
+        node,
+        provider: selectedProvider,
+        model: selectedModel,
+        reasoningEffort,
+      });
+      onSubmitted();
+    } catch (err) {
+      alert(`Failed to approve model change: ${(err as Error).message}`);
+      setSubmitting(false);
+    }
+  };
+
+  const selectedProviderLabel = selectedProviderGroup?.providerDisplayName || selectedProvider;
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 px-4">
+      <div className="w-full max-w-2xl rounded-2xl border border-[rgb(var(--color-border)/0.75)] bg-app-card shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-[rgb(var(--color-border)/0.55)] px-6 py-5">
+          <div className="flex gap-3">
+            <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/12 text-amber-500">
+              <Cpu className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="overline mb-1 text-amber-500">Model recovery</div>
+              <h2 className="text-lg font-semibold text-theme-primary">Approve model change for {node}</h2>
+              <p className="mt-1 text-sm text-theme-muted">
+                The node failed after the automatic retry. Pick a DB-registered provider/model and resume this workflow.
+              </p>
+            </div>
+          </div>
+          <button className="rounded-lg p-1 text-theme-muted hover:bg-app-muted hover:text-theme-primary" onClick={onClose} aria-label="Close model recovery dialog">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-5 px-6 py-5">
+          <div className="rounded-xl border border-amber-500/25 bg-amber-500/8 p-4 text-sm">
+            <div className="flex items-center gap-2 font-medium text-theme-primary">
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              {failureCategory.replace(/_/g, ' ')}
+            </div>
+            <div className="mt-2 grid gap-2 text-theme-muted sm:grid-cols-2">
+              <div>Failed provider: <span className="font-mono text-theme-primary">{failedProvider ?? 'unknown'}</span></div>
+              <div>Failed model: <span className="font-mono text-theme-primary">{failedModel ?? 'unknown'}</span></div>
+              <div>Attempt: <span className="font-mono text-theme-primary">{Number.isFinite(attempt) ? attempt : 1}/{Number.isFinite(maxAttempts) ? maxAttempts : 1}</span></div>
+            </div>
+            {sanitizedError && (
+              <pre className="mt-3 max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-black/10 p-3 text-xs text-theme-muted">{sanitizedError}</pre>
+            )}
+            {!sanitizedError && prompt && (
+              <pre className="mt-3 max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-black/10 p-3 text-xs text-theme-muted">{prompt}</pre>
+            )}
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="space-y-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-theme-muted">Provider</span>
+              <select
+                className="w-full rounded-lg border border-[rgb(var(--color-border)/0.7)] bg-app-bg px-3 py-2 text-sm text-theme-primary outline-none focus:border-theme-primary"
+                value={selectedProvider}
+                disabled={loadingModels || submitting}
+                onChange={(event) => setSelectedProvider(event.target.value)}
+              >
+                {providerGroups.map((group) => (
+                  <option key={group.provider} value={group.provider}>{group.providerDisplayName || group.provider}</option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-theme-muted">Model</span>
+              <select
+                className="w-full rounded-lg border border-[rgb(var(--color-border)/0.7)] bg-app-bg px-3 py-2 text-sm text-theme-primary outline-none focus:border-theme-primary"
+                value={selectedModel}
+                disabled={!selectedProviderGroup || loadingModels || submitting}
+                onChange={(event) => setSelectedModel(event.target.value)}
+              >
+                {(selectedProviderGroup?.models ?? []).map((model) => (
+                  <option key={model.fullId} value={model.fullId}>{model.displayName || model.fullId}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label className="block space-y-2">
+            <span className="text-xs font-medium uppercase tracking-wide text-theme-muted">Reasoning effort</span>
+            <select
+              className="w-full rounded-lg border border-[rgb(var(--color-border)/0.7)] bg-app-bg px-3 py-2 text-sm text-theme-primary outline-none focus:border-theme-primary"
+              value={reasoningEffort}
+              disabled={submitting}
+              onChange={(event) => setReasoningEffort(event.target.value)}
+            >
+              {['off', 'low', 'medium', 'high', 'max'].map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+
+          {loadError && (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">{loadError}</div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-[rgb(var(--color-border)/0.55)] px-6 py-4">
+          <div className="text-xs text-theme-muted">
+            Selection: <span className="font-mono text-theme-primary">{selectedProviderLabel || '—'} / {selectedModel || '—'}</span>
+          </div>
+          <div className="flex gap-2">
+            <button className="rounded-lg border border-[rgb(var(--color-border)/0.7)] px-4 py-2 text-sm text-theme-muted hover:bg-app-muted hover:text-theme-primary" onClick={onClose} disabled={submitting}>
+              Dismiss
+            </button>
+            <button
+              className="rounded-lg bg-theme-primary px-4 py-2 text-sm font-medium text-app-bg disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => { void submit(); }}
+              disabled={submitting || loadingModels || !selectedProvider || !selectedModel}
+            >
+              {submitting ? 'Approving…' : 'Approve model change'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorkflowTraceTable({
   nodeStates,
   traces,
@@ -267,6 +522,12 @@ function WorkflowTraceTable({
               }
             }
 
+            // Check if any deduped trace has modelRecoveryAttempt or discardedSessionId
+            const latestTrace = deduped.length > 0 ? deduped[deduped.length - 1] : null;
+            const recoveryAttempt = latestTrace?.modelRecoveryAttempt as
+              { recoveryAttempt: number; originalProvider: string; originalModel: string; selectedProvider: string; selectedModel: string; failureCategory: string } | undefined;
+            const hasDiscardedSession = latestTrace?.discardedSessionId != null;
+
             return (
               <tr
                 key={name}
@@ -275,7 +536,24 @@ function WorkflowTraceTable({
                   selectedNode === name ? 'bg-accent-blue/10' : ''
                 }`}
               >
-                <td className="px-4 py-2 font-mono text-theme-primary">{name}</td>
+                <td className="px-4 py-2 font-mono text-theme-primary">
+                  {name}
+                  {recoveryAttempt && (
+                    <div className="mt-1 flex items-center gap-1">
+                      <span
+                        className="inline-flex items-center gap-1 rounded border border-accent-orange/25 bg-accent-orange/5 px-1.5 py-0.5 text-[9px] font-mono text-accent-orange"
+                        title={`Failed provider: ${recoveryAttempt.originalProvider}/${recoveryAttempt.originalModel} · ${recoveryAttempt.failureCategory}`}
+                      >
+                        Recovery #{recoveryAttempt.recoveryAttempt} → {recoveryAttempt.selectedProvider}/{recoveryAttempt.selectedModel}
+                      </span>
+                    </div>
+                  )}
+                  {hasDiscardedSession && !recoveryAttempt && (
+                    <div className="mt-1 text-[9px] font-mono text-theme-muted">
+                      Previous session discarded
+                    </div>
+                  )}
+                </td>
                 <td className="px-4 py-2"><StatusBadge status={state.status} /></td>
                 <td className="px-4 py-2 text-theme-secondary tabular-nums font-mono">{state.attempt}</td>
                 <td className="px-4 py-2 text-theme-secondary tabular-nums font-mono">
@@ -1335,7 +1613,7 @@ function RunContextPanel({
           <div className="flex items-center gap-2">
             {expanded ? <ChevronDown className="w-3.5 h-3.5 text-theme-muted shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-theme-muted shrink-0" />}
             <div className="text-[13px] font-semibold text-theme-primary">Context</div>
-            <StatusBadge status={execution.status} />
+            <StatusBadge status={execution.status === 'waiting_for_input' && execution.state?.__recovery_state != null ? 'model_recovery' : execution.status} />
           </div>
           <div className="mt-1 flex items-center gap-2 min-w-0 text-[10px] text-theme-subtle font-mono">
             <span className="capitalize shrink-0">{phaseLabel(phase)}</span>
@@ -2119,7 +2397,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="truncate text-[22px] font-semibold leading-tight text-theme-primary">{agentName}</h1>
-                <StatusBadge status={execution.status} />
+                <StatusBadge status={execution.status === 'waiting_for_input' && execution.state?.__recovery_state != null ? 'model_recovery' : execution.status} />
                 {execution.status === 'running' && <span className="h-2 w-2 rounded-full bg-accent-green animate-pulse" />}
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-theme-muted">
@@ -2554,6 +2832,10 @@ export default function ExecutionDetailPage() {
   const [feedbackEntries, setFeedbackEntries] = useState<Array<{ id: string; content: string; targetNodes?: string[]; createdAt: string; createdBy?: string }>>([]);
   const [approvalModalOpen, setApprovalModalOpen] = useState(false);
 
+  // Model recovery state — populated by SSE events
+  const [recoveryOverrideNodes, setRecoveryOverrideNodes] = useState<Map<string, { recoveryAttempt: number; selectedProvider: string; selectedModel: string }>>(() => new Map());
+  const [recoveryPausedBranches, setRecoveryPausedBranches] = useState<Map<string, { node: string; siblingBranches?: string[] }>>(() => new Map());
+
   // Input dialog is dismissible — user can close it to look at nodes/logs
   // and reopen via the header "Respond" button. The dismissed flag resets
   // whenever a new input request arrives or the execution resumes.
@@ -2645,12 +2927,44 @@ export default function ExecutionDetailPage() {
   }, [loadRunInterventions, execution?.status]);
 
   const pendingIntervention = runInterventions.find((i: any) => i.status === 'pending');
-  const approvalPending = Boolean(pendingIntervention || runContext?.humanInput?.required);
   const latestInputNode = latestInputEvent?.data?.node as string | undefined;
   const latestInputFields = Array.isArray(latestInputEvent?.data?.fields)
     ? (latestInputEvent.data.fields as Array<{ name?: string; type?: string; options?: unknown[] }>)
     : [];
-  const waitingInputLooksLikeApproval = looksLikeApprovalInput(latestInputNode, latestInputFields);
+  const waitingNodeForInput = execution?.status === 'waiting_for_input'
+    ? (latestInputNode
+      ?? ((Array.isArray(execution.currentNodes) && execution.currentNodes[0]) || undefined))
+    : undefined;
+  const latestModelRecoveryIntervention = isRecord(latestInputEvent?.data?.intervention)
+    ? latestInputEvent.data.intervention as Record<string, unknown>
+    : null;
+  const latestModelRecoveryTrace = [...traces].reverse().find((trace: any) => (
+    trace?.modelRecoveryAttempt
+    && (!waitingNodeForInput || trace.node === waitingNodeForInput)
+  ));
+  const latestInputFieldNames = latestInputFields
+    .map((field) => (field.name ?? '').toLowerCase())
+    .filter(Boolean);
+  const latestInputLooksLikeModelRecovery = latestModelRecoveryIntervention?.kind === 'model_recovery'
+    || latestModelRecoveryIntervention?.widget === 'model_recovery'
+    || (latestInputFieldNames.includes('provider') && latestInputFieldNames.includes('model'));
+  const traceBackedModelRecoveryState = execution?.status === 'waiting_for_input'
+    && (!latestInputEvent || latestInputLooksLikeModelRecovery)
+    ? modelRecoveryStateFromTrace(latestModelRecoveryTrace, waitingNodeForInput)
+    : null;
+  const activeModelRecoveryState = execution?.status === 'waiting_for_input'
+    ? (resolveModelRecoveryState((execution.state ?? {}).__recovery_state, waitingNodeForInput)
+      ?? (isRecord(latestModelRecoveryIntervention?.recoveryContext)
+        ? latestModelRecoveryIntervention.recoveryContext as ModelRecoveryStateView
+        : null)
+      ?? traceBackedModelRecoveryState)
+    : null;
+  const isModelRecoveryWaiting = Boolean(activeModelRecoveryState)
+    || latestModelRecoveryIntervention?.kind === 'model_recovery'
+    || latestModelRecoveryIntervention?.widget === 'model_recovery';
+  const effectivePendingIntervention = isModelRecoveryWaiting ? undefined : pendingIntervention;
+  const approvalPending = Boolean(effectivePendingIntervention || (!isModelRecoveryWaiting && runContext?.humanInput?.required));
+  const waitingInputLooksLikeApproval = isModelRecoveryWaiting || looksLikeApprovalInput(latestInputNode, latestInputFields);
 
   // Auto-select node based on execution state.
   // IMPORTANT: the right-side detail pane should NOT auto-follow the running
@@ -2889,6 +3203,10 @@ export default function ExecutionDetailPage() {
     : undefined;
   const selectedState = selectedNode ? nodeStates.get(selectedNode) : undefined;
   const isPaused = execution.status === 'waiting_for_input' && !latestInputEvent;
+  // When execution is waiting_for_input and has active recovery state, show
+  // "Model Recovery" badge instead of generic "Waiting for Input".
+  const hasRecoveryState = isModelRecoveryWaiting;
+  const badgeStatus = hasRecoveryState ? 'model_recovery' : execution.status;
 
   // Compute total cost from node states (more accurate for live executions)
   const liveCost = (() => {
@@ -2948,13 +3266,13 @@ export default function ExecutionDetailPage() {
             <h1 className="text-[20px] font-semibold text-theme-primary tracking-tight truncate">
               {execution.workflowName}
             </h1>
-            <StatusBadge status={execution.status} />
-            {isPaused && (
+            <StatusBadge status={badgeStatus} />
+            {isPaused && !hasRecoveryState && (
               <span className="badge bg-accent-orange/10 text-accent-orange gap-1">
                 <Pause className="w-3 h-3" /> paused
               </span>
             )}
-            {execution.status === 'waiting_for_input' && inputDialogDismissed && !pendingIntervention && (
+            {execution.status === 'waiting_for_input' && inputDialogDismissed && !effectivePendingIntervention && (
               <button
                 onClick={() => setInputDialogDismissed(false)}
                 className={waitingInputLooksLikeApproval ? 'cr-approval-button' : 'badge badge-warn cursor-pointer'}
@@ -2962,7 +3280,7 @@ export default function ExecutionDetailPage() {
               >
                 {waitingInputLooksLikeApproval ? (
                   <>
-                    <span className="cr-approval-main">Approve</span>
+                    <span className="cr-approval-main">{isModelRecoveryWaiting ? 'Approve model change' : 'Approve'}</span>
                     <ChevronRight className="h-3.5 w-3.5" />
                   </>
                 ) : (
@@ -2974,7 +3292,7 @@ export default function ExecutionDetailPage() {
                 )}
               </button>
             )}
-            {approvalPending && pendingIntervention && (
+            {approvalPending && effectivePendingIntervention && (
               <button
                 type="button"
                 onClick={() => setApprovalModalOpen(true)}
@@ -3190,10 +3508,10 @@ export default function ExecutionDetailPage() {
         </div>
       )}
 
-      {approvalModalOpen && pendingIntervention && (
+      {approvalModalOpen && effectivePendingIntervention && (
         <ExecutionApprovalModal
           executionId={id ?? execution.id}
-          intervention={pendingIntervention}
+          intervention={effectivePendingIntervention}
           onClose={() => setApprovalModalOpen(false)}
           onSubmitted={() => {
             void loadRunInterventions();
@@ -3371,7 +3689,7 @@ export default function ExecutionDetailPage() {
           Mounted only when status is waiting_for_input AND we have the
           clarify payload; otherwise we defer to the pending-intervention
           banner higher up. */}
-      {execution.status === 'waiting_for_input' && !pendingIntervention && !inputDialogDismissed && (() => {
+      {execution.status === 'waiting_for_input' && !effectivePendingIntervention && !inputDialogDismissed && (() => {
         const st = (execution.state ?? {}) as Record<string, unknown>;
         // Field source priority:
         //   1. __clarify_fields   — agent-provided clarify fields (auto-gate)
@@ -3443,6 +3761,27 @@ export default function ExecutionDetailPage() {
         // Only render if we have a waiting-node context. If not, fall back
         // to the intervention banner flow.
         if (!waitingNode) return null;
+        const modelRecoveryIntervention = latestModelRecoveryIntervention;
+        const recoveryState = activeModelRecoveryState
+          ?? resolveModelRecoveryState(st.__recovery_state, waitingNode)
+          ?? (isRecord(modelRecoveryIntervention?.recoveryContext)
+            ? modelRecoveryIntervention.recoveryContext as ModelRecoveryStateView
+            : null)
+          ?? traceBackedModelRecoveryState;
+        if (isModelRecoveryWaiting && recoveryState) {
+          return (
+            <ModelRecoveryDialog
+              executionId={id ?? execution.id}
+              node={waitingNode}
+              recoveryState={recoveryState}
+              intervention={modelRecoveryIntervention}
+              onClose={() => setInputDialogDismissed(true)}
+              onSubmitted={() => {
+                refresh();
+              }}
+            />
+          );
+        }
         const waitingFields = fields as Array<{ name?: string; type?: string; options?: unknown[] }>;
         if (looksLikeApprovalInput(waitingNode, waitingFields)) {
           return (

@@ -968,7 +968,9 @@ async function runDeepEval(payload: Record<string, unknown>): Promise<{ result: 
 function resolveDeepEvalScript(): string {
   if (process.env.ALLEN_DEEPEVAL_SCRIPT) return process.env.ALLEN_DEEPEVAL_SCRIPT;
   const here = dirname(fileURLToPath(import.meta.url));
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   const candidates = [
+    ...(resourcesPath ? [join(resourcesPath, 'server-scripts/deepeval-context-evaluator.py')] : []),
     join(here, '../../../scripts/deepeval-context-evaluator.py'),
     ...(process.env.ALLEN_DESKTOP === '1' ? [join(here, '../../../../src/scripts/deepeval-context-evaluator.py')] : []),
     join(process.cwd(), 'packages/server/src/scripts/deepeval-context-evaluator.py'),

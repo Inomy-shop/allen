@@ -50,6 +50,14 @@ const SPAWN_CHAT_SESSION_ID = process.env.ALLEN_CHAT_SESSION_ID || undefined;
 
 import jwt, { type SignOptions } from 'jsonwebtoken';
 import { parseAllenApiResponse } from './mcp-api-response.js';
+import {
+  activityToWaitMessage,
+  compactWaitMessages,
+  errorToWaitMessage,
+  finalResponseToWaitMessage,
+  inputRequestToWaitMessage,
+  logToWaitMessage,
+} from './execution-wait-messages.js';
 
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 
@@ -158,7 +166,7 @@ const TOOLS = [
   { name: 'update_workflow', description: 'Update an existing workflow by name or id. Bumps version. Refuses system-seeded workflows.', params: { id: 'string — MongoDB ObjectId', name: 'string — workflow name (used when id omitted)', yaml: 'string — new YAML source', parsed: 'object — new parsed workflow object' } },
 
   // ── Executions ──
-  { name: 'wait_for_execution', description: 'Poll an execution until it completes. Blocks up to 90s. Returns response when done. If status="waiting", call again. Returns recent_activity, activity_summary, progress_message, top_logs, and activity_cursor so callers can report useful progress while work is still running.', params: { execution_id: 'string (required)', activity_since: 'string — ISO timestamp cursor from prior activity_cursor' } },
+  { name: 'wait_for_execution', description: 'Poll an execution until it completes. Blocks up to 90s. If status="waiting", call again. Returns only status plus up to the last 10 structured messages; completed responses, failures, and input requests are included as messages.', params: { execution_id: 'string (required)', activity_since: 'string — optional ISO timestamp cursor for compatibility with older callers' } },
   { name: 'list_executions', description: 'List recent executions. Filter by status or workflow name.', params: { status: 'string', workflow_name: 'string', limit: 'number' } },
   { name: 'search_executions', description: 'Search executions with filters: date range, cost, failed nodes.', params: { workflow_name: 'string', status: 'string', since_hours: 'number', min_cost: 'number', has_failed_node: 'boolean', limit: 'number' } },
   { name: 'cancel_execution', description: 'Cancel a running execution.', params: { execution_id: 'string (required)' } },
@@ -316,44 +324,21 @@ async function callAPI(endpoint: string, method = 'GET', body?: unknown): Promis
   return parseAllenApiResponse(res);
 }
 
-function trimText(value: unknown, max: number): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const cleaned = value.replace(/\s+/g, ' ').trim();
-  if (!cleaned) return undefined;
-  return cleaned.length > max ? `${cleaned.slice(0, max)}...` : cleaned;
-}
-
-function formatProgressActivity(row: Record<string, unknown>): string | undefined {
-  const agent = trimText(row.agent, 80) ?? 'agent';
-  const tool = trimText(row.tool, 80);
-  const content = trimText(row.content ?? row.label, 180);
-  const type = String(row.type ?? '');
-  if (type === 'tool_call') return `${agent} started ${tool ?? 'a tool'}${content ? `: ${content}` : ''}`;
-  if (type === 'tool_result') return `${agent} received ${tool ?? 'tool'} result${content ? `: ${content}` : ''}`;
-  if (type === 'thinking') return content ? `${agent} is thinking: ${content}` : `${agent} is thinking`;
-  if (type === 'text') return content ? `${agent}: ${content}` : undefined;
-  return content ? `${agent}: ${content}` : undefined;
-}
-
-function formatProgressLog(row: Record<string, unknown>): string | undefined {
-  const message = trimText(row.message ?? row.content ?? row.command ?? row.tool ?? row.type, 220);
-  if (!message) return undefined;
-  const node = trimText(row.node, 60);
-  const category = trimText(row.category, 40);
-  const prefix = node ? `[${node}]` : category ? `[${category}]` : '';
-  return prefix ? `${prefix} ${message}` : message;
-}
-
-async function readExecutionProgress(executionId: unknown, sinceRaw?: unknown): Promise<Record<string, unknown>> {
+async function readExecutionMessages(
+  executionId: unknown,
+  sinceRaw?: unknown,
+  execution?: Record<string, unknown>,
+  finalResponse?: unknown,
+): Promise<Record<string, unknown>> {
   if (!executionId) return {};
   const execId = String(executionId);
   const since = typeof sinceRaw === 'string' && sinceRaw ? new Date(sinceRaw) : undefined;
-  const activityQs = new URLSearchParams({ limit: '12' });
+  const activityQs = new URLSearchParams({ limit: '10' });
   if (since && !Number.isNaN(since.getTime())) activityQs.set('since', since.toISOString());
 
   const [activityRes, logsRes] = await Promise.all([
     callAPI(`/api/executions/${execId}/activity?${activityQs.toString()}`).catch(() => ({ events: [] })),
-    callAPI(`/api/executions/${execId}/logs?include_descendants=true&limit=12`).catch(() => []),
+    callAPI(`/api/executions/${execId}/logs?include_descendants=true&limit=10`).catch(() => []),
   ]);
 
   const recentActivity = Array.isArray((activityRes as Record<string, unknown>)?.events)
@@ -367,34 +352,20 @@ async function readExecutionProgress(executionId: unknown, sinceRaw?: unknown): 
       })
     : rawLogs;
 
-  const topLogs = logs.slice(-8).map((log) => ({
-    timestamp: log.timestamp ?? log.createdAt,
-    level: log.level,
-    category: log.category ?? log.type,
-    node: log.node ?? null,
-    message: trimText(log.message ?? log.content ?? log.command ?? log.tool ?? log.type, 300) ?? '',
-  }));
-  const activitySummary = [
-    ...recentActivity.map(formatProgressActivity),
-    ...logs.slice(-5).map(formatProgressLog),
-  ].filter((line): line is string => Boolean(line)).slice(-10);
-
-  const cursorCandidates = [
-    ...recentActivity.map(row => row.at),
-    ...logs.map(log => log.timestamp ?? log.createdAt),
-    since?.toISOString(),
-  ]
-    .filter(Boolean)
-    .map(value => new Date(String(value)))
-    .filter(date => !Number.isNaN(date.getTime()))
-    .sort((a, b) => b.getTime() - a.getTime());
-
   return {
-    recent_activity: recentActivity,
-    top_logs: topLogs,
-    activity_summary: activitySummary,
-    progress_message: activitySummary[activitySummary.length - 1],
-    activity_cursor: cursorCandidates[0]?.toISOString(),
+    messages: compactWaitMessages([
+      ...recentActivity.map(activityToWaitMessage),
+      ...logs.map(logToWaitMessage),
+      execution?.status === 'completed'
+        ? finalResponseToWaitMessage(finalResponse, execution.completedAt ?? execution.updatedAt, execution.workflowName)
+        : undefined,
+      execution?.status === 'failed'
+        ? errorToWaitMessage(execution.errorMessage, execution.completedAt ?? execution.updatedAt, execution.failedNode ?? execution.workflowName)
+        : undefined,
+      execution?.status === 'waiting_for_input'
+        ? inputRequestToWaitMessage(execution)
+        : undefined,
+    ]),
   };
 }
 
@@ -422,29 +393,38 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       while (Date.now() < eDeadline) {
         const res = await fetch(`${API_BASE}/api/executions/${execId}`);
         const data = await res.json() as Record<string, unknown>;
+        if (!res.ok) {
+          return {
+            status: 'not_found',
+            messages: compactWaitMessages([
+              errorToWaitMessage(data.error ?? `Execution "${String(execId)}" not found.`),
+            ]),
+          };
+        }
         if (data.status !== 'running' && data.status !== 'queued') {
           // Fetch trace for the response
+          let response: unknown;
           try {
             const traceRes = await fetch(`${API_BASE}/api/executions/${execId}/traces`);
             const traces = await traceRes.json() as Array<Record<string, unknown>>;
             const lastTrace = traces[traces.length - 1];
             if (lastTrace) {
               const output = lastTrace.output as Record<string, unknown> | undefined;
-              data.response = output?.response ?? lastTrace.rawResponse ?? undefined;
-              data.session_id = output?.session_id ?? undefined;
+              response = output?.response ?? lastTrace.rawResponse ?? undefined;
             }
           } catch {}
-          return { ...data, ...(await readExecutionProgress(execId, activitySince)) };
+          return {
+            status: data.status,
+            ...(await readExecutionMessages(execId, activitySince, data, response)),
+          };
         }
         process.stderr.write(`[mcp] waiting for execution ${execId} (${Math.round(eWait / 1000)}s interval)\n`);
         await new Promise(r => setTimeout(r, eWait));
         eWait = Math.min(eWait * 1.3, eMaxWait);
       }
       return {
-        id: execId,
         status: 'waiting',
-        message: 'Execution still running. Call wait_for_execution again.',
-        ...(await readExecutionProgress(execId, activitySince)),
+        ...(await readExecutionMessages(execId, activitySince)),
       };
     }
     case 'cancel_execution': {

@@ -612,6 +612,38 @@ export function useExecution(id: string | undefined) {
           break;
         }
 
+        case 'node_recovery_override_applied': {
+          if (!node) break;
+          const existing = next.get(node);
+          next.set(node, {
+            name: node,
+            status: 'running',
+            attempt: existing?.attempt ?? (e.data.recoveryAttempt as number | undefined) ?? 1,
+            startedAt: existing?.startedAt ?? e.data.startedAt,
+            completedAt: null,
+            streamText: existing?.streamText ?? '',
+            activity: existing?.activity ?? [],
+          });
+          break;
+        }
+
+        case 'parallel_branch_recovery_paused': {
+          if (!node) break;
+          const existing = next.get(node);
+          if (existing) {
+            next.set(node, { ...existing, status: 'waiting_for_input' });
+          } else {
+            next.set(node, {
+              name: node,
+              status: 'waiting_for_input',
+              attempt: 1,
+              streamText: '',
+              activity: [],
+            });
+          }
+          break;
+        }
+
         // parallel_branch_done, parallel_joined
         // are already reflected in timeline — no additional node state changes needed
       }
@@ -638,6 +670,11 @@ export function useExecution(id: string | undefined) {
       setExecution((prev: any) => ({ ...prev, status: 'waiting_for_input' }));
     } else if (e.event === 'input_received') {
       setExecution((prev: any) => ({ ...prev, status: 'running' }));
+    } else if (e.event === 'parallel_branch_recovery_paused' || e.event === 'node_recovery_override_applied') {
+      // Model recovery events update execution to waiting/input if paused for recovery
+      if (e.event === 'parallel_branch_recovery_paused') {
+        setExecution((prev: any) => ({ ...prev, status: 'waiting_for_input' }));
+      }
     }
   }, [id, descendantsMode]);
 

@@ -1,6 +1,14 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { WatcherService } from '../watcher.service.js';
 
+const mocks = vi.hoisted(() => ({
+  broadcastToExecution: vi.fn(),
+}));
+
+vi.mock('../stream.service.js', () => ({
+  broadcastToExecution: mocks.broadcastToExecution,
+}));
+
 describe('WatcherService lifecycle — reactivate() and markReplaced()', () => {
   let mockDb: any;
   let mockChatService: any;
@@ -8,6 +16,7 @@ describe('WatcherService lifecycle — reactivate() and markReplaced()', () => {
   let chainable: any;
 
   beforeEach(() => {
+    mocks.broadcastToExecution.mockReset();
     chainable = {
       findOne: vi.fn().mockResolvedValue(null),
       insertOne: vi.fn().mockResolvedValue({ insertedId: { toHexString: () => 'mock-id' } }),
@@ -96,6 +105,27 @@ describe('WatcherService lifecycle — reactivate() and markReplaced()', () => {
       expect(setArg.updateSeq).toBe(8);
     });
 
+    it('reactivates a watcher that was resolved by chat cancellation', async () => {
+      const existingDoc = {
+        watcherId: 'w-1',
+        executionId: 'exec-4',
+        watcherStatus: 'resolved',
+        executionState: 'cancelled',
+        triggerSentForState: 'cancelled',
+        updateSeq: 9,
+      };
+
+      chainable.findOne.mockResolvedValueOnce(existingDoc);
+
+      await service.reactivate('exec-4', 'agent');
+
+      const setArg = chainable.updateOne.mock.calls[0][1].$set;
+      expect(setArg.watcherStatus).toBe('active');
+      expect(setArg.triggerSentForState).toBeNull();
+      expect(setArg.nextPollAt).toBeInstanceOf(Date);
+      expect(setArg.updateSeq).toBe(10);
+    });
+
     it('is a no-op when the watcher does not exist (no error, no insert)', async () => {
       // chainable.findOne returns null by default → no existing watcher
       // The fallback tries to find execution for chatSessionId;
@@ -140,6 +170,76 @@ describe('WatcherService lifecycle — reactivate() and markReplaced()', () => {
       await service.markReplaced('nonexistent-exec');
 
       expect(chainable.updateOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resolveForChatCancellation()', () => {
+    it('resolves the watcher immediately and marks cancelled handled without sending a hidden trigger', async () => {
+      const existingDoc = {
+        watcherId: 'w-1',
+        executionId: 'exec-1',
+        chatSessionId: 'session-1',
+        executionType: 'agent',
+        watcherStatus: 'active',
+        executionState: 'running',
+        triggerSentForState: null,
+        updateSeq: 5,
+      };
+
+      chainable.findOne.mockResolvedValueOnce(existingDoc);
+
+      await service.resolveForChatCancellation('exec-1');
+
+      expect(chainable.updateOne).toHaveBeenCalledWith(
+        { executionId: 'exec-1' },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            watcherStatus: 'resolved',
+            executionState: 'cancelled',
+            triggerSentForState: 'cancelled',
+            latestStatusText: 'Execution cancelled because the owning chat was interrupted.',
+            updateSeq: 6,
+          }),
+        }),
+      );
+
+      const setArg = chainable.updateOne.mock.calls[0][1].$set;
+      expect(setArg.nextPollAt).toBeInstanceOf(Date);
+      expect(setArg.lastCheckedAt).toBeInstanceOf(Date);
+
+      expect(mockChatService.broadcastToSession).toHaveBeenCalledWith(
+        'session-1',
+        'watcher_update',
+        expect.objectContaining({
+          executionId: 'exec-1',
+          chatSessionId: 'session-1',
+          watcherStatus: 'resolved',
+          executionState: 'cancelled',
+          triggerSentForState: 'cancelled',
+          updateSeq: 6,
+        }),
+      );
+      expect(mocks.broadcastToExecution).toHaveBeenCalledWith(
+        'exec-1',
+        expect.objectContaining({
+          event: 'watcher_update',
+          data: expect.objectContaining({
+            watcherStatus: 'resolved',
+            executionState: 'cancelled',
+          }),
+        }),
+      );
+      expect(mockChatService.appendWatcherTrigger).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op when there is no watcher for the execution', async () => {
+      chainable.findOne.mockResolvedValueOnce(null);
+
+      await service.resolveForChatCancellation('missing-exec');
+
+      expect(chainable.updateOne).not.toHaveBeenCalled();
+      expect(mockChatService.broadcastToSession).not.toHaveBeenCalled();
+      expect(mockChatService.appendWatcherTrigger).not.toHaveBeenCalled();
     });
   });
 });

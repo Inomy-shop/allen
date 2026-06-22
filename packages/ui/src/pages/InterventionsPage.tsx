@@ -53,7 +53,7 @@ interface Intervention {
   workflow_run_id: string;
   workflow_name: string;
   stage: string;
-  kind?: 'clarify' | 'review' | 'recover';
+  kind?: 'clarify' | 'review' | 'recover' | 'model_recovery';
   severity: 'question' | 'approval' | 'escalation';
   title: string;
   context_summary: string;
@@ -264,7 +264,7 @@ function InterventionRow({ item, emphasized }: { item: Intervention; emphasized:
 function InterventionsListView() {
   const [items, setItems] = useState<Intervention[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'gate' | 'review' | 'question' | 'blocked' | 'mention'>('all');
+  const [filter, setFilter] = useState<'all' | 'gate' | 'review' | 'question' | 'blocked' | 'mention' | 'model_recovery'>('all');
   const [search, setSearch] = useState('');
 
   async function load() {
@@ -290,8 +290,9 @@ function InterventionsListView() {
     return () => clearInterval(t);
   }, [pendingCount]);
 
-  function kindFor(item: Intervention): 'gate' | 'review' | 'question' | 'blocked' | 'mention' {
+  function kindFor(item: Intervention): 'gate' | 'review' | 'question' | 'blocked' | 'mention' | 'model_recovery' {
     const haystack = `${item.title} ${item.context_summary} ${item.question} ${item.user_request ?? ''}`.toLowerCase();
+    if (item.kind === 'model_recovery') return 'model_recovery';
     if (filter === 'mention' && haystack.includes('@')) return 'mention';
     if (item.severity === 'escalation') return 'blocked';
     if (item.severity === 'approval') return item.stage?.toLowerCase().includes('gate') ? 'gate' : 'review';
@@ -337,7 +338,7 @@ function InterventionsListView() {
       </div>
 
       <div className="filter-row">
-        {(['all', 'gate', 'review', 'question', 'blocked', 'mention'] as const).map((key) => (
+        {(['all', 'gate', 'review', 'question', 'blocked', 'mention', 'model_recovery'] as const).map((key) => (
           <button key={key} className={`fchip ${filter === key ? 'active' : ''}`} onClick={() => setFilter(key)} type="button">
             {key}
           </button>

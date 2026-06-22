@@ -40,6 +40,10 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
   private sessionId = '';
   private initialized?: Promise<void>;
   private closed = false;
+  /** True between sending a steer interrupt and swallowing the aborted turn's
+   *  terminal `error_during_execution` result, so the steered continuation
+   *  streams into the same logical turn instead of orphaning. */
+  private steerPending = false;
 
   constructor(private readonly createInput: RuntimeCreateInput) {
     this.key = createInput.key;
@@ -101,6 +105,81 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
     }) + '\n');
 
     return completion;
+  }
+
+  /** Inject a user message into the active turn mid-stream.
+   *  Returns `true` if accepted, `false` if no active turn or stdin unavailable. */
+  steer(text: string): boolean {
+    if (!this.currentTurn) {
+      logRuntimeEvent({
+        db: this.createInput.db,
+        sessionId: this.createInput.chatSessionId,
+        provider: this.provider,
+        runtimeId: this.id,
+        eventType: 'lifecycle',
+        event: 'runtime_steer_declined',
+        data: { reason: 'no_current_turn', providerSessionId: this.sessionId },
+      });
+      return false;
+    }
+    if (!this.proc?.stdin) {
+      logRuntimeEvent({
+        db: this.createInput.db,
+        sessionId: this.createInput.chatSessionId,
+        provider: this.provider,
+        runtimeId: this.id,
+        eventType: 'lifecycle',
+        event: 'runtime_steer_declined',
+        data: { reason: 'no_stdin', providerSessionId: this.sessionId },
+      });
+      return false;
+    }
+    try {
+      // `claude -p` does not read a new stdin user message mid-turn — it finishes
+      // the active turn first, so a plain user-message write does NOT steer (it
+      // runs as a separate follow-up turn whose output Allen would drop). To steer
+      // mid-stream we must first interrupt the running turn via a control_request
+      // (which the CLI reads asynchronously), then send the new user message as the
+      // continuation. The interrupt's terminal `result: error_during_execution` is
+      // swallowed in handleClaudeEvent so the steered turn streams into the same turn.
+      this.steerPending = true;
+      this.proc.stdin.write(JSON.stringify({
+        type: 'control_request',
+        request_id: randomUUID(),
+        request: { subtype: 'interrupt' },
+      }) + '\n');
+      this.proc.stdin.write(JSON.stringify({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text }],
+        },
+      }) + '\n');
+
+      logRuntimeEvent({
+        db: this.createInput.db,
+        sessionId: this.createInput.chatSessionId,
+        provider: this.provider,
+        runtimeId: this.id,
+        eventType: 'lifecycle',
+        event: 'runtime_steer',
+        data: { providerSessionId: this.sessionId, textPreview: text.slice(0, 300) },
+      });
+
+      return true;
+    } catch (err) {
+      this.steerPending = false;
+      logRuntimeEvent({
+        db: this.createInput.db,
+        sessionId: this.createInput.chatSessionId,
+        provider: this.provider,
+        runtimeId: this.id,
+        eventType: 'lifecycle',
+        event: 'runtime_steer_failed',
+        data: { providerSessionId: this.sessionId, error: (err as Error).message },
+      });
+      return false;
+    }
   }
 
   async close(reason: string): Promise<void> {
@@ -257,6 +336,19 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
     }
 
     if (msg.type === 'result') {
+      // A steer interrupt produces a terminal `error_during_execution` result for
+      // the aborted turn. Swallow it once and keep the turn open + reset its
+      // accumulators so the steered continuation streams into the same assistant
+      // message rather than resolving (and orphaning) the turn.
+      if (this.steerPending && msg.subtype === 'error_during_execution') {
+        this.steerPending = false;
+        turn.text = '';
+        turn.thinking = '';
+        turn.pendingTools.clear();
+        turn.input.callbacks.onText('');
+        return;
+      }
+      this.steerPending = false;
       const resultText = typeof msg.result === 'string' ? msg.result : turn.text;
       if (resultText && resultText !== turn.text) {
         turn.text = resultText;

@@ -1364,6 +1364,21 @@ export function systemRoutes(db: Db): Router {
   });
 
   /**
+   * GET /api/system/models/recovery
+   * Public — returns active models grouped by provider for the recovery
+   * dropdown in the model-recovery UI.
+   */
+  router.get('/models/recovery', async (req: Request, res: Response) => {
+    try {
+      const groups = await modelRegistry.listAvailableForRecovery();
+      return res.json({ providers: groups });
+    } catch (err) {
+      console.error('[system/models/recovery]', err);
+      return res.status(500).json({ error: 'model_registry_recovery_failed' });
+    }
+  });
+
+  /**
    * GET /api/system/models/:id
    * Public — returns single model or 404
    */

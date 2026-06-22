@@ -385,7 +385,7 @@ Discovery procedure (run before choosing a target):
 4. Pick the most specific match by description/mission. Prefer a team lead when coordination across specialties is needed; prefer a single specialist for narrow one-shot work; prefer a workflow when the steps are well-defined and inputs are satisfiable.
 5. If no match exists, ask the user how to proceed — register a new agent/workflow via the matching meta-builder, or proceed via raw tools only with explicit user confirmation.
 
-If wait_for_execution returns "waiting", keep waiting with wait_for_execution until status is "completed", "failed", "cancelled", or "waiting_for_input". For a follow-up, call spawn_agent again with the prior session_id when available.
+If wait_for_execution returns "waiting", keep waiting with wait_for_execution until status is "completed", "failed", "cancelled", or "waiting_for_input". For a follow-up, call spawn_agent again and include the relevant prior result when available.
 
 Top-level direct tool calls are reserved for: read-only data queries, normal conversation, explanation/brainstorming, and forwarding answers to a spawned execution that is waiting for input.`;
 

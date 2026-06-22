@@ -22,7 +22,7 @@ import { buildOrgContextBlock } from './org-context.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { ExecutionService } from './execution.service.js';
 import { LinearService } from './linear.service.js';
-import { runPersistentChatSlashCommand } from './chat-runtime-manager.js';
+import { runPersistentChatSlashCommand, steerPersistentChat } from './chat-runtime-manager.js';
 import { listSlashCommands, type SlashCommandInfo } from './slash-commands.js';
 import type { RuntimeSlashCommand } from './chat-runtime-types.js';
 import { ChatContextPacketService } from './context/core/chat-context-packet.service.js';
@@ -234,6 +234,17 @@ function sendSSE(res: Response, event: string, data: unknown): void {
   try {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   } catch { /* client disconnected */ }
+}
+
+function sendSSEToSet(listeners: Iterable<Response>, event: string, data: unknown, delivered = new Set<Response>()): number {
+  let count = 0;
+  for (const listener of listeners) {
+    if (delivered.has(listener)) continue;
+    delivered.add(listener);
+    sendSSE(listener, event, data);
+    count++;
+  }
+  return count;
 }
 
 // ── Mention Resolution ──
@@ -581,6 +592,7 @@ interface ActiveQuery {
 }
 
 const activeQueries = new Map<string, ActiveQuery>();
+const sessionStreamListeners = new Map<string, Set<Response>>();
 const ACTIVE_EXECUTION_STATUSES = ['running', 'queued', 'waiting_for_input'];
 const drainingQueues = new Set<string>();
 const ACTIVE_QUEUE_STATUSES: ChatQueueStatus[] = ['queued', 'editing', 'running'];
@@ -613,6 +625,27 @@ function detachHeartbeat(res: Response): void {
     clearInterval(handle);
     listenerHeartbeats.delete(res);
   }
+}
+
+function addSessionStreamListener(sessionId: string, res: Response): void {
+  let listeners = sessionStreamListeners.get(sessionId);
+  if (!listeners) {
+    listeners = new Set<Response>();
+    sessionStreamListeners.set(sessionId, listeners);
+  }
+  listeners.add(res);
+  attachHeartbeat(res);
+  res.on('close', () => {
+    detachHeartbeat(res);
+    listeners?.delete(res);
+    if (listeners && listeners.size === 0) {
+      sessionStreamListeners.delete(sessionId);
+    }
+  });
+}
+
+function broadcastToSessionListeners(sessionId: string, event: string, data: unknown, delivered = new Set<Response>()): number {
+  return sendSSEToSet(sessionStreamListeners.get(sessionId) ?? [], event, data, delivered);
 }
 
 interface CancelledExecutionInfo {
@@ -885,6 +918,8 @@ async function cancelLinkedChatExecutions(sessionId: string, db: Db, parentMessa
     .toArray();
 
   const service = new ExecutionService(db);
+  const { WatcherService } = await import('./watcher.service.js');
+  const watcherService = new WatcherService(db, new ChatService(db));
   const seen = new Set<string>();
   const cancelled: CancelledExecutionInfo[] = [];
 
@@ -894,6 +929,7 @@ async function cancelLinkedChatExecutions(sessionId: string, db: Db, parentMessa
     seen.add(id);
     try {
       await service.cancel(id);
+      await watcherService.resolveForChatCancellation(id);
       await db.collection('execution_logs').insertOne({
         executionId: id,
         level: 'warn',
@@ -1034,10 +1070,9 @@ function broadcastToListeners(entry: ActiveQuery, event: string, data: unknown):
   const payload = data && typeof data === 'object' && !Array.isArray(data) && !('messageId' in data)
     ? { ...(data as Record<string, unknown>), messageId: entry.messageId }
     : data;
-  for (const listener of entry.listeners) {
-    try { listener.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`); }
-    catch { entry.listeners.delete(listener); }
-  }
+  const delivered = new Set<Response>();
+  sendSSEToSet(entry.listeners, event, payload, delivered);
+  broadcastToSessionListeners(entry.sessionId, event, payload, delivered);
   for (const handler of entry.eventHandlers ?? []) {
     try { handler(event, payload); } catch { entry.eventHandlers?.delete(handler); }
   }
@@ -1051,6 +1086,25 @@ function closeStreamListeners(entry: ActiveQuery): void {
     } catch {}
   }
   entry.listeners.clear();
+}
+
+// ── Steer Predicate (exported for testability) ──
+
+/**
+ * Decide whether to steer a message into the running agent or fall back to queue.
+ * Extracted as a pure function so tests can verify the branching logic without
+ * importing ChatService (which pulls in @allen/engine).
+ *
+ * @returns `true` if the session has an active query AND steerFn accepted injection.
+ */
+export function shouldSteerInsteadOfQueue(
+  activeQueriesMap: Map<string, unknown>,
+  sessionId: string,
+  steerFn: (id: string, text: string) => boolean,
+  content: string,
+): boolean {
+  if (!activeQueriesMap.has(sessionId)) return false;
+  return steerFn(sessionId, content);
 }
 
 // ── Service ──
@@ -1509,6 +1563,7 @@ export class ChatService {
 
   subscribeToStream(sessionId: string, res: Response): void {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    addSessionStreamListener(sessionId, res);
     const entry = activeQueries.get(sessionId);
     if (entry) {
       if (entry.currentThinking) sendSSE(res, 'thinking', { text: entry.currentThinking, messageId: entry.messageId });
@@ -1516,16 +1571,67 @@ export class ChatService {
       for (const [toolUseId, pending] of entry.pendingToolCalls) {
         sendSSE(res, 'tool_start', { tool: pending.tool, args: pending.args, toolUseId, tool_use_id: toolUseId, messageId: entry.messageId });
       }
-      entry.listeners.add(res);
-      attachHeartbeat(res);
-      res.on('close', () => { detachHeartbeat(res); entry.listeners.delete(res); });
     } else {
       sendSSE(res, 'stream_inactive', { sessionId });
-      res.end();
     }
   }
 
   isStreaming(sessionId: string): boolean { return activeQueries.has(sessionId); }
+
+  /**
+   * Steer a user message into the currently running agent turn.
+   * If an active persistent runtime accepts the injection, the message is
+   * persisted and broadcast as a `steered_message` SSE event.
+   * Falls back transparently to the existing queue when no active turn exists.
+   */
+  async steerRunningAgent(
+    sessionId: string,
+    content: string,
+    sender?: ChatMessageSender,
+  ): Promise<{ steered: true; messageId: string } | { queued: true; item: ChatQueueItem }> {
+    if (!content || typeof content !== 'string' || !content.trim()) throw new Error('content is required');
+    if (!ObjectId.isValid(sessionId)) throw new Error('Invalid session id');
+
+    const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
+    if (!session) throw new Error('Session not found');
+
+    const entry = activeQueries.get(sessionId);
+    if (shouldSteerInsteadOfQueue(activeQueries, sessionId, steerPersistentChat, content)) {
+      const now = new Date();
+      const inserted = await this.messages.insertOne({
+        sessionId,
+        role: 'user',
+        content,
+        status: 'completed',
+        ...senderFields(sender),
+        createdAt: now,
+        completedAt: now,
+      });
+      const messageId = inserted.insertedId.toString();
+
+      await this.sessions.updateOne(
+        { _id: new ObjectId(sessionId) },
+        { $set: { lastMessageAt: now, updatedAt: now }, $inc: { messageCount: 1 } },
+      );
+
+      if (entry) {
+        broadcastToListeners(entry, 'steered_message', {
+          content,
+          role: 'user',
+          status: 'completed',
+          createdAt: now.toISOString(),
+          steeredMessageId: messageId,
+          sender: senderFields(sender),
+        });
+      }
+
+      return { steered: true, messageId };
+    }
+
+    // Queue fallback
+    const item = await this.enqueueQueuedMessage(sessionId, { content }, sender);
+    return { queued: true, item };
+  }
 
   /**
    * Broadcast an SSE event to every tab currently subscribed to this
@@ -1542,9 +1648,11 @@ export class ChatService {
    */
   broadcastToSession(sessionId: string, event: string, data: unknown): number {
     const entry = activeQueries.get(sessionId);
-    if (!entry) return 0;
-    broadcastToListeners(entry, event, data);
-    return entry.listeners.size;
+    if (entry) {
+      broadcastToListeners(entry, event, data);
+      return entry.listeners.size + (sessionStreamListeners.get(sessionId)?.size ?? 0);
+    }
+    return broadcastToSessionListeners(sessionId, event, data);
   }
 
   /**
@@ -2438,8 +2546,8 @@ SPAWN FLOW:
 2. wait_for_execution(execution_id) → blocks up to 90s
    - "waiting": call wait_for_execution again
    - "waiting_for_input": explain the requested input to the user
-   - "completed": done, read response
-3. To follow up with context, spawn the same agent again and include the prior execution result or session_id when available.
+   - "completed": done, read the final_response message
+3. To follow up with context, spawn the same agent again and include the prior execution result when available.
 
 ASKING THE USER:
 - If you need info from the user, call ask_user(question). Blocks until user answers.
@@ -2464,7 +2572,7 @@ RULES:
 9. If a spawned execution is waiting_for_input, explain the requested input to the user and use submit_execution_input after the user answers.
 10. If you don't know required information, call ask_user to ask the user.
 11. NEVER respond to the user before ALL spawned executions you started for the task are complete, failed, blocked, or clearly still running after progress has been surfaced.
-12. Use report_to_user for progress updates. When wait_for_execution returns status="waiting" with progress_message or activity_summary, call report_to_user with a short human-readable update before waiting again. Pass activity_cursor back as activity_since on the next wait call so updates move forward instead of repeating old activity.
+12. Use report_to_user for progress updates. When wait_for_execution returns status="waiting" with messages, summarize the newest useful message before waiting again.
 12a. Context query for spawned agents: when calling spawn_agent for repo-related work, pass a compact context_query object as a separate tool argument. Include user_request, task_type, retrieval-relevant requirements, topics, target_files/path_hints, and required_categories/preferred_categories when obvious. Consolidate relevant prior chat discussion so phrases like "implement what we discussed" still carry the actual retrieval intent. Never embed context query XML/JSON in prompt. Keep execution guardrails, artifact instructions, no-edit/no-commit/no-PR constraints, and process constraints in prompt, not context_query.
 13. RESOURCE LINKS — every PR, ticket, issue, commit, uploaded file, artifact, or deploy you mention MUST be rendered as a clickable markdown link when a URL is available. Use html_url / permalink / publicUrl from the tool response verbatim for external resources; never invent external URLs. For Allen internal resources such as workflow runs, executions, agents, and chat sessions, prefer a UI link when one is provided or the route is known with confidence; otherwise present readable names/statuses and include raw IDs only when useful. Do not expose URL/tool fallback reasoning to the user.
 14. INTERRUPTED RERUNS — if this chat has interrupted/cancelled tasks and the user asks to rerun, retry, continue, or restart that work, ask whether to start fresh or resume the cancelled execution. Use resume_execution only after the user chooses resume.

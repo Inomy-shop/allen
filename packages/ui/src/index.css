@@ -2443,6 +2443,10 @@
     @apply border-accent-purple/25 bg-accent-purple/10 text-accent-purple;
   }
 
+  .ib-kind.model_recovery {
+    @apply border-accent-orange/25 bg-accent-orange/10 text-accent-orange;
+  }
+
   .need-title {
     @apply text-[13px] font-medium text-theme-primary;
   }
@@ -10781,10 +10785,13 @@
   }
 
   .chat-queue-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border: 0;
     border-radius: 6px;
     background: transparent;
-    padding: 3px 6px;
+    padding: 4px;
     color: rgb(var(--color-text-subtle));
     font-family: var(--font-mono);
     font-size: 10px;

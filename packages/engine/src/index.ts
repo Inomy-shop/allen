@@ -32,6 +32,18 @@ export {
 export { normalizeModelAlias } from './model-alias.js';
 export { computeCostFromUsage, buildCostInfo, type ComputedCost } from './cost-calculator.js';
 export {
+  classifyFailure,
+  defaultMaxRecoveryAttempts,
+  buildRecoveryState,
+  sanitizeErrorSummary,
+  type FailureCategory,
+  type ClassificationResult,
+  type NodeModelOverride,
+  type RecoveryState,
+  type RecoveryOverrideHistoryEntry,
+} from './model-recovery.js';
+export { renderModelRecoveryIntervention } from './human-intervention.js';
+export {
   renderHumanIntervention,
   renderClarifyIntervention,
   buildHumanResumeInput,

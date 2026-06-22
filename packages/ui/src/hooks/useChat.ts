@@ -379,6 +379,7 @@ export function useChat() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [messageReloadNonce, setMessageReloadNonce] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  const sessionStreamAbortRef = useRef<AbortController | null>(null);
   const sessionsRef = useRef<ChatSession[]>([]);
   const clearRestoredDraft = useCallback(() => setRestoredDraft(null), []);
 
@@ -465,6 +466,7 @@ export function useChat() {
 
     let cancelled = false;
     const streamAbortController = new AbortController();
+    sessionStreamAbortRef.current = streamAbortController;
     let streamReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     (async () => {
       try {
@@ -499,25 +501,29 @@ export function useChat() {
           setPendingUserQuestion(null);
         }
 
-        // Check if this session has an active streaming response
+        // Check if this session has an active streaming response. The
+        // session SSE stream is connected regardless so watcher/session
+        // events keep updating after the assistant turn ends.
         const { streaming: isActive } = await api.isStreaming(activeSessionId);
         console.log('[useChat:refresh] isStreaming →', isActive);
-        if (cancelled || !isActive) {
-          return;
+        if (cancelled) return;
+
+        setStreaming(isActive);
+        if (isActive) {
+          const streamingMsg = session.messages?.find((m: any) => m.status === 'streaming');
+          if (streamingMsg) {
+            setMessages(prev => prev.filter(m => m._id !== streamingMsg._id));
+            setStreamText(streamingMsg.content ?? '');
+            setThinkingText(streamingMsg.thinkingText ?? '');
+            setActiveToolCalls(activeToolCallsFromRecords(streamingMsg.toolCalls));
+          }
         }
 
-        // Reconnect to the active stream
-        console.log('[useChat:refresh] reconnecting SSE stream for', activeSessionId);
-        setStreaming(true);
-        const streamingMsg = session.messages?.find((m: any) => m.status === 'streaming');
-        if (streamingMsg) {
-          setMessages(prev => prev.filter(m => m._id !== streamingMsg._id));
-          setStreamText(streamingMsg.content ?? '');
-          setThinkingText(streamingMsg.thinkingText ?? '');
-          setActiveToolCalls(activeToolCallsFromRecords(streamingMsg.toolCalls));
-        }
-
-        // Attempt to attach an SSE reader with up to MAX_RECONNECT_ATTEMPTS retries.
+        // Attach the always-on session stream with up to
+        // MAX_RECONNECT_ATTEMPTS retries. It remains open even when there is
+        // no active assistant turn so watcher_update/session_update events
+        // arrive live.
+        console.log('[useChat:refresh] connecting live session stream for', activeSessionId);
         let sessionReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
         for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
           if (cancelled) break;
@@ -543,7 +549,6 @@ export function useChat() {
 
         if (cancelled || !sessionReader) {
           if (!cancelled) {
-            setStreaming(false);
             console.warn('[useChat:refresh] SSE stream fetch returned no body after retries');
           }
           return;
@@ -585,6 +590,9 @@ export function useChat() {
     return () => {
       cancelled = true;
       streamAbortController.abort();
+      if (sessionStreamAbortRef.current === streamAbortController) {
+        sessionStreamAbortRef.current = null;
+      }
       if (streamReader) {
         void streamReader.cancel().catch(() => {});
       }
@@ -595,14 +603,17 @@ export function useChat() {
   const handleSSEEvent = useCallback((event: string, data: any, sessionId: string) => {
     switch (event) {
       case 'message_delta':
+        setStreaming(true);
         setStreamText(data.text ?? '');
         break;
 
       case 'thinking':
+        setStreaming(true);
         setThinkingText(data.text ?? '');
         break;
 
       case 'tool_start':
+        setStreaming(true);
         setActiveToolCalls(prev => mergeToolStart(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
         break;
 
@@ -638,6 +649,26 @@ export function useChat() {
         setActiveToolCalls([]);
         setStreaming(false);
         break;
+
+      case 'steered_message': {
+        const steeredAt = data.createdAt ?? new Date().toISOString();
+        setMessages(prev => [
+          ...prev,
+          {
+            _id: data.steeredMessageId,
+            sessionId,
+            role: 'user',
+            content: data.content ?? '',
+            status: 'completed',
+            createdAt: steeredAt,
+            senderUserId: data.sender?.senderUserId,
+            senderName: data.sender?.senderName,
+            senderEmail: data.sender?.senderEmail,
+            senderSource: data.sender?.senderSource,
+          } as ChatMessage,
+        ]);
+        break;
+      }
 
       case 'session_update':
         if (data.title) {
@@ -840,6 +871,13 @@ export function useChat() {
     const sessionId = overrideSessionId || activeSessionId;
     if (!sessionId || streaming) return;
 
+    // The POST /messages response owns the active assistant stream for this
+    // tab. Temporarily detach the always-on session stream to avoid applying
+    // the same SSE events twice in this hook; reconnect when the POST stream
+    // finishes.
+    sessionStreamAbortRef.current?.abort();
+    sessionStreamAbortRef.current = null;
+
     sendingRef.current = true;
     setStreaming(true);
   setStreamText('');
@@ -973,6 +1011,26 @@ export function useChat() {
                     const ws = sessionsRef.current.find(s => s._id === sessionId);
                     window.dispatchEvent(new CustomEvent('allen:workspace-activity', { detail: { workspaceId: ws?.workspaceId ?? null } }));
                   }
+                  break;
+                }
+
+                case 'steered_message': {
+                  const steeredAt = data.createdAt ?? new Date().toISOString();
+                  setMessages(prev => [
+                    ...prev,
+                    {
+                      _id: data.steeredMessageId,
+                      sessionId,
+                      role: 'user',
+                      content: data.content ?? '',
+                      status: 'completed',
+                      createdAt: steeredAt,
+                      senderUserId: data.sender?.senderUserId,
+                      senderName: data.sender?.senderName,
+                      senderEmail: data.sender?.senderEmail,
+                      senderSource: data.sender?.senderSource,
+                    } as ChatMessage,
+                  ]);
                   break;
                 }
 
@@ -1192,6 +1250,7 @@ export function useChat() {
       setStreaming(false);
       sendingRef.current = false;
       abortRef.current = null;
+      setMessageReloadNonce(n => n + 1);
       loadSessions();
     }
   }, [activeSessionId, streaming, loadSessions]);

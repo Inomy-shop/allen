@@ -144,9 +144,9 @@ export interface HumanField {
   default?: unknown;
 }
 
-export type HumanInterventionKind = 'clarify' | 'review' | 'recover';
+export type HumanInterventionKind = 'clarify' | 'review' | 'recover' | 'model_recovery';
 export type HumanInterventionSeverity = 'question' | 'approval' | 'escalation';
-export type HumanWidget = 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate';
+export type HumanWidget = 'dynamic_form' | 'approval_gate' | 'retry_exhausted_gate' | 'escalation_gate' | 'model_recovery';
 
 export interface HumanEvidence {
   label: string;
@@ -240,6 +240,18 @@ export interface ResumeContext {
   createdAt: string;
 }
 
+export interface ModelRecoveryContext {
+  failedProvider: string;
+  failedModel: string;
+  failureCategory: string;
+  sanitizedError: string;
+  isParallelBranch: boolean;
+  siblingBranches?: string[];
+  joinPolicy?: string;
+  attempt: number;
+  maxAttempts: number;
+}
+
 export interface HumanInterventionPayload {
   kind: HumanInterventionKind;
   widget?: HumanWidget;
@@ -253,6 +265,7 @@ export interface HumanInterventionPayload {
   fields: HumanField[];
   actions: HumanAction[];
   retryExhaustion?: RetryExhaustionContext;
+  recoveryContext?: ModelRecoveryContext;
 }
 
 export interface HumanEvent {
@@ -625,6 +638,31 @@ export interface NodeTrace {
    *  can show "why this node stopped" without needing a separate log lookup.
    *  Always undefined on completed traces. */
   error?: string;
+
+  /**
+   * If this attempt was a model-recovery retry, records the override so the
+   * trace history shows what failure triggered recovery and which provider/
+   * model was selected for the retry.
+   *
+   * PRD refs: AC16 (recovery visible in trace)
+   */
+  modelRecoveryAttempt?: {
+    recoveryAttempt: number;
+    originalProvider: string;
+    originalModel: string;
+    selectedProvider: string;
+    selectedModel: string;
+    failureCategory: string;
+    sanitizedError: string;
+  };
+
+  /**
+   * Session id that was discarded when a model/provider change caused the
+   * engine to start a fresh session instead of resuming the prior one.
+   *
+   * PRD refs: AC13 (fresh session after model change)
+   */
+  discardedSessionId?: string;
 }
 
 export interface ActivityEntry {
@@ -739,6 +777,8 @@ export type SSEEventType =
   | 'parallel_started'
   | 'parallel_branch_done'
   | 'parallel_joined'
+  | 'parallel_branch_recovery_paused'
+  | 'node_recovery_override_applied'
   | 'execution_log'
   | 'watcher_update'; // Deterministic Execution Watcher
 
@@ -946,3 +986,7 @@ export interface Learning {
   createdAt: Date;
   updatedAt: Date;
 }
+
+// ── Re-exports from model-recovery ───────────────────────────────────────
+
+export type { FailureCategory, ClassificationResult, NodeModelOverride, RecoveryState, RecoveryOverrideHistoryEntry } from './model-recovery.js';

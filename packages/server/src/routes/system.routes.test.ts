@@ -250,6 +250,41 @@ describe('system routes — model registry auth (AC-004)', () => {
     expect(res.body.models.length).toBeGreaterThan(0);
   });
 
+  it('GET /api/system/models/recovery backfills provider display names from seeded provider data', async () => {
+    mockDb.store.model_registry.push(
+      {
+        provider: 'claude',
+        fullId: 'claude-sonnet-4-5-20250929',
+        displayName: 'Claude sonnet 4.5',
+        isActive: true,
+        sortOrder: 0,
+      },
+      {
+        provider: 'claude',
+        fullId: 'claude-opus-4-8',
+        displayName: 'Opus 4.8',
+        providerDisplayName: 'Claude',
+        isActive: true,
+        sortOrder: 4,
+        tier: 'opus',
+      },
+    );
+
+    const res = await request(app).get('/api/system/models/recovery');
+
+    expect(res.status).toBe(200);
+    expect(res.body.providers).toEqual([
+      {
+        provider: 'claude',
+        providerDisplayName: 'Claude',
+        models: [
+          { fullId: 'claude-sonnet-4-5-20250929', displayName: 'Claude sonnet 4.5' },
+          { fullId: 'claude-opus-4-8', displayName: 'Opus 4.8', tier: 'opus' },
+        ],
+      },
+    ]);
+  });
+
   it('GET /api/system/models?includeInactive=true returns deactivated models', async () => {
     const ModelRegistryService = (await import('../services/model-registry.service.js')).ModelRegistryService;
     const service = new ModelRegistryService(mockDb as any);

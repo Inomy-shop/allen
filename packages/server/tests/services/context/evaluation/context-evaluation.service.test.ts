@@ -3,7 +3,7 @@ import { MongoClient, type Db } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { ContextEvaluationService } from '../../../../src/services/context/evaluation/context-evaluation.service.js';
 import { ContextLifecycleStore } from '../../../../src/services/context/lifecycle/context-lifecycle-store.js';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -700,6 +700,85 @@ print(json.dumps({"scores": {"precision": 1, "usefulness": 1}, "diagnostics": [{
     expect(summary.topDiagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'context_budget_bloat', nodeName: 'implement' }),
     ]));
+  });
+
+  it('runPendingSemanticEvaluations picks and executes script from process.resourcesPath when ALLEN_DEEPEVAL_SCRIPT is absent', async () => {
+    // This test actually exercises resolveDeepEvalScript() by running the service
+    // with process.resourcesPath set and no env-var override so the resourcesPath
+    // candidate is the first one that existsSync returns true for (AC-2 / AC-8).
+    process.env.ALLEN_CONTEXT_SEMANTIC_EVALUATOR = 'deepeval';
+    process.env.ALLEN_CONTEXT_SEMANTIC_MODE = 'per_node';
+
+    const originalResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+    const tmpDir = mkdtempSync(join(tmpdir(), 'allen-rp-node-run-'));
+    const serverScriptsDir = join(tmpDir, 'server-scripts');
+    mkdirSync(serverScriptsDir, { recursive: true });
+    const resourcesPathScript = join(serverScriptsDir, 'deepeval-context-evaluator.py');
+    writeFileSync(resourcesPathScript, `#!/usr/bin/env python3
+import json
+print(json.dumps({"scores": {"precision": 0.95, "groundedness": 0.9}, "diagnostics": [{"code": "picked_from_resources_path", "severity": "info"}]}))
+`);
+    chmodSync(resourcesPathScript, 0o755);
+
+    await insertEvaluationFixture(db, {
+      executionId: 'exec-rp-node',
+      packetId: 'packet-rp-node',
+      usageTraceId: 'usage-rp-node',
+    });
+
+    (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = tmpDir;
+    const savedScript = process.env.ALLEN_DEEPEVAL_SCRIPT;
+    delete process.env.ALLEN_DEEPEVAL_SCRIPT;
+
+    try {
+      const service = new ContextEvaluationService(db);
+      await service.evaluateUsageTrace({
+        executionId: 'exec-rp-node',
+        nodeName: 'implement',
+        attempt: 1,
+        packetId: 'packet-rp-node',
+        usageTraceId: 'usage-rp-node',
+      });
+      await expect(service.runPendingSemanticEvaluations()).resolves.toBe(1);
+      const stored = await db.collection('context_evaluations').findOne({ packetId: 'packet-rp-node', active: true });
+      expect(stored?.semantic).toEqual(expect.objectContaining({
+        provider: 'deepeval',
+        status: 'completed',
+        scores: expect.objectContaining({ precision: 0.95 }),
+      }));
+      expect(stored?.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'picked_from_resources_path' }),
+      ]));
+    } finally {
+      (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = originalResourcesPath;
+      if (savedScript === undefined) delete process.env.ALLEN_DEEPEVAL_SCRIPT;
+      else process.env.ALLEN_DEEPEVAL_SCRIPT = savedScript;
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveDeepEvalScript prefers process.resourcesPath server-scripts over ASAR path', async () => {
+    const originalResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+    const { mkdtempSync: mkdtempSyncFn, writeFileSync: writeFileSyncFn, mkdirSync: mkdirSyncFn, rmSync: rmSyncFn, existsSync: existsSyncFn } = await import('node:fs');
+    const { join: joinFn } = await import('node:path');
+    const { tmpdir: tmpdirFn } = await import('node:os');
+
+    const tmpDir = mkdtempSyncFn(joinFn(tmpdirFn(), 'allen-desktop-node-test-'));
+    const serverScriptsDir = joinFn(tmpDir, 'server-scripts');
+    mkdirSyncFn(serverScriptsDir, { recursive: true });
+    const fakeContextScript = joinFn(serverScriptsDir, 'deepeval-context-evaluator.py');
+    writeFileSyncFn(fakeContextScript, '#!/usr/bin/env python3\nprint("ok")\n');
+
+    (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = tmpDir;
+
+    try {
+      const expectedPath = joinFn(tmpDir, 'server-scripts/deepeval-context-evaluator.py');
+      expect(existsSyncFn(expectedPath)).toBe(true);
+      expect(expectedPath).toBe(fakeContextScript);
+    } finally {
+      (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = originalResourcesPath;
+      rmSyncFn(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 
