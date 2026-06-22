@@ -16,6 +16,7 @@ vi.mock('../services/designStudioService', () => ({
     confirmProfile: vi.fn(),
     greenfield: vi.fn(),
     createSession: vi.fn(),
+    deleteWorkspace: vi.fn(),
   },
 }));
 
@@ -25,6 +26,7 @@ function renderPage() {
   return render(
     <MemoryRouter initialEntries={['/studio/workspaces/w1']}>
       <Routes>
+        <Route path="/studio" element={<div>Design Studio list</div>} />
         <Route path="/studio/workspaces/:id" element={<DesignStudioWorkspacePage />} />
       </Routes>
     </MemoryRouter>,
@@ -85,5 +87,31 @@ describe('DesignStudioWorkspacePage', () => {
     vi.mocked(designStudio.repoChange).mockResolvedValue({ changed: true, hasProfile: true });
     renderPage();
     await waitFor(() => expect(screen.getByText(/repository changed since the profile/i)).toBeTruthy());
+  });
+
+  it('lets a repo Design Studio workspace be deleted from the detail page', async () => {
+    vi.mocked(designStudio.getWorkspace).mockResolvedValue({
+      _id: 'w1',
+      kind: 'repo',
+      name: 'Acme',
+      sourceRepoPath: '/repos/acme',
+      profileStatus: 'confirmed',
+      profile: baseProfile,
+    } as any);
+    vi.mocked(designStudio.deleteWorkspace).mockResolvedValue(undefined);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Delete$/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
+
+    expect(screen.getByText('Delete Design Studio repository')).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText('Acme'), { target: { value: 'Acme' } });
+    fireEvent.click(screen.getByRole('button', { name: /Delete repository/i }));
+
+    await waitFor(() => {
+      expect(designStudio.deleteWorkspace).toHaveBeenCalledWith('w1');
+      expect(screen.getByText('Design Studio list')).toBeTruthy();
+    });
   });
 });

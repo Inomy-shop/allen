@@ -47,6 +47,20 @@ export interface Workspace {
   updatedAt: string;
 }
 
+export const DESIGN_STUDIO_WORKSPACE_UPDATED_EVENT = 'allen:design-studio-workspace-updated';
+
+export type DesignStudioWorkspaceUpdatedDetail = {
+  workspaceId: string;
+  workspace?: Workspace;
+  profileStatus?: ProfileStatus;
+  deleted?: boolean;
+};
+
+function emitWorkspaceUpdated(detail: DesignStudioWorkspaceUpdatedDetail): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(DESIGN_STUDIO_WORKSPACE_UPDATED_EVENT, { detail }));
+}
+
 export interface Session {
   _id: string;
   workspaceId: string;
@@ -99,12 +113,27 @@ const B = '/design-studio';
 export const designStudio = {
   // Workspaces
   listWorkspaces: () => request<Workspace[]>(`${B}/workspaces`),
-  createWorkspace: (body: { kind: 'repo' | 'greenfield'; repoId?: string; name?: string }) =>
-    request<Workspace>(`${B}/workspaces`, { method: 'POST', body: JSON.stringify(body) }),
+  createWorkspace: async (body: { kind: 'repo' | 'greenfield'; repoId?: string; name?: string }) => {
+    const workspace = await request<Workspace>(`${B}/workspaces`, { method: 'POST', body: JSON.stringify(body) });
+    emitWorkspaceUpdated({ workspaceId: workspace._id, workspace, profileStatus: workspace.profileStatus });
+    return workspace;
+  },
   getWorkspace: (id: string) => request<Workspace>(`${B}/workspaces/${id}`),
-  deleteWorkspace: (id: string) => request<void>(`${B}/workspaces/${id}`, { method: 'DELETE' }),
-  analyze: (id: string, opts?: { provider?: string; model?: string }) =>
-    request<Workspace>(`${B}/workspaces/${id}/analyze`, { method: 'POST', body: JSON.stringify(opts ?? {}) }),
+  deleteWorkspace: async (id: string) => {
+    await request<void>(`${B}/workspaces/${id}`, { method: 'DELETE' });
+    emitWorkspaceUpdated({ workspaceId: id, deleted: true });
+  },
+  analyze: async (id: string, opts?: { provider?: string; model?: string }) => {
+    emitWorkspaceUpdated({ workspaceId: id, profileStatus: 'analyzing' });
+    try {
+      const workspace = await request<Workspace>(`${B}/workspaces/${id}/analyze`, { method: 'POST', body: JSON.stringify(opts ?? {}) });
+      emitWorkspaceUpdated({ workspaceId: workspace._id, workspace, profileStatus: workspace.profileStatus });
+      return workspace;
+    } catch (error) {
+      emitWorkspaceUpdated({ workspaceId: id });
+      throw error;
+    }
+  },
   /** Available provider/model options for the analysis picker. */
   listModels: async (): Promise<{ provider: string; model: string; label: string }[]> => {
     const providers = await request<{ provider: string; models?: string[]; modelSuggestions?: string[]; defaultModel?: string }[]>('/chat/providers');
@@ -115,14 +144,23 @@ export const designStudio = {
     }
     return out;
   },
-  confirmProfile: (id: string, body: { profile?: Partial<DesignProfile>; strategy?: 'mimic' | 'normalize'; selectedTheme?: string }) =>
-    request<Workspace>(`${B}/workspaces/${id}/profile`, { method: 'POST', body: JSON.stringify(body) }),
+  confirmProfile: async (id: string, body: { profile?: Partial<DesignProfile>; strategy?: 'mimic' | 'normalize'; selectedTheme?: string }) => {
+    const workspace = await request<Workspace>(`${B}/workspaces/${id}/profile`, { method: 'POST', body: JSON.stringify(body) });
+    emitWorkspaceUpdated({ workspaceId: workspace._id, workspace, profileStatus: workspace.profileStatus });
+    return workspace;
+  },
   repoChange: (id: string) => request<{ changed: boolean; hasProfile: boolean }>(`${B}/workspaces/${id}/repo-change`),
   /** REQ-005: Manual refresh — re-runs full analysis + context update for a confirmed repo workspace. */
-  refresh: (id: string, opts?: { provider?: string; model?: string }) =>
-    request<Workspace>(`${B}/workspaces/${id}/refresh`, { method: 'POST', body: JSON.stringify(opts ?? {}) }),
-  greenfield: (id: string, body: { idea?: string; answers: Record<string, string> }) =>
-    request<Workspace>(`${B}/workspaces/${id}/greenfield`, { method: 'POST', body: JSON.stringify(body) }),
+  refresh: async (id: string, opts?: { provider?: string; model?: string }) => {
+    const workspace = await request<Workspace>(`${B}/workspaces/${id}/refresh`, { method: 'POST', body: JSON.stringify(opts ?? {}) });
+    emitWorkspaceUpdated({ workspaceId: workspace._id, workspace, profileStatus: workspace.profileStatus });
+    return workspace;
+  },
+  greenfield: async (id: string, body: { idea?: string; answers: Record<string, string> }) => {
+    const workspace = await request<Workspace>(`${B}/workspaces/${id}/greenfield`, { method: 'POST', body: JSON.stringify(body) });
+    emitWorkspaceUpdated({ workspaceId: workspace._id, workspace, profileStatus: workspace.profileStatus });
+    return workspace;
+  },
 
   // Start a chat-based design session running the "UI Designer" persona.
   start: (workspaceId: string, opts?: { provider?: string; model?: string; agentOverrides?: Record<string, unknown> }) =>

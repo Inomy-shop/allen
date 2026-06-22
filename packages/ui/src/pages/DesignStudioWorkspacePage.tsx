@@ -9,8 +9,9 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Loader2, RefreshCw, Check, Plus, FileText, FolderGit2, MessageSquare, ExternalLink, Upload, Folder, Palette, Sparkles } from 'lucide-react';
+import { ArrowLeft, Loader2, RefreshCw, Check, Plus, FileText, FolderGit2, MessageSquare, ExternalLink, Upload, Folder, Palette, Sparkles, Trash2 } from 'lucide-react';
 import Select from '../components/common/Select';
+import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
   designStudio,
   workspaceSitePath,
@@ -32,6 +33,9 @@ export default function DesignStudioWorkspacePage() {
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [repoChanged, setRepoChanged] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -46,6 +50,19 @@ export default function DesignStudioWorkspacePage() {
   }, [id]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const deleteWorkspace = useCallback(async () => {
+    if (!ws) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await designStudio.deleteWorkspace(ws._id);
+      navigate('/studio');
+    } catch (e) {
+      setDeleteError((e as Error).message);
+      setDeleting(false);
+    }
+  }, [navigate, ws]);
 
   if (loading || !ws) {
     return <div className="flex h-full items-center justify-center text-theme-muted"><Loader2 className="h-5 w-5 animate-spin" /></div>;
@@ -73,8 +90,24 @@ export default function DesignStudioWorkspacePage() {
               <ExternalLink className="h-3.5 w-3.5" /> Preview
             </button>
             <ExportWorkspaceButton workspaceId={ws._id} disabled={files.length === 0} />
+            {ws.kind === 'repo' && (
+              <button
+                className="btn btn-secondary btn-sm gap-1.5 !rounded-md text-accent-red hover:bg-accent-red/10 hover:text-accent-red"
+                onClick={() => setDeleteOpen(true)}
+                disabled={deleting}
+                title="Remove this repository from Design Studio"
+              >
+                {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Delete
+              </button>
+            )}
           </div>
         </div>
+        {deleteError && (
+          <p className="mt-3 whitespace-pre-wrap rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">
+            {deleteError}
+          </p>
+        )}
       </header>
 
       {ws.profileStatus !== 'confirmed' ? (
@@ -84,6 +117,20 @@ export default function DesignStudioWorkspacePage() {
       ) : (
         <ConfirmedWorkspace ws={ws} sessions={sessions} files={files} repoChanged={repoChanged} onChange={load} onOpenSession={(sid) => navigate(sid ? `/studio/sessions/${sid}?ws=${ws._id}` : `/studio/sessions?ws=${ws._id}`)} />
       )}
+      <DeleteConfirmDialog
+        open={deleteOpen}
+        resourceType="Design Studio repository"
+        resourceName={ws.name}
+        title="Delete Design Studio repository"
+        description="This removes the repository from Design Studio, including its design profile, sessions, messages, and generated versions. It does not delete the source repository checkout."
+        confirmLabel="Delete repository"
+        busy={deleting}
+        onConfirm={deleteWorkspace}
+        onCancel={() => {
+          setDeleteOpen(false);
+          setDeleteError(null);
+        }}
+      />
     </div>
   );
 }

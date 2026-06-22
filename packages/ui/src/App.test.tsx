@@ -23,7 +23,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup, act } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import App from './App';
 
@@ -82,6 +82,7 @@ vi.mock('./services/workspaceService', () => ({
 }));
 
 vi.mock('./services/designStudioService', () => ({
+  DESIGN_STUDIO_WORKSPACE_UPDATED_EVENT: 'allen:design-studio-workspace-updated',
   designStudio: { listWorkspaces: vi.fn() },
 }));
 
@@ -304,6 +305,60 @@ describe('Sidebar carousel — workspace rows (AC5–AC7)', () => {
       rows.forEach((row) => {
         expect(row.querySelector('svg')).toBeInTheDocument();
       });
+    });
+  });
+
+  it('updates a Design Studio sidebar status from the workspace update event without reselecting the panel', async () => {
+    vi.mocked(designStudio.listWorkspaces).mockResolvedValue([
+      { _id: 'w1', kind: 'repo', name: 'Acme', profileStatus: 'pending', createdAt: '', updatedAt: '' } as any,
+    ]);
+    renderApp();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Design Studio' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Acme')).toBeInTheDocument();
+      expect(screen.getByText('Setup needed')).toBeInTheDocument();
+    });
+
+    vi.mocked(designStudio.listWorkspaces).mockResolvedValue([
+      { _id: 'w1', kind: 'repo', name: 'Acme', profileStatus: 'analyzing', createdAt: '', updatedAt: '' } as any,
+    ]);
+    act(() => {
+      window.dispatchEvent(new CustomEvent('allen:design-studio-workspace-updated', {
+        detail: { workspaceId: 'w1', profileStatus: 'analyzing' },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Analyzing…')).toBeInTheDocument();
+      expect(screen.queryByText('Setup needed')).not.toBeInTheDocument();
+    });
+  });
+
+  it('removes a deleted Design Studio workspace from the sidebar without reselecting the panel', async () => {
+    vi.mocked(designStudio.listWorkspaces).mockResolvedValue([
+      { _id: 'w1', kind: 'repo', name: 'Acme', profileStatus: 'confirmed', createdAt: '', updatedAt: '' } as any,
+    ]);
+    renderApp();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Design Studio' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Acme')).toBeInTheDocument();
+      expect(screen.getByText('Ready')).toBeInTheDocument();
+    });
+
+    vi.mocked(designStudio.listWorkspaces).mockResolvedValue([]);
+    act(() => {
+      window.dispatchEvent(new CustomEvent('allen:design-studio-workspace-updated', {
+        detail: { workspaceId: 'w1', deleted: true },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Acme')).not.toBeInTheDocument();
+      expect(screen.getByText(/No design workspaces yet/i)).toBeInTheDocument();
     });
   });
 

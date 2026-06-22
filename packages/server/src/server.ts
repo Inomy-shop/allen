@@ -47,9 +47,6 @@ import { runTrustBootstrap } from './services/trust-bootstrap.service.js';
 import { seedContextQuality } from './services/context/judge/context-quality-seed.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
 import { designDocRoutes } from './routes/design-doc.routes.js';
-import { designRoutes } from './routes/design.routes.js';
-import { designReposRoutes, createDesignRepoPreviewHandler } from './routes/design-repos.routes.js';
-import { DesignRepoPreviewManager } from './services/design-repo-preview-manager.js';
 import { designStudioRoutes } from './routes/design-studio.routes.js';
 import { createPreviewHandler, createChatPreviewHandler, DSTUDIO_PREVIEW_PREFIX, DSTUDIO_CHAT_PREVIEW_PREFIX } from './services/design-studio/preview.service.js';
 import { createWorkspaceSiteHandler, DSTUDIO_SITE_PREFIX } from './services/design-studio/workspace-fs.js';
@@ -277,8 +274,6 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
   app.use('/api/workspaces', publicWorkspaceRoutes(db));
   app.use('/api/workspaces/:id/preview', createWorkspaceProxy(db));
 
-  app.use('/api/design/repos/:repoId/preview', createDesignRepoPreviewHandler(db));
-
   // Design Studio previews are served unauthenticated so they open in the
   // user's real local browser. Mounted before requireAuth. The chat-session
   // route serves a session's HTML/CSS/JS artifacts as a mini static site (so
@@ -311,8 +306,6 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
   app.use('/api/pull-requests', pullRequestRoutes(db));
   app.use('/api/crons', cronRoutes(db, cronService));
   app.use('/api/design-docs', designDocRoutes(db));
-  app.use('/api/design', designRoutes(db));
-  app.use('/api/design', designReposRoutes(db));
   app.use('/api/design-studio', designStudioRoutes(db));
   app.use('/api/interventions', interventionRoutes(db));
   app.use('/api/execution-watchers', watcherRoutes(db));
@@ -441,7 +434,6 @@ export async function startAllenServer(options: StartAllenServerOptions = {}): P
       await collect(() => stopMcpHealthMonitor());
       await collect(() => watcherServiceHandle?.stopPoller());
       await collect(() => cronService.stop());
-      await collect(() => DesignRepoPreviewManager.stopAll());
       await collect(() => closeHttpServer(httpServer));
       await collect(() => stalePidCleanup);
       if (shouldManageDb) await collect(() => disconnectDB());

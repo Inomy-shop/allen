@@ -148,7 +148,6 @@ Built-in workflows in `packages/engine/workflows/`:
 | `self-healing-incident-triage.yml` | Classify and route a production/runtime incident. |
 | `allen-self-healing-monitor-hourly.yml` | Hourly scan of Allen's own runtime; files and dispatches incidents. |
 | `multi-repo-change-orchestration.yml` | Parent orchestrator for cross-repo change delivery — clarify, plan per-repo work, approve, then run child workflows. |
-| `source-prd-to-ui-designs-variations.yml` | Generate distinct UX/design options from a product brief and design-system evidence. Dispatched automatically by the Design tab. |
 
 See [`docs/first-workflow.md`](docs/first-workflow.md) for a step-by-step walkthrough.
 
@@ -173,8 +172,6 @@ See [`docs/first-workflow.md`](docs/first-workflow.md) for a step-by-step walkth
 **Cron / scheduled work.** Six built-in jobs (repo scan/pull, PR sync, MCP bundle cleanup, CodeRabbit sweep, hourly self-healing monitor) plus user-created scheduled agent/workflow runs via the Schedules page.
 
 **Self-healing monitoring.** An hourly agent-led scan inspects Allen's own runtime records, fingerprints and deduplicates incidents, files Linear tickets, and can auto-dispatch `bug-fix-by-severity`. See [`docs/SELF_HEALING_MONITORING.md`](docs/SELF_HEALING_MONITORING.md).
-
-**Design tab.** A dedicated `/design` surface for design-specific conversations, separate from normal chat history. Write a design prompt, pick a design repo and optional source repo, and Allen auto-routes: new requests with no existing output dispatch the `source-prd-to-ui-designs-variations` full workflow; existing sessions or workspaces route to the `frontend-developer` agent for fast iterations. The routing decision (mode, resolved runner, reason) is visible and overrideable before each run. Repos can be onboarded as design repos or bootstrapped from a local `ui-designs` template; an optional preview config (working directory, start command, port, health check) integrates with the existing workspace preview proxy.
 
 **Learnings & memory.** Agents record learnings (facts, patterns, mistakes) scoped to global / workflow / context / agent. Relevant learnings are retrieved by embedding similarity and injected into future prompts.
 

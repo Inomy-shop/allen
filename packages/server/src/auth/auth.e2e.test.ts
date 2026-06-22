@@ -359,3 +359,94 @@ describe('auth e2e: logout', () => {
     expect(replay.status).toBe(401);
   });
 });
+
+describe('auth e2e: desktop-only local password reset', () => {
+  let ctx: TestContext;
+  let prevDesktopFlag: string | undefined;
+
+  beforeAll(async () => {
+    ctx = await makeTestApp();
+    prevDesktopFlag = process.env.ALLEN_DESKTOP;
+  });
+  afterAll(async () => {
+    if (prevDesktopFlag === undefined) delete process.env.ALLEN_DESKTOP;
+    else process.env.ALLEN_DESKTOP = prevDesktopFlag;
+    await ctx.stop();
+  });
+
+  it('rejects the reset in web/browser mode and leaves the password unchanged', async () => {
+    delete process.env.ALLEN_DESKTOP;
+    const res = await request(ctx.app)
+      .post('/api/auth/desktop-reset-password')
+      .send({ email: BOOT_EMAIL, newPassword: 'WebReset!2345' });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('desktop_runtime_only');
+
+    // Original password still works.
+    const login = await request(ctx.app)
+      .post('/api/auth/login')
+      .send({ email: BOOT_EMAIL, password: BOOT_PW });
+    expect(login.status).toBe(200);
+  });
+
+  it('rejects weak new passwords in desktop mode', async () => {
+    process.env.ALLEN_DESKTOP = '1';
+    const res = await request(ctx.app)
+      .post('/api/auth/desktop-reset-password')
+      .send({ email: BOOT_EMAIL, newPassword: 'weakpass' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects unknown emails in desktop mode without changing any password', async () => {
+    process.env.ALLEN_DESKTOP = '1';
+    const res = await request(ctx.app)
+      .post('/api/auth/desktop-reset-password')
+      .send({ email: 'ghost@nowhere.co', newPassword: 'GhostReset!2345' });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('account_not_found');
+
+    // Seeded admin password is untouched.
+    const login = await request(ctx.app)
+      .post('/api/auth/login')
+      .send({ email: BOOT_EMAIL, password: BOOT_PW });
+    expect(login.status).toBe(200);
+  });
+
+  it('resets the password, revokes sessions, and lets the user sign in with the new password', async () => {
+    process.env.ALLEN_DESKTOP = '1';
+    // Establish an existing session that must be invalidated by the reset.
+    const existing = await request(ctx.app)
+      .post('/api/auth/login')
+      .send({ email: BOOT_EMAIL, password: BOOT_PW });
+    expect(existing.status).toBe(200);
+    const oldRefresh = existing.body.refreshToken;
+
+    const newPw = 'DesktopReset!2345';
+    const reset = await request(ctx.app)
+      .post('/api/auth/desktop-reset-password')
+      .send({ email: BOOT_EMAIL, newPassword: newPw });
+    expect(reset.status).toBe(200);
+    expect(reset.body.ok).toBe(true);
+    // No session is issued by the reset itself.
+    expect(reset.body.accessToken).toBeUndefined();
+
+    // Existing refresh token is now invalid.
+    const stale = await request(ctx.app)
+      .post('/api/auth/refresh')
+      .send({ refreshToken: oldRefresh });
+    expect(stale.status).toBe(401);
+
+    // Old password no longer works.
+    const bad = await request(ctx.app)
+      .post('/api/auth/login')
+      .send({ email: BOOT_EMAIL, password: BOOT_PW });
+    expect(bad.status).toBe(401);
+
+    // New password works.
+    const good = await request(ctx.app)
+      .post('/api/auth/login')
+      .send({ email: BOOT_EMAIL, password: newPw });
+    expect(good.status).toBe(200);
+    expect(good.body.accessToken).toBeTruthy();
+  });
+});

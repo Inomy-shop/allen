@@ -218,6 +218,13 @@ export const auth = {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
+  // Desktop-only local password recovery. Rejected by the server unless the
+  // runtime is in desktop mode (ALLEN_DESKTOP=1).
+  desktopResetPassword: (email: string, newPassword: string) =>
+    request<{ ok: true }>('/auth/desktop-reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ email, newPassword }),
+    }),
   me: () => request<{ user: AuthUser }>('/auth/me'),
 };
 

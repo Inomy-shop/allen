@@ -104,25 +104,12 @@ Responsibilities:
 - Workspace list/detail, terminal, file preview, service preview. Clicking a workspace in the sidebar opens `ChatPage` in workspace mode (`/chat?workspaceId=…`) rather than the workspace IDE page, giving a browser-style chat tab strip scoped to that workspace.
 - Repo manager.
 - Ticket and PR views.
-- **Design tab** (`/design`, `/design/:designSessionId`): design-session list, active conversation, composer, routing selector, design/source repo selectors, run-progress panel, artifact list, and optional preview panel. When no design repo is configured, shows a setup panel with options to onboard an existing repo or bootstrap a `ui-designs` template.
-- **Sidebar carousel**: the expanded sidebar shows three panels switched via a dot selector at the bottom: Design Studio (left dot, lists Design Studio workspaces with status badges and search), main app navigation (center dot, default), and code workspaces (right dot). On `/design` routes the carousel is replaced by a dedicated `DesignNavPanel` for design-session history. When collapsed, the sidebar shows only icon navigation with tooltips.
+- **Sidebar carousel**: the expanded sidebar shows three panels switched via a dot selector at the bottom: Design Studio (left dot, lists Design Studio workspaces with status badges and search), main app navigation (center dot, default), and code workspaces (right dot). When collapsed, the sidebar shows only icon navigation with tooltips.
 - Settings for agents, MCP (including preset and repo-based registration with Python MCP support), integrations, and users.
 
 Key activity page components:
 
 - `src/pages/ExecutionListPage.tsx` - Activity page. Renders the paginated execution list. Exports the `paginationViewModel({ page, total, pageSize })` pure function that computes UI-state (`visible`, `pageCount`, `currentPageLabel`, `prevDisabled`, `nextDisabled`) with no DOM dependency so it can be tested in isolation. A **Source** filter chip group (`All | Chat | Workflow | Design`) filters on `executions.meta.sourceSurface`; design-tab runs carry `sourceSurface='design_tab'`.
-- `src/pages/DesignPage.tsx` - Design tab entry point routed at `/design` and `/design/:designSessionId`. Hosts the session list, active conversation, composer, run panel, and routing selector. Renders `DesignSetupPanel` when no design repo is configured.
-
-Key design UI components:
-
-- `src/components/design/DesignSetupPanel.tsx` - empty-state panel with "Onboard existing design/prototyping repo" and "Create from ui-designs template" actions.
-- `src/components/design/DesignConversationList.tsx` - left rail listing the user's design sessions.
-- `src/components/design/DesignComposer.tsx` - input box and Run button; sends to `POST /api/design/sessions/:id/run`.
-- `src/components/design/DesignRoutingSelector.tsx` - shows resolved mode, runner, and reason with a `Change ▾` override menu (`auto | full_workflow | fast_frontend | design_refinement | design_review`). Displays the workflow as `Full design workflow` in the UI without changing the internal name.
-- `src/components/design/DesignRepoSelector.tsx` - design repo (required, defaults to `isDefaultDesignRepo`) and source repo (optional) selectors.
-- `src/components/design/DesignPreviewConfigForm.tsx` - preview config form; validates working directory, startCommand, portMode, and fixedPort; calls `PUT /preview-config` then optionally `POST /preview-config/test`.
-- `src/components/design/DesignRunPanel.tsx` - streams the active run via the existing execution SSE, shows artifacts, and surfaces retry/error options.
-- `src/services/designService.ts` - thin `request<T>` wrappers around `/api/design/*`.
 
 Key chat UI components:
 
