@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { X, Loader2, AlertTriangle, Check, FolderGit2, Plus, Users } from 'lucide-react';
+import { X, Loader2, AlertTriangle, Check, FolderGit2, Plus, Users, RefreshCw } from 'lucide-react';
 import { agents as agentsApi, teams as teamsApi, repos as reposApi } from '../../services/api';
 import { useToast } from '../common/Toast';
 import IconTooltipButton from '../common/IconTooltipButton';
@@ -114,6 +114,7 @@ export function ImportAgentsFromRepoDialog({
   const [verdicts, setVerdicts] = useState<ImportVerdict[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [committing, setCommitting] = useState(false);
+  const [syncingAgent, setSyncingAgent] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -164,6 +165,19 @@ export function ImportAgentsFromRepoDialog({
       toast.error(err instanceof Error ? err.message : 'Import failed');
     } finally {
       setCommitting(false);
+    }
+  }
+
+  async function handleSync(existingAgentName: string) {
+    setSyncingAgent(existingAgentName);
+    try {
+      await agentsApi.resync(existingAgentName);
+      toast.success(`Agent "${existingAgentName}" synced from repo.`);
+      if (selectedRepoId) await runPreview(selectedRepoId);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Sync failed');
+    } finally {
+      setSyncingAgent(null);
     }
   }
 
@@ -287,24 +301,28 @@ export function ImportAgentsFromRepoDialog({
                 );
               }
               const isCreate = v.kind === 'create';
+              const isAlreadyImported = v.kind === 'skip:already-imported';
               const reason =
                 v.kind === 'skip:name-collision'
-                  ? `Name already used by "${v.existingAgent}"`
-                  : v.kind === 'skip:already-imported'
-                    ? `Already imported as "${v.existingAgent}"`
+                  ? `Name "${v.existingAgent}" already exists — delete it first to reimport`
+                  : isAlreadyImported
+                    ? `Already in Allen as "${v.existingAgent}" — sync to pull latest changes`
                     : '';
               return (
-                <label
+                <div
                   key={v.agent.name}
                   className={`flex items-center gap-3 border-b border-app px-3 py-2.5 last:border-b-0 ${
-                    isCreate ? 'cursor-pointer hover:bg-app-muted/40' : 'cursor-not-allowed bg-app-muted/25 opacity-60'
+                    isCreate ? 'cursor-pointer hover:bg-app-muted/40' : 'bg-app-muted/25'
                   }`}
+                  onClick={() => isCreate && toggle(v.agent.name)}
                 >
                   <input
                     type="checkbox"
                     disabled={!isCreate}
                     checked={isCreate && selected.has(v.agent.name)}
                     onChange={() => isCreate && toggle(v.agent.name)}
+                    onClick={e => e.stopPropagation()}
+                    className="shrink-0"
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -323,12 +341,27 @@ export function ImportAgentsFromRepoDialog({
                     {isCreate && 'description' in v.agent && (
                       <div className="truncate text-[11px] text-theme-muted">{v.agent.description}</div>
                     )}
-                    {!isCreate && <div className="text-[11px] text-theme-muted">{reason}</div>}
+                    {!isCreate && <div className="text-[11px] text-theme-muted opacity-70">{reason}</div>}
                   </div>
-                  <span className="shrink-0 font-mono text-[10px] text-theme-subtle">
-                    {isCreate ? 'create' : 'skip'}
-                  </span>
-                </label>
+                  {isAlreadyImported && 'existingAgent' in v && (
+                    <button
+                      type="button"
+                      onClick={e => { e.stopPropagation(); void handleSync(v.existingAgent); }}
+                      disabled={syncingAgent === v.existingAgent}
+                      className="shrink-0 inline-flex items-center gap-1 rounded-md border border-app px-2 py-1 font-mono text-[10px] text-accent-blue hover:bg-accent-blue/10 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {syncingAgent === v.existingAgent
+                        ? <Loader2 className="h-3 w-3 animate-spin" />
+                        : <RefreshCw className="h-3 w-3" />}
+                      Sync
+                    </button>
+                  )}
+                  {!isAlreadyImported && (
+                    <span className="shrink-0 font-mono text-[10px] text-theme-subtle">
+                      {isCreate ? 'create' : 'skip'}
+                    </span>
+                  )}
+                </div>
               );
             })}
           </div>

@@ -28,7 +28,6 @@ import OnboardingRepositoryPage from './pages/OnboardingRepositoryPage';
 import OnboardingFirstWorkflowPage from './pages/OnboardingFirstWorkflowPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
-import DesignPage from './pages/DesignPage';
 import DesignStudioPage from './pages/DesignStudioPage';
 import DesignStudioWorkspacePage from './pages/DesignStudioWorkspacePage';
 import DesignStudioSessionPage from './pages/DesignStudioSessionPage';
@@ -85,8 +84,6 @@ const router = createBrowserRouter([
           { path: 'threads', element: <Navigate to="/chats" replace /> },
           { path: 'chat', element: <ChatPage /> },
           { path: 'chat/:sessionId', element: <ChatPage /> },
-          { path: 'design', element: <DesignPage /> },
-          { path: 'design/:sessionId', element: <DesignPage /> },
           { path: 'studio', element: <DesignStudioPage /> },
           { path: 'studio/workspaces/:id', element: <DesignStudioWorkspacePage /> },
           { path: 'studio/sessions', element: <DesignStudioSessionPage /> },

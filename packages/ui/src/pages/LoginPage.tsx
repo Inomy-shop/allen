@@ -11,6 +11,7 @@ import {
 import { auth, system } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { BRAND_SLUG } from '../lib/brand';
+import ForgotPasswordModal from '../components/auth/ForgotPasswordModal';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -26,6 +27,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [resetNotice, setResetNotice] = useState<string | null>(null);
   const requestedFrom = params.get('from') ?? '/';
   const from = requestedFrom.startsWith('/login') ? '/' : requestedFrom;
 
@@ -253,9 +256,20 @@ export default function LoginPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label htmlFor="login-password" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">
-                    password
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="login-password" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">
+                      password
+                    </label>
+                    {isDesktop && (
+                      <button
+                        type="button"
+                        onClick={() => { setResetNotice(null); setShowForgotPassword(true); }}
+                        className="font-mono text-[11px] text-accent transition-colors hover:underline"
+                      >
+                        Forgot password?
+                      </button>
+                    )}
+                  </div>
                   <input
                     id="login-password"
                     type="password"
@@ -268,6 +282,12 @@ export default function LoginPage() {
                   />
                 </div>
               </div>
+
+              {resetNotice && (
+                <div className="mt-4 rounded-md border border-accent-green/25 bg-accent-green/10 px-3 py-2 text-[12px] text-accent-green">
+                  {resetNotice}
+                </div>
+              )}
 
               {error && (
                 <div className="mt-4 rounded-md border border-accent-red/25 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">
@@ -291,6 +311,20 @@ export default function LoginPage() {
           </section>
         </div>
       </div>
+
+      {isDesktop && showForgotPassword && (
+        <ForgotPasswordModal
+          initialEmail={email}
+          onClose={() => setShowForgotPassword(false)}
+          onResetComplete={(resetEmail) => {
+            setShowForgotPassword(false);
+            setError(null);
+            setEmail(resetEmail);
+            setPassword('');
+            setResetNotice('Password reset. Sign in with your new password.');
+          }}
+        />
+      )}
     </main>
   );
 }

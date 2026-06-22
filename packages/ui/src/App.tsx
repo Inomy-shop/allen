@@ -6,7 +6,7 @@ import ShortcutKey from './components/common/ShortcutKey';
 import {
   CirclePlay, GitBranch, GitPullRequest, History, LayoutDashboard, Settings,
   FolderGit2, TicketCheck, Workflow,
-  ChevronRight, Plus, Palette, PenTool,
+  ChevronRight, Plus, PenTool,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
   SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain, Cpu,
   Trash2, AlertTriangle, Copy, Check, BarChart3, X, Lightbulb, Loader2,
@@ -26,9 +26,8 @@ import { usePanelLayout } from './hooks/usePanelLayout';
 import { WorkspaceCreateDialog, type WorkspaceCreateRepo } from './components/workspace/WorkspaceCreateDialog';
 import { workspaceChatPath } from './lib/workspace-routes';
 import { workspaceCreateBaseBranch } from './lib/workspace-create';
-import DesignNavPanel from './components/design/DesignNavPanel';
 import DesignStudioCreateDialog from './components/design/DesignStudioCreateDialog';
-import { designStudio, type Workspace as DesignStudioWorkspace } from './services/designStudioService';
+import { designStudio, DESIGN_STUDIO_WORKSPACE_UPDATED_EVENT, type Workspace as DesignStudioWorkspace } from './services/designStudioService';
 
 interface NavItem {
   to: string;
@@ -122,7 +121,6 @@ const NAV_GROUPS: NavGroup[] = [
     { to: '/workspaces', icon: FolderGit2, label: 'Workspaces' },
   ]},
   { id: 'design', dividerBefore: true, items: [
-    { to: '/design', icon: Palette, label: 'Design', activePrefixes: ['/design'] },
     { to: '/studio', icon: PenTool, label: 'Design Studio', activePrefixes: ['/studio'] },
   ]},
   { id: 'studio', dividerBefore: true, items: [
@@ -151,7 +149,6 @@ const SETTINGS_NAV_GROUPS: NavGroup[] = [
 
 const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
   { prefix: '/studio', label: 'Design Studio' },
-  { prefix: '/design', label: 'Design' },
   { prefix: '/chats', label: 'History' },
   { prefix: '/threads', label: 'History' },
   { prefix: '/chat', label: 'Chat' },
@@ -173,7 +170,6 @@ const COMMANDS: CommandItem[] = [
   { id: 'dashboard', label: 'Open dashboard', group: 'Navigate', to: '/', icon: LayoutDashboard },
   { id: 'executions', label: 'Open executions', group: 'Navigate', to: '/executions', icon: CirclePlay },
   { id: 'chats', label: 'Open history', group: 'Navigate', to: '/chats', icon: History },
-  { id: 'design', label: 'Open design', group: 'Navigate', to: '/design', icon: Palette },
   { id: 'studio', label: 'Open Design Studio', group: 'Navigate', to: '/studio', icon: PenTool },
   { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: History },
   { id: 'activity', label: 'View execution log', group: 'Executions', to: '/executions', icon: CirclePlay },
@@ -1123,6 +1119,26 @@ export default function App() {
     }
   }, []);
 
+  const applyDsWorkspaceUpdate = useCallback((workspace: DesignStudioWorkspace) => {
+    setDsWorkspaces(prev => {
+      const idx = prev.findIndex(item => item._id === workspace._id);
+      if (idx === -1) return [workspace, ...prev];
+      const next = [...prev];
+      next[idx] = { ...next[idx], ...workspace };
+      return next;
+    });
+  }, []);
+
+  const applyDsWorkspaceStatus = useCallback((workspaceId: string, profileStatus: DesignStudioWorkspace['profileStatus']) => {
+    setDsWorkspaces(prev => prev.map(item =>
+      item._id === workspaceId ? { ...item, profileStatus } : item,
+    ));
+  }, []);
+
+  const removeDsWorkspace = useCallback((workspaceId: string) => {
+    setDsWorkspaces(prev => prev.filter(item => item._id !== workspaceId));
+  }, []);
+
   useEffect(() => {
     if (sidebarPanel !== 'workspaces') return;
     void loadSidebarWorkspaces(false);
@@ -1132,6 +1148,37 @@ export default function App() {
     if (sidebarPanel !== 'design-studio') return;
     void loadDsWorkspaces(false);
   }, [sidebarPanel, loadDsWorkspaces]);
+
+  useEffect(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    function onDesignStudioWorkspaceUpdated(event: Event) {
+      const detail = (event as CustomEvent<{
+        workspaceId?: string;
+        workspace?: DesignStudioWorkspace;
+        profileStatus?: DesignStudioWorkspace['profileStatus'];
+        deleted?: boolean;
+      }>).detail ?? {};
+
+      if (detail.deleted && detail.workspaceId) {
+        removeDsWorkspace(detail.workspaceId);
+      } else if (detail.workspace) {
+        applyDsWorkspaceUpdate(detail.workspace);
+      } else if (detail.workspaceId && detail.profileStatus) {
+        applyDsWorkspaceStatus(detail.workspaceId, detail.profileStatus);
+      }
+
+      if (sidebarPanel === 'design-studio') {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => void loadDsWorkspaces(true), 300);
+      }
+    }
+
+    window.addEventListener(DESIGN_STUDIO_WORKSPACE_UPDATED_EVENT, onDesignStudioWorkspaceUpdated);
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      window.removeEventListener(DESIGN_STUDIO_WORKSPACE_UPDATED_EVENT, onDesignStudioWorkspaceUpdated);
+    };
+  }, [applyDsWorkspaceStatus, applyDsWorkspaceUpdate, loadDsWorkspaces, removeDsWorkspace, sidebarPanel]);
 
   // Keep the sidebar ordered by recent chat activity in real time while it is
   // open: refresh on the workspace-activity event (fired when a chat message is
@@ -1196,10 +1243,6 @@ export default function App() {
   });
 
   const isSettingsRoute = location.pathname.startsWith('/settings');
-  const isDesignRoute = location.pathname.startsWith('/design');
-  const designActiveSessionId = isDesignRoute
-    ? location.pathname.match(/^\/design\/([^/]+)/)?.[1] ?? null
-    : null;
   const shellNavState = navPanel.collapsed && !isSettingsRoute ? 'nav-collapsed' : 'nav-expanded';
   const sidebarPanelIndex = Math.max(0, SIDEBAR_PANEL_ORDER.indexOf(sidebarPanel));
 
@@ -1345,52 +1388,6 @@ export default function App() {
                 </div>
               </div>
             ))}
-          </div>
-        </nav>
-      ) : isDesignRoute && !navPanel.collapsed ? (
-        /* Design route: custom design history sidebar */
-        <nav className="sidebar !w-[290px] !min-w-[290px] [animation:none]">
-          <div className="brand">
-            <NavLink to="/" className="brand-link">
-              <div className="brand-mark">[a]</div>
-              <span className="brand-name">{BRAND_NAME}</span>
-            </NavLink>
-            <span className="brand-sub">v{appVersion}</span>
-          </div>
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <DesignNavPanel
-              activeSessionId={designActiveSessionId}
-              onBack={() => {
-                setSidebarPanel('navigation');
-                // Navigate away from Design mode. Using navigate('/') rather than
-                // navigate(-1) so the user reliably lands on a non-design route —
-                // history -1 might still be another /design/* entry.
-                navigate('/');
-              }}
-              onDelete={async (id) => {
-                try {
-                  await chatApi.deleteSession(id);
-                  // If we deleted the active session, navigate to /design root
-                  if (designActiveSessionId === id) navigate('/design');
-                } catch (err) {
-                  console.error('[design] failed to delete session', err);
-                }
-              }}
-            />
-          </div>
-          <div className="sidebar-foot-wrap">
-            {currentUser && (
-              <div className="sidebar-foot">
-                <div className="avatar">{userInitial}</div>
-                <div className="user-meta">
-                  <div className="nm">{currentUser.name}</div>
-                  <div className="em">{currentUser.email}</div>
-                </div>
-                <NavLink to="/settings/general" className="foot-btn" title="Settings">
-                  <Settings className="w-3.5 h-3.5" />
-                </NavLink>
-              </div>
-            )}
           </div>
         </nav>
       ) : navPanel.collapsed ? (
@@ -1637,7 +1634,7 @@ export default function App() {
                   {/* ── Design Studio sidebar panel ── */}
                   <div className="flex items-center justify-between px-4 pb-2 pt-2">
                     <div className="flex items-center gap-1.5">
-                      <Palette className="h-3.5 w-3.5 text-theme-muted" />
+                      <PenTool className="h-3.5 w-3.5 text-theme-muted" />
                       <span className="text-[12.5px] font-medium text-theme-secondary">Design Studio</span>
                     </div>
                     <button

@@ -62,10 +62,6 @@ vi.mock('../hooks/usePanelLayout', () => ({
   }),
 }));
 
-vi.mock('../components/design/DesignNavPanel', () => ({
-  default: () => null,
-}));
-
 // ── Helper: replicate the same formatBytes the component uses ──
 
 function formatBytes(bytes: number): string {

@@ -653,6 +653,14 @@ export default function RoleManagerPage() {
     } catch (err) { toast.error(err instanceof Error ? err.message : 'Failed to delete'); }
   }
 
+  async function handleResyncAgent(name: string) {
+    try {
+      await agentsApi.resync(name);
+      toast.success(`Agent "${name}" synced from repo.`);
+      refresh();
+    } catch (err) { toast.error(err instanceof Error ? err.message : 'Sync failed'); }
+  }
+
   async function handleSaveAgent(data: Record<string, unknown>) {
     if (editingRole) {
       const updated = await agentsApi.update(data.name as string, data);
@@ -919,6 +927,7 @@ export default function RoleManagerPage() {
             onDeleteTeam={setDeletingTeam}
             onAddAgentToTeam={handleAddAgentToTeam}
             onRefresh={() => { refresh(); void reloadTeams(); void reloadActivity(); }}
+            onResyncAgent={handleResyncAgent}
           />
         )}
         {librarySection === 'skills' && (
@@ -1399,7 +1408,7 @@ function LibraryTeamsAgentsPane({
   teams, agents, agentsByTeam, activityByAgent, selectedAgents,
   onToggleSelect, onSelectAll, onDeselectAll, onClearSelection, onViewAgent, onEditAgent, onDeleteAgent, onRunAgent,
   onCreateTeam, onBuildTeamWithAi, onCreateAgent, onImportAgents, onImportAgentJson, onExportAgents, onEditTeam, onDeleteTeam,
-  onAddAgentToTeam, onRefresh,
+  onAddAgentToTeam, onRefresh, onResyncAgent,
 }: {
   teams: Team[];
   agents: any[];
@@ -1424,6 +1433,7 @@ function LibraryTeamsAgentsPane({
   onDeleteTeam: (team: Team) => void;
   onAddAgentToTeam: (team: Team) => void;
   onRefresh: () => void;
+  onResyncAgent: (name: string) => void;
 }) {
   const [activeName, setActiveName] = useState('all');
   const [teamQuery, setTeamQuery] = useState('');
@@ -1729,6 +1739,7 @@ function LibraryTeamsAgentsPane({
                                   onEdit={() => onEditAgent(agent)}
                                   onDelete={() => onDeleteAgent(agent.name)}
                                   onRun={() => onRunAgent(agent)}
+                                  onResync={agent.sourceRepoId ? () => onResyncAgent(agent.name) : undefined}
                                 />
                               ))}
                             </div>
@@ -1752,6 +1763,7 @@ function LibraryTeamsAgentsPane({
                                   onEdit={() => onEditAgent(agent)}
                                   onDelete={() => onDeleteAgent(agent.name)}
                                   onRun={() => onRunAgent(agent)}
+                                  onResync={agent.sourceRepoId ? () => onResyncAgent(agent.name) : undefined}
                                 />
                               ))}
                             </div>
@@ -1777,6 +1789,7 @@ function LibraryTeamsAgentsPane({
                             onEdit={() => onEditAgent(agent)}
                             onDelete={() => onDeleteAgent(agent.name)}
                             onRun={() => onRunAgent(agent)}
+                            onResync={agent.sourceRepoId ? () => onResyncAgent(agent.name) : undefined}
                           />
                         ))}
                       </div>
@@ -1806,7 +1819,7 @@ function LibraryTeamsAgentsPane({
 }
 
 function LibraryAgentListRow({
-  agent, runs7d, selected, onToggle, onView, onEdit, onDelete, onRun,
+  agent, runs7d, selected, onToggle, onView, onEdit, onDelete, onRun, onResync,
 }: {
   agent: any;
   runs7d: number;
@@ -1816,15 +1829,17 @@ function LibraryAgentListRow({
   onEdit: () => void;
   onDelete: () => void;
   onRun: () => void;
+  onResync?: () => void;
 }) {
   const isLead = agent.teamRole === 'lead';
   const isBuiltIn = !!agent.isBuiltIn;
+  const fromRepo = !!agent.sourceRepoId;
   const provider = String(agent.provider ?? 'claude');
   const model = String(agent.model ?? registryDefaultModelForProvider(provider));
   const { providerLabel: rowProviderLabel, modelLabel: rowModelLabel } = getModelDisplay(provider, model);
 
   return (
-    <div className="grid grid-cols-[28px_minmax(0,1fr)_120px_116px] items-center gap-3 px-4 py-3 transition-colors hover:bg-app-muted/30">
+    <div className={`grid items-center gap-3 px-4 py-3 transition-colors hover:bg-app-muted/30 ${fromRepo ? 'grid-cols-[28px_minmax(0,1fr)_120px_148px]' : 'grid-cols-[28px_minmax(0,1fr)_120px_116px]'}`}>
       <input
         type="checkbox"
         checked={selected}
@@ -1838,6 +1853,7 @@ function LibraryAgentListRow({
             <strong className="truncate text-[13.5px] font-semibold text-theme-primary">{agent.displayName ?? agent.name}</strong>
             {isLead && <Crown className="h-3.5 w-3.5 shrink-0 text-accent-yellow" />}
             {isBuiltIn && <span className="shrink-0 font-mono text-[10px] text-theme-subtle">built-in</span>}
+            {fromRepo && <span className="shrink-0 font-mono text-[10px] text-accent-purple/70">repo</span>}
           </span>
           <span className="mt-1 block truncate font-mono text-[11px] text-theme-muted">
             {agent.name}
@@ -1855,6 +1871,11 @@ function LibraryAgentListRow({
         <IconTooltipButton label="Edit agent" side="left" onClick={onEdit} className="h-8 w-8">
           <Pencil className="h-3.5 w-3.5" />
         </IconTooltipButton>
+        {fromRepo && onResync && (
+          <IconTooltipButton label="Sync from repo" side="left" onClick={onResync} className="h-8 w-8">
+            <RefreshCw className="h-3.5 w-3.5" />
+          </IconTooltipButton>
+        )}
         {!isBuiltIn && (
           <IconTooltipButton label="Delete agent" side="left" tone="danger" onClick={onDelete} className="h-8 w-8">
             <Trash2 className="h-3.5 w-3.5" />

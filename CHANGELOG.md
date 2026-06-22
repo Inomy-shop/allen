@@ -6,6 +6,20 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-06-22
+
+### Added
+
+- **Desktop-only local password reset** (`packages/server`, `packages/ui`): a "Forgot password?" recovery flow for local accounts, hard-gated by the `ALLEN_DESKTOP` runtime flag so it is never exposed on browser/web deployments. New public `POST /api/auth/desktop-reset-password` validates password strength, rejects unknown emails, updates the password, and revokes all existing sessions (issues no session — the user logs in again). New `ForgotPasswordModal` on the login page.
+
+### Changed
+
+- **Design Studio sidebar actions** (`packages/ui`): added a repository delete action on the Design Studio workspace detail page, and workspace update events are now published so sidebar status and deletion state refresh immediately.
+
+### Removed
+
+- **Legacy Design flow** (`packages/server`, `packages/engine`, `docs`): removed the legacy design pipeline — the `source-prd-to-ui-designs-variations` workflow and the `design-repos` routes/preview — now superseded by Design Studio.
+
 ## [0.1.14] - 2026-06-20
 
 ### Added

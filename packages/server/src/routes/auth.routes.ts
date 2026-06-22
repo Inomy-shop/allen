@@ -13,6 +13,7 @@ import {
   validatePasswordStrength,
 } from '../auth/password.js';
 import { requireAuth, type AuthedRequest } from '../middleware/requireAuth.js';
+import { getRuntimeConfigProvider } from '../runtime/config.js';
 
 export function authRoutes(db: Db): Router {
   const router = Router();
@@ -222,6 +223,47 @@ export function authRoutes(db: Db): Router {
       return res.json({ ...session, user: toPublicUser(fresh!) });
     } catch (err) {
       console.error('[auth/reset-password]', err);
+      return res.status(500).json({ error: 'reset_failed' });
+    }
+  });
+
+  // POST /api/auth/desktop-reset-password
+  //
+  // Public desktop-only local password recovery. There is no email/OTP
+  // delivery: local access to the desktop app is the recovery factor. The
+  // route is hard-gated by the existing ALLEN_DESKTOP runtime flag so it can
+  // never act as an unauthenticated reset on browser/web deployments.
+  router.post('/desktop-reset-password', async (req: Request, res: Response) => {
+    try {
+      if (getRuntimeConfigProvider().get('ALLEN_DESKTOP') !== '1') {
+        // Web/browser deployments must never expose this reset path.
+        return res.status(403).json({ error: 'desktop_runtime_only' });
+      }
+
+      const { email, newPassword } = req.body ?? {};
+      if (typeof email !== 'string' || typeof newPassword !== 'string') {
+        return res.status(400).json({ error: 'email and newPassword required' });
+      }
+
+      const cleanEmail = email.trim().toLowerCase();
+      if (!cleanEmail) return res.status(400).json({ error: 'email is required' });
+
+      const strength = validatePasswordStrength(newPassword);
+      if (!strength.valid) return res.status(400).json({ error: strength.error });
+
+      const user = await users.findByEmail(cleanEmail);
+      // Unknown emails must not reset any password.
+      if (!user) return res.status(404).json({ error: 'account_not_found' });
+
+      await users.updatePassword(user._id, newPassword);
+      // Invalidate every existing session/refresh token for the account.
+      await tokens.revokeAllForUser(user._id);
+
+      // No session is issued: the user is returned to login and must sign in
+      // again with the new password.
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error('[auth/desktop-reset-password]', err);
       return res.status(500).json({ error: 'reset_failed' });
     }
   });

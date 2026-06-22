@@ -1,5 +1,3 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OrgSeedService } from './org-seed.js';
 
@@ -384,11 +382,12 @@ describe('design-assistant agent seed', () => {
     expect(agent.displayName).toBe('Design Assistant');
   });
 
-  it('design-assistant system prompt contains workflow invocation rules', async () => {
+  it('design-assistant system prompt references Design Studio and does not mention old workflow', async () => {
     const db = makeDb();
     await new OrgSeedService(db).seed();
     const agent = db.store.agents.find((a: any) => a.name === 'design-assistant');
-    expect(agent.system).toContain('source-prd-to-ui-designs-variations');
+    expect(agent.system).not.toContain('source-prd-to-ui-designs-variations');
+    expect(agent.system).toContain('Design Studio');
     expect(agent.system).toContain('frontend-developer');
   });
 
@@ -408,51 +407,5 @@ describe('design-assistant agent seed', () => {
     const agent = db.store.agents.find((a: any) => a.name === 'design-assistant');
     expect(agent.capabilities).toContain('design');
     expect(agent.spawnTargets).toContain('frontend-developer');
-  });
-});
-
-describe('source-prd-to-ui-designs-variations workflow YAML invariants', () => {
-  // Resolve the workflow YAML relative to this test file's location in the monorepo.
-  // The file lives at packages/engine/workflows/…; this test lives at packages/server/src/services/…
-  // Going up 4 levels from packages/server/src/services/ reaches the workspace root.
-  const workflowPath = path.resolve(
-    __dirname,
-    '../../../../packages/engine/workflows/source-prd-to-ui-designs-variations.yml',
-  );
-
-  let workflowYaml: string;
-
-  beforeEach(() => {
-    workflowYaml = fs.readFileSync(workflowPath, 'utf8');
-  });
-
-  it('keeps max_retries: 2 on the final_design_verifier → build_prototypes_and_routes retry edge', () => {
-    // The retry edge from final_design_verifier must have max_retries: 2 — never reduced to 1.
-    expect(workflowYaml).toMatch(/max_retries:\s*2/);
-    // Specifically it must NOT have max_retries: 1
-    expect(workflowYaml).not.toMatch(/max_retries:\s*1/);
-  });
-
-  it('contains the professional visual quality contract in the research_and_options prompt', () => {
-    expect(workflowYaml).toMatch(/PROFESSIONAL VISUAL QUALITY CONTRACT/);
-    expect(workflowYaml).toMatch(/NO EMOJI/i);
-    expect(workflowYaml).toMatch(/NO DECORATIVE GIMMICKS/i);
-  });
-
-  it('contains the first-pass quality self-check in the build_prototypes_and_routes prompt', () => {
-    expect(workflowYaml).toMatch(/FIRST-PASS.*QUALITY.*SELF-CHECK|QUALITY.*SELF-CHECK/i);
-    expect(workflowYaml).toMatch(/EMOJI CHECK/i);
-    expect(workflowYaml).toMatch(/DECORATIVE GIMMICK CHECK/i);
-  });
-
-  it('adds professional_visual_quality_ok to the final_design_verifier blocker_summary', () => {
-    expect(workflowYaml).toContain('professional_visual_quality_ok');
-  });
-
-  it('treats professional quality violations as rank-blockers in final_design_verifier', () => {
-    // Dimension 12 must be present and must route failures to build_prototypes_and_routes
-    expect(workflowYaml).toMatch(/PROFESSIONAL VISUAL QUALITY.*rank-blocker|rank-blocker.*PROFESSIONAL VISUAL QUALITY|12\.\s+PROFESSIONAL VISUAL QUALITY/i);
-    // Must route violations to build_prototypes_and_routes, not escalate
-    expect(workflowYaml).toMatch(/build_prototypes_and_routes.*NOT escalate|NOT escalate.*build_prototypes_and_routes/i);
   });
 });
