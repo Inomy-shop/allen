@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Check out Allen
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js for Allen
         uses: actions/setup-node@v4
