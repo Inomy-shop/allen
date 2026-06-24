@@ -10,7 +10,7 @@ import {
 } from '../services/claude-agents-importer.js';
 import { executeChatTool } from '../services/chat-tools.js';
 import { getAgentDefaults } from '../services/llm-defaults.js';
-import { PROVIDERS, type ChatProvider } from '../services/chat-providers.js';
+import { PROVIDERS, getOpenRouterNonClaudeWarning, type ChatProvider } from '../services/chat-providers.js';
 
 const ALLOWED_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max']);
 const PROVIDER_IDS = new Set(PROVIDERS.map((provider) => provider.provider));
@@ -372,7 +372,10 @@ export function agentRoutes(db: Db): Router {
         updatedAt: new Date(),
       };
       const result = await col.insertOne(agent);
-      res.status(201).json({ ...agent, _id: result.insertedId });
+      const warning = getOpenRouterNonClaudeWarning(body.provider, body.model);
+      const response: Record<string, unknown> = { ...agent, _id: result.insertedId };
+      if (warning) response.warning = warning;
+      res.status(201).json(response);
     } catch (err: unknown) {
       if (err instanceof AgentSettingsValidationError) {
         return res.status(400).json({ error: err.message, code: err.code });
@@ -408,7 +411,11 @@ export function agentRoutes(db: Db): Router {
 
       const result = await col.updateOne({ name }, { $set: updates });
       if (result.matchedCount === 0) return res.status(404).json({ error: 'Agent not found' });
-      res.json({ name, ...updates });
+      const merged = { ...existing, ...updates };
+      const warning = getOpenRouterNonClaudeWarning(merged.provider, merged.model);
+      const response: Record<string, unknown> = { name, ...updates };
+      if (warning) response.warning = warning;
+      res.json(response);
     } catch (err: unknown) {
       if (err instanceof AgentSettingsValidationError) {
         return res.status(400).json({ error: err.message, code: err.code });
@@ -775,7 +782,8 @@ export function agentRoutes(db: Db): Router {
         updated.push(name);
       }
 
-      res.json({ updated, skipped });
+      const warning = getOpenRouterNonClaudeWarning(provider, model);
+      res.json({ updated, skipped, ...(warning ? { warning } : {}) });
     } catch (err: unknown) {
       if (err instanceof AgentSettingsValidationError) {
         return res.status(400).json({ error: err.message, code: err.code });

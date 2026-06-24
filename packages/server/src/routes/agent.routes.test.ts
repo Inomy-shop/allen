@@ -256,6 +256,26 @@ describe('agentRoutes bulk model update', () => {
     expect(after?.model).toBe('gpt-5.5');
   });
 
+  it('returns a non-Claude OpenRouter warning when bulk assigning a non-anthropic model', async () => {
+    await insertAgent({ name: 'alpha', provider: 'claude', model: 'sonnet' });
+
+    const res = await request(app)
+      .post('/api/agents/bulk-model')
+      .send({
+        agentNames: ['alpha'],
+        provider: 'openrouter',
+        model: 'google/gemini-2.5-pro',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.updated).toEqual(['alpha']);
+    expect(res.body.warning).toEqual(expect.objectContaining({
+      code: 'openrouter_non_claude_experimental',
+      model: 'google/gemini-2.5-pro',
+    }));
+    expect(res.body.warning.message).toContain('Claude Code');
+  });
+
   async function insertAgent(overrides: Record<string, unknown>): Promise<void> {
     const now = new Date('2026-01-01T00:00:00.000Z');
     await db.collection('agents').insertOne({

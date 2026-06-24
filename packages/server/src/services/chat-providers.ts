@@ -159,6 +159,21 @@ export const CLAUDE_COMPATIBLE_PROVIDER_CONFIGS: ClaudeCompatibleProviderConfig[
     apiKeyPlaceholder: 'za-...',
     baseUrlDescription: 'Leave blank to use the default Z.AI Anthropic-compatible endpoint (https://api.z.ai/anthropic).',
   },
+  {
+    provider: 'openrouter',
+    label: 'OpenRouter',
+    apiKeyEnv: 'ALLEN_OPENROUTER_API_KEY',
+    baseUrlEnv: 'ALLEN_OPENROUTER_BASE_URL',
+    modelEnv: 'ALLEN_OPENROUTER_MODEL',
+    opusModelEnv: 'ALLEN_OPENROUTER_OPUS_MODEL',
+    flashModelEnv: 'ALLEN_OPENROUTER_FLASH_MODEL',
+    defaultBaseUrl: 'https://openrouter.ai/api',
+    defaultModel: '',
+    defaultFlashModel: '',
+    modelSuggestions: [],
+    apiKeyPlaceholder: 'sk-or-v1-...',
+    baseUrlDescription: 'OpenRouter endpoint. Defaults to https://openrouter.ai/api when unset; override if your OpenRouter-compatible deployment uses a different endpoint.',
+  },
 ];
 
 const CLAUDE_COMPATIBLE_PROVIDER_BY_ID = new Map(
@@ -175,6 +190,26 @@ export function getClaudeCompatibleProviderConfig(provider: unknown): ClaudeComp
 
 export function isClaudeFamilyProvider(provider: unknown): boolean {
   return provider === 'claude' || isClaudeCompatibleProvider(provider);
+}
+
+/**
+ * Return a non-Claude warning for OpenRouter models that are not in the
+ * anthropic/ family. These models are experimental for the Claude Code
+ * execution path and may not work correctly (AC6 / REQ-7).
+ * Returns null when no warning is applicable.
+ */
+export function getOpenRouterNonClaudeWarning(
+  provider: unknown,
+  model: unknown,
+): { code: string; model: string; message: string } | null {
+  if (provider === 'openrouter' && typeof model === 'string' && !model.startsWith('anthropic/')) {
+    return {
+      code: 'openrouter_non_claude_experimental',
+      model,
+      message: 'This model is experimental for the Claude Code execution path. Non-Claude models may not work correctly with this runtime.',
+    };
+  }
+  return null;
 }
 
 // ── Provider Registry ──
@@ -878,14 +913,19 @@ export async function buildClaudeCompatibleEnvOverlay(
 
   const effectiveModel = model && model !== 'default' ? model : defaultModel;
   if (!apiKey) throw new Error(`${config.apiKeyEnv} is not set. Configure this secret in Allen Settings > Secrets.`);
+  if (!effectiveModel) {
+    throw new Error(`${config.label} model is not set. Register a model in Settings > Models and select it before running this provider.`);
+  }
+  const effectiveOpusModel = opusModel || effectiveModel;
+  const effectiveFlashModel = flashModel || effectiveModel;
   return {
     ANTHROPIC_BASE_URL: baseUrl,
     ANTHROPIC_AUTH_TOKEN: apiKey,
     ANTHROPIC_MODEL: effectiveModel,
-    ANTHROPIC_DEFAULT_OPUS_MODEL: config.opusModelEnv ? opusModel : effectiveModel,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: config.opusModelEnv ? effectiveOpusModel : effectiveModel,
     ANTHROPIC_DEFAULT_SONNET_MODEL: effectiveModel,
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: flashModel,
-    CLAUDE_CODE_SUBAGENT_MODEL: flashModel,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: effectiveFlashModel,
+    CLAUDE_CODE_SUBAGENT_MODEL: effectiveFlashModel,
     CLAUDE_CODE_EFFORT_LEVEL: 'max',
   };
 }

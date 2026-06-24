@@ -440,7 +440,7 @@ describe('ModelRegistryService', () => {
       expect(rows[0].sortOrder).toBeGreaterThanOrEqual(1);
     });
 
-    it('seed data includes models from all 6 providers with correct counts', async () => {
+    it('seed data includes models from seeded providers only; OpenRouter is manual-only', async () => {
       await service.syncSeedModels();
       const all = await service.list({ includeInactive: true });
       expect(all.filter((m) => m.provider === 'claude')).toHaveLength(5);
@@ -449,6 +449,7 @@ describe('ModelRegistryService', () => {
       expect(all.filter((m) => m.provider === 'xiaomi-mimo')).toHaveLength(1);
       expect(all.filter((m) => m.provider === 'kimi')).toHaveLength(2);
       expect(all.filter((m) => m.provider === 'zai')).toHaveLength(15);
+      expect(all.filter((m) => m.provider === 'openrouter')).toHaveLength(0);
     });
 
     // ── REQ-005 / R1, R5, R6: Z.AI seed models ──
@@ -565,6 +566,11 @@ describe('ModelRegistryService', () => {
     it('accepts known provider: kimi', async () => {
       const model = await service.create({ ...validInput, provider: 'kimi', fullId: 'kimi', displayName: 'Kimi', providerDisplayName: 'Kimi' });
       expect(model.provider).toBe('kimi');
+    });
+
+    it('accepts known provider: openrouter', async () => {
+      const model = await service.create({ ...validInput, provider: 'openrouter', fullId: 'openrouter/custom-model', displayName: 'Custom OpenRouter Model', providerDisplayName: 'OpenRouter' });
+      expect(model.provider).toBe('openrouter');
     });
 
     it('rejects unknown provider', async () => {
@@ -737,7 +743,7 @@ describe('ModelRegistryService', () => {
   // ── LEGACY_ALIAS_LOOKUP_MAP ──
 
   describe('LEGACY_ALIAS_LOOKUP_MAP', () => {
-    it('contains all 35 seed entries', () => {
+    it('contains all 35 seed entries and no OpenRouter defaults', () => {
       const keys = Object.keys(LEGACY_ALIAS_LOOKUP_MAP);
       expect(keys).toHaveLength(35);
       expect(keys).toContain('fable');
@@ -748,6 +754,8 @@ describe('ModelRegistryService', () => {
       expect(keys).toContain('gpt-5.5');
       expect(keys).toContain('kimi-k2.5');
       expect(keys).toContain('deepseek-v4-pro[1m]');
+      expect(keys).not.toContain('anthropic/claude-sonnet-4-6');
+      expect(keys).not.toContain('google/gemini-2.5-pro');
     });
   });
 

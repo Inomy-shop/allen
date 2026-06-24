@@ -144,6 +144,7 @@ Built-in workflows in `packages/engine/workflows/`:
 | `bug-fix-by-severity.yml` | Triage a bug by severity and dispatch the appropriate fix path. |
 | `tdd-design-by-severity.yml` | Generate a technical design from a user-supplied request, scaled to severity. |
 | `milestone-implementation-from-prd-tdd.yml` | Implement milestones from existing product and technical design artifacts. |
+| `agent-build-with-review.yml` | Research, review, validate, and create new Allen agents through a human-approved blueprint workflow. |
 | `resolve-pr-reviews.yml` | Resolve CodeRabbit/PR review comments, run tests, push fixes, summarize. |
 | `self-healing-incident-triage.yml` | Classify and route a production/runtime incident. |
 | `allen-self-healing-monitor-hourly.yml` | Hourly scan of Allen's own runtime; files and dispatches incidents. |

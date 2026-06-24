@@ -708,7 +708,7 @@ Return workspace path/link, validation result, PR URL or reason PR was skipped.`
     name: 'agent-workflow-builder',
     displayName: 'Org, Agent, and Workflow Builder',
     category: 'meta',
-    description: 'Design, create, validate, update, and explain Allen orgs, teams, agents, skills, and workflows. Use whenever the user asks to extend the org chart ("build a marketing team", "add an SRE to engineering"), create/edit agents, or create/edit workflows or skills.',
+    description: 'Design, create, validate, update, and explain Allen orgs, teams, agents, skills, and workflows. Workflow creation/editing must route through the seeded workflow-build-and-review workflow; team, agent, and skill changes use the relevant builder.',
     triggers: [
       // Team / org
       'create team', 'build team', 'new team', 'add team', 'set up team', 'set up a team',
@@ -723,10 +723,12 @@ Return workspace path/link, validation result, PR URL or reason PR was skipped.`
     excludes: ['run existing workflow', 'run workflow'],
     priority: 86,
     allowedRoutes: ['spawn_agent', 'direct_answer', 'run_workflow'],
+    relatedWorkflows: ['agent-build-with-review', 'workflow-build-and-review'],
+    relatedAgents: ['team-builder-agent', 'workflow-builder-agent', 'agent-blueprint-validator'],
     body: `# Org, Agent, and Workflow Builder
 
 ## When to use
-Use when the user asks to design, create, edit, validate, or explain an Allen **team / org structure**, **agent**, **skill**, or **workflow**. Examples include "build a marketing team", "I want a finance team", "add a tax specialist to the finance team", "I need an SRE in the engineering team", "create a workflow that …", "edit a workflow", and "add/edit a skill for …".
+Use when the user asks to design, create, edit, validate, or explain an Allen **team / org structure**, **agent**, **skill**, or **workflow**. Examples include "build a marketing team", "add a tax specialist to finance", "create a workflow that …", "edit this workflow", and "add/edit a skill for …".
 
 ## When not to use
 Do not use for running an existing workflow, ordinary product feature work, or bug fixes — those route through the matching domain skill (bug-fix-routing, feature-routing, workspace-pr-routing, team-assignment-routing).
@@ -734,25 +736,40 @@ Do not use for running an existing workflow, ordinary product feature work, or b
 ## Evidence
 Before proposing any change, inspect what already exists in the current system: list_teams, list_agents, list_workflows, list_skills. Avoid duplicate teams/agents/skills/workflows. Confirm the parent team and lead choice are consistent with the existing org chart.
 
-## Pick the right builder by intent
-The universal "spawn the owner, don't act yourself" rule lives in the operating rules section below. This skill only helps you decide WHICH builder to spawn — and Allen's builder roster is dynamic, so do not assume any specific agent name exists.
+## Workflow creation/editing route
+Workflow creation or editing must use the seeded workflow \`workflow-build-and-review\`. Do **not** spawn \`workflow-builder-agent\` directly for workflow authoring.
 
+For create/edit workflow requests:
+1. Gather any obvious inputs from the conversation:
+   - \`user_request\`: the user's workflow request or brainstorming transcript.
+   - \`target_workflow_name\`: optional requested workflow slug.
+   - \`mode\`: \`create\` unless the user clearly asked to update an existing workflow.
+   - \`constraints\`: any required agents, tools, MCP servers, checkpoints, validation expectations, or compatibility constraints.
+2. Present the selected route and ask for confirmation before execution, unless the user has already explicitly said to proceed.
+3. Call run_workflow with \`workflow-build-and-review\` and the exact inputs above.
+4. Monitor until it completes, blocks for human review, or fails. When it waits for human review, forward the draft and validation report for approval/request-changes/reject.
+5. Never bypass the workflow's validator or human checkpoint.
+
+## Builder selection for non-workflow meta requests
 1. Classify the operation from the user's intent:
    - **Create a new team / org subtree.**
    - **Add or modify an agent inside an existing team.**
-   - **Create or edit a workflow.**
    - **Create or edit a skill.**
    - **Design / explanation only**, no record creation requested.
-2. Discover candidate builders at runtime: run list_agents (and list_teams if helpful), filter by category "meta" or by description text that names the operation (e.g. an agent whose description mentions "creating teams" or "blueprinting org structure" is the right target for new-team work; one whose description mentions "adding agents" fits the agent-add variant; one whose description mentions "workflow" or "skill" authoring fits those variants).
-3. Pick the most specific match by description/mission. If multiple builders look plausible, prefer the one whose category is "meta" and whose mission text most directly names the operation. If only a generic builder exists, use it.
-4. If no matching builder exists at all, ask the user how to proceed — either register a builder agent first (recursive meta-build), or perform the operation directly as a one-off with explicit user confirmation.
-5. For design / explanation only, answer directly with evidence and do not spawn an agent.
+2. For **adding or modifying an agent inside an existing team**, prefer the seeded workflow \`agent-build-with-review\` via \`run_workflow\`. Do not spawn or call \`agent-builder-agent\` directly for agent creation; it is a workflow-internal executor used only after research, human review, and blueprint validation.
+   - Before execution, inspect \`get_workflow("agent-build-with-review")\` and use its exact input field names.
+   - Pass \`user_request\` as the user's request, \`target_team_name\` when known, and \`additional_context\` for constraints or routing expectations.
+   - If the workflow is missing, report that the seeded workflow is unavailable and ask whether to create/restore it; do not fall back to direct agent-builder creation.
+3. For all other meta operations, discover candidate builders at runtime: run list_agents (and list_teams if helpful), filter by category "meta" or by description text that names the operation (e.g. an agent whose description mentions "creating teams" or "blueprinting org structure" is the right target for new-team work; one whose description mentions "skill" authoring fits skill variants).
+4. Pick the most specific match by description/mission. If multiple builders look plausible, prefer the one whose category is "meta" and whose mission text most directly names the operation. If only a generic builder exists, use it.
+5. If no matching builder exists at all, ask the user how to proceed — either register a builder agent first (recursive meta-build), or perform the operation directly as a one-off with explicit user confirmation. This direct fallback is not allowed for agent creation, which must use agent-build-with-review.
+6. For design / explanation only, answer directly with evidence and do not spawn an agent.
 
 ## Confirmation forwarding
-Builder agents may pause with waiting_for_input before creating anything. When wait_for_execution returns status: "waiting_for_input", forward the **exact** requested decision or blueprint to the user — do not summarize, reorder, or rewrite it. Pass the user's reply back via submit_execution_input and keep waiting until the builder reaches a terminal status.
+Builder agents and review-gated workflows may pause with waiting_for_input before creating anything. When wait_for_execution returns status: "waiting_for_input", forward the **exact** requested decision or blueprint to the user — do not summarize, reorder, or rewrite it. Pass the user's reply back via submit_execution_input and keep waiting until the run reaches a terminal status.
 
 ## Output
-Return: the builder agent you chose (as discovered at runtime), the blueprint preview verbatim from the builder when available, the created record IDs and names, and a clickable link to each new team/agent/workflow/skill when the UI route is known. Never paste raw create_* outputs without context.`,
+Return: the route chosen (review-gated workflow or builder agent), the workflow execution id/status when applicable, the human-review state if waiting, the blueprint preview verbatim when available, created record IDs and names, and clickable links when UI routes are known. Never paste raw create_* outputs without context.`,
   },
   {
     // ─────────────────────────────────────────────────────────────────────────

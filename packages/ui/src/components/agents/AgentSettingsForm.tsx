@@ -13,9 +13,13 @@
  * document. It only emits changes to its `onChange` callback; the parent
  * decides where they get written.
  */
-import { ShieldCheck, Sparkles } from 'lucide-react';
+import { ShieldCheck, Sparkles, AlertTriangle } from 'lucide-react';
 import Select from '../common/Select';
 import { useModelRegistry } from '../../hooks/useModelRegistry';
+import {
+  isNonClaudeOpenRouterModel,
+  OPENROUTER_NON_CLAUDE_WARNING,
+} from '../../lib/openrouter-warning';
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
 export type Provider = 'claude' | 'codex' | (string & {});
@@ -96,7 +100,12 @@ export default function AgentSettingsForm({
     ...(isOverrideMode
       ? [{ value: '', label: 'Inherit', sublabel: modelInherited }]
       : []),
-    ...(openModelSuggestions ?? []).map((model) => ({ value: model, label: model })),
+    ...(openModelSuggestions ?? []).map((model) => ({
+      value: model,
+      label: isNonClaudeOpenRouterModel(provider, model)
+        ? `${model} (experimental)`
+        : model,
+    })),
     ...(isOpenModelProvider && modelValue && !(openModelSuggestions ?? []).includes(modelValue)
       ? [{ value: modelValue, label: modelValue, sublabel: 'Custom model ID' }]
       : []),
@@ -134,6 +143,17 @@ export default function AgentSettingsForm({
             ]}
           />
         )}
+
+          {/* Non-Claude OpenRouter model warning (AC6) */}
+          {isNonClaudeOpenRouterModel(provider, modelValue) && (
+            <div
+              role="alert"
+              className="mt-2 flex items-start gap-2 rounded-md border border-accent-yellow/25 bg-accent-yellow/10 px-3 py-2 text-[12px] text-accent-yellow"
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{OPENROUTER_NON_CLAUDE_WARNING}</span>
+            </div>
+          )}
       </div>
 
       {/* ── Reasoning Effort ─────────────────────────────────────── */}

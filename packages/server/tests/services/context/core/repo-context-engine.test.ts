@@ -28,6 +28,10 @@ const originalCogneeMinSelectionScore = process.env.ALLEN_COGNEE_MIN_SELECTION_S
 const originalContextMinRerankScore = process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE;
 const originalContextMinFinalScore = process.env.ALLEN_CONTEXT_MIN_FINAL_SCORE;
 const originalCogneeMinInjectionScore = process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
+// Capture host reranker env that could override createConfiguredContextReranker
+const originalContextReranker = process.env.ALLEN_CONTEXT_RERANKER;
+const originalContextRerankerModel = process.env.ALLEN_CONTEXT_RERANKER_MODEL;
+const originalContextRerankerTimeout = process.env.ALLEN_CONTEXT_RERANKER_TIMEOUT_MS;
 
 beforeEach(() => {
   process.env.ALLEN_CONTEXT_PROVIDER = 'cognee';
@@ -35,6 +39,10 @@ beforeEach(() => {
   delete process.env.ALLEN_CONTEXT_MIN_RERANK_SCORE;
   delete process.env.ALLEN_CONTEXT_MIN_FINAL_SCORE;
   delete process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
+  // Clear host reranker env so createConfiguredContextReranker returns default (deterministic_policy_reranker)
+  delete process.env.ALLEN_CONTEXT_RERANKER;
+  delete process.env.ALLEN_CONTEXT_RERANKER_MODEL;
+  delete process.env.ALLEN_CONTEXT_RERANKER_TIMEOUT_MS;
 });
 
 afterEach(() => {
@@ -52,6 +60,12 @@ afterEach(() => {
   else process.env.ALLEN_CONTEXT_MIN_FINAL_SCORE = originalContextMinFinalScore;
   if (originalCogneeMinInjectionScore === undefined) delete process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE;
   else process.env.ALLEN_COGNEE_MIN_INJECTION_SCORE = originalCogneeMinInjectionScore;
+  if (originalContextReranker === undefined) delete process.env.ALLEN_CONTEXT_RERANKER;
+  else process.env.ALLEN_CONTEXT_RERANKER = originalContextReranker;
+  if (originalContextRerankerModel === undefined) delete process.env.ALLEN_CONTEXT_RERANKER_MODEL;
+  else process.env.ALLEN_CONTEXT_RERANKER_MODEL = originalContextRerankerModel;
+  if (originalContextRerankerTimeout === undefined) delete process.env.ALLEN_CONTEXT_RERANKER_TIMEOUT_MS;
+  else process.env.ALLEN_CONTEXT_RERANKER_TIMEOUT_MS = originalContextRerankerTimeout;
 });
 
 describe('RepoContextEngine', () => {

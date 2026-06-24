@@ -1,7 +1,31 @@
 import { Router, type Request, type Response } from 'express';
 import { WorkflowService } from '../services/workflow.service.js';
 import { param } from '../types.js';
+import { getOpenRouterNonClaudeWarning } from '../services/chat-providers.js';
 import type { Db } from 'mongodb';
+
+/**
+ * Scan workflow parsed nodes for OpenRouter model warnings.
+ * Returns an array of { node, code, model, message } for each node
+ * that uses a non-Claude OpenRouter model (AC6 / REQ-7).
+ */
+function scanWorkflowOpenRouterWarnings(
+  parsed: Record<string, unknown> | undefined,
+): Array<{ node: string; code: string; model: string; message: string }> {
+  if (!parsed?.nodes || typeof parsed.nodes !== 'object') return [];
+  const warnings: Array<{ node: string; code: string; model: string; message: string }> = [];
+  for (const [nodeName, nodeDef] of Object.entries(parsed.nodes as Record<string, unknown>)) {
+    if (!nodeDef || typeof nodeDef !== 'object') continue;
+    const n = nodeDef as Record<string, unknown>;
+    const overrides = n.agentOverrides as Record<string, unknown> | undefined;
+    if (!overrides) continue;
+    const warning = getOpenRouterNonClaudeWarning(overrides.provider, overrides.model);
+    if (warning) {
+      warnings.push({ node: nodeName, ...warning });
+    }
+  }
+  return warnings;
+}
 
 export function workflowRoutes(db: Db): Router {
   const router = Router();
@@ -22,7 +46,10 @@ export function workflowRoutes(db: Db): Router {
   router.post('/', async (req: Request, res: Response) => {
     try {
       const workflow = await service.create(req.body);
-      res.status(201).json(workflow);
+      const warnings = scanWorkflowOpenRouterWarnings(workflow.parsed as Record<string, unknown> | undefined);
+      const response: Record<string, unknown> = { ...workflow };
+      if (warnings.length > 0) response.warnings = warnings;
+      res.status(201).json(response);
     } catch (err: unknown) {
       res.status(400).json({ error: (err as Error).message });
     }
@@ -78,7 +105,10 @@ export function workflowRoutes(db: Db): Router {
   router.put('/:id', async (req: Request, res: Response) => {
     try {
       const workflow = await service.update(param(req, 'id'), req.body);
-      res.json(workflow);
+      const warnings = scanWorkflowOpenRouterWarnings(workflow.parsed as Record<string, unknown> | undefined);
+      const response: Record<string, unknown> = { ...workflow };
+      if (warnings.length > 0) response.warnings = warnings;
+      res.json(response);
     } catch (err: unknown) {
       res.status(400).json({ error: (err as Error).message });
     }

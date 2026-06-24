@@ -28,12 +28,33 @@ describe('internalContextEvaluationRoutes', () => {
   const originalCogneeLlmProvider = process.env.ALLEN_COGNEE_LLM_PROVIDER;
   const originalCogneeLlmModel = process.env.ALLEN_COGNEE_LLM_MODEL;
 
+  // Capture host env values that could shadow test-specific Cognee LLM settings
+  const savedHostEnv: Partial<Record<string, string | undefined>> = {
+    ALLEN_DEFAULT_CHAT_PROVIDER: process.env.ALLEN_DEFAULT_CHAT_PROVIDER,
+    ALLEN_DEFAULT_CHAT_MODEL: process.env.ALLEN_DEFAULT_CHAT_MODEL,
+    ALLEN_DEFAULT_AGENT_PROVIDER: process.env.ALLEN_DEFAULT_AGENT_PROVIDER,
+    ALLEN_DEFAULT_AGENT_MODEL: process.env.ALLEN_DEFAULT_AGENT_MODEL,
+    ALLEN_CONTEXT_LLM_PROVIDER: process.env.ALLEN_CONTEXT_LLM_PROVIDER,
+    ALLEN_CONTEXT_LLM_MODEL: process.env.ALLEN_CONTEXT_LLM_MODEL,
+    ALLEN_CONTEXT_PROVIDER: process.env.ALLEN_CONTEXT_PROVIDER,
+  };
+
   beforeEach(() => {
+    // Clear host env vars that could shadow test-specific Cognee LLM settings
+    for (const key of Object.keys(savedHostEnv)) {
+      delete process.env[key];
+    }
     process.env.ALLEN_CONTEXT_PROVIDER = 'graph';
     vi.clearAllMocks();
   });
 
   afterEach(() => {
+    // Restore cleared host env vars
+    for (const [key, value] of Object.entries(savedHostEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    // Restore the explicitly tracked originals
     if (originalContextProvider === undefined) delete process.env.ALLEN_CONTEXT_PROVIDER;
     else process.env.ALLEN_CONTEXT_PROVIDER = originalContextProvider;
     if (originalContextLlmProvider === undefined) delete process.env.ALLEN_CONTEXT_LLM_PROVIDER;

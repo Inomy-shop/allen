@@ -8,7 +8,7 @@ Integrations connect Allen to developer tools and external systems. They let All
 - **Linear** for ticket browsing and dispatch.
 - **Slack** for chat-driven interaction from Slack threads.
 - **MCP servers** for custom tools and external systems.
-- **Model providers and CLIs** for agent execution.
+- **Model providers and CLIs** for agent execution. Supported providers include Claude, Codex, DeepSeek, Kimi, Xiaomi MiMo, GLM/Z.AI, and OpenRouter. OpenRouter is a provider-only integration by default: users register the exact OpenRouter model slug and configure the API key/endpoint themselves. Non-Claude OpenRouter models are experimental for the Claude Code execution path.
 
 ## How integrations fit
 

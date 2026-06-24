@@ -7,6 +7,7 @@ import {
   getEnabledProvidersInDefaultOrder,
   normalizeDeepSeekAnthropicBaseUrl,
   getEnabledProvidersFromRegistry,
+  getOpenRouterNonClaudeWarning,
 } from './chat-providers.js';
 import { EnvConfigProvider, resetRuntimeProvidersForTests, setRuntimeConfigProvider, setRuntimeSecretsProvider } from '../runtime/config.js';
 
@@ -168,8 +169,17 @@ describe('Codex resume command construction', () => {
 describe('ALLEN_PUBLIC_URL propagation in Allen MCP env', () => {
   const originalPublicUrl = process.env.ALLEN_PUBLIC_URL;
   const originalPort = process.env.PORT;
+  const originalInternalApiUrl = process.env.ALLEN_INTERNAL_API_URL;
+  const originalApiUrl = process.env.ALLEN_API_URL;
+
+  beforeEach(() => {
+    delete process.env.ALLEN_INTERNAL_API_URL;
+    delete process.env.ALLEN_API_URL;
+    resetRuntimeProvidersForTests();
+  });
 
   afterEach(() => {
+    resetRuntimeProvidersForTests();
     if (originalPublicUrl === undefined) {
       delete process.env.ALLEN_PUBLIC_URL;
     } else {
@@ -179,6 +189,16 @@ describe('ALLEN_PUBLIC_URL propagation in Allen MCP env', () => {
       delete process.env.PORT;
     } else {
       process.env.PORT = originalPort;
+    }
+    if (originalInternalApiUrl === undefined) {
+      delete process.env.ALLEN_INTERNAL_API_URL;
+    } else {
+      process.env.ALLEN_INTERNAL_API_URL = originalInternalApiUrl;
+    }
+    if (originalApiUrl === undefined) {
+      delete process.env.ALLEN_API_URL;
+    } else {
+      process.env.ALLEN_API_URL = originalApiUrl;
     }
     vi.clearAllMocks();
   });
@@ -504,6 +524,10 @@ describe('buildDeepSeekEnvOverlay', () => {
 
   it('builds Xiaomi MiMo overlay from generic Claude-compatible provider config', async () => {
     process.env.ALLEN_XIAOMI_MIMO_API_KEY = 'mimo-key-123';
+    delete process.env.ALLEN_XIAOMI_MIMO_BASE_URL;
+    delete process.env.ALLEN_XIAOMI_MIMO_MODEL;
+    delete process.env.ALLEN_XIAOMI_MIMO_FLASH_MODEL;
+    resetRuntimeProvidersForTests();
     const overlay = await buildClaudeCompatibleEnvOverlay('xiaomi-mimo');
     expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('mimo-key-123');
     expect(overlay.ANTHROPIC_BASE_URL).toBe('https://api.xiaomimimo.com/anthropic');
@@ -513,6 +537,11 @@ describe('buildDeepSeekEnvOverlay', () => {
 
   it('builds Kimi overlay from generic Claude-compatible provider config', async () => {
     process.env.ALLEN_KIMI_API_KEY = 'kimi-key-123';
+    delete process.env.ALLEN_KIMI_BASE_URL;
+    delete process.env.ALLEN_KIMI_MODEL;
+    delete process.env.ALLEN_KIMI_OPUS_MODEL;
+    delete process.env.ALLEN_KIMI_FLASH_MODEL;
+    resetRuntimeProvidersForTests();
     const overlay = await buildKimiEnvOverlay();
     expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('kimi-key-123');
     expect(overlay.ANTHROPIC_BASE_URL).toBe('https://api.moonshot.ai/anthropic');
@@ -948,5 +977,339 @@ describe('Tier resolution via buildClaudeCompatibleEnvOverlay (REQ-019)', () => 
 
     const overlay = await buildClaudeCompatibleEnvOverlay('deepseek', undefined, undefined);
     expect(overlay.ANTHROPIC_MODEL).toBe('deepseek-v4-pro[1m]');
+  });
+});
+
+// ── OpenRouter Provider Tests (AC1, AC3, AC5, AC6, AC8) ──
+
+describe('OpenRouter provider registry', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    for (const key of [
+      'ALLEN_OPENROUTER_API_KEY',
+      'ALLEN_OPENROUTER_BASE_URL',
+      'ALLEN_OPENROUTER_MODEL',
+      'ALLEN_OPENROUTER_OPUS_MODEL',
+      'ALLEN_OPENROUTER_FLASH_MODEL',
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_MODEL',
+    ]) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+    resetRuntimeProvidersForTests();
+  });
+
+  it('openrouter is in PROVIDERS with correct shape and is enabled when key is set', () => {
+    const or = PROVIDERS.find(p => p.provider === 'openrouter');
+    expect(or).toBeDefined();
+    expect(or?.label).toBe('OpenRouter');
+    expect(or?.open).toBe(true);
+    expect(or?.modelSuggestions).toEqual([]);
+    expect(or?.defaultModel).toBe('');
+    expect(or?.requiresKey).toBe('ALLEN_OPENROUTER_API_KEY');
+  });
+
+  it('openrouter is excluded from enabled providers when key is missing', async () => {
+    delete process.env.ALLEN_OPENROUTER_API_KEY;
+    const providers = await getEnabledProvidersInDefaultOrder();
+    expect(providers.some((p) => p.provider === 'openrouter')).toBe(false);
+  });
+
+  it('openrouter is included in enabled providers when key is present', async () => {
+    process.env.ALLEN_OPENROUTER_API_KEY = 'sk-or-v1-test';
+    const providers = await getEnabledProvidersInDefaultOrder();
+    expect(providers.some((p) => p.provider === 'openrouter')).toBe(true);
+  });
+});
+
+describe('buildClaudeCompatibleEnvOverlay for openrouter', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    for (const key of [
+      'ALLEN_OPENROUTER_API_KEY',
+      'ALLEN_OPENROUTER_BASE_URL',
+      'ALLEN_OPENROUTER_MODEL',
+      'ALLEN_OPENROUTER_OPUS_MODEL',
+      'ALLEN_OPENROUTER_FLASH_MODEL',
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_MODEL',
+    ]) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+    resetRuntimeProvidersForTests();
+  });
+
+  it('throws when key missing with actionable message (AC8 — no key exposure)', async () => {
+    delete process.env.ALLEN_OPENROUTER_API_KEY;
+    await expect(buildClaudeCompatibleEnvOverlay('openrouter'))
+      .rejects.toThrow('ALLEN_OPENROUTER_API_KEY');
+    // Actionable guidance directs operator to Settings > Secrets
+    await expect(buildClaudeCompatibleEnvOverlay('openrouter'))
+      .rejects.toThrow('Settings > Secrets');
+    // Error message does NOT expose the key value (AC2 / AC8)
+    await expect(buildClaudeCompatibleEnvOverlay('openrouter'))
+      .rejects.not.toThrow('sk-or-v1-');
+  });
+
+  it('throws when key is present but no OpenRouter model has been configured', async () => {
+    process.env.ALLEN_OPENROUTER_API_KEY = 'sk-or-v1-test-key';
+    await expect(buildClaudeCompatibleEnvOverlay('openrouter'))
+      .rejects.toThrow('OpenRouter model is not set');
+  });
+
+  it('returns correct overlay when an OpenRouter model is configured', async () => {
+    process.env.ALLEN_OPENROUTER_API_KEY = 'sk-or-v1-test-key';
+    process.env.ALLEN_OPENROUTER_MODEL = 'openrouter/custom-default';
+    process.env.ALLEN_OPENROUTER_OPUS_MODEL = 'openrouter/custom-opus';
+    process.env.ALLEN_OPENROUTER_FLASH_MODEL = 'openrouter/custom-flash';
+    const overlay = await buildClaudeCompatibleEnvOverlay('openrouter');
+    expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('sk-or-v1-test-key');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://openrouter.ai/api');
+    expect(overlay.ANTHROPIC_MODEL).toBe('openrouter/custom-default');
+    expect(overlay.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('openrouter/custom-opus');
+    expect(overlay.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('openrouter/custom-default');
+    expect(overlay.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('openrouter/custom-flash');
+    expect(overlay.CLAUDE_CODE_SUBAGENT_MODEL).toBe('openrouter/custom-flash');
+    expect(overlay.CLAUDE_CODE_EFFORT_LEVEL).toBe('max');
+  });
+
+  it('uses model override when provided', async () => {
+    process.env.ALLEN_OPENROUTER_API_KEY = 'sk-or-v1-test-key';
+    const overlay = await buildClaudeCompatibleEnvOverlay('openrouter', 'google/gemini-2.5-pro');
+    expect(overlay.ANTHROPIC_MODEL).toBe('google/gemini-2.5-pro');
+  });
+
+  it('resolves runtime secrets/config', async () => {
+    delete process.env.ALLEN_OPENROUTER_API_KEY;
+    delete process.env.ALLEN_OPENROUTER_BASE_URL;
+    delete process.env.ALLEN_OPENROUTER_MODEL;
+    delete process.env.ALLEN_OPENROUTER_FLASH_MODEL;
+    setRuntimeConfigProvider(new EnvConfigProvider({
+      ALLEN_OPENROUTER_BASE_URL: 'https://custom.openrouter.test/v1',
+      ALLEN_OPENROUTER_MODEL: 'openrouter/custom-default',
+      ALLEN_OPENROUTER_FLASH_MODEL: 'openrouter/custom-flash',
+    } as NodeJS.ProcessEnv));
+    setRuntimeSecretsProvider({
+      async getSecret(key: string) {
+        return key === 'ALLEN_OPENROUTER_API_KEY' ? 'runtime-secret-or-key' : undefined;
+      },
+    });
+
+    const overlay = await buildClaudeCompatibleEnvOverlay('openrouter');
+    expect(overlay.ANTHROPIC_AUTH_TOKEN).toBe('runtime-secret-or-key');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://custom.openrouter.test/v1');
+    expect(overlay.ANTHROPIC_MODEL).toBe('openrouter/custom-default');
+    expect(overlay.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('openrouter/custom-flash');
+  });
+
+  it('does not mutate process.env', async () => {
+    process.env.ALLEN_OPENROUTER_API_KEY = 'sk-or-v1-test-key';
+    process.env.ALLEN_OPENROUTER_MODEL = 'openrouter/custom-default';
+    const beforeAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    await buildClaudeCompatibleEnvOverlay('openrouter');
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe(beforeAuthToken);
+  });
+
+  it('allows baseUrl env override', async () => {
+    process.env.ALLEN_OPENROUTER_API_KEY = 'sk-or-v1-test-key';
+    process.env.ALLEN_OPENROUTER_MODEL = 'openrouter/custom-default';
+    process.env.ALLEN_OPENROUTER_BASE_URL = 'https://custom.openrouter.ai/v1/anthropic';
+    const overlay = await buildClaudeCompatibleEnvOverlay('openrouter');
+    expect(overlay.ANTHROPIC_BASE_URL).toBe('https://custom.openrouter.ai/v1/anthropic');
+  });
+
+  it('allows model env override', async () => {
+    process.env.ALLEN_OPENROUTER_API_KEY = 'sk-or-v1-test-key';
+    process.env.ALLEN_OPENROUTER_MODEL = 'openai/gpt-5.5';
+    const overlay = await buildClaudeCompatibleEnvOverlay('openrouter');
+    expect(overlay.ANTHROPIC_MODEL).toBe('openai/gpt-5.5');
+  });
+
+  it('allows flash model env override', async () => {
+    process.env.ALLEN_OPENROUTER_API_KEY = 'sk-or-v1-test-key';
+    process.env.ALLEN_OPENROUTER_MODEL = 'openrouter/custom-default';
+    process.env.ALLEN_OPENROUTER_FLASH_MODEL = 'google/gemini-2.5-flash';
+    const overlay = await buildClaudeCompatibleEnvOverlay('openrouter');
+    expect(overlay.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('google/gemini-2.5-flash');
+  });
+});
+
+describe('getOpenRouterNonClaudeWarning', () => {
+  it('returns null for anthropic/ slugs', () => {
+    expect(getOpenRouterNonClaudeWarning('openrouter', 'anthropic/custom-claude')).toBeNull();
+    expect(getOpenRouterNonClaudeWarning('openrouter', 'anthropic/another-claude')).toBeNull();
+    expect(getOpenRouterNonClaudeWarning('openrouter', 'anthropic/fast-claude')).toBeNull();
+  });
+
+  it('returns warning object for google/ slugs', () => {
+    const result = getOpenRouterNonClaudeWarning('openrouter', 'google/gemini-2.5-pro');
+    expect(result).not.toBeNull();
+    expect(result?.code).toBe('openrouter_non_claude_experimental');
+    expect(result?.model).toBe('google/gemini-2.5-pro');
+    expect(result?.message).toContain('Non-Claude models may not work correctly');
+    // AC6: warning must mention "experimental" and "Claude Code execution path"
+    expect(result?.message).toContain('experimental');
+    expect(result?.message).toContain('Claude Code');
+  });
+
+  it('returns warning object for deepseek/ slugs', () => {
+    const result = getOpenRouterNonClaudeWarning('openrouter', 'deepseek/deepseek-chat-v4');
+    expect(result).not.toBeNull();
+    expect(result?.code).toBe('openrouter_non_claude_experimental');
+    expect(result?.model).toBe('deepseek/deepseek-chat-v4');
+    // AC6: every non-Claude warning must contain actionable guidance
+    expect(result?.message).toContain('experimental');
+    expect(result?.message).toContain('Claude Code');
+  });
+
+  it('returns warning object for openai/ slugs', () => {
+    const result = getOpenRouterNonClaudeWarning('openrouter', 'openai/gpt-5.5');
+    expect(result).not.toBeNull();
+    expect(result?.code).toBe('openrouter_non_claude_experimental');
+    expect(result?.model).toBe('openai/gpt-5.5');
+    expect(result?.message).toContain('experimental');
+    expect(result?.message).toContain('Claude Code');
+  });
+
+  it('returns null for non-openrouter providers', () => {
+    expect(getOpenRouterNonClaudeWarning('deepseek', 'deepseek-v4-pro[1m]')).toBeNull();
+    expect(getOpenRouterNonClaudeWarning('kimi', 'kimi-k2.6')).toBeNull();
+    expect(getOpenRouterNonClaudeWarning('claude', 'claude-sonnet-4-6')).toBeNull();
+    expect(getOpenRouterNonClaudeWarning('codex', 'gpt-5.5')).toBeNull();
+    expect(getOpenRouterNonClaudeWarning('zai', 'glm-5.2[1m]')).toBeNull();
+  });
+
+  it('returns null when provider is openrouter but model is not a string', () => {
+    expect(getOpenRouterNonClaudeWarning('openrouter', undefined)).toBeNull();
+    expect(getOpenRouterNonClaudeWarning('openrouter', null)).toBeNull();
+    expect(getOpenRouterNonClaudeWarning('openrouter', 123)).toBeNull();
+  });
+});
+
+// ── AC5: ANTHROPIC_API_KEY suppression during Claude-compatible runs ──
+
+describe('runClaudeCompatibleChatCLI host ANTHROPIC_API_KEY suppression', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    resetRuntimeProvidersForTests();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) delete process.env[key];
+    }
+    for (const [key, value] of Object.entries(originalEnv)) {
+      process.env[key] = value;
+    }
+  });
+
+  beforeEach(() => {
+    resetRuntimeProvidersForTests();
+  });
+
+  /**
+   * Simulate the save/delete/restore logic from runClaudeCompatibleChatCLI.
+   * This tests the ANTHROPIC_API_KEY suppression pattern directly without
+   * requiring module mocking for @allen/engine or @anthropic-ai/claude-code.
+   */
+  async function simulateEnvSuppression(
+    provider: string,
+  ): Promise<{
+    envDuringRun: Record<string, string | undefined>;
+    envAfterRestore: Record<string, string | undefined>;
+  }> {
+    const overlay = await buildClaudeCompatibleEnvOverlay(provider, undefined, undefined);
+
+    // Replicate the save/overlay/ANTHROPIC_API_KEY suppression from
+    // runClaudeCompatibleChatCLI:
+    const saved: Record<string, string | undefined> = {};
+    for (const key of Object.keys(overlay)) {
+      saved[key] = process.env[key];
+      process.env[key] = overlay[key];
+    }
+    // Suppress host ANTHROPIC_API_KEY so it cannot override the provider's
+    // ANTHROPIC_AUTH_TOKEN during Claude Code execution (AC5 / REQ-6).
+    if (process.env.ANTHROPIC_API_KEY !== undefined && !('ANTHROPIC_API_KEY' in saved)) {
+      saved['ANTHROPIC_API_KEY'] = process.env.ANTHROPIC_API_KEY;
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+
+    const envDuringRun = { ...process.env };
+
+    // Replicate the finally-block restore logic:
+    for (const key of Object.keys(overlay)) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+    // Restore ANTHROPIC_API_KEY that was suppressed before the run.
+    if ('ANTHROPIC_API_KEY' in saved) {
+      if (saved.ANTHROPIC_API_KEY === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = saved.ANTHROPIC_API_KEY;
+    }
+
+    const envAfterRestore = { ...process.env };
+
+    return { envDuringRun, envAfterRestore };
+  }
+
+  it('ANTHROPIC_API_KEY is absent from env during the run for openrouter', async () => {
+    process.env.ALLEN_OPENROUTER_API_KEY = 'or-key';
+    process.env.ALLEN_OPENROUTER_MODEL = 'openrouter/custom-default';
+    process.env.ANTHROPIC_API_KEY = 'host-native-key';
+
+    const { envDuringRun } = await simulateEnvSuppression('openrouter');
+
+    // During the run, ANTHROPIC_API_KEY should be deleted
+    expect(envDuringRun.ANTHROPIC_API_KEY).toBeUndefined();
+    // ANTHROPIC_AUTH_TOKEN should be set to provider key, not host key
+    expect(envDuringRun.ANTHROPIC_AUTH_TOKEN).toBe('or-key');
+  });
+
+  it('ANTHROPIC_API_KEY is restored after the run for openrouter', async () => {
+    process.env.ALLEN_OPENROUTER_API_KEY = 'or-key';
+    process.env.ALLEN_OPENROUTER_MODEL = 'openrouter/custom-default';
+    process.env.ANTHROPIC_API_KEY = 'host-native-key';
+
+    const { envAfterRestore } = await simulateEnvSuppression('openrouter');
+
+    // After the run, ANTHROPIC_API_KEY should be restored
+    expect(envAfterRestore.ANTHROPIC_API_KEY).toBe('host-native-key');
+  });
+
+  it('ANTHROPIC_API_KEY is suppressed for kimi (non-openrouter provider) too', async () => {
+    process.env.ALLEN_KIMI_API_KEY = 'kimi-key';
+    process.env.ANTHROPIC_API_KEY = 'host-native-key';
+
+    const { envDuringRun, envAfterRestore } = await simulateEnvSuppression('kimi');
+
+    expect(envDuringRun.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(envDuringRun.ANTHROPIC_AUTH_TOKEN).toBe('kimi-key');
+    expect(envAfterRestore.ANTHROPIC_API_KEY).toBe('host-native-key');
+  });
+
+  it('does not create ANTHROPIC_API_KEY when it was not present before', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.ALLEN_OPENROUTER_API_KEY = 'or-key';
+    process.env.ALLEN_OPENROUTER_MODEL = 'openrouter/custom-default';
+
+    const { envDuringRun } = await simulateEnvSuppression('openrouter');
+
+    // ANTHROPIC_API_KEY should remain undefined during the run
+    expect(envDuringRun.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it('ANTHROPIC_AUTH_TOKEN is set to provider key, not host native key', async () => {
+    process.env.ALLEN_OPENROUTER_API_KEY = 'or-key';
+    process.env.ALLEN_OPENROUTER_MODEL = 'openrouter/custom-default';
+    process.env.ANTHROPIC_API_KEY = 'host-native-key';
+
+    const { envDuringRun } = await simulateEnvSuppression('openrouter');
+
+    expect(envDuringRun.ANTHROPIC_AUTH_TOKEN).toBe('or-key');
+    expect(envDuringRun.ANTHROPIC_AUTH_TOKEN).not.toBe('host-native-key');
   });
 });

@@ -1,0 +1,302 @@
+name: workflow-build-and-review
+description: Review-gated workflow authoring from brainstorming or natural-language requirements. Produces a structured workflow brief, drafts a workflow, validates requirement/tool/prompt coverage, pauses for human approval, then persists only an approved workflow.
+version: 1
+context:
+  concurrency: 1
+  tools:
+    - mcp__allen__list_agents
+    - mcp__allen__list_teams
+    - mcp__allen__list_workflows
+    - mcp__allen__validate_workflow
+    - mcp__allen__create_agent
+    - mcp__allen__update_agent
+    - mcp__allen__create_workflow
+    - mcp__allen__update_workflow
+input:
+  user_request:
+    type: string
+    required: true
+    widget: textarea
+    label: Workflow request / brainstorming
+    description: Natural-language request, chat transcript, or brainstorming notes for the workflow to create.
+  target_workflow_name:
+    type: string
+    required: false
+    widget: text
+    label: Target workflow name
+    description: Optional lowercase slug for the workflow. Leave blank for the requirements node to derive one.
+  mode:
+    type: string
+    required: false
+    default: create
+    enum: [create, update]
+    widget: select
+    label: Create or update
+    description: Use create for a new workflow. Use update only when intentionally replacing an existing workflow after review.
+  constraints:
+    type: string
+    required: false
+    widget: textarea
+    label: Additional constraints
+    description: Optional hard requirements such as agents, tools, MCP servers, human checkpoints, retry policy, or validation expectations.
+
+nodes:
+  gather_requirements:
+    type: agent
+    agent: requirements-analyst
+    agentOverrides:
+      model: sonnet
+      reasoningEffort: high
+      planMode: false
+    prompt: |
+      Convert the user's workflow brainstorming into a structured workflow brief.
+
+      User request / brainstorming:
+      {{user_request}}
+
+      Optional target workflow name:
+      {{target_workflow_name}}
+
+      Optional constraints:
+      {{constraints}}
+
+      Produce a concise but complete brief that downstream workflow authors can implement without re-interviewing the user unless the request is genuinely impossible to resolve.
+
+      Required output structure:
+      - workflow_name: lowercase slug. Use target_workflow_name if provided; otherwise derive a clear unique slug.
+      - workflow_brief: include goal, users/triggers, inputs, expected outputs, required steps, human checkpoints, needed capabilities, tool/MCP needs, and risks/open questions.
+      - workflow_acceptance_criteria: checklist the draft and validator must satisfy.
+
+      Do not design the final YAML here. This node only converts conversation into an implementation-ready brief.
+    outputs:
+      workflow_brief: "Structured implementation brief for the workflow."
+      workflow_name: "Resolved lowercase workflow slug."
+      workflow_acceptance_criteria: "Acceptance criteria the draft and validator must satisfy."
+
+  draft_workflow:
+    type: agent
+    agent: workflow-builder-agent
+    agentOverrides:
+      model: opus
+      reasoningEffort: high
+      planMode: false
+    prompt: |
+      Draft an Allen workflow from the structured brief. This is DRAFT MODE.
+
+      You must NOT call create_workflow or update_workflow in this node. Persistence is only allowed after validate_draft passes and human_review approves.
+
+      Structured brief:
+      {{workflow_brief}}
+
+      Acceptance criteria:
+      {{workflow_acceptance_criteria}}
+
+      Retry or review feedback, if any:
+      {{retry_context}}
+
+      Drafting rules:
+      1. Discover available agents before naming any agent in YAML.
+      2. Prefer existing specialist agents over leads.
+      3. If an existing agent can satisfy a step, use that existing agent and do not propose a new one.
+      4. If no existing agent can safely satisfy a required step, you may reference a new proposed agent slug in the draft YAML, but only if you also produce a complete agent creation plan for that slug. Do not invent unplanned agents.
+      5. Keep the workflow as small as correctness allows.
+      6. Include concrete prompts, required tools/MCP tools, human gates, retry edges, and output contracts.
+      7. Use valid Allen workflow YAML: name, description, version, input, nodes, edges, and optional context.
+      8. Include at least one START edge and one END edge.
+      9. If the workflow needs persistence or mutation, put that behind an explicit human review gate.
+
+      Agent creation plan rules:
+      - Set draft_requires_new_agents=true only when at least one required workflow node cannot use an existing agent.
+      - For each proposed new agent, provide: name, displayName, description, teamName, teamRole=member, provider, model, capabilities, tools, spawnTargets, personality, and full system prompt.
+      - teamName must be an existing team from list_teams. If no existing team fits, do not invent a team; return a blocking assumption for human review.
+      - The human reviewer will approve this agent creation plan together with the workflow draft.
+
+      Return:
+      - the complete draft YAML
+      - a concise design summary for human scanability
+      - a readable review packet with node-by-node design, prompt/tool notes, assumptions, and requirement coverage
+      - new-agent creation plan, or an explicit empty list when no new agents are needed
+    outputs:
+      draft_workflow_yaml: "Complete draft Allen workflow YAML."
+      draft_design_summary: "Concise human-readable node-by-node workflow design summary."
+      draft_review_packet: "Node-by-node design summary including prompt/tool notes, assumptions, and requirement coverage."
+      draft_requires_new_agents: "Boolean true when the draft references one or more proposed agents that do not exist yet."
+      draft_agent_creation_plan: "Array/object describing every new agent to create before workflow persistence; empty when no new agents are needed."
+
+  validate_draft:
+    type: agent
+    agent: allen-workflow-diagnostician
+    agentOverrides:
+      model: sonnet
+      reasoningEffort: high
+      planMode: false
+    prompt: |
+      Validate the draft workflow before any human review.
+
+      Original user request:
+      {{user_request}}
+
+      Structured brief:
+      {{workflow_brief}}
+
+      Acceptance criteria:
+      {{workflow_acceptance_criteria}}
+
+      Draft YAML:
+      {{draft_workflow_yaml}}
+
+      Draft review packet:
+      {{draft_review_packet}}
+
+      Draft requires new agents:
+      {{draft_requires_new_agents}}
+
+      Draft agent creation plan:
+      {{draft_agent_creation_plan}}
+
+      Validation tasks:
+      1. Call validate_workflow with the draft YAML and include the validation result.
+      2. Verify every user requirement and acceptance criterion is satisfied.
+      3. Verify every referenced existing agent exists.
+      4. For every referenced agent that does not exist yet, verify it has a complete draft_agent_creation_plan entry with an existing teamName and enough system/tool/capability detail to create it safely before workflow persistence. Unplanned missing agents are invalid.
+      5. Call validate_workflow on the draft YAML. If validation fails only because planned new agents do not exist yet, treat that as a conditional technical pass and list those planned agents. Any other validation error is invalid.
+      6. Verify prompts are specific enough, include required context, and define outputs.
+      7. Verify required Allen MCP tools and external MCP tools are named correctly and only used where appropriate.
+      8. Verify human checkpoints happen before destructive or persistence actions.
+      9. Verify edge conditions, retry loops, START/END paths, and outputs are coherent.
+
+      Set draft_valid to true only when requirement coverage passes and technical validation either passes directly or fails only for agents covered by the approved creation plan. If anything needs correction, set draft_valid to false and provide actionable feedback for the draft_workflow node.
+    outputs:
+      draft_valid: "Boolean true only when the draft is valid and fully covers the requirements."
+      validation_summary: "Concise validation verdict."
+      validation_feedback: "Actionable corrections for the drafter when draft_valid is false."
+      validation_report: "Detailed validation report including schema/tool/prompt/coverage/agent-creation findings."
+
+  human_review:
+    type: human
+    human:
+      kind: review
+      widget: approval_gate
+      title: "Review workflow draft"
+      summary: "Review the validated workflow draft before Allen persists it."
+      question: "Approve this workflow draft for creation, request changes, or reject it?"
+      highlights:
+        - "Workflow: {{workflow_name}}"
+        - "Validation: {{validation_summary}}"
+        - "Design: {{draft_design_summary}}"
+        - "New agents required: {{draft_requires_new_agents}}"
+      evidence:
+        - label: "Draft workflow YAML"
+          type: text
+          value: "{{draft_workflow_yaml}}"
+        - label: "Validation report"
+          type: text
+          value: "{{validation_report}}"
+        - label: "New agent creation plan"
+          type: text
+          value: "{{draft_agent_creation_plan}}"
+    prompt: |
+      Review the workflow draft and validator report.
+
+      Original request:
+      {{user_request}}
+
+      Structured brief:
+      {{workflow_brief}}
+
+      Draft review packet:
+      {{draft_review_packet}}
+
+      Draft YAML:
+      {{draft_workflow_yaml}}
+
+      Validation report:
+      {{validation_report}}
+
+      New agents required:
+      {{draft_requires_new_agents}}
+
+      Agent creation plan, if any:
+      {{draft_agent_creation_plan}}
+
+      Choose:
+      - Approve: create the listed new agents if needed, then persist this workflow.
+      - Request changes: provide precise feedback and retry drafting.
+      - Reject: stop without creating agents or creating/updating a workflow.
+    outputs:
+      decision: "approve | request_changes | reject"
+      feedback: "Human feedback passed back to the drafter when changes are requested."
+
+  create_workflow:
+    type: agent
+    agent: workflow-builder-agent
+    agentOverrides:
+      model: opus
+      reasoningEffort: high
+      planMode: false
+    prompt: |
+      Persist the approved workflow. This is CREATE MODE.
+
+      Preconditions:
+      - The validator passed before human review.
+      - human_review decision is approve.
+      - The YAML below is the approved draft.
+
+      Mode:
+      {{mode}}
+
+      Workflow name:
+      {{workflow_name}}
+
+      Approved draft YAML:
+      {{draft_workflow_yaml}}
+
+      Validation summary:
+      {{validation_summary}}
+
+      Draft requires new agents:
+      {{draft_requires_new_agents}}
+
+      Approved agent creation plan:
+      {{draft_agent_creation_plan}}
+
+      Human review decision:
+      {{human.human_review.latest.decision}}
+
+      Human review feedback:
+      {{human.human_review.latest.feedback.value}}
+
+      Required process:
+      1. Confirm the latest human_review decision is approve.
+      2. If draft_requires_new_agents is true, create each approved planned agent first using create_agent. Use exactly the approved agent_creation_plan fields. Do not create unplanned agents.
+      3. After agent creation, call list_agents or otherwise confirm every planned agent now exists.
+      4. Call validate_workflow one final time on the approved YAML, after planned agents exist.
+      5. If validation fails, do not persist the workflow; return workflow_persisted false with the blocking errors and the agent creation status.
+      6. If mode is create, call create_workflow with the approved YAML.
+      7. If mode is update, call update_workflow with the approved YAML only when the request clearly targets an existing workflow.
+      8. Return created agent names, saved workflow name/id/status, and any UI links returned by the tools.
+
+      Never create agents outside the approved agent creation plan. Never create or update workflow YAML other than the approved YAML.
+    outputs:
+      agents_created: "Array/list of agent names created before workflow persistence; empty when no new agents were needed."
+      workflow_persisted: "Boolean true only when create_workflow or update_workflow succeeds."
+      saved_workflow_name: "Name of the created or updated workflow."
+      saved_workflow_id: "ID of the created or updated workflow, if returned."
+      saved_workflow_url: "Clickable workflow URL if returned by the tool."
+      persistence_summary: "Concise summary of final validation and persistence result."
+
+edges:
+  - { from: START, to: gather_requirements }
+  - { from: gather_requirements, to: draft_workflow }
+  - { from: draft_workflow, to: validate_draft }
+
+  - { from: validate_draft, to: human_review, condition: "draft_valid == true" }
+  - { from: validate_draft, to: draft_workflow, condition: "draft_valid != true", max_retries: 3, retry_context: "Validator feedback:\n{{validation_feedback}}\n\nValidation summary:\n{{validation_summary}}" }
+  - { from: validate_draft, to: END, condition: "draft_valid != true AND __retry_exhausted_from == 'validate_draft'" }
+
+  - { from: human_review, to: create_workflow, condition: "human.human_review.latest.decision == 'approve'" }
+  - { from: human_review, to: draft_workflow, condition: "human.human_review.latest.decision == 'request_changes'", max_retries: 5, retry_context: "Human feedback on workflow draft:\n{{human.human_review.latest.feedback.value}}" }
+  - { from: human_review, to: END, condition: "human.human_review.latest.decision == 'reject'" }
+  - { from: human_review, to: END, condition: "human.human_review.latest.decision == 'request_changes' AND __retry_exhausted_from == 'human_review'" }
+
+  - { from: create_workflow, to: END }

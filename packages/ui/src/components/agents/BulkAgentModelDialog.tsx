@@ -5,6 +5,10 @@ import { useEnabledProvidersStatus, isProviderSelectable, type EnabledProvider }
 import { useModelRegistry } from '../../hooks/useModelRegistry';
 import { getModelDisplay } from '../../hooks/useModelRegistry';
 import { buildModelOptionsForProvider } from '../../lib/model-catalog';
+import {
+  isNonClaudeOpenRouterModel,
+  OPENROUTER_NON_CLAUDE_WARNING,
+} from '../../lib/openrouter-warning';
 import Select from '../common/Select';
 import IconTooltipButton from '../common/IconTooltipButton';
 import { useToast } from '../common/Toast';
@@ -211,6 +215,17 @@ export default function BulkAgentModelDialog({
               )}
             </div>
           </section>
+
+          {/* ⚠ Non-Claude OpenRouter model warning (AC6) */}
+          {isNonClaudeOpenRouterModel(provider, model) && (
+            <div
+              role="alert"
+              className="flex items-start gap-2 rounded-md border border-accent-yellow/25 bg-accent-yellow/10 px-3 py-2 text-[12px] text-accent-yellow"
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{OPENROUTER_NON_CLAUDE_WARNING}</span>
+            </div>
+          )}
 
           <section className="rounded-md border border-accent-yellow/30 bg-accent-yellow/10 p-3">
             <div className="flex items-start gap-2">
