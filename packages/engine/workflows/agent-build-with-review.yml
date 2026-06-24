@@ -1,0 +1,289 @@
+name: agent-build-with-review
+description: >
+  Built-in agent creation workflow. Analyses the requested agent, researching
+  where needed, drafts an Allen agent blueprint, validates the draft, pauses
+  for human review of the validated blueprint, and only then creates the
+  agent through the internal Agent Builder executor.
+
+version: 1
+
+context:
+  requires: []
+  tools: []
+  concurrency: 1
+
+input:
+  user_request:
+    type: string
+    required: true
+    widget: textarea
+    label: Agent request
+    description: Natural-language request describing the agent to create, its role, target team, and expected responsibilities.
+    placeholder: "e.g. Add a release-manager agent to Engineering that coordinates changelog, versioning, and release validation."
+  target_team_name:
+    type: string
+    required: false
+    widget: text
+    label: Target team name or slug (optional)
+    description: Existing Allen team to add the agent to, if known.
+    placeholder: "e.g. engineering"
+  additional_context:
+    type: string
+    required: false
+    widget: textarea
+    label: Additional context (optional)
+    description: Constraints, examples, tools, models, or routing expectations the agent should follow.
+
+nodes:
+  analyse_requirements:
+    agent: research-agent
+    prompt: |
+      Analyse the requirements for a new Allen agent. You are acting as a requirements analyst: research where needed, but do not stop at fact collection. Infer the role boundaries, operational fit, risks, and tool needs.
+
+      USER REQUEST:
+      {{user_request}}
+
+      TARGET TEAM HINT:
+      {{default target_team_name "Not provided."}}
+
+      ADDITIONAL CONTEXT:
+      {{default additional_context "Not provided."}}
+
+      Inspect the existing Allen org before recommending a role:
+      - Use list_teams and list_agents to identify the target team, existing similar agents, and likely lead agent.
+      - If a target team is provided, inspect that team and its current members.
+      - If a tool catalog or MCP-tool discovery surface is available in your
+        context, inspect it before recommending tools. If not, mark tool
+        availability assumptions explicitly.
+      - Do not create or update any agent, team, workflow, or skill.
+
+      Produce concise, structured analysis for the planner. Include:
+      - resolved target team name/slug if confident
+      - likely agent responsibilities and boundaries
+      - existing agents that overlap or should be spawn targets
+      - required tools/capabilities, including MCP/tool access the agent needs
+        for its actual work; distinguish read-only tools from state-changing tools
+        and call out least-privilege risks
+      - open questions or risks
+
+      End with valid JSON containing: target_team_name_resolved, analysis_summary,
+      role_requirements, existing_overlap, recommended_spawn_targets,
+      recommended_capabilities, open_questions.
+    outputs:
+      target_team_name_resolved: "Resolved target team name or slug, if known."
+      analysis_summary: "Concise requirements analysis summary."
+      role_requirements: "Role requirements for the requested agent."
+      existing_overlap: "Existing agents with overlapping responsibilities."
+      recommended_spawn_targets: "Suggested spawn targets, if any."
+      recommended_capabilities: "Suggested capability strings."
+      open_questions: "Open questions or risks."
+
+  plan_blueprint:
+    agent: planner-agent
+    prompt: |
+      Draft a concrete Allen agent blueprint from the request and requirements analysis.
+
+      USER REQUEST:
+      {{user_request}}
+
+      TARGET TEAM HINT:
+      {{default target_team_name "Not provided."}}
+
+      ADDITIONAL CONTEXT:
+      {{default additional_context "Not provided."}}
+
+      ANALYSIS SUMMARY:
+      {{analysis_summary}}
+
+      ROLE REQUIREMENTS:
+      {{role_requirements}}
+
+      EXISTING OVERLAP:
+      {{existing_overlap}}
+
+      RECOMMENDED SPAWN TARGETS:
+      {{recommended_spawn_targets}}
+
+      RECOMMENDED CAPABILITIES:
+      {{recommended_capabilities}}
+
+      OPEN QUESTIONS:
+      {{open_questions}}
+
+      {{#if retry_context}}
+      REVISION FEEDBACK:
+      {{retry_context}}
+      {{/if}}
+
+      Inspect list_teams and list_agents as needed to avoid duplicate agents and
+      invalid team or spawn-target references. Do not create or update records.
+
+      Draft exactly one new agent blueprint. Keep it lean and consistent with
+      existing Allen agent seed fields. The blueprint must be actionable by an
+      executor without additional interpretation.
+
+      Tool selection is part of the blueprint:
+      - Choose the persisted `tools` array from the work the agent must do, not
+        from convenience.
+      - Include only MCP/tool names the agent actually needs.
+      - Verify tool names against available tool/catalog context when possible;
+        if a needed tool cannot be verified, leave it out of `tools` and record
+        the gap in `assumptions`.
+      - Prefer read-only tools unless the agent's job explicitly requires
+        mutation.
+      - Put the tool-access rationale and denied/unneeded tools in `assumptions`
+        or `successCriteria`; do not invent extra create_agent fields.
+
+      Save the complete blueprint as a JSON artifact using allen_save_artifact.
+      Then return valid JSON with:
+      {
+        "agent_blueprint_json": { ...complete blueprint... },
+        "blueprint_artifact_url": "artifact URL",
+        "blueprint_summary": "short human-readable summary",
+        "target_team_name_resolved": "team slug/name"
+      }
+
+      The complete blueprint JSON must include: name, displayName, description,
+      teamName, teamRole, type, icon, color, provider, model, reasoningEffort,
+      planMode, tools, capabilities, personality, spawnTargets, system,
+      leadSpawnTargetUpdate, assumptions, successCriteria.
+    outputs:
+      agent_blueprint_json: "Complete proposed agent blueprint JSON."
+      blueprint_artifact_url: "URL of the saved blueprint artifact."
+      blueprint_summary: "Short summary for human review."
+      target_team_name_resolved: "Resolved target team name or slug."
+
+  validate_blueprint:
+    agent: agent-blueprint-validator
+    prompt: |
+      Validate this drafted Allen agent blueprint. Do not create or update any
+      records. Your job is to decide whether the blueprint is safe, coherent,
+      non-duplicative, and executable by the Agent Builder.
+
+      USER REQUEST:
+      {{user_request}}
+
+      TARGET TEAM:
+      {{target_team_name_resolved}}
+
+      ANALYSIS SUMMARY:
+      {{analysis_summary}}
+
+      BLUEPRINT SUMMARY:
+      {{blueprint_summary}}
+
+      BLUEPRINT ARTIFACT URL:
+      {{blueprint_artifact_url}}
+
+      BLUEPRINT JSON:
+      {{agent_blueprint_json}}
+
+      Fetch/read the artifact if needed. Inspect list_teams, list_agents, and
+      get_team/get_agent where useful. Validate:
+      - target team exists and the team role is valid
+      - agent name is a safe slug and does not duplicate an existing agent
+      - responsibilities do not materially duplicate an existing agent
+      - provider/model/reasoningEffort/planMode are coherent
+      - tools/capabilities/spawnTargets are justified by the agent's actual
+        work, existing, and least-privilege; state-changing MCP tools must have
+        explicit job need and safety boundaries
+      - tool names are verified against available tool/catalog context, or any
+        uncertainty is called out as needs_changes
+      - system prompt has clear boundaries, safety rules, and output contract
+      - leadSpawnTargetUpdate is explicit and safe
+
+      Save any corrected approved blueprint as a JSON artifact if you make
+      minor non-semantic normalization. Do not make substantive role changes;
+      return needs_changes instead.
+
+      End with valid JSON:
+      {
+        "validation_decision": "approved" | "needs_changes",
+        "validation_feedback": "specific feedback for the planner or executor",
+        "blocking_issues": ["..."],
+        "validated_blueprint_artifact_url": "artifact URL if available, otherwise original blueprint URL",
+        "validation_summary": "short summary"
+      }
+    outputs:
+      validation_decision: "approved | needs_changes"
+      validation_feedback: "Specific validator feedback."
+      blocking_issues: "Blocking issues array or summary."
+      validated_blueprint_artifact_url: "URL of validated blueprint artifact."
+      validation_summary: "Short validation summary."
+
+  human_plan_review:
+    type: human
+    human:
+      kind: review
+      widget: approval_gate
+      title: "Review validated agent blueprint"
+      summary: "A validated Allen agent blueprint is ready. Review it before creation."
+      question: "Should this workflow create the validated agent?"
+      highlights:
+        - "Target team: {{target_team_name_resolved}}"
+        - "Blueprint summary: {{blueprint_summary}}"
+        - "Validation summary: {{validation_summary}}"
+      evidence:
+        - label: "Validated agent blueprint"
+          url: "{{validated_blueprint_artifact_url}}"
+    prompt: |
+      Review the validated agent blueprint and choose:
+      - **Approve** — create the agent from the validated blueprint.
+      - **Request changes** — provide feedback for the planner to revise the blueprint.
+      - **Reject** — stop without creating an agent.
+
+  create_agent:
+    agent: agent-builder-agent
+    prompt: |
+      Create the approved Allen agent from the validated blueprint.
+
+      This node is the only approved place where Agent Builder creates agents.
+      If validation_decision is not exactly "approved", stop and return an
+      error without creating or updating anything.
+
+      VALIDATION DECISION:
+      {{validation_decision}}
+
+      VALIDATION SUMMARY:
+      {{validation_summary}}
+
+      VALIDATION FEEDBACK:
+      {{validation_feedback}}
+
+      VALIDATED BLUEPRINT ARTIFACT URL:
+      {{validated_blueprint_artifact_url}}
+
+      ORIGINAL BLUEPRINT JSON:
+      {{agent_blueprint_json}}
+
+      Steps:
+      1. Read the validated blueprint artifact if present; otherwise use the original blueprint JSON.
+      2. Call create_agent exactly once with the approved persisted blueprint fields, including the validated `tools` array. Do not pass non-create metadata such as tool rationale.
+      3. If leadSpawnTargetUpdate requires adding the new agent to a team lead's spawnTargets, call update_agent exactly once for that lead.
+      4. Verify the created agent with get_agent.
+      5. Return valid JSON with creation_status, created_agent_name,
+         created_agent_display_name, created_agent_team, creation_summary.
+
+      Do not research, re-plan, ask for confirmation, create a team, or modify unrelated agents.
+    outputs:
+      creation_status: "created | failed"
+      created_agent_name: "Created agent slug/name."
+      created_agent_display_name: "Created agent display name."
+      created_agent_team: "Team the agent was added to."
+      creation_summary: "Concise creation summary."
+
+edges:
+  - { from: START, to: analyse_requirements }
+  - { from: analyse_requirements, to: plan_blueprint }
+  - { from: plan_blueprint, to: validate_blueprint }
+
+  - { from: validate_blueprint, to: human_plan_review, condition: "validation_decision == 'approved'" }
+  - { from: validate_blueprint, to: plan_blueprint, condition: "validation_decision == 'needs_changes'", max_retries: 2, retry_context: "Blueprint validator feedback:\n{{validation_feedback}}\nBlocking issues:\n{{blocking_issues}}" }
+  - { from: validate_blueprint, to: END, condition: "validation_decision == 'needs_changes' AND __retry_exhausted_from == 'validate_blueprint'" }
+
+  - { from: human_plan_review, to: create_agent, condition: "human.human_plan_review.latest.decision == 'approve'" }
+  - { from: human_plan_review, to: END, condition: "human.human_plan_review.latest.decision == 'reject'" }
+  - { from: human_plan_review, to: plan_blueprint, condition: "human.human_plan_review.latest.decision == 'request_changes'", max_retries: 3, retry_context: "Human feedback on validated agent blueprint:\n{{human.human_plan_review.latest.feedback.value}}" }
+  - { from: human_plan_review, to: END, condition: "human.human_plan_review.latest.decision == 'request_changes' AND __retry_exhausted_from == 'human_plan_review'" }
+
+  - { from: create_agent, to: END }

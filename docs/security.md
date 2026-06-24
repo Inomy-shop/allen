@@ -65,6 +65,7 @@ Review these before changing execution behavior:
 - `packages/engine/src/cli-runner.ts`
 - `packages/server/src/services/chat-tools.ts`
 - `packages/server/src/services/chat-providers.ts`
+- `packages/server/src/services/chat-llm.ts` — provider credential isolation (suppresses host `ANTHROPIC_API_KEY` during Claude-compatible provider runs)
 
 ## Credentials
 
@@ -81,6 +82,7 @@ Optional — set only the integrations you use:
 - `ALLEN_LINEAR_ACCESS_TOKEN` for Linear ticket workflows.
 - `ALLEN_SLACK_BOT_TOKEN`, `ALLEN_SLACK_SIGNING_SECRET`, `ALLEN_SLACK_TEAM_ID` for Slack.
 - MCP server credentials, supplied per server as `ALLEN_<KEY>` (for example, an MCP that needs `POSTGRES_CONNECTION_STRING` reads it from `ALLEN_POSTGRES_CONNECTION_STRING`). The MCP loader strips the `ALLEN_` prefix when forwarding the value to the MCP subprocess, and forwards only the keys that server explicitly declares.
+- `ALLEN_OPENROUTER_API_KEY` for OpenRouter provider runs. OpenRouter models are manually registered by users, and the API key is stored and handled as a runtime secret — never exposed in UI after saving and never included in logs, traces, artifacts, or error messages.
 
 Do not commit `.env`, tokens, API keys, customer data, private prompts, or copied repo contents.
 

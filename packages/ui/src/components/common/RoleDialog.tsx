@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { X, Sparkles, FileText, Eye, Columns, Pencil, AlertCircle, Check, ChevronRight } from 'lucide-react';
+import { X, Sparkles, FileText, Eye, Columns, Pencil, AlertCircle, AlertTriangle, Check, ChevronRight } from 'lucide-react';
 import Select from './Select';
 import RoleIcon from './RoleIcon';
 import { renderMarkdown } from '../chat/ChatMessageList';
@@ -8,6 +8,10 @@ import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
 import { useEnabledProvidersStatus, isProviderSelectable } from '../../hooks/useEnabledProviders';
 import { useModelRegistry, getModelDisplay } from '../../hooks/useModelRegistry';
 import { buildModelOptionsForProvider } from '../../lib/model-catalog';
+import {
+  isNonClaudeOpenRouterModel,
+  OPENROUTER_NON_CLAUDE_WARNING,
+} from '../../lib/openrouter-warning';
 
 const TOOLS = ['filesystem', 'terminal', 'git', 'web-search', 'web-fetch', 'database'];
 const EFFORT_LEVELS = [
@@ -497,6 +501,17 @@ export default function RoleDialog({
                     )}
                   </div>
                 </div>
+
+                {/* ⚠ Non-Claude OpenRouter model warning (AC6) */}
+                {isNonClaudeOpenRouterModel(provider, model) && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2 rounded-md border border-accent-yellow/25 bg-accent-yellow/10 px-3 py-2 text-[12px] text-accent-yellow"
+                  >
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>{OPENROUTER_NON_CLAUDE_WARNING}</span>
+                  </div>
+                )}
               </section>
 
               <section className="space-y-3 border-t border-app pt-4">

@@ -262,7 +262,7 @@ async function runClaudeCLI(
   return { text: fullText, costUsd, sessionId: llmSessionId, trace, tokenUsage };
 }
 
-async function runClaudeCompatibleChatCLI(
+export async function runClaudeCompatibleChatCLI(
   provider: ChatProvider,
   db: Db,
   systemPrompt: string,
@@ -281,12 +281,23 @@ async function runClaudeCompatibleChatCLI(
     saved[key] = process.env[key];
     process.env[key] = overlay[key];
   }
+  // Suppress host ANTHROPIC_API_KEY so it cannot override the provider's
+  // ANTHROPIC_AUTH_TOKEN during Claude Code execution (AC5 / REQ-6).
+  if (process.env.ANTHROPIC_API_KEY !== undefined && !('ANTHROPIC_API_KEY' in saved)) {
+    saved['ANTHROPIC_API_KEY'] = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+  }
   try {
     return await runClaudeCLI(db, systemPrompt, messages, model, callbacks, resumeSessionId, skipTools, cwd, resolved, chatSessionId);
   } finally {
     for (const key of Object.keys(overlay)) {
       if (saved[key] === undefined) delete process.env[key];
       else process.env[key] = saved[key];
+    }
+    // Restore ANTHROPIC_API_KEY that was suppressed before the run.
+    if ('ANTHROPIC_API_KEY' in saved) {
+      if (saved.ANTHROPIC_API_KEY === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = saved.ANTHROPIC_API_KEY;
     }
   }
 }

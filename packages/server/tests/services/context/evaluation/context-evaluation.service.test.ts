@@ -27,11 +27,10 @@ describe('ContextEvaluationService', () => {
 
   beforeEach(async () => {
     process.env.ALLEN_CONTEXT_PROVIDER = 'graph';
-    process.env.ALLEN_CONTEXT_SEMANTIC_EVALUATOR = originalSemanticEvaluator ?? '';
-    if (originalSemanticMode === undefined) delete process.env.ALLEN_CONTEXT_SEMANTIC_MODE;
-    else process.env.ALLEN_CONTEXT_SEMANTIC_MODE = originalSemanticMode;
-    if (originalDeepEvalScript === undefined) delete process.env.ALLEN_DEEPEVAL_SCRIPT;
-    else process.env.ALLEN_DEEPEVAL_SCRIPT = originalDeepEvalScript;
+    // Clear host semantic-evaluator env so tests expecting provider:'none' are not polluted
+    delete process.env.ALLEN_CONTEXT_SEMANTIC_EVALUATOR;
+    delete process.env.ALLEN_CONTEXT_SEMANTIC_MODE;
+    delete process.env.ALLEN_DEEPEVAL_SCRIPT;
     if (tmpPath) rmSync(tmpPath, { recursive: true, force: true });
     tmpPath = undefined;
     await Promise.all([

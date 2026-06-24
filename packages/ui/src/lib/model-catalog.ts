@@ -44,6 +44,7 @@ export const PROVIDER_COLORS: Record<string, { color: string; dotBg: string }> =
   'xiaomi-mimo': { color: 'text-accent-blue', dotBg: 'bg-accent-blue' },
   kimi: { color: 'text-accent-blue', dotBg: 'bg-accent-blue' },
   zai: { color: 'text-accent-purple', dotBg: 'bg-accent-purple' },
+  openrouter: { color: 'text-accent-orange', dotBg: 'bg-accent-orange' },
 };
 
 /** Minimal structural shape of an enabled provider (see useEnabledProviders). */
@@ -81,15 +82,23 @@ export function buildModelOptionsForProvider(
   registryModels: ModelOption[] = [],
   currentModel?: string,
 ): ModelOption[] {
+  // AC6: Non-Claude OpenRouter models get a subtle "(experimental)" suffix in
+  // the model select to distinguish them from Claude-family models at a glance.
+  const experimentalSuffix = (modelId: string): string =>
+    provider === 'openrouter' && !modelId.startsWith('anthropic/') ? ' (experimental)' : '';
+
   const base: ModelOption[] = registryModels.length > 0
     ? registryModels.map((m) => ({
-        label: m.label?.trim() || humanLabel(m.value),
+        label: (m.label?.trim() || humanLabel(m.value)) + experimentalSuffix(m.value),
         value: m.value,
       }))
     : (() => {
         const enabled = enabledProviders.find((item) => item.provider === provider);
         const ids = (enabled?.open ? enabled.modelSuggestions : enabled?.models) ?? [];
-        return ids.map((model) => ({ label: model, value: model }));
+        return ids.map((model) => ({
+          label: model + experimentalSuffix(model),
+          value: model,
+        }));
       })();
 
   // If the currently-selected/saved model is not in the options, append it so

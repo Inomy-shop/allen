@@ -6,6 +6,18 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-06-24
+
+### Added
+
+- **OpenRouter provider and model registry** (`packages/server`, `packages/ui`): OpenRouter added as a first-class Claude-compatible provider (identifier `openrouter`) with API key secret `ALLEN_OPENROUTER_API_KEY`. OpenRouter models are not seeded; users register their own OpenRouter model slugs in Settings → Models and can configure `ALLEN_OPENROUTER_BASE_URL` (default `https://openrouter.ai/api`). Non-Claude OpenRouter models show explicit warnings in agent config forms, model selectors, and workflow node configs (AC6). The `runClaudeCompatibleChatCLI` helper now suppresses host `ANTHROPIC_API_KEY` during all Claude-compatible provider runs to prevent credential override.
+- **Reviewed agent builder workflow** (`packages/engine`, `packages/server`): added the `agent-build-with-review` workflow seed, a blueprint validator agent, and meta-builder skill routing so new agent creation goes through research, human review, validation, and then the internal Agent Builder executor instead of direct Agent Builder calls.
+- **Review-gated workflow builder** (`packages/engine`, `packages/server`): added the `workflow-build-and-review` workflow seed so new workflow creation runs through research and a human review gate before the workflow is built.
+
+### Changed
+
+- **ANTHROPIC_API_KEY credential isolation** (`packages/server`): `runClaudeCompatibleChatCLI` now saves and suppresses the host `ANTHROPIC_API_KEY` env var during Claude-compatible provider runs (DeepSeek, Kimi, Xiaomi MiMo, GLM/Z.AI, OpenRouter) to prevent it from overriding the provider's `ANTHROPIC_AUTH_TOKEN` (AC5).
+
 ## [0.1.15] - 2026-06-22
 
 ### Added

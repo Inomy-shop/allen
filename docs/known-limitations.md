@@ -37,6 +37,7 @@ Allen is early alpha. These limitations are intentional to document current real
 - CLI trust prompts can still require manual intervention in some environments.
 - Model aliases can be overridden with `ALLEN_MODEL_*`, but defaults may change. The **Model Registry** (Settings → Models, admin-only) now provides editable, database-backed model definitions as an alternative — admins can add, edit, activate/deactivate, and price models without code changes or env-var configuration. The `ALLEN_MODEL_*` env-var overrides still take highest precedence when set.
 - Agent outputs are parsed heuristically where workflows ask for structured JSON.
+- **OpenRouter** — OpenRouter is provider-only by default; no OpenRouter models are seeded. Users must register the exact OpenRouter model slug and configure the API key/endpoint before use. Non-Claude models (Gemini, DeepSeek, OpenAI, etc.) are experimental for the Claude Code execution path, and a warning is displayed in the UI when a non-Claude OpenRouter model is selected.
 
 ## Workspaces
 
