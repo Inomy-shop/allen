@@ -106,19 +106,21 @@ function buildEngineServices(db: Db): EngineConfig['services'] {
 }
 
 /**
- * Build aliasMap and costMap from the model_registry collection.
+ * Build aliasMap, costMap, and modelProviderMap from the model_registry collection.
  * These are passed to EngineConfig → NodeExecutorDeps so the engine can
- * resolve model aliases and estimate costs from the registry.
+ * resolve model aliases, estimate costs, and infer providers for model-only node overrides.
  */
 async function buildAliasAndCostMaps(db: Db): Promise<{
   aliasMap: Record<string, string>;
   costMap: Record<string, ModelCostInfo>;
+  modelProviderMap: Record<string, string>;
 }> {
   const models = await db.collection('model_registry')
     .find({ isActive: true })
     .toArray();
   const aliasMap: Record<string, string> = {};
   const costMap: Record<string, ModelCostInfo> = {};
+  const modelProviderMap: Record<string, string> = {};
   for (const m of models) {
     aliasMap[m.alias as string] = m.fullId as string;
     const info: ModelCostInfo = {
@@ -130,8 +132,13 @@ async function buildAliasAndCostMaps(db: Db): Promise<{
     // free-text "Other…" id that matches a registry fullId).
     costMap[m.alias as string] = info;
     if (typeof m.fullId === 'string') costMap[m.fullId] = info;
+
+    if (typeof m.provider === 'string') {
+      if (typeof m.alias === 'string' && m.alias.trim()) modelProviderMap[m.alias] = m.provider;
+      if (typeof m.fullId === 'string' && m.fullId.trim()) modelProviderMap[m.fullId] = m.provider;
+    }
   }
-  return { aliasMap, costMap };
+  return { aliasMap, costMap, modelProviderMap };
 }
 
 // Track running engines by executionId
@@ -689,6 +696,7 @@ export class ExecutionService {
       buildClaudeCompatibleEnvOverlay,
       aliasMap: _aliasMapResult?.aliasMap,
       costMap: _aliasMapResult?.costMap,
+      modelProviderMap: _aliasMapResult?.modelProviderMap,
     };
 
     const engine = new AllenEngine(config);
@@ -1640,6 +1648,7 @@ export class ExecutionService {
       buildClaudeCompatibleEnvOverlay,
       aliasMap: _aliasMapResult?.aliasMap,
       costMap: _aliasMapResult?.costMap,
+      modelProviderMap: _aliasMapResult?.modelProviderMap,
     };
 
     const engine = new AllenEngine(config);
@@ -1730,6 +1739,7 @@ export class ExecutionService {
       buildClaudeCompatibleEnvOverlay,
       aliasMap: _aliasMapResult?.aliasMap,
       costMap: _aliasMapResult?.costMap,
+      modelProviderMap: _aliasMapResult?.modelProviderMap,
     };
 
     const engine = new AllenEngine(config);
@@ -1794,6 +1804,7 @@ export class ExecutionService {
       buildClaudeCompatibleEnvOverlay,
       aliasMap: _aliasMapResult?.aliasMap,
       costMap: _aliasMapResult?.costMap,
+      modelProviderMap: _aliasMapResult?.modelProviderMap,
     };
 
     const engine = new AllenEngine(config);

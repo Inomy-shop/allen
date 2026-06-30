@@ -7,6 +7,7 @@ import { toClaudeSdkOptions } from './agent-settings.js';
 import { buildControlledMcpConfig, writeClaudeMcpConfigFile } from './chat-controlled-mcp.js';
 import { logRuntimeEvent } from './chat-runtime-logs.js';
 import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
+import { applyClaudeChatNativeToolPolicyToArgs } from './claude-chat-tool-policy.js';
 import type { ChatTraceEvent } from './chat-llm.js';
 import type { PersistentChatRuntime, RuntimeCreateInput, RuntimeSlashCommand, RuntimeTurnInput, RuntimeTurnResult } from './chat-runtime-types.js';
 
@@ -226,6 +227,7 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
       '--permission-mode', claudePermissionMode(input),
     ];
     if (claudeSupportsHookEvents()) args.push('--include-hook-events');
+    applyClaudeChatNativeToolPolicyToArgs(args);
 
     const model = normalizeModelAlias(input.model) ?? input.model;
     if (model && model !== 'default') args.push('--model', model);

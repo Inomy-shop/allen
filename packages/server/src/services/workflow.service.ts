@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ObjectId, type Collection, type Db } from 'mongodb';
-import { validateWorkflow, loadAgents, getBuiltIns, generateMermaid } from '@allen/engine';
+import { validateWorkflow, loadAgents, getBuiltIns, generateMermaid, normalizeModelAlias } from '@allen/engine';
 import type { WorkflowDef, ValidationResult } from '@allen/engine';
 import { notDeletedFilter, softDeleteSet, restoreSet } from './soft-delete.js';
 
@@ -191,6 +191,58 @@ export class WorkflowService {
     return this.col.findOne({ name, ...notDeletedFilter });
   }
 
+  private inferProviderForModel(model: string, aliasMap: Record<string, string>, modelProviderMap: Record<string, string>): string | undefined {
+    const resolvedModel = normalizeModelAlias(model, aliasMap) ?? model;
+    const fromRegistry = modelProviderMap[resolvedModel] ?? modelProviderMap[model];
+    if (fromRegistry) return fromRegistry;
+
+    const lower = model.toLowerCase().trim();
+    if (!lower) return undefined;
+    if (lower === 'sonnet' || lower === 'opus' || lower === 'haiku' || lower === 'fable' || lower.startsWith('claude-')) return 'claude';
+    if (lower.startsWith('gpt-') || lower === 'o3' || lower.startsWith('o4-') || lower.startsWith('codex-')) return 'codex';
+    if (lower.startsWith('deepseek-')) return 'deepseek';
+    if (lower.startsWith('kimi-')) return 'kimi';
+    if (lower.startsWith('mimo-')) return 'xiaomi-mimo';
+    if (lower.startsWith('glm-')) return 'zai';
+    return undefined;
+  }
+
+  private async addMissingNodeOverrideProviders(parsed: WorkflowDef): Promise<boolean> {
+    const nodes = parsed.nodes as Record<string, Record<string, unknown>> | undefined;
+    if (!nodes) return false;
+
+    const aliasMap: Record<string, string> = {};
+    const modelProviderMap: Record<string, string> = {};
+    try {
+      const entries = await this.db.collection('model_registry')
+        .find({ isActive: true }, { projection: { alias: 1, fullId: 1, provider: 1 } })
+        .toArray();
+      for (const entry of entries) {
+        const provider = typeof entry.provider === 'string' ? entry.provider : undefined;
+        const fullId = typeof entry.fullId === 'string' ? entry.fullId : undefined;
+        const alias = typeof entry.alias === 'string' ? entry.alias : undefined;
+        if (alias && fullId) aliasMap[alias.toLowerCase()] = fullId;
+        if (provider && fullId) modelProviderMap[fullId] = provider;
+        if (provider && alias) modelProviderMap[alias] = provider;
+      }
+    } catch {
+      // Best-effort only; static fallback below still covers Allen's seed catalog.
+    }
+
+    let changed = false;
+    for (const node of Object.values(nodes)) {
+      const overrides = node?.agentOverrides;
+      if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) continue;
+      const typedOverrides = overrides as Record<string, unknown>;
+      if (typedOverrides.provider != null || typeof typedOverrides.model !== 'string') continue;
+      const provider = this.inferProviderForModel(typedOverrides.model, aliasMap, modelProviderMap);
+      if (!provider) continue;
+      typedOverrides.provider = provider;
+      changed = true;
+    }
+    return changed;
+  }
+
   async create(body: { yaml?: string; parsed?: WorkflowDef; createdBy?: string; tags?: string[] }): Promise<Record<string, unknown>> {
     let parsed: WorkflowDef;
     let rawYaml: string;
@@ -203,6 +255,10 @@ export class WorkflowService {
       rawYaml = yaml.dump(parsed);
     } else {
       throw new Error('Either yaml or parsed must be provided');
+    }
+
+    if (await this.addMissingNodeOverrideProviders(parsed)) {
+      rawYaml = yaml.dump(parsed, { lineWidth: 120, noRefs: true, sortKeys: false });
     }
 
     // Check for soft-deleted record with the same name — restore instead of insert.
@@ -261,15 +317,17 @@ export class WorkflowService {
 
     if (body.yaml) {
       const parsed = yaml.load(body.yaml) as WorkflowDef;
-      updates.yaml = body.yaml;
+      const changed = await this.addMissingNodeOverrideProviders(parsed);
+      updates.yaml = changed ? yaml.dump(parsed, { lineWidth: 120, noRefs: true, sortKeys: false }) : body.yaml;
       updates.parsed = parsed;
       updates.name = parsed.name;
       updates.description = parsed.description ?? '';
       updates.validation = await this.validate(parsed);
       updates.version = (existing.version as number ?? 0) + 1;
     } else if (body.parsed) {
+      await this.addMissingNodeOverrideProviders(body.parsed);
       updates.parsed = body.parsed;
-      updates.yaml = yaml.dump(body.parsed);
+      updates.yaml = yaml.dump(body.parsed, { lineWidth: 120, noRefs: true, sortKeys: false });
       updates.name = body.parsed.name;
       updates.description = body.parsed.description ?? '';
       updates.validation = await this.validate(body.parsed);

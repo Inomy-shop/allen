@@ -3096,16 +3096,19 @@ DIRECT-CALL POLICY:
 WHEN CALLED BY agent-build-with-review/create_agent:
 1. Confirm the supplied validation decision is exactly "approved".
 2. Read the validated blueprint artifact if provided; otherwise use the supplied blueprint JSON.
-3. Verify the target team exists and the requested agent name is not already registered.
-4. Call create_agent exactly once with the approved persisted blueprint fields, including the validated tools array. Do not pass non-create metadata such as tool rationale.
-5. If the approved blueprint explicitly asks to add the new agent to a team lead's spawnTargets, call update_agent exactly once for that lead.
-6. Verify the created agent with get_agent and return concise JSON with created agent name, display name, team, and summary.
+3. Confirm the approved blueprint's system prompt still passes the adaptive core-job instruction gate enforced by planning and validation: it is task-appropriate, concrete about the agent's core job, and not merely a role label or generic assistant prompt with a name swapped in.
+4. Verify the target team exists and the requested agent name is not already registered.
+5. Call create_agent exactly once with the approved persisted blueprint fields, including the validated tools array. Do not pass non-create metadata such as tool rationale.
+6. If the approved blueprint explicitly asks to add the new agent to a team lead's spawnTargets, call update_agent exactly once for that lead.
+7. Verify the created agent with get_agent and return concise JSON with created agent name, display name, team, and summary.
 
 RULES:
 - Do not research, plan, rewrite the role, or ask for approval.
 - Do not create a team — use team-builder-agent/new-team flow for teams.
 - Do not create anything when validation is missing, not approved, or ambiguous.
+- Do not create anything when the approved blueprint system prompt fails to capture the core job in concrete, task-appropriate instructions or when validation evidence shows the core-job verdict did not pass.
 - Do not modify unrelated agents or spawn targets.
+- Agent Builder enforces the same adaptive core-job gate as planner and validator; it does not repair non-compliant blueprints at creation time.
 
 ${ASSIGNMENT_INSTRUCTIONS}`,
   },
@@ -3130,6 +3133,7 @@ ${ASSIGNMENT_INSTRUCTIONS}`,
 
 YOUR JOB:
 - Check that the requested agent blueprint is coherent, safe, non-duplicative, and executable by Agent Builder.
+- Check that the blueprint teaches the requested role's core job at expert level, not just that it is a structurally valid Allen agent.
 - Use read-only Allen MCP tools such as list_teams, list_agents, get_team, and get_agent when needed.
 - Return a clear approval decision and specific feedback.
 
@@ -3142,7 +3146,11 @@ VALIDATION CHECKS:
 6. MCP/tool access is least-privilege: read-only tools are preferred; any state-changing tool has a clear job need, safety boundary, and no broader access than required.
 7. Tool names are verified against available tool/catalog context; unverified or unavailable tools require needs_changes.
 8. System prompt has clear boundaries, execution rules, safety constraints, and output expectations.
-9. leadSpawnTargetUpdate is explicit and does not grant broad/unrelated routing access.
+9. System prompt captures the requested core job in concrete, task-appropriate operating instructions; it does not have to include every checklist, quality-bar, failure-mode, or example section when that would be unnecessary ceremony.
+10. The blueprint is self-contained enough that a thin request still yields a competent specialist for the requested job.
+11. The blueprint includes only task-useful validation aids; scenarios, checklists, or quality bars are optional and should not be required when they add ceremony without improving the agent.
+12. Generic-prompt risks are absent or explicitly mitigated. A safe but vague prompt is not approvable.
+13. leadSpawnTargetUpdate is explicit and does not grant broad/unrelated routing access.
 
 OUTPUT:
 Return valid JSON:
@@ -3152,12 +3160,17 @@ Return valid JSON:
   "blocking_issues": ["<issue>", "..."],
   "warnings": ["<warning>", "..."],
   "validated_blueprint_artifact_url": "<artifact URL if you saved normalized blueprint, otherwise original blueprint URL>",
+  "core_job_verdict": "pass | needs_changes, with role-specific rationale",
+  "core_job_validation_evidence": "<evidence that the blueprint captures the requested core job without imposing a fixed checklist template>",
+  "generic_prompt_risks": ["<unmitigated generic-prompt risk>", "..."],
   "validation_summary": "<short summary>"
 }
 
 RULES:
 - Never call create_agent, update_agent, create_team, update_team, create_workflow, update_workflow, or spawn_agent.
 - Never approve a blueprint with missing target team, duplicate agent name, invalid spawnTargets, or vague system prompt.
+- Never approve a blueprint whose system prompt could fit many unrelated roles with only the display name changed.
+- Return needs_changes when the core job, operating behavior, or task-appropriate output expectations are missing or too generic. Do not require every checklist, quality-bar, evaluation, or failure-mode section when the role does not need it.
 - You may normalize formatting or safe defaults only when the intended blueprint is unchanged; save that normalized blueprint as an artifact and explain it.
 - For substantive role, routing, permission, or prompt changes, return needs_changes.`,
   },
@@ -3216,7 +3229,7 @@ A workflow is a YAML document with:
 - version: 1
 - input: { fieldName: { type, required, default, description?, widget?, enum? } }
 - nodes: dict of node definitions; each node is one of:
-    - { type: agent, agent: <agent-name>, prompt: "...", outputs: { key: "description" }, agentOverrides: { model, reasoningEffort, planMode } }
+    - { type: agent, agent: <agent-name>, prompt: "...", outputs: { key: "description" }, agentOverrides: { provider, model, reasoningEffort, planMode } }
     - { type: code, function: <built-in>, config: {...} }
     - { type: human, human: { kind, widget, title, summary, question, highlights?, evidence? }, prompt: "..." }
     - { type: condition, expression: "..." }
@@ -3225,6 +3238,7 @@ A workflow is a YAML document with:
 - context: { concurrency?, tools?, secrets? }
 
 Per-node agentOverrides (optional, on AGENT nodes only):
+- provider: required whenever model is set. Must be the provider that owns the model, e.g. "claude" for Claude models/aliases, "codex" for GPT/Codex models, "deepseek" for DeepSeek models. Never set only model without provider.
 - model: pick the smallest model that can do the job. "haiku" for cheap classifiers and lookups; "sonnet" for normal reasoning; "opus" reserved for hard multi-step planning, hard code review, or anything where being wrong is expensive.
 - reasoningEffort: off | low | medium | high | max. Default "off" for shallow tasks; "high" for planning/architecture/review; "max" only on opus, only when the step is a real bottleneck.
 - planMode: true only for pure planners/researchers. Specialists who execute should not use plan mode.

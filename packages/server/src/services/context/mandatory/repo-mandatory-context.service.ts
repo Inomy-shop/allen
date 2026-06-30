@@ -393,6 +393,29 @@ export class RepoMandatoryContextService {
     return (await this.mappings.findOne({ repoId, mappingId }))!;
   }
 
+  async deactivateMany(
+    repoId: string,
+    mappingIds: string[],
+    options: { reason?: string } = {},
+  ): Promise<{ requested: number; affected: number; skipped: number }> {
+    if (!mappingIds.length) return { requested: 0, affected: 0, skipped: 0 };
+    const now = new Date();
+    const result = await this.mappings.updateMany(
+      { repoId, mappingId: { $in: mappingIds }, enabled: true },
+      {
+        $set: {
+          enabled: false,
+          deactivatedAt: now,
+          deactivationReason: options.reason ?? 'user_bulk_delete',
+          updatedAt: now,
+        },
+      },
+    );
+    const affected = result.modifiedCount;
+    const skipped = mappingIds.length - affected;
+    return { requested: mappingIds.length, affected, skipped };
+  }
+
   async saveManyFromAgent(body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const repoId = stringValue(body.repo_id ?? body.repoId);
     if (!repoId) throw new Error('repo_id is required');

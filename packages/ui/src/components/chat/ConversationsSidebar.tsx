@@ -1,8 +1,9 @@
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Search, Pencil, Sparkles, LoaderCircle } from 'lucide-react';
+import { Plus, Trash2, Search, Pencil, Sparkles, LoaderCircle, Download, ArrowDownToLine } from 'lucide-react';
 import { useChat } from '../../hooks/useChat';
 import DeleteConfirmDialog from '../common/DeleteConfirmDialog';
+import ChatImportPreviewModal from './ChatImportPreviewModal';
 import { PROVIDER_COLORS } from '../../lib/model-catalog';
 import { getModelDisplay } from '../../hooks/useModelRegistry';
 
@@ -30,6 +31,7 @@ export default function ConversationsSidebar() {
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
   const [query, setQuery] = useState('');
   const [pendingTitle, setPendingTitle] = useState<string | null>(null);
+  const [importModalOpen, setImportModalOpen] = useState(false);
   // useRef available for future focus management if needed
   const _renameRef = useRef<HTMLInputElement | null>(null);
 
@@ -42,6 +44,12 @@ export default function ConversationsSidebar() {
   function handleNew() {
     switchSession('');
     navigate('/chat', { replace: true });
+  }
+
+  function handleImported(sessionId: string) {
+    setImportModalOpen(false);
+    switchSession(sessionId);
+    navigate(`/chat/${sessionId}`, { replace: true });
   }
 
   async function handleDelete() {
@@ -64,13 +72,23 @@ export default function ConversationsSidebar() {
     <aside className="w-[260px] shrink-0 border-r border-app flex flex-col min-h-0">
       <div className="px-3 py-2.5 flex items-center justify-between border-b border-app">
         <span className="text-[13px] font-medium text-theme-primary">Conversations</span>
-        <button
-          onClick={handleNew}
-          className="w-6 h-6 flex items-center justify-center rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors"
-          title="New conversation"
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => setImportModalOpen(true)}
+            className="w-6 h-6 flex items-center justify-center rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors"
+            title="Import chat"
+            aria-label="Import chat"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={handleNew}
+            className="w-6 h-6 flex items-center justify-center rounded text-theme-muted hover:text-accent hover:bg-app-muted transition-colors"
+            title="New conversation"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
       <div className="px-2 pt-2 pb-1">
         <div className="relative">
@@ -154,6 +172,15 @@ export default function ConversationsSidebar() {
                       <span className="text-theme-subtle">{s.messageCount} msg</span>
                     </>
                   )}
+                  {s.isImported && (
+                    <>
+                      <span className="text-theme-subtle/60">·</span>
+                      <span className="inline-flex items-center gap-1 text-[10px] text-yellow-600 bg-yellow-100/60 rounded-full px-1.5 py-0 leading-tight">
+                        <ArrowDownToLine className="w-2.5 h-2.5" />
+                        Imported
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
               <button
@@ -205,6 +232,11 @@ export default function ConversationsSidebar() {
         resourceName={deleting?.title ?? ''}
         onConfirm={handleDelete}
         onCancel={() => setDeleting(null)}
+      />
+      <ChatImportPreviewModal
+        isOpen={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onImported={handleImported}
       />
     </aside>
   );

@@ -17,6 +17,7 @@ import { usageRoutes, startUsageCacheWarmer } from './routes/usage.routes.js';
 import { repoRoutes } from './routes/repo.routes.js';
 import { learningRoutes, executionLearningsRoute } from './routes/learning.routes.js';
 import { chatRoutes } from './routes/chat.routes.js';
+import { chatExportImportRoutes } from './routes/chat-export-import.routes.js';
 import { ChatService, backfillSessionOwners } from './services/chat.service.js';
 import { mcpRoutes } from './routes/mcp.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
@@ -300,6 +301,7 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
   app.use('/api/learnings', learningRoutes(db));
   app.use('/api/executions', executionLearningsRoute(db));
   app.use('/api/chat', chatRoutes(db));
+  app.use('/api/chat', chatExportImportRoutes(db));
   app.use('/api/mcp', mcpRoutes(db));
   app.use('/api/alerts', alertRoutes(db));
   app.use('/api/workspaces', workspaceRoutes(db));

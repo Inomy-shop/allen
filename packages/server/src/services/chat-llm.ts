@@ -22,6 +22,7 @@ import {
   type ResolvedSettings,
 } from './agent-settings.js';
 import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
+import { applyClaudeChatNativeToolPolicyToSdkOptions } from './claude-chat-tool-policy.js';
 import { persistentChatRuntimeEnabled, runPersistentChatTurn } from './chat-runtime-manager.js';
 
 // ── Types ──
@@ -188,6 +189,7 @@ async function runClaudeCLI(
   if (resumeSessionId) sdkOptions.resume = resumeSessionId;
   else sdkOptions.customSystemPrompt = systemPrompt;
   if (Object.keys(mcpServers).length > 0) sdkOptions.mcpServers = mcpServers;
+  applyClaudeChatNativeToolPolicyToSdkOptions(sdkOptions);
   // Wire the abort signal so clicking "Stop" in chat kills the claude-cli
   // subprocess (SIGTERM) instead of just closing the SSE connection.
   if (callbacks.signal) {

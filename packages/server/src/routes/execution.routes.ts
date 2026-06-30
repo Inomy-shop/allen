@@ -4,12 +4,61 @@ import { InterventionService } from '../services/intervention.service.js';
 import { RepoContextPacketService } from '../services/context/core/repo-context-packet.service.js';
 import { isContextEngineEnabled } from '../services/context/config/context-provider-config.js';
 import { param } from '../types.js';
-import type { Db } from 'mongodb';
+import { type Db, ObjectId } from 'mongodb';
 import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { PROVIDERS, type ChatProvider } from '../services/chat-providers.js';
 import { ModelRegistryService } from '../services/model-registry.service.js';
 import { sanitizeErrorSummary } from '@allen/engine';
+
+/**
+ * Guard: reject resume/retry on imported (read-only replay) executions.
+ * Checks both execution.meta.imported and the linked chat session's isImported flag.
+ * Returns true if the request should be stopped with 403.
+ */
+async function rejectIfImportedExecution(
+  db: Db,
+  res: Response,
+  executionId: string,
+): Promise<boolean> {
+  try {
+    const exec = await db.collection('executions').findOne(
+      { id: executionId },
+      { projection: { meta: 1 } },
+    );
+    if (!exec) return false;
+
+    const meta = exec.meta as Record<string, unknown> | undefined;
+
+    // Direct check: execution was imported
+    if (meta?.imported === true) {
+      res.status(403).json({
+        error: 'IMPORTED_SESSION_READONLY',
+        message: 'Cannot resume or retry imported execution records',
+      });
+      return true;
+    }
+
+    // Check linked chat session
+    const chatSessionId = meta?.chatSessionId as string | undefined;
+    if (chatSessionId && ObjectId.isValid(chatSessionId)) {
+      const session = await db.collection('chat_sessions').findOne(
+        { _id: new ObjectId(chatSessionId) },
+        { projection: { isImported: 1 } },
+      );
+      if (session?.isImported) {
+        res.status(403).json({
+          error: 'IMPORTED_SESSION_READONLY',
+          message: 'Cannot resume or retry executions linked to imported replay sessions',
+        });
+        return true;
+      }
+    }
+  } catch {
+    // If lookup fails, allow the request to proceed
+  }
+  return false;
+}
 
 export function executionRoutes(db: Db): Router {
   const router = Router();
@@ -266,7 +315,9 @@ export function executionRoutes(db: Db): Router {
   // POST /api/executions/:id/resume
   router.post('/:id/resume', async (req: Request, res: Response) => {
     try {
-      await service.resume(param(req, 'id'));
+      const executionId = param(req, 'id');
+      if (await rejectIfImportedExecution(db, res, executionId)) return;
+      await service.resume(executionId);
       res.json({ status: 'resumed' });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -280,12 +331,14 @@ export function executionRoutes(db: Db): Router {
   // the existing trace stream so the UI can show attempt tabs.
   router.post('/:id/resume-agent', async (req: Request, res: Response) => {
     try {
+      const executionId = param(req, 'id');
+      if (await rejectIfImportedExecution(db, res, executionId)) return;
       const prompt = req.body?.prompt as string | undefined;
       if (!prompt || !prompt.trim()) {
         return res.status(400).json({ error: 'prompt is required' });
       }
       const { resumeAgentExecution } = await import('../services/chat-tools.js');
-      const result = await resumeAgentExecution(db, param(req, 'id'), prompt.trim());
+      const result = await resumeAgentExecution(db, executionId, prompt.trim());
       if ('error' in result) return res.status(400).json(result);
       res.status(202).json(result);
     } catch (err: unknown) {
@@ -304,6 +357,7 @@ export function executionRoutes(db: Db): Router {
       const { node, data } = req.body;
       if (!node) return res.status(400).json({ error: 'node is required' });
       const executionId = param(req, 'id');
+      if (await rejectIfImportedExecution(db, res, executionId)) return;
       const delivered = await service.submitInput(executionId, node, data ?? {});
       if (!delivered) {
         return res.status(404).json({ error: 'No pending input request found for this execution/node' });
@@ -394,6 +448,7 @@ export function executionRoutes(db: Db): Router {
   router.post('/:id/recover-model', async (req: AuthedRequest, res: Response) => {
     try {
       const executionId = param(req, 'id');
+      if (await rejectIfImportedExecution(db, res, executionId)) return;
       const { node, provider, model, reasoningEffort } = req.body ?? {};
 
       // ── Body validation ──
@@ -547,7 +602,9 @@ export function executionRoutes(db: Db): Router {
   // POST /api/executions/:id/retry-from/:node
   router.post('/:id/retry-from/:node', async (req: Request, res: Response) => {
     try {
-      const result = await service.retryFromNode(param(req, 'id'), param(req, 'node'));
+      const executionId = param(req, 'id');
+      if (await rejectIfImportedExecution(db, res, executionId)) return;
+      const result = await service.retryFromNode(executionId, param(req, 'node'));
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

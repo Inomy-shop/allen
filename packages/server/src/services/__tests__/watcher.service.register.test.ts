@@ -30,9 +30,14 @@ describe('WatcherService.register()', () => {
     service = new WatcherService(mockDb as any, mockChatService as any);
   });
 
+  // Valid 24-char hex ObjectId so the AC15 imported-session guard can
+  // look up the chat_sessions doc (the default mock returns null → not
+  // imported → registration proceeds normally).
+  const VALID_SESSION_ID = '507f1f77bcf86cd799439011';
+
   const baseOptions = {
     executionId: 'exec-1',
-    chatSessionId: 'session-1',
+    chatSessionId: VALID_SESSION_ID,
     executionType: 'workflow' as const,
     originatingMessageId: 'msg-1',
     userId: 'user-1',
@@ -45,9 +50,11 @@ describe('WatcherService.register()', () => {
   // ── AC1 + AC2: fresh registration with correct ownership ──────────────
 
   it('inserts a new execution_watchers doc with correct ownership fields for workflow executionType', async () => {
-    // First findOne: execution status check → running
-    // Second findOne: existing watcher check → null (no existing)
+    // First findOne: AC15 guard chat_sessions lookup → null (not imported)
+    // Second findOne: execution status check → running
+    // Third findOne: existing watcher check → null (no existing)
     chainable.findOne
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ status: 'running' })
       .mockResolvedValueOnce(null);
 
@@ -58,7 +65,7 @@ describe('WatcherService.register()', () => {
 
     const insertCall = chainable.insertOne.mock.calls[0][0] as ExecutionWatcherDoc;
     expect(insertCall.executionId).toBe('exec-1');
-    expect(insertCall.chatSessionId).toBe('session-1');
+    expect(insertCall.chatSessionId).toBe(VALID_SESSION_ID);
     expect(insertCall.originatingMessageId).toBe('msg-1');
     expect(insertCall.userId).toBe('user-1');
     expect(insertCall.executionType).toBe('workflow');
@@ -84,12 +91,13 @@ describe('WatcherService.register()', () => {
     const existingDoc = {
       watcherId: 'existing-id',
       executionId: 'exec-1',
-      chatSessionId: 'session-1',
+      chatSessionId: VALID_SESSION_ID,
       watcherStatus: 'active' as const,
       updateSeq: 3,
     };
 
     chainable.findOne
+      .mockResolvedValueOnce(null) // AC15 guard: chat_sessions (not imported)
       .mockResolvedValueOnce({ status: 'running' })
       .mockResolvedValueOnce(existingDoc);
 
@@ -107,12 +115,13 @@ describe('WatcherService.register()', () => {
     const existingDoc = {
       watcherId: 'waiting-id',
       executionId: 'exec-1',
-      chatSessionId: 'session-1',
+      chatSessionId: VALID_SESSION_ID,
       watcherStatus: 'waiting' as const,
       updateSeq: 3,
     };
 
     chainable.findOne
+      .mockResolvedValueOnce(null) // AC15 guard: chat_sessions (not imported)
       .mockResolvedValueOnce({ status: 'running' })
       .mockResolvedValueOnce(existingDoc);
 
@@ -128,6 +137,7 @@ describe('WatcherService.register()', () => {
 
   it('registers successfully with executionType: agent (AC3 / AC11)', async () => {
     chainable.findOne
+      .mockResolvedValueOnce(null) // AC15 guard: chat_sessions (not imported)
       .mockResolvedValueOnce({ status: 'running' })
       .mockResolvedValueOnce(null);
 
@@ -145,6 +155,7 @@ describe('WatcherService.register()', () => {
 
   it('registers successfully with executionType: lead (AC3 / AC11)', async () => {
     chainable.findOne
+      .mockResolvedValueOnce(null) // AC15 guard: chat_sessions (not imported)
       .mockResolvedValueOnce({ status: 'running' })
       .mockResolvedValueOnce(null);
 

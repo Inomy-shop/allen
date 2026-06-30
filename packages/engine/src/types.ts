@@ -81,7 +81,7 @@ export interface AgentOverrides {
 export interface NodeDef {
   type?: NodeType;               // default: 'agent'
   agent?: string;                // for agent nodes
-  /** Per-node override of the referenced agent's model/effort/planMode. Ephemeral. */
+  /** Per-node override of the referenced agent's provider/model/effort/planMode. Ephemeral. */
   agentOverrides?: AgentOverrides;
   prompt?: string;               // for agent/human nodes
   outputs?: OutputsSpec;
@@ -613,10 +613,11 @@ export interface NodeTrace {
 
   /** Effective agent settings at spawn time + which layer set each. */
   agentOverrides?: {
+    provider?: string;
     model?: string;
     reasoningEffort?: string;
     planMode?: boolean;
-    sources: Partial<Record<'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>>;
+    sources: Partial<Record<'provider' | 'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>>;
   };
 
   /** Per-tool-call token usage + estimated cost. Estimated because the

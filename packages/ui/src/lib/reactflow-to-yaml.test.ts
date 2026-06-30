@@ -93,6 +93,59 @@ describe('reactFlowToYaml edge serialization', () => {
 });
 
 describe('reactFlowToYaml node + meta round-trip (Phase 4 fields)', () => {
+  it('preserves workflow-builder agent override provider and model together', () => {
+    const nodes: Node[] = [
+      {
+        id: 'draft',
+        type: 'al-agent',
+        position: { x: 0, y: 0 },
+        data: {
+          label: 'draft',
+          type: 'agent',
+          agent: 'requirements-analyst',
+          agentOverrides: {
+            provider: 'deepseek',
+            model: 'deepseek-v4-pro[1m]',
+            reasoningEffort: 'high',
+          },
+        },
+      },
+    ];
+
+    const out = yaml.load(reactFlowToYaml(nodes, [], { name: 'wf' })) as any;
+
+    expect(out.nodes.draft.agentOverrides).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-v4-pro[1m]',
+      reasoningEffort: 'high',
+    });
+  });
+
+  it('backfills provider when serializing a legacy model-only override', () => {
+    const nodes: Node[] = [
+      {
+        id: 'draft',
+        type: 'al-agent',
+        position: { x: 0, y: 0 },
+        data: {
+          label: 'draft',
+          type: 'agent',
+          agent: 'requirements-analyst',
+          agentOverrides: {
+            model: 'deepseek-v4-flash',
+          },
+        },
+      },
+    ];
+
+    const out = yaml.load(reactFlowToYaml(nodes, [], { name: 'wf' })) as any;
+
+    expect(out.nodes.draft.agentOverrides).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+    });
+  });
+
   it('preserves advanced node fields and workflow input/context', () => {
     const workflow = {
       name: 'phase4',

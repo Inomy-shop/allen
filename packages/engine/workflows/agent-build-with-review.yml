@@ -60,6 +60,13 @@ nodes:
       Produce concise, structured analysis for the planner. Include:
       - resolved target team name/slug if confident
       - likely agent responsibilities and boundaries
+      - a task-adaptive core job doctrine for the requested role: what the
+        agent owns, how it should operate, and what good output looks like
+      - instruction guidance that fits the requested task; do not force quality
+        bars, checklists, examples, failure modes, or scenarios unless they
+        materially improve this agent's core-job performance
+      - output expectations appropriate to the role
+      - validation guidance for judging whether the blueprint is too generic
       - existing agents that overlap or should be spawn targets
       - required tools/capabilities, including MCP/tool access the agent needs
         for its actual work; distinguish read-only tools from state-changing tools
@@ -67,12 +74,17 @@ nodes:
       - open questions or risks
 
       End with valid JSON containing: target_team_name_resolved, analysis_summary,
-      role_requirements, existing_overlap, recommended_spawn_targets,
-      recommended_capabilities, open_questions.
+      role_requirements, core_job_doctrine, instruction_guidance,
+      output_expectations, validation_guidance, existing_overlap,
+      recommended_spawn_targets, recommended_capabilities, open_questions.
     outputs:
       target_team_name_resolved: "Resolved target team name or slug, if known."
       analysis_summary: "Concise requirements analysis summary."
       role_requirements: "Role requirements for the requested agent."
+      core_job_doctrine: "Role-specific operating doctrine that defines what excellent work means for this agent."
+      instruction_guidance: "Task-adaptive guidance for writing the agent's system prompt without imposing a fixed checklist template."
+      output_expectations: "Expected output shape, completion criteria, and quality signals appropriate to this agent's job."
+      validation_guidance: "How the validator should judge whether this blueprint captures the core job instead of a generic role label."
       existing_overlap: "Existing agents with overlapping responsibilities."
       recommended_spawn_targets: "Suggested spawn targets, if any."
       recommended_capabilities: "Suggested capability strings."
@@ -98,6 +110,18 @@ nodes:
       ROLE REQUIREMENTS:
       {{role_requirements}}
 
+      CORE JOB DOCTRINE:
+      {{core_job_doctrine}}
+
+      INSTRUCTION GUIDANCE:
+      {{instruction_guidance}}
+
+      OUTPUT EXPECTATIONS:
+      {{output_expectations}}
+
+      VALIDATION GUIDANCE:
+      {{validation_guidance}}
+
       EXISTING OVERLAP:
       {{existing_overlap}}
 
@@ -121,6 +145,30 @@ nodes:
       Draft exactly one new agent blueprint. Keep it lean and consistent with
       existing Allen agent seed fields. The blueprint must be actionable by an
       executor without additional interpretation.
+
+      Core-job excellence is mandatory:
+      - The `system` prompt must teach the agent how to perform the requested
+        core job, not merely name the role or describe a safe generic assistant.
+      - Use a clear, task-appropriate instruction structure. Do not force every
+        agent to include every possible checkpoint or heading; include only the
+        parts the role actually needs.
+      - The prompt must still make the core job operational: what the agent
+        owns, what inputs or context it needs, how it should do the work, what
+        good output looks like for this task, tool and safety boundaries when
+        relevant, and when to stop or escalate.
+      - Use the analysis fields as source material, but omit or mark as not
+        applicable any checklist, quality bar, examples, failure modes, or
+        evaluation scenarios that would add ceremony without improving the
+        agent.
+      - A one-line role label such as "You are a product manager", "You are a
+        front-end developer", or "You are a marketing expert" is not enough;
+        the prompt must capture the role's core job in concrete operating
+        instructions.
+      - Make the prompt self-contained enough that a thin request like
+        "create a PRD reviewer agent" still yields a specialist with domain
+        standards and concrete review behavior.
+      - Keep the prompt focused on the role; do not pad with broad policy,
+        speculative responsibilities, or unrelated tools.
 
       Tool selection is part of the blueprint:
       - Choose the persisted `tools` array from the work the agent must do, not
@@ -169,6 +217,18 @@ nodes:
       ANALYSIS SUMMARY:
       {{analysis_summary}}
 
+      CORE JOB DOCTRINE:
+      {{core_job_doctrine}}
+
+      INSTRUCTION GUIDANCE:
+      {{instruction_guidance}}
+
+      OUTPUT EXPECTATIONS:
+      {{output_expectations}}
+
+      VALIDATION GUIDANCE:
+      {{validation_guidance}}
+
       BLUEPRINT SUMMARY:
       {{blueprint_summary}}
 
@@ -190,6 +250,23 @@ nodes:
       - tool names are verified against available tool/catalog context, or any
         uncertainty is called out as needs_changes
       - system prompt has clear boundaries, safety rules, and output contract
+      - system prompt uses a clear task-appropriate instruction structure; do
+        not require every possible checkpoint or heading when the role does not
+        need it
+      - system prompt captures the requested core job in concrete operating
+        instructions: ownership or scope, relevant inputs, how to do the work,
+        output expectations, tool and safety boundaries when relevant, and
+        stop/escalation behavior when relevant
+      - system prompt is not merely a role label such as "You are a product
+        manager" or a generic assistant prompt with the display name swapped
+      - optional aids such as checklists, quality bars, examples, failure modes,
+        or scenarios are included only when they improve this specific agent;
+        omission is acceptable when it does not weaken core-job performance
+      - summarize concrete validation evidence for the core-job gate in
+        core_job_validation_evidence
+      - generic_prompt_risks are absent or explicitly mitigated; return
+        needs_changes for prompts that are structurally valid but too generic
+        to teach the requested core job at expert level
       - leadSpawnTargetUpdate is explicit and safe
 
       Save any corrected approved blueprint as a JSON artifact if you make
@@ -202,6 +279,9 @@ nodes:
         "validation_feedback": "specific feedback for the planner or executor",
         "blocking_issues": ["..."],
         "validated_blueprint_artifact_url": "artifact URL if available, otherwise original blueprint URL",
+        "core_job_verdict": "pass | needs_changes, with role-specific rationale",
+        "core_job_validation_evidence": "summary of why the blueprint passes or fails the task-adaptive core-job gate",
+        "generic_prompt_risks": ["unmitigated generic-prompt risk", "..."],
         "validation_summary": "short summary"
       }
     outputs:
@@ -209,6 +289,9 @@ nodes:
       validation_feedback: "Specific validator feedback."
       blocking_issues: "Blocking issues array or summary."
       validated_blueprint_artifact_url: "URL of validated blueprint artifact."
+      core_job_verdict: "Pass/fail verdict on whether the blueprint teaches expert-level performance for the requested core job."
+      core_job_validation_evidence: "Validator evidence for whether the blueprint captures the requested core job without imposing a fixed checklist template."
+      generic_prompt_risks: "Any remaining signs that the blueprint is safe but too generic for the requested role."
       validation_summary: "Short validation summary."
 
   human_plan_review:
@@ -222,10 +305,17 @@ nodes:
       highlights:
         - "Target team: {{target_team_name_resolved}}"
         - "Blueprint summary: {{blueprint_summary}}"
+        - "Core job verdict: {{core_job_verdict}}"
         - "Validation summary: {{validation_summary}}"
       evidence:
         - label: "Validated agent blueprint"
           url: "{{validated_blueprint_artifact_url}}"
+        - label: "Core-job validation evidence"
+          type: text
+          value: "{{core_job_validation_evidence}}"
+        - label: "Generic prompt risks"
+          type: text
+          value: "{{generic_prompt_risks}}"
     prompt: |
       Review the validated agent blueprint and choose:
       - **Approve** — create the agent from the validated blueprint.
@@ -250,6 +340,15 @@ nodes:
       VALIDATION FEEDBACK:
       {{validation_feedback}}
 
+      CORE JOB VERDICT:
+      {{core_job_verdict}}
+
+      CORE-JOB VALIDATION EVIDENCE:
+      {{core_job_validation_evidence}}
+
+      GENERIC PROMPT RISKS:
+      {{generic_prompt_risks}}
+
       VALIDATED BLUEPRINT ARTIFACT URL:
       {{validated_blueprint_artifact_url}}
 
@@ -258,13 +357,27 @@ nodes:
 
       Steps:
       1. Read the validated blueprint artifact if present; otherwise use the original blueprint JSON.
-      2. Call create_agent exactly once with the approved persisted blueprint fields, including the validated `tools` array. Do not pass non-create metadata such as tool rationale.
-      3. If leadSpawnTargetUpdate requires adding the new agent to a team lead's spawnTargets, call update_agent exactly once for that lead.
-      4. Verify the created agent with get_agent.
-      5. Return valid JSON with creation_status, created_agent_name,
+      2. Before creating, confirm the approved blueprint's `system` prompt still
+         passes the same core-job instruction gate enforced by planning and
+         validation: it is task-appropriate, concrete about the agent's core
+         job, and not merely a role label or generic assistant prompt with a
+         name swapped in.
+      3. If validation evidence is missing, validation_decision is not approved,
+         core_job_verdict is not a pass, generic_prompt_risks contains
+         unmitigated risks, or the `system` prompt no longer captures the core
+         job in concrete, task-appropriate instructions, stop without creating
+         anything and return creation_status "failed" with a concise
+         creation_summary.
+      4. Call create_agent exactly once with the approved persisted blueprint fields, including the validated `tools` array. Do not pass non-create metadata such as tool rationale.
+      5. If leadSpawnTargetUpdate requires adding the new agent to a team lead's spawnTargets, call update_agent exactly once for that lead.
+      6. Verify the created agent with get_agent.
+      7. Return valid JSON with creation_status, created_agent_name,
          created_agent_display_name, created_agent_team, creation_summary.
 
-      Do not research, re-plan, ask for confirmation, create a team, or modify unrelated agents.
+      Do not research, re-plan, rewrite the role, ask for confirmation, create a
+      team, or modify unrelated agents. Agent Builder enforces the same
+      adaptive core-job gate as planner and validator; it does not repair
+      non-compliant blueprints at creation time.
     outputs:
       creation_status: "created | failed"
       created_agent_name: "Created agent slug/name."

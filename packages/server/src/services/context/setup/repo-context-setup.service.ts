@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { ObjectId, type Db } from 'mongodb';
-import { isActiveSetupStatus, type RepoContextSetupRun, type SetupPhase, type SetupPhaseSnapshot, type SetupStatus } from './repo-context-setup.types.js';
+import { isActiveSetupStatus, type RepoContextSetupRun, type SetupPhase, type SetupPhaseSnapshot, type SetupStatus, type CurationFileFailure, type MandatoryMappingRow, type MandatoryMappingRowStatus, type MandatoryProposalDetail, type SetupDetailResponse } from './repo-context-setup.types.js';
 import type { RepoContextCurationService } from '../curation/repo-context-curation.service.js';
 import type { RepoMandatoryContextService } from '../mandatory/repo-mandatory-context.service.js';
 import type { CogneeMemoryService } from '../cognee/cognee-memory.service.js';
 import { ExecutionService } from '../../execution.service.js';
 import { isContextEngineEnabled, isCogneeContextEnabled } from '../config/context-provider-config.js';
 import { resolveDefaultBranchName, fetchBranch, revParse } from '../curation/repo-context-curation-git.js';
-import { getRepoContextCurationStageStatus } from '../curation/repo-context-curation-runner.js';
+import { getRepoContextCurationStageStatus, type CurationStageStatus } from '../curation/repo-context-curation-runner.js';
 import { logger } from '../../../logger.js';
 import { AlertService } from '../../alert.service.js';
 import { notDeletedFilter } from '../../soft-delete.js';
@@ -38,6 +38,141 @@ type SpawnArgs = {
   root_execution_id?: string;
   parent_caller?: string;
 };
+
+/** Priority weight for deduplication: higher = wins. */
+const STATUS_PRIORITY: Record<string, number> = {
+  missing: 0,
+  staged: 1,
+  consumed_into_proposal: 2,
+  deactivated: 3,
+  saved: 4,
+};
+
+/**
+ * Pure function — no DB access. Merges proposal rows + mapping rows into
+ * a deduped list keyed by (agentName, title, sourcePath?).
+ * Priority: saved > deactivated > consumed_into_proposal > staged > missing.
+ * Returns null when all sources are empty.
+ * Caps output at 200 rows.
+ */
+function buildMandatoryProposalDetail(
+  proposalDocs: Record<string, unknown>[],
+  savedDocs: Record<string, unknown>[],
+  deactivatedDocs: Record<string, unknown>[],
+  affectedAgentNames: string[],
+): MandatoryProposalDetail | null {
+  if (proposalDocs.length === 0 && savedDocs.length === 0 && deactivatedDocs.length === 0) {
+    return null;
+  }
+
+  let stagedCount = 0;
+  let consumedIntoProposalCount = 0;
+  let activeProposalCount = 0;
+
+  const rowMap = new Map<string, MandatoryMappingRow>();
+
+  function rowKey(agentName: string, title: string, sourcePath?: string): string {
+    return `${agentName}::${title}::${sourcePath ?? ''}`;
+  }
+
+  function addRow(row: MandatoryMappingRow): void {
+    const key = rowKey(row.agentName, row.title, row.sourcePath);
+    const existing = rowMap.get(key);
+    if (!existing || (STATUS_PRIORITY[row.status] ?? 0) > (STATUS_PRIORITY[existing.status] ?? 0)) {
+      rowMap.set(key, row);
+    }
+  }
+
+  // Process proposal docs (staged rows, consumed_into_proposal rows, or assembled proposals)
+  for (const doc of proposalDocs) {
+    const status = String(doc.status ?? '');
+    if (status === 'staged') {
+      stagedCount++;
+      addRow({
+        agentName: String(doc.agentName ?? ''),
+        title: String(doc.title ?? ''),
+        ...(doc.sourcePath != null ? { sourcePath: String(doc.sourcePath) } : {}),
+        status: 'staged',
+        ...(doc.updatedAt != null ? { updatedAt: doc.updatedAt as Date } : {}),
+      });
+    } else if (status === 'consumed_into_proposal') {
+      consumedIntoProposalCount++;
+      addRow({
+        agentName: String(doc.agentName ?? ''),
+        title: String(doc.title ?? ''),
+        ...(doc.sourcePath != null ? { sourcePath: String(doc.sourcePath) } : {}),
+        status: 'consumed_into_proposal',
+        ...(doc.updatedAt != null ? { updatedAt: doc.updatedAt as Date } : {}),
+      });
+    } else if (status === 'proposed' || status === 'consumed') {
+      // Assembled proposal doc — unpack mappings[]
+      if (status === 'proposed') activeProposalCount++;
+      if (Array.isArray(doc.mappings)) {
+        for (const mapping of doc.mappings as Record<string, unknown>[]) {
+          const rowStatus: MandatoryMappingRowStatus =
+            status === 'consumed' ? 'consumed_into_proposal' : 'staged';
+          addRow({
+            agentName: String(mapping.agentName ?? ''),
+            title: String(mapping.title ?? ''),
+            ...(mapping.sourcePath != null ? { sourcePath: String(mapping.sourcePath) } : {}),
+            status: rowStatus,
+            ...(doc.updatedAt != null ? { updatedAt: doc.updatedAt as Date } : {}),
+          });
+        }
+      }
+    }
+  }
+
+  // Process saved mapping docs (enabled=true, stagedBySetupRunId matches)
+  for (const doc of savedDocs) {
+    addRow({
+      agentName: String(doc.agentName ?? ''),
+      title: String(doc.title ?? ''),
+      ...(doc.sourcePath != null ? { sourcePath: String(doc.sourcePath) } : {}),
+      status: 'saved',
+      ...(doc.updatedAt != null ? { updatedAt: doc.updatedAt as Date } : {}),
+    });
+  }
+
+  // Process deactivated mapping docs (enabled=false, deactivatedByRunId matches)
+  for (const doc of deactivatedDocs) {
+    addRow({
+      agentName: String(doc.agentName ?? ''),
+      title: String(doc.title ?? ''),
+      ...(doc.sourcePath != null ? { sourcePath: String(doc.sourcePath) } : {}),
+      status: 'deactivated',
+      ...(doc.deactivationReason != null ? { reason: String(doc.deactivationReason) } : {}),
+      ...(doc.updatedAt != null ? { updatedAt: doc.updatedAt as Date } : {}),
+    });
+  }
+
+  // Add synthetic 'missing' rows for agents in affectedAgentNames with no existing rows
+  const agentsWithRows = new Set<string>();
+  for (const row of rowMap.values()) {
+    agentsWithRows.add(row.agentName);
+  }
+  for (const agentName of affectedAgentNames) {
+    if (!agentsWithRows.has(agentName)) {
+      const key = `${agentName}::__missing__::`;
+      rowMap.set(key, {
+        agentName,
+        title: '',
+        status: 'missing',
+        reason: `No mandatory mapping row found for agent '${agentName}' in this setup run`,
+      });
+    }
+  }
+
+  const rows = Array.from(rowMap.values())
+    .sort((a, b) => {
+      const nameCmp = a.agentName.localeCompare(b.agentName);
+      if (nameCmp !== 0) return nameCmp;
+      return (STATUS_PRIORITY[b.status] ?? 0) - (STATUS_PRIORITY[a.status] ?? 0);
+    })
+    .slice(0, 200);
+
+  return { stagedCount, consumedIntoProposalCount, activeProposalCount, rows };
+}
 
 export class RepoContextSetupService {
   private setupRuns;
@@ -207,39 +342,100 @@ export class RepoContextSetupService {
     return { active: false, setupRun: latest ?? null, label };
   }
 
-  async get(setupRunId: string): Promise<{
-    setupRun: RepoContextSetupRun;
-    curationProfile: Record<string, unknown> | null;
-    curationStageStatus: Record<string, unknown> | null;
-    mandatoryMappings: { activeCount: number; inactiveCount: number };
-    cogneeStatus: Record<string, unknown> | null;
-  }> {
+  async get(setupRunId: string): Promise<SetupDetailResponse> {
     const run = await this.setupRuns.findOne({ setupRunId });
     if (!run) throw Object.assign(new Error('Setup run not found'), { code: 'RUN_NOT_FOUND', statusCode: 404 });
 
-    const [curationProfile, cogneeStatus, allMappings] = await Promise.all([
-      this.curation.getLatest(run.repoId).catch(() => null),
-      this.cognee.getStatus(run.repoId).catch(() => null),
-      this.mandatory.list(run.repoId, { enabled: 'all' as const }).catch(() => []),
+    const curationRunId = run.phases.curation.curationRunId;
+    const repoId = run.repoId;
+
+    const [
+      curationProfile,
+      cogneeStatus,
+      allMappings,
+      curationStageStatus,
+      curationFileFailuresRaw,
+      proposalDocs,
+      savedMappingDocs,
+      deactivatedMappingDocs,
+    ] = await Promise.all([
+      // Existing queries
+      this.curation.getLatest(repoId).catch(() => null),
+      this.cognee.getStatus(repoId).catch(() => null),
+      this.mandatory.list(repoId, { enabled: 'all' as const }).catch(() => []),
+      // Bug fix: use getRepoContextCurationStageStatus instead of raw findOne on repo_context_curation_runs
+      curationRunId
+        ? getRepoContextCurationStageStatus(this.db, curationRunId).catch((err) => {
+            logger.warn('repo-context-setup:get:curation-stage-status-warn', { setupRunId, error: (err as Error).message });
+            return null as CurationStageStatus | null;
+          })
+        : Promise.resolve(null as CurationStageStatus | null),
+      // New: curation file failures (capped at 20 by DB + app-level slice)
+      curationRunId
+        ? (this.db.collection('repo_context_curation_stage_file_statuses')
+            .find({ runId: curationRunId, status: 'failed' })
+            .sort({ updatedAt: -1 })
+            .limit(20)
+            .toArray() as Promise<Record<string, unknown>[]>)
+            .catch((): Record<string, unknown>[] => [])
+        : Promise.resolve([] as Record<string, unknown>[]),
+      // New: mandatory proposals for this setup run
+      (this.proposals
+        .find({ setupRunId })
+        .toArray() as Promise<Record<string, unknown>[]>)
+        .catch((err): Record<string, unknown>[] => {
+          logger.warn('repo-context-setup:get:mandatory-detail-warn', { setupRunId, error: (err as Error).message });
+          return [];
+        }),
+      // New: saved mandatory mappings (enabled=true, stagedBySetupRunId=setupRunId)
+      (this.db.collection('repo_mandatory_context_mappings')
+        .find({ repoId, stagedBySetupRunId: setupRunId, enabled: true })
+        .toArray() as Promise<Record<string, unknown>[]>)
+        .catch((): Record<string, unknown>[] => []),
+      // New: deactivated mandatory mappings (enabled=false, deactivatedByRunId=setupRunId)
+      (this.db.collection('repo_mandatory_context_mappings')
+        .find({ repoId, deactivatedByRunId: setupRunId, enabled: false })
+        .toArray() as Promise<Record<string, unknown>[]>)
+        .catch((): Record<string, unknown>[] => []),
     ]);
 
-    // Fix G: correct collection name (was: 'repo_context_curation_stage_runs')
-    let curationStageStatus: Record<string, unknown> | null = null;
-    if (run.phases.curation.curationRunId) {
-      curationStageStatus = await this.db.collection('repo_context_curation_runs')
-        .findOne({ runId: run.phases.curation.curationRunId })
-        .then((r) => r ?? null)
-        .catch(() => null);
-    }
+    const curationFileFailures: CurationFileFailure[] = (curationFileFailuresRaw ?? [])
+      .slice(0, 20)
+      .map((r) => ({
+        path: String(r.path ?? ''),
+        ...(r.sourceHash != null ? { sourceHash: String(r.sourceHash) } : {}),
+        status: String(r.status ?? 'failed'),
+        ...(r.reason != null ? { reason: String(r.reason) } : {}),
+        ...(r.updatedAt != null ? { updatedAt: r.updatedAt as Date } : {}),
+      }));
+
+    const affectedAgentNames = Array.isArray(run.phases.mandatoryMapping?.affectedAgentNames)
+      ? (run.phases.mandatoryMapping.affectedAgentNames as string[])
+      : [];
+
+    const mandatoryProposalDetail = buildMandatoryProposalDetail(
+      proposalDocs ?? [],
+      savedMappingDocs ?? [],
+      deactivatedMappingDocs ?? [],
+      affectedAgentNames,
+    );
+
+    logger.info('repo-context-setup:get:detail-enriched', {
+      setupRunId,
+      curationFileFailureCount: curationFileFailures.length,
+      mandatoryProposalRowCount: mandatoryProposalDetail?.rows.length ?? 0,
+    });
 
     return {
       setupRun: run,
       curationProfile: curationProfile as Record<string, unknown> | null,
       curationStageStatus,
+      curationFileFailures,
       mandatoryMappings: {
-        activeCount: allMappings.filter((m) => m.enabled).length,
-        inactiveCount: allMappings.filter((m) => !m.enabled).length,
+        activeCount: (allMappings ?? []).filter((m) => m.enabled).length,
+        inactiveCount: (allMappings ?? []).filter((m) => !m.enabled).length,
       },
+      mandatoryProposalDetail,
       cogneeStatus: cogneeStatus as Record<string, unknown> | null,
     };
   }

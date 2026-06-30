@@ -67,6 +67,7 @@ nodes:
     type: agent
     agent: requirements-analyst
     agentOverrides:
+      provider: claude
       model: sonnet
       reasoningEffort: high
       planMode: true
@@ -142,6 +143,7 @@ nodes:
     type: agent
     agent: engineering-lead
     agentOverrides:
+      provider: claude
       model: sonnet
       reasoningEffort: high
       planMode: true
@@ -346,6 +348,7 @@ nodes:
     type: agent
     agent: engineering-lead
     agentOverrides:
+      provider: claude
       model: sonnet
       reasoningEffort: high
       planMode: false
@@ -452,6 +455,7 @@ nodes:
     type: agent
     agent: documentation-writer
     agentOverrides:
+      provider: claude
       model: sonnet
       reasoningEffort: medium
       planMode: false

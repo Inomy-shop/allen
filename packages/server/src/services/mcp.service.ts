@@ -181,6 +181,17 @@ export const MCP_PRESETS: McpPreset[] = [
     docsUrl: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/github',
   },
   {
+    name: 'xapi',
+    description: 'X API — search posts, look up users, bookmarks, trends, news, and Articles',
+    type: 'stdio',
+    command: 'npx',
+    // User adds ALLEN_CLIENT_ID and ALLEN_CLIENT_SECRET to .env; xurl sees
+    // CLIENT_ID and CLIENT_SECRET, then handles the X OAuth flow.
+    args: ['-y', '@xdevplatform/xurl', 'mcp', 'https://api.x.com/mcp'],
+    envKeys: ['CLIENT_ID', 'CLIENT_SECRET'],
+    docsUrl: 'https://docs.x.com/tools/mcp',
+  },
+  {
     name: 'jira',
     description: 'Jira — search, read, and update Jira issues through Atlassian MCP',
     type: 'stdio',

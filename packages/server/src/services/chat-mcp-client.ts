@@ -66,6 +66,8 @@ function killMcpProcessGroup(proc: ChildProcess, sig: NodeJS.Signals = 'SIGTERM'
 
 // ── JSON-RPC helpers ──
 
+const MCP_RPC_TIMEOUT_MS = 30_000;
+
 function sendRpc(conn: McpConnection, method: string, params?: unknown): Promise<unknown> {
   const id = randomUUID();
   return new Promise((resolve, reject) => {
@@ -73,13 +75,14 @@ function sendRpc(conn: McpConnection, method: string, params?: unknown): Promise
     const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} });
     conn.process.stdin?.write(msg + '\n');
 
-    // Timeout after 15s
+    // Timeout after 30s. Some OAuth-backed bridges, including xurl for X API,
+    // can take longer than a few seconds to finish startup and first auth checks.
     setTimeout(() => {
       if (conn.pendingRequests.has(id)) {
         conn.pendingRequests.delete(id);
         reject(new Error(`MCP RPC timeout: ${method}`));
       }
-    }, 15000);
+    }, MCP_RPC_TIMEOUT_MS);
   });
 }
 

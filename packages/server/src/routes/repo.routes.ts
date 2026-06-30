@@ -926,6 +926,43 @@ export function repoRoutes(db: Db): Router {
     }
   });
 
+  // POST /api/repos/:id/context-management/entries/bulk-delete — bulk archive curated context entries
+  router.post('/:id/context-management/entries/bulk-delete', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Context provider is disabled.'));
+      const repoId = param(req, 'id');
+      const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as Record<string, unknown> : {};
+      const entryIds = stringArrayValue(body.entryIds);
+      if (!entryIds.length) return res.status(400).json({ error: 'entryIds must be a non-empty array' });
+      if (entryIds.length > 200) return res.status(400).json({ error: 'entryIds exceeds max batch size of 200' });
+      const result = await curatedContextEditor.archiveMany(
+        repoId,
+        entryIds,
+        { actor: 'user', source: 'manual_context_management' },
+      );
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // POST /api/repos/:id/context-management/mandatory/bulk-delete — bulk deactivate mandatory mappings
+  router.post('/:id/context-management/mandatory/bulk-delete', async (req: Request, res: Response) => {
+    try {
+      if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Context provider is disabled.'));
+      const repoId = param(req, 'id');
+      const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as Record<string, unknown> : {};
+      const mappingIds = stringArrayValue(body.mappingIds);
+      if (!mappingIds.length) return res.status(400).json({ error: 'mappingIds must be a non-empty array' });
+      if (mappingIds.length > 200) return res.status(400).json({ error: 'mappingIds exceeds max batch size of 200' });
+      const reason = typeof body.reason === 'string' ? body.reason.trim() : undefined;
+      const result = await mandatoryContext.deactivateMany(repoId, mappingIds, { reason });
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   router.delete('/:id/context-management/entries/:entryId', async (req: Request, res: Response) => {
     try {
       if (!isContextEngineEnabled()) return res.status(409).json(contextProviderDisabledPayload('Context provider is disabled.'));

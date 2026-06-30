@@ -733,6 +733,10 @@ export const repos = {
     request<any>(`/repos/${id}/context-management/entries/${encodeURIComponent(entryId)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteCuratedContextEntry: (id: string, entryId: string) =>
     request<any>(`/repos/${id}/context-management/entries/${encodeURIComponent(entryId)}`, { method: 'DELETE' }),
+  bulkDeleteCuratedContextEntries: (id: string, entryIds: string[]) =>
+    request<any>(`/repos/${id}/context-management/entries/bulk-delete`, { method: 'POST', body: JSON.stringify({ entryIds }) }),
+  bulkDeleteMandatoryMappings: (id: string, mappingIds: string[]) =>
+    request<any>(`/repos/${id}/context-management/mandatory/bulk-delete`, { method: 'POST', body: JSON.stringify({ mappingIds }) }),
   saveMandatoryContext: (id: string, body: Record<string, unknown>) =>
     request<any>(`/repos/${id}/context-management/mandatory`, { method: 'POST', body: JSON.stringify(body) }),
   updateMandatoryContext: (id: string, mappingId: string, body: Record<string, unknown>) =>
@@ -758,7 +762,7 @@ export const repos = {
     history: (id: string) =>
       request<any>(`/repos/${id}/context-setup/runs`),
     get: (id: string, runId: string) =>
-      request<any>(`/repos/${id}/context-setup/${runId}`),
+      request<import('../hooks/useRepoContextSetup').SetupDetailResponse>(`/repos/${id}/context-setup/${runId}`),
     cancel: (id: string, runId: string) =>
       request<any>(`/repos/${id}/context-setup/${runId}/cancel`, { method: 'POST' }),
     resume: (id: string, runId: string) =>
@@ -959,6 +963,27 @@ export const chat = {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
     return request<any[]>(`/chat/logs${qs}`);
   },
+  // ── Export / Import ──────────────────────────────────────────────────────
+  exportOptions: (id: string) =>
+    request<{ messageCount: number; toolCallCount: number; executionCount: number; descendantExecutionCount: number; chatLogCount: number; traceCount: number; artifactCount: number; codeDiffCount: number; estimatedSizeBytes: number; warnings: string[]; }>(`/chat/sessions/${id}/export-options`),
+  exportChat: async (id: string, options: Record<string, unknown>): Promise<Blob> => {
+    const res = await fetch(`${BASE}/chat/sessions/${id}/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(options),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      try { throw Object.assign(new Error('Export failed'), JSON.parse(text)); }
+      catch { throw new Error(text || res.statusText); }
+    }
+    return await res.blob();
+  },
+  getExportBundle: (id: string) => `${BASE}/chat/sessions/${id}/export-bundle`,
+  importPreview: (bundle: object) =>
+    request<{ valid: true; bundleId: string; preview: any }>('/chat/import/preview', { method: 'POST', body: JSON.stringify({ bundle }) }),
+  importConfirm: (bundleId: string) =>
+    request<{ imported: true; sessionId: string; session: any; remappedCounts: any }>('/chat/import/confirm', { method: 'POST', body: JSON.stringify({ bundleId }) }),
 };
 
 // ── Execution Watchers ──────────────────────────────────────────────────────

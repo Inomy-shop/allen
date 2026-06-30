@@ -45,6 +45,7 @@ nodes:
     type: agent
     agent: requirements-analyst
     agentOverrides:
+      provider: claude
       model: sonnet
       reasoningEffort: high
       planMode: false
@@ -77,6 +78,7 @@ nodes:
     type: agent
     agent: workflow-builder-agent
     agentOverrides:
+      provider: claude
       model: opus
       reasoningEffort: high
       planMode: false
@@ -127,6 +129,7 @@ nodes:
     type: agent
     agent: allen-workflow-diagnostician
     agentOverrides:
+      provider: claude
       model: sonnet
       reasoningEffort: high
       planMode: false
@@ -231,6 +234,7 @@ nodes:
     type: agent
     agent: workflow-builder-agent
     agentOverrides:
+      provider: claude
       model: opus
       reasoningEffort: high
       planMode: false

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ChevronDown, FolderGit2, GitBranch, ListFilter, MessageSquare, Search, UserRound } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ChevronDown, Download, FolderGit2, GitBranch, ListFilter, MessageSquare, Search, UserRound } from 'lucide-react';
 import { chat as chatApi, users as usersApi } from '../services/api';
 import { useAuthStore, type AuthUser } from '../stores/authStore';
 import { getModelDisplay } from '../hooks/useModelRegistry';
+import ChatImportPreviewModal from '../components/chat/ChatImportPreviewModal';
 
 interface ChatSessionItem {
   _id: string;
@@ -101,11 +102,13 @@ function sessionContext(session: ChatSessionItem): ThreadItem['context'] {
 }
 
 export default function ThreadsPage() {
+  const navigate = useNavigate();
   const currentUser = useAuthStore((s) => s.user);
   const [chatSessions, setChatSessions] = useState<ChatSessionItem[]>([]);
   const [allUsers, setAllUsers] = useState<AuthUser[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [importModalOpen, setImportModalOpen] = useState(false);
   const [ownerMenuOpen, setOwnerMenuOpen] = useState(false);
   const [ownerSearch, setOwnerSearch] = useState('');
   const ownerMenuRef = useRef<HTMLDivElement | null>(null);
@@ -211,18 +214,35 @@ export default function ThreadsPage() {
     return ownerOptions.filter((option) => option.label.toLowerCase().includes(term));
   }, [ownerOptions, ownerSearch]);
 
+  function handleImported(sessionId: string) {
+    setImportModalOpen(false);
+    navigate(`/chat/${sessionId}`, { replace: true });
+  }
+
   return (
     <div className="content scroll-hide bg-app" data-screen-label="chats">
       <div className="w-full px-8 py-8">
         <div className="mb-5">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
-              <MessageSquare className="h-[18px] w-[18px]" />
-            </span>
-            <div>
-              <h1 className="text-[24px] font-semibold leading-tight text-theme-primary">History</h1>
-              <p className="mt-1 text-[13px] text-theme-muted">Pick up where conversations left off.</p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
+                <MessageSquare className="h-[18px] w-[18px]" />
+              </span>
+              <div>
+                <h1 className="text-[24px] font-semibold leading-tight text-theme-primary">History</h1>
+                <p className="mt-1 text-[13px] text-theme-muted">Pick up where conversations left off.</p>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={() => setImportModalOpen(true)}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-app bg-app-card px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:bg-app-muted hover:text-theme-primary focus:border-accent focus:shadow-[var(--focus-ring)] focus:outline-none"
+              title="Import chat"
+              aria-label="Import chat"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Import
+            </button>
           </div>
         </div>
 
@@ -358,6 +378,11 @@ export default function ThreadsPage() {
           })}
         </div>
       </div>
+      <ChatImportPreviewModal
+        isOpen={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onImported={handleImported}
+      />
     </div>
   );
 }

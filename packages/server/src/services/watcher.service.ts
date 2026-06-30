@@ -11,7 +11,7 @@
  * @see TDD §3 — Sequence Diagrams
  */
 
-import type { Db } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../logger.js';
 import type { ChatService } from './chat.service.js';
@@ -36,6 +36,8 @@ export interface ExecutionWatcherDoc {
   slackTeamId: string | null;
   slackChannelId: string | null;
   slackThreadTs: string | null;
+  /** Reason the watcher was resolved (e.g. 'imported_session') */
+  resolvedReason?: string;
   updateSeq: number;
   createdAt: Date;
   updatedAt: Date;
@@ -278,6 +280,27 @@ export class WatcherService {
     slackThreadTs?: string;
   }): Promise<{ watcherId: string; alreadyExisted: boolean }> {
     const { executionId, chatSessionId, executionType } = options;
+
+    // AC15 guard: refuse to register watchers for imported (read-only replay) sessions
+    if (chatSessionId) {
+      try {
+        if (!ObjectId.isValid(chatSessionId)) return { watcherId: '', alreadyExisted: false };
+        const session = await this.db.collection('chat_sessions').findOne(
+          { _id: new ObjectId(chatSessionId) as any },
+          { projection: { isImported: 1 } },
+        );
+        if (session?.isImported) {
+          logger.info('[watcher] Refusing to register watcher for imported session', {
+            component: 'watcher',
+            executionId,
+            chatSessionId,
+          });
+          return { watcherId: '', alreadyExisted: false };
+        }
+      } catch {
+        // If lookup fails, allow registration to proceed
+      }
+    }
 
     // Check if execution is already terminal — watcher would be resolved immediately
     const exec = await this.db.collection('executions').findOne(
@@ -550,6 +573,69 @@ export class WatcherService {
   async pollOnce(watcherDoc: ExecutionWatcherDoc): Promise<void> {
     const { executionId, chatSessionId } = watcherDoc;
     const pollStart = Date.now();
+
+    // AC15 guard: force-resolve watchers for imported replay sessions or
+    // imported execution records — never poll.
+    if (chatSessionId) {
+      try {
+        const importedExec = await this.db.collection('executions').findOne(
+          { id: executionId },
+          { projection: { meta: 1 } },
+        );
+        if (importedExec) {
+          const meta = importedExec.meta as Record<string, unknown> | undefined;
+          if (meta?.imported === true) {
+            logger.info('[watcher] Resolving watcher for imported execution — skipping poll', {
+              component: 'watcher',
+              executionId,
+              chatSessionId,
+            });
+            await this.col.updateOne(
+              { executionId },
+              {
+                $set: {
+                  watcherStatus: 'resolved',
+                  executionState: 'completed',
+                  latestStatusText: 'Imported replay — watcher resolved.',
+                  resolvedReason: 'imported_session',
+                  updatedAt: new Date(),
+                },
+              },
+            );
+            return;
+          }
+        }
+        // Check if the linked chat session is imported
+        if (ObjectId.isValid(chatSessionId)) {
+          const session = await this.db.collection('chat_sessions').findOne(
+            { _id: new ObjectId(chatSessionId) as any },
+            { projection: { isImported: 1 } },
+          );
+          if (session?.isImported) {
+            logger.info('[watcher] Resolving watcher for imported session — skipping poll', {
+              component: 'watcher',
+              executionId,
+              chatSessionId,
+            });
+            await this.col.updateOne(
+              { executionId },
+              {
+                $set: {
+                  watcherStatus: 'resolved',
+                  executionState: 'completed',
+                  latestStatusText: 'Imported replay — watcher resolved.',
+                  resolvedReason: 'imported_session',
+                  updatedAt: new Date(),
+                },
+              },
+            );
+            return;
+          }
+        }
+      } catch {
+        // If lookup fails, allow polling to proceed
+      }
+    }
 
     try {
       // 1. Read execution state
