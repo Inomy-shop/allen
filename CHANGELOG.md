@@ -6,6 +6,30 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-06-30
+
+### Added
+
+- **Chat export/import — portable replay bundles** (`packages/server`, `packages/ui`): export any chat session as a downloadable `allen-chat-*.json` file and import it on another Allen installation as a read-only replay. The feature covers the full PRD scope (R1–R16, AC1–AC20).
+  - **New server services** (`packages/server/src/services/chat-export.service.ts`, `chat-import.service.ts`): `ChatExportService` assembles a portable bundle from chat messages, executions, logs, traces, artifacts, interventions, watchers, and code-diff snapshots with configurable toggles and server-side redaction; `ChatImportService` validates, previews, and persists imported bundles with full ID remapping and rollback on failure.
+  - **New API** (`packages/server/src/routes/chat-export-import.routes.ts`): `GET /api/chat/sessions/:id/export-options` (counts/size preview), `POST /api/chat/sessions/:id/export` (assembly + download), `GET /api/chat/sessions/:id/export-bundle` (re-download), `POST /api/chat/import/preview` (validate + preview), `POST /api/chat/import/confirm` (persist with rollback).
+  - **Read-only guards**: imported sessions block message send, cancel, steer, queue, code-diff creation, agent-answer, and automation-message endpoints (chat.routes.ts). Imported executions block resume/retry (execution.routes.ts). Interventions on imported sessions block respond (intervention.routes.ts). The watcher registration endpoint rejects imported sessions, and `pollOnce()` force-resolves any watcher linked to imported executions (watcher.service.ts).
+  - **New UI components** (`packages/ui/src/components/chat/`): `ChatExportDialog` — 11 toggle groups (messages, tool calls, hidden messages, logs, traces, artifacts, artfact contents, code diffs, thinking, hidden messages) and 3 redaction checkboxes (paths, identity, secrets) with size-limit recovery. `ChatImportPreviewModal` — file picker → validation → preview with source environment, counts, warnings, and confirmation. `ImportedChatBanner` — persistent yellow read-only replay banner above the message list with source environment details.
+  - **Modified UI** (`ConversationsSidebar.tsx`): Import chat button (Upload icon) next to New chat in the sidebar header; imported sessions show a yellow "Imported" badge in the history list. `ChatPage.tsx`: Export button in the active chat header; composer disabled with replay reason; answer/intervention callbacks suppressed when `session.isImported`. `useChat.ts`: added `isImported`, `importBundleId`, `sourceEnvironment`, `sourceSessionId`, `replayLabel` fields. `api.ts`: new `chat.exportOptions`, `chat.exportChat`, `chat.getExportBundle`, `chat.importPreview`, `chat.importConfirm` methods.
+  - **New DB collection** (`chat_export_bundles`): indexes on `bundleId` (unique), `chatSessionId+operation`, `userId+createdAt`, `importSessionId` (sparse), `createdAt`. New partial index on `chat_sessions.isImported`.
+  - **New server mount**: `chatExportImportRoutes` mounted at `/api/chat` in `server.ts`.
+  - **Covers**: PRD R1–R16, AC1–AC20.
+
+- **X API MCP preset** (`packages/server`): added an X (Twitter) API MCP server preset to the MCP preset catalog.
+- **Context setup-card progress detail panel** (`packages/ui`): the context-setup card replaces the always-visible minimal progress pane with a user-toggled (Show/Hide) detail panel grouped into Curation, Mandatory Mapping, and Graph sections.
+- **Bulk context deletion controls** (`packages/server`, `packages/ui`): bulk soft-archive of curated context entries (`archiveMany()`) and bulk-deactivation of mandatory mappings (`deactivateMany()`), each preserving revision history and Cognee stale-marking per entry.
+
+### Fixed
+
+- **Prevent Claude `AskUserQuestion` tool use in chat** (`packages/server`): the chat runtime no longer permits Claude's `AskUserQuestion` tool, which is unsupported in this context.
+- **Provider-aware workflow model overrides** (`packages/server`): workflow model overrides now respect the node's provider instead of assuming a single provider.
+- **Core-job-specific agent builder prompts** (`packages/server`): the agent builder enforces core-job-specific prompts rather than a shared generic prompt.
+
 ## [0.1.16] - 2026-06-24
 
 ### Added

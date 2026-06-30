@@ -1481,10 +1481,345 @@ describe('RepoContextSetupService', () => {
       const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
       const result = await svc.get('run-get');
 
-      expect(collectionsQueried).toContain('repo_context_curation_runs');
+      // After bug fix: getRepoContextCurationStageStatus() is used — repo_context_curation_runs NOT directly queried
       expect(collectionsQueried).not.toContain('repo_context_curation_stage_runs');
       expect(result.curationStageStatus).toBeDefined();
       expect((result.curationStageStatus as Record<string, unknown>)?.wrongCollection).toBeUndefined();
+      // curationStageStatus comes from the module mock (validEntries=5), not the raw run doc
+      expect((result.curationStageStatus as Record<string, unknown>)?.validEntries).toBe(5);
+    });
+  });
+
+  // ── S1–S12: get() service extension tests ────────────────────────────────────
+
+  describe('get() service extension (S1–S12)', () => {
+    /** Canonical setup run used across most S-tests. */
+    function makeGetRun(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+      return {
+        setupRunId: 'run-get-s',
+        repoId: REPO_ID,
+        status: 'completed',
+        currentPhase: 'completed',
+        childExecutionIds: [],
+        repoPath: '/tmp/test-repo',
+        options: {},
+        diagnostics: [],
+        resumeCount: 0,
+        phases: {
+          preflight: { status: 'completed' },
+          curation: { status: 'completed', curationRunId: 'cr-s' },
+          mandatoryMapping: { status: 'completed', affectedAgentNames: [] },
+          contextRefresh: { status: 'completed' },
+        },
+        ...overrides,
+      };
+    }
+
+    it('S1: get() curationStageStatus uses getRepoContextCurationStageStatus, not raw findOne', async () => {
+      vi.mocked(getRepoContextCurationStageStatus).mockResolvedValueOnce({
+        runId: 'cr-s',
+        status: 'validated',
+        expectedFiles: 3,
+        stagedEntries: 3,
+        validEntries: 3,
+        stagedStatuses: 3,
+        completedFiles: 3,
+        missingFiles: [],
+        invalidFiles: [],
+        duplicateStatusFiles: [],
+        retryFiles: [],
+        promotable: true,
+        entries: [],
+        diagnostics: [],
+      });
+
+      const setupRunsCol = makeCollection([makeGetRun()]);
+      const db = makeDb({ repo_context_setup_runs: setupRunsCol });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      const result = await svc.get('run-get-s');
+
+      expect(vi.mocked(getRepoContextCurationStageStatus)).toHaveBeenCalledWith(expect.anything(), 'cr-s');
+      expect(result.curationStageStatus).not.toBeNull();
+      expect((result.curationStageStatus as Record<string, unknown>).validEntries).toBe(3);
+    });
+
+    it('S2: get() curationFileFailures populated when failed rows exist', async () => {
+      const failedRows = [
+        { runId: 'cr-s', path: 'docs/a.md', status: 'failed', reason: 'timeout', updatedAt: new Date('2024-01-01') },
+        { runId: 'cr-s', path: 'docs/b.md', status: 'failed', reason: 'parse_error', updatedAt: new Date('2024-01-02') },
+      ];
+      const setupRunsCol = makeCollection([makeGetRun()]);
+      const fileStatusesCol = makeCollection(failedRows);
+      const db = makeDb({
+        repo_context_setup_runs: setupRunsCol,
+        repo_context_curation_stage_file_statuses: fileStatusesCol,
+      });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      const result = await svc.get('run-get-s');
+
+      expect(result.curationFileFailures).toHaveLength(2);
+      const paths = result.curationFileFailures.map((f) => f.path);
+      expect(paths).toContain('docs/a.md');
+      expect(paths).toContain('docs/b.md');
+      const aRow = result.curationFileFailures.find((f) => f.path === 'docs/a.md');
+      expect(aRow?.reason).toBe('timeout');
+    });
+
+    it('S3: get() curationFileFailures empty array when no failed rows exist', async () => {
+      const successRows = [
+        { runId: 'cr-s', path: 'docs/a.md', status: 'completed', updatedAt: new Date() },
+      ];
+      const setupRunsCol = makeCollection([makeGetRun()]);
+      const fileStatusesCol = makeCollection(successRows);
+      const db = makeDb({
+        repo_context_setup_runs: setupRunsCol,
+        repo_context_curation_stage_file_statuses: fileStatusesCol,
+      });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      const result = await svc.get('run-get-s');
+
+      expect(result.curationFileFailures).toEqual([]);
+    });
+
+    it('S4: get() curationFileFailures empty and curationStageStatus null when curationRunId absent', async () => {
+      const run = makeGetRun({
+        phases: {
+          preflight: { status: 'completed' },
+          curation: { status: 'pending' }, // no curationRunId
+          mandatoryMapping: { status: 'pending', affectedAgentNames: [] },
+          contextRefresh: { status: 'pending' },
+        },
+      });
+      const failedRows = [
+        { runId: 'cr-s', path: 'docs/a.md', status: 'failed', reason: 'err', updatedAt: new Date() },
+      ];
+      const setupRunsCol = makeCollection([run]);
+      const db = makeDb({
+        repo_context_setup_runs: setupRunsCol,
+        repo_context_curation_stage_file_statuses: makeCollection(failedRows),
+      });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      const result = await svc.get('run-get-s');
+
+      expect(result.curationFileFailures).toEqual([]);
+      expect(result.curationStageStatus).toBeNull();
+      // getRepoContextCurationStageStatus should NOT have been called
+      expect(vi.mocked(getRepoContextCurationStageStatus)).not.toHaveBeenCalled();
+    });
+
+    it('S5: get() curationFileFailures capped at 20 even when more rows exist', async () => {
+      const failedRows = Array.from({ length: 25 }, (_, i) => ({
+        runId: 'cr-s',
+        path: `docs/file${i}.md`,
+        status: 'failed',
+        updatedAt: new Date(),
+      }));
+      const setupRunsCol = makeCollection([makeGetRun()]);
+      const db = makeDb({
+        repo_context_setup_runs: setupRunsCol,
+        repo_context_curation_stage_file_statuses: makeCollection(failedRows),
+      });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      const result = await svc.get('run-get-s');
+
+      expect(result.curationFileFailures.length).toBe(20);
+    });
+
+    it('S6: get() mandatoryProposalDetail from staged proposal rows, grouped by agent', async () => {
+      const stagedRows = [
+        { setupRunId: 'run-get-s', agentName: 'agent-a', title: 'Doc 1', status: 'staged', updatedAt: new Date() },
+        { setupRunId: 'run-get-s', agentName: 'agent-a', title: 'Doc 2', status: 'staged', updatedAt: new Date() },
+        { setupRunId: 'run-get-s', agentName: 'agent-b', title: 'Doc 3', status: 'staged', updatedAt: new Date() },
+      ];
+      const setupRunsCol = makeCollection([makeGetRun()]);
+      const proposalsCol = makeCollection(stagedRows);
+      const db = makeDb({
+        repo_context_setup_runs: setupRunsCol,
+        mandatory_context_proposals: proposalsCol,
+      });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      const result = await svc.get('run-get-s');
+
+      expect(result.mandatoryProposalDetail).not.toBeNull();
+      expect(result.mandatoryProposalDetail!.stagedCount).toBe(3);
+      const agentNames = result.mandatoryProposalDetail!.rows.map((r) => r.agentName);
+      expect(agentNames).toContain('agent-a');
+      expect(agentNames).toContain('agent-b');
+      expect(result.mandatoryProposalDetail!.rows.every((r) => r.status === 'staged')).toBe(true);
+    });
+
+    it('S7: get() mandatoryProposalDetail includes saved rows from repo_mandatory_context_mappings', async () => {
+      const savedMappings = [
+        { repoId: REPO_ID, agentName: 'agent-x', title: 'Mapping 1', enabled: true, stagedBySetupRunId: 'run-get-s', updatedAt: new Date() },
+        { repoId: REPO_ID, agentName: 'agent-x', title: 'Mapping 2', enabled: true, stagedBySetupRunId: 'run-get-s', updatedAt: new Date() },
+      ];
+      const setupRunsCol = makeCollection([makeGetRun()]);
+      const mappingsCol = makeCollection(savedMappings);
+      const db = makeDb({
+        repo_context_setup_runs: setupRunsCol,
+        repo_mandatory_context_mappings: mappingsCol,
+      });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      const result = await svc.get('run-get-s');
+
+      expect(result.mandatoryProposalDetail).not.toBeNull();
+      expect(result.mandatoryProposalDetail!.rows.length).toBe(2);
+      expect(result.mandatoryProposalDetail!.rows.every((r) => r.status === 'saved')).toBe(true);
+    });
+
+    it('S8: get() mandatoryProposalDetail includes deactivated rows with reason', async () => {
+      const deactivatedMappings = [
+        {
+          repoId: REPO_ID,
+          agentName: 'agent-y',
+          title: 'Old Mapping',
+          enabled: false,
+          deactivatedByRunId: 'run-get-s',
+          deactivationReason: 'replaced',
+          updatedAt: new Date(),
+        },
+      ];
+      const setupRunsCol = makeCollection([makeGetRun()]);
+      const mappingsCol = makeCollection(deactivatedMappings);
+      const db = makeDb({
+        repo_context_setup_runs: setupRunsCol,
+        repo_mandatory_context_mappings: mappingsCol,
+      });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      const result = await svc.get('run-get-s');
+
+      expect(result.mandatoryProposalDetail).not.toBeNull();
+      const row = result.mandatoryProposalDetail!.rows.find((r) => r.agentName === 'agent-y');
+      expect(row).toBeDefined();
+      expect(row!.status).toBe('deactivated');
+      expect(row!.reason).toBe('replaced');
+    });
+
+    it('S9: get() mandatoryProposalDetail null when no proposals and no mappings for this run', async () => {
+      // Seed mappings and proposals for a DIFFERENT run ID to verify filter correctness
+      const otherProposals = [
+        { setupRunId: 'other-run', agentName: 'agent-z', title: 'Doc Z', status: 'staged', updatedAt: new Date() },
+      ];
+      const otherMappings = [
+        { repoId: REPO_ID, agentName: 'agent-z', title: 'M', enabled: true, stagedBySetupRunId: 'other-run', updatedAt: new Date() },
+      ];
+      const setupRunsCol = makeCollection([makeGetRun()]);
+      const db = makeDb({
+        repo_context_setup_runs: setupRunsCol,
+        mandatory_context_proposals: makeCollection(otherProposals),
+        repo_mandatory_context_mappings: makeCollection(otherMappings),
+      });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      const result = await svc.get('run-get-s');
+
+      expect(result.mandatoryProposalDetail).toBeNull();
+    });
+
+    it('S10: get() query failures do not cause 500 — graceful null/empty fallback', async () => {
+      vi.mocked(getRepoContextCurationStageStatus).mockRejectedValueOnce(new Error('curation status DB error'));
+
+      // Make proposals find throw
+      const throwingProposals = {
+        ...makeCollection(),
+        find: vi.fn(() => ({
+          toArray: vi.fn(async () => { throw new Error('proposals DB error'); }),
+          sort: function () { return this; },
+          limit: function () { return this; },
+        })),
+      };
+
+      const setupRunsCol = makeCollection([makeGetRun()]);
+      const db = makeDb({
+        repo_context_setup_runs: setupRunsCol,
+        mandatory_context_proposals: throwingProposals as ReturnType<typeof makeCollection>,
+      });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      // Must NOT throw
+      const result = await svc.get('run-get-s');
+
+      expect(result.curationStageStatus).toBeNull();
+      expect(result.curationFileFailures).toEqual([]);
+      expect(result.mandatoryProposalDetail).toBeNull();
+    });
+
+    it('S11: buildMandatoryProposalDetail() saved wins over staged for same (agentName, title) key', async () => {
+      const stagedRow = {
+        setupRunId: 'run-get-s',
+        agentName: 'agent-a',
+        title: 'Doc A',
+        status: 'staged',
+        updatedAt: new Date(),
+      };
+      const savedMapping = {
+        repoId: REPO_ID,
+        agentName: 'agent-a',
+        title: 'Doc A',
+        enabled: true,
+        stagedBySetupRunId: 'run-get-s',
+        updatedAt: new Date(),
+      };
+      const setupRunsCol = makeCollection([makeGetRun()]);
+      const db = makeDb({
+        repo_context_setup_runs: setupRunsCol,
+        mandatory_context_proposals: makeCollection([stagedRow]),
+        repo_mandatory_context_mappings: makeCollection([savedMapping]),
+      });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      const result = await svc.get('run-get-s');
+
+      expect(result.mandatoryProposalDetail).not.toBeNull();
+      const row = result.mandatoryProposalDetail!.rows.find(
+        (r) => r.agentName === 'agent-a' && r.title === 'Doc A',
+      );
+      expect(row).toBeDefined();
+      expect(row!.status).toBe('saved');
+    });
+
+    it('S12: buildMandatoryProposalDetail() adds missing synthetic row for agents in affectedAgentNames with no rows', async () => {
+      // agent-has-row has a staged proposal; agent-missing has nothing
+      const stagedRow = {
+        setupRunId: 'run-get-s',
+        agentName: 'agent-has-row',
+        title: 'Doc A',
+        status: 'staged',
+        updatedAt: new Date(),
+      };
+      const run = makeGetRun({
+        phases: {
+          preflight: { status: 'completed' },
+          curation: { status: 'completed', curationRunId: 'cr-s' },
+          mandatoryMapping: { status: 'completed', affectedAgentNames: ['agent-has-row', 'agent-missing'] },
+          contextRefresh: { status: 'completed' },
+        },
+      });
+      const setupRunsCol = makeCollection([run]);
+      const db = makeDb({
+        repo_context_setup_runs: setupRunsCol,
+        mandatory_context_proposals: makeCollection([stagedRow]),
+      });
+      const svc = new RepoContextSetupService(db, makeCuration() as never, makeMandatory() as never, makeCognee() as never, makeSpawn());
+
+      const result = await svc.get('run-get-s');
+
+      expect(result.mandatoryProposalDetail).not.toBeNull();
+      // agent-has-row should have a 'staged' row
+      const hasRow = result.mandatoryProposalDetail!.rows.find((r) => r.agentName === 'agent-has-row');
+      expect(hasRow?.status).toBe('staged');
+      // agent-missing should have a synthetic 'missing' row
+      const missingRow = result.mandatoryProposalDetail!.rows.find((r) => r.agentName === 'agent-missing');
+      expect(missingRow).toBeDefined();
+      expect(missingRow!.status).toBe('missing');
     });
   });
 

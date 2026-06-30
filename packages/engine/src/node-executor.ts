@@ -90,6 +90,47 @@ function isAgentProviderOverride(provider: unknown): provider is 'codex' | 'clau
   return provider === 'codex' || provider === 'claude' || isClaudeCompatibleAgentProvider(provider);
 }
 
+
+function latestModelOverrideForNode(
+  nodeName: string,
+  state: Record<string, unknown>,
+): import('./model-recovery.js').NodeModelOverride | undefined {
+  const recoveryOverrides = state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
+  return recoveryOverrides?.[nodeName]?.at(-1);
+}
+
+function inferProviderFromModelOverride(
+  rawModel: unknown,
+  deps: Pick<NodeExecutorDeps, 'aliasMap' | 'modelProviderMap'>,
+): string | undefined {
+  if (typeof rawModel !== 'string' || !rawModel.trim()) return undefined;
+  const resolvedModel = normalizeModelAlias(rawModel, deps.aliasMap) ?? rawModel;
+  return deps.modelProviderMap?.[resolvedModel] ?? deps.modelProviderMap?.[rawModel];
+}
+
+export function resolveAgentNodeEffectiveProvider(
+  nodeName: string,
+  nodeDef: NodeDef,
+  state: Record<string, unknown>,
+  role: AgentDef | undefined,
+  deps: Pick<NodeExecutorDeps, 'aliasMap' | 'modelProviderMap'>,
+): 'codex' | 'claude' | ClaudeCompatibleAgentProvider {
+  const latestRecoveryOverride = latestModelOverrideForNode(nodeName, state);
+  const explicitProvider = latestRecoveryOverride?.provider ?? nodeDef.agentOverrides?.provider;
+  const inferredProvider = explicitProvider == null
+    ? inferProviderFromModelOverride(latestRecoveryOverride?.model ?? nodeDef.agentOverrides?.model, deps)
+    : undefined;
+  const overrideProvider = explicitProvider ?? inferredProvider;
+
+  return isAgentProviderOverride(overrideProvider)
+    ? overrideProvider
+    : role?.provider === 'codex'
+      ? 'codex'
+      : isClaudeCompatibleAgentProvider(role?.provider)
+        ? role.provider
+        : 'claude';
+}
+
 /**
  * Resolve the session key for a node.
  *
@@ -184,6 +225,8 @@ export interface NodeExecutorDeps {
   aliasMap?: Record<string, string>;
   /** Registry-backed per-MTok cost map, keyed by alias and fullId. Optional — cost falls back to the provider-reported figure when absent. */
   costMap?: Record<string, import('./types.js').ModelCostInfo>;
+  /** Registry-backed model owner map, keyed by alias and fullId. Used to infer provider when a node overrides only model. */
+  modelProviderMap?: Record<string, string>;
 }
 
 function resolveExternalMcpServers(
@@ -313,10 +356,11 @@ export interface NodeResult {
   /** Effective agent settings + which layer set each (per-node override
    *  vs. agent default). */
   agentOverrides?: {
+    provider?: string;
     model?: string;
     reasoningEffort?: string;
     planMode?: boolean;
-    sources: Partial<Record<'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>>;
+    sources: Partial<Record<'provider' | 'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>>;
   };
 
   /** When a recovery override causes the old session to be discarded, record which session was dropped. */
@@ -362,17 +406,7 @@ export async function executeNode(
       // to run on Codex (or vice versa) without mutating the agent document.
       // Recovery overrides are execution-scoped and never persist.
       // PRD refs: AC12 (execution-scoped override), AC17 (no persistent mutation)
-      const recoveryOverrides = state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
-      const latestRecoveryOverride = recoveryOverrides?.[nodeName]?.at(-1);
-      const overrideProvider = latestRecoveryOverride?.provider ?? nodeDef.agentOverrides?.provider;
-      const effectiveProvider =
-        isAgentProviderOverride(overrideProvider)
-          ? overrideProvider
-          : role?.provider === 'codex'
-            ? 'codex'
-            : isClaudeCompatibleAgentProvider(role?.provider)
-              ? role.provider
-              : 'claude';
+      const effectiveProvider = resolveAgentNodeEffectiveProvider(nodeName, effectiveNodeDef, state, role, deps);
       if (effectiveProvider === 'codex') {
         const existingSession = sessions[resolveSessionKey(nodeName, nodeDef, state)];
         const codexResult = await executeCodexNode(
@@ -435,14 +469,10 @@ async function executeAgentNode(
   // Detect Claude-compatible API providers so queryViaCli can receive an env
   // overlay that redirects the Claude Code CLI away from Anthropic.
   // Recovery overrides (execution-scoped) take highest precedence.
-  const recoveryOverridesForAgent = state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
-  const latestRecoveryOverrideForAgent = recoveryOverridesForAgent?.[nodeName]?.at(-1);
-  const overrideProviderForAgent = latestRecoveryOverrideForAgent?.provider ?? nodeDef.agentOverrides?.provider;
-  const claudeCompatibleProvider = isClaudeCompatibleAgentProvider(overrideProviderForAgent)
-    ? overrideProviderForAgent
-    : isClaudeCompatibleAgentProvider(role?.provider)
-      ? role.provider
-      : undefined;
+  const effectiveProviderForAgent = resolveAgentNodeEffectiveProvider(nodeName, nodeDef, state, role, deps);
+  const claudeCompatibleProvider = isClaudeCompatibleAgentProvider(effectiveProviderForAgent)
+    ? effectiveProviderForAgent
+    : undefined;
 
   // Resolve cwd in priority order:
   //   1. worktree_path — set by create-workspace once an isolated git worktree exists.
@@ -1528,6 +1558,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
   const rawModel2 = (latestRecoveryOverride2?.model ?? override2.model ?? role?.model) ?? 'sonnet';
   // Pass deps.aliasMap so the re-derived model matches exactly what callAgent used above.
   const resolvedModel2 = normalizeModelAlias(rawModel2, deps.aliasMap) ?? rawModel2;
+  const resolvedProvider2 = resolveAgentNodeEffectiveProvider(nodeName, nodeDef, state, role, deps);
   const resolvedEffort2 = latestRecoveryOverride2?.reasoningEffort ?? override2.reasoningEffort ?? role?.reasoningEffort;
   const resolvedPlanMode2 = override2.planMode ?? role?.planMode ?? false;
   const systemPromptMode2: 'append' | 'custom' =
@@ -1538,7 +1569,9 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
     explicitMode === 'sdk' ? 'sdk' :
     'cli';
 
-  const overrideSources: Partial<Record<'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>> = {};
+  const overrideSources: Partial<Record<'provider' | 'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>> = {};
+  if (latestRecoveryOverride2?.provider !== undefined || override2.provider !== undefined || (override2.model !== undefined && resolvedProvider2 !== role?.provider)) overrideSources.provider = 'node';
+  else if (role?.provider !== undefined) overrideSources.provider = 'agent-default';
   if (latestRecoveryOverride2?.model !== undefined || override2.model !== undefined) overrideSources.model = 'node';
   else if (role?.model !== undefined) overrideSources.model = 'agent-default';
   if (latestRecoveryOverride2?.reasoningEffort !== undefined || override2.reasoningEffort !== undefined) overrideSources.reasoningEffort = 'node';
@@ -1564,6 +1597,7 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
   };
 
   const agentOverrides: NodeResult['agentOverrides'] = {
+    provider: resolvedProvider2,
     model: resolvedModel2,
     reasoningEffort: resolvedEffort2,
     planMode: resolvedPlanMode2,

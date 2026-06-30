@@ -27,7 +27,7 @@ import { buildMcpSourceEnvForServer } from '../runtime/mcp-credentials.js';
 
 const HEALTH_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const STARTUP_DELAY_MS = 30 * 1000; // wait 30s after boot before first check
-const HANDSHAKE_TIMEOUT_MS = 15 * 1000; // each RPC waits at most 15s
+const HANDSHAKE_TIMEOUT_MS = 30 * 1000; // each RPC waits at most 30s
 const SPAWN_TIMEOUT_MS = 30 * 1000; // total per-server budget incl. process startup
 const SSE_HTTP_TIMEOUT_MS = 10 * 1000;
 const KILL_GRACE_MS = 3_000; // SIGTERM → SIGKILL grace period during teardown

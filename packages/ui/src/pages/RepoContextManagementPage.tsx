@@ -1061,6 +1061,9 @@ function CuratedContextSection({ repoId, entries, contextStatus, onChanged }: { 
   const [saving, setSaving] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<Record<string, any> | null>(null);
+  const [selectedEntryIds, setSelectedEntryIds] = useState<Set<string>>(new Set());
+  const [bulkArchiving, setBulkArchiving] = useState(false);
+  const [showBulkArchiveConfirm, setShowBulkArchiveConfirm] = useState(false);
 
   const statusFiltered = uniqueEntries.filter((entry) => {
     if (filter === 'all') return true;
@@ -1151,11 +1154,77 @@ function CuratedContextSection({ repoId, entries, contextStatus, onChanged }: { 
 
   const archiveTargetName = archiveTarget ? String(archiveTarget.title ?? archiveTarget.path ?? archiveTarget.entryId ?? 'Curated context entry') : '';
 
+  const visibleEntryIds = visible.map((entry) => String(entry.entryId ?? ''));
+  const allVisibleSelected = visibleEntryIds.length > 0 && visibleEntryIds.every((id) => selectedEntryIds.has(id));
+  const someVisibleSelected = visibleEntryIds.some((id) => selectedEntryIds.has(id));
+  const selectedCount = selectedEntryIds.size;
+
+  const toggleEntry = (entryId: string) => {
+    setSelectedEntryIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(entryId)) {
+        next.delete(entryId);
+      } else {
+        next.add(entryId);
+      }
+      return next;
+    });
+  };
+
+  const toggleAllVisible = () => {
+    if (allVisibleSelected) {
+      setSelectedEntryIds((prev) => {
+        const next = new Set(prev);
+        for (const id of visibleEntryIds) next.delete(id);
+        return next;
+      });
+    } else {
+      setSelectedEntryIds((prev) => {
+        const next = new Set(prev);
+        for (const id of visibleEntryIds) next.add(id);
+        return next;
+      });
+    }
+  };
+
+  const bulkArchiveSelected = async () => {
+    if (!selectedCount) return;
+    setBulkArchiving(true);
+    try {
+      const result = await repoApi.bulkDeleteCuratedContextEntries(repoId, [...selectedEntryIds]);
+      const summary = `Archived ${result.affected ?? 0} of ${result.requested ?? selectedCount} entries.${result.skipped ? ` ${result.skipped} skipped.` : ''} Context marked stale.`;
+      toast.success(summary);
+      setSelectedEntryIds(new Set());
+      setShowBulkArchiveConfirm(false);
+      setSelectedId('');
+      await onChanged();
+    } catch (err: any) {
+      toast.error(err.message ?? 'Bulk archive failed');
+    } finally {
+      setBulkArchiving(false);
+    }
+  };
+
+  useEffect(() => {
+    setSelectedEntryIds(new Set());
+  }, [filter, searchQuery]);
+
   return (
     <>
     <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-4">
       <div className="space-y-2">
         <div className="flex flex-wrap gap-1">
+          <label className="flex items-center gap-1 cursor-pointer pr-1 border-r border-app mr-1">
+            <input
+              type="checkbox"
+              ref={(el) => { if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected; }}
+              checked={allVisibleSelected}
+              onChange={toggleAllVisible}
+              className="rounded"
+              aria-label="Select all visible entries"
+              disabled={!visibleEntryIds.length}
+            />
+          </label>
           {(['active', 'stale', 'all'] as const).map((item) => (
             <button key={item} type="button" onClick={() => setFilter(item)} className={`btn btn-sm ${filter === item ? 'btn-secondary' : 'btn-ghost'}`}>{item}</button>
           ))}
@@ -1163,6 +1232,20 @@ function CuratedContextSection({ repoId, entries, contextStatus, onChanged }: { 
             <Plus className="w-3.5 h-3.5" /> New entry
           </button>
         </div>
+        {selectedCount > 0 && (
+          <div className="flex items-center gap-2 px-2 py-1.5 rounded border border-accent-red/30 bg-accent-red/5">
+            <span className="text-[11px] text-theme-muted font-mono">{selectedCount} selected</span>
+            <button
+              type="button"
+              onClick={() => setShowBulkArchiveConfirm(true)}
+              disabled={bulkArchiving}
+              className="btn btn-ghost btn-sm text-accent-red hover:text-accent-red ml-auto"
+            >
+              {bulkArchiving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+              Archive {selectedCount} selected
+            </button>
+          </div>
+        )}
         <div className="flex gap-1">
           <input
             value={searchDraft}
@@ -1192,16 +1275,27 @@ function CuratedContextSection({ repoId, entries, contextStatus, onChanged }: { 
           {visible.length ? visible.map((entry) => {
             const entryKey = String(entry.entryId ?? entry.path ?? '');
             return (
-              <button
+              <div
                 key={entryKey}
-                type="button"
-                onClick={() => setSelectedId(String(entry.entryId))}
-                className={`block w-full text-left px-3 py-2 border-b border-app hover:bg-app-muted ${entryKey === String(selected?.entryId) ? 'bg-app-muted' : ''}`}
+                className={`flex items-start gap-2 px-3 py-2 border-b border-app hover:bg-app-muted ${entryKey === String(selected?.entryId) ? 'bg-app-muted' : ''}`}
               >
-                <div className="text-xs text-theme-primary truncate">{entry.title ?? entry.path}</div>
-                <div className="text-[10px] text-theme-muted font-mono truncate">{entry.path}</div>
-                <div className="text-[10px] text-theme-subtle font-mono">{entry.inclusion} · {entry.injectionPolicy}</div>
-              </button>
+                <input
+                  type="checkbox"
+                  className="mt-0.5 rounded flex-shrink-0"
+                  checked={selectedEntryIds.has(String(entry.entryId))}
+                  onChange={() => toggleEntry(String(entry.entryId))}
+                  aria-label={`Select ${String(entry.title ?? entry.path ?? entry.entryId)}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(String(entry.entryId))}
+                  className="min-w-0 text-left flex-1"
+                >
+                  <div className="text-xs text-theme-primary truncate">{entry.title ?? entry.path}</div>
+                  <div className="text-[10px] text-theme-muted font-mono truncate">{entry.path}</div>
+                  <div className="text-[10px] text-theme-subtle font-mono">{entry.inclusion} · {entry.injectionPolicy}</div>
+                </button>
+              </div>
             );
           }) : <div className="p-3"><EmptyState text="No curated context entries match this search." /></div>}
         </div>
@@ -1316,6 +1410,18 @@ function CuratedContextSection({ repoId, entries, contextStatus, onChanged }: { 
       busy={archiving}
       onConfirm={() => void archiveSelected()}
       onCancel={() => setArchiveTarget(null)}
+    />
+    <DeleteConfirmDialog
+      open={showBulkArchiveConfirm}
+      resourceType="curated context entries"
+      resourceName={`${selectedCount} selected entries`}
+      title={`Archive ${selectedCount} curated context entries`}
+      description={`This will soft-archive all ${selectedCount} selected entries: they will be removed from active context, history is preserved, and Cognee context will be marked stale. New agent runs will stop receiving these entries immediately.`}
+      confirmLabel={`Archive ${selectedCount} entries`}
+      requireTypedName={false}
+      busy={bulkArchiving}
+      onConfirm={() => void bulkArchiveSelected()}
+      onCancel={() => setShowBulkArchiveConfirm(false)}
     />
     </>
   );
@@ -1482,6 +1588,9 @@ function MandatoryContextSection({ repoId, agents, mappings: initialMappings, on
   const [showInactive, setShowInactive] = useState(false);
   const [mappings, setMappings] = useState<Array<Record<string, any>>>(initialMappings);
   const [loadingMappings, setLoadingMappings] = useState(false);
+  const [selectedMappingIds, setSelectedMappingIds] = useState<Set<string>>(new Set());
+  const [bulkDeactivating, setBulkDeactivating] = useState(false);
+  const [showBulkDeactivateConfirm, setShowBulkDeactivateConfirm] = useState(false);
   const agentOptions = useMemo(() => toAgentChatOptions(agents), [agents]);
 
   // Latest parent-provided snapshot, kept in a ref so loadMappings doesn't depend
@@ -1552,6 +1661,61 @@ function MandatoryContextSection({ repoId, agents, mappings: initialMappings, on
     }
   };
 
+  const pageItemMappingIds = pageItems.map((m) => String(m.mappingId ?? ''));
+  const allPageSelected = pageItemMappingIds.length > 0 && pageItemMappingIds.every((id) => selectedMappingIds.has(id));
+  const somePageSelected = pageItemMappingIds.some((id) => selectedMappingIds.has(id));
+  const selectedCount = selectedMappingIds.size;
+
+  const toggleMapping = (mappingId: string) => {
+    setSelectedMappingIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(mappingId)) {
+        next.delete(mappingId);
+      } else {
+        next.add(mappingId);
+      }
+      return next;
+    });
+  };
+
+  const toggleAllPage = () => {
+    if (allPageSelected) {
+      setSelectedMappingIds((prev) => {
+        const next = new Set(prev);
+        for (const id of pageItemMappingIds) next.delete(id);
+        return next;
+      });
+    } else {
+      setSelectedMappingIds((prev) => {
+        const next = new Set(prev);
+        for (const id of pageItemMappingIds) next.add(id);
+        return next;
+      });
+    }
+  };
+
+  const bulkDeactivateSelected = async () => {
+    if (!selectedCount) return;
+    setBulkDeactivating(true);
+    try {
+      const result = await repoApi.bulkDeleteMandatoryMappings(repoId, [...selectedMappingIds]);
+      const summary = `Deactivated ${result.affected ?? 0} of ${result.requested ?? selectedCount} mappings.${result.skipped ? ` ${result.skipped} already inactive.` : ''} Agent runs will stop receiving these mappings immediately.`;
+      toast.success(summary);
+      setSelectedMappingIds(new Set());
+      setShowBulkDeactivateConfirm(false);
+      await onChanged();
+      await loadMappings();
+    } catch (err: any) {
+      toast.error(err.message ?? 'Bulk deactivate failed');
+    } finally {
+      setBulkDeactivating(false);
+    }
+  };
+
+  useEffect(() => {
+    setSelectedMappingIds(new Set());
+  }, [agentName, page]);
+
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[420px_1fr] gap-4">
       <div className="space-y-3">
@@ -1588,8 +1752,37 @@ function MandatoryContextSection({ repoId, agents, mappings: initialMappings, on
         {!agentName && <div className="text-[11px] text-theme-muted">Select an agent before adding new mandatory context.</div>}
       </div>
       <div className="space-y-3">
+        {selectedCount > 0 && (
+          <div className="flex items-center gap-2 px-2 py-1.5 rounded border border-accent-red/30 bg-accent-red/5">
+            <span className="text-[11px] text-theme-muted font-mono">{selectedCount} selected</span>
+            <button
+              type="button"
+              onClick={() => setShowBulkDeactivateConfirm(true)}
+              disabled={bulkDeactivating}
+              className="btn btn-ghost btn-sm text-accent-red hover:text-accent-red ml-auto"
+            >
+              {bulkDeactivating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+              Deactivate {selectedCount} selected
+            </button>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2 text-[11px] text-theme-muted font-mono">
-          <span>{visible.length} mapping{visible.length === 1 ? '' : 's'} · page {currentPage}/{pageCount}</span>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="checkbox"
+                ref={(el) => { if (el) el.indeterminate = somePageSelected && !allPageSelected; }}
+                checked={allPageSelected}
+                onChange={toggleAllPage}
+                className="rounded"
+                aria-label="Select all on this page"
+                disabled={!pageItemMappingIds.length}
+              />
+              <span>Select page</span>
+            </label>
+            <span>·</span>
+            <span>{visible.length} mapping{visible.length === 1 ? '' : 's'} · page {currentPage}/{pageCount}</span>
+          </div>
           <div className="flex gap-1">
             <button type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage <= 1} className="btn btn-ghost btn-sm">Previous</button>
             <button type="button" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage >= pageCount} className="btn btn-ghost btn-sm">Next</button>
@@ -1601,6 +1794,16 @@ function MandatoryContextSection({ repoId, agents, mappings: initialMappings, on
           return (
             <Panel key={mappingId} title={String(mapping.title ?? mapping.sourcePath ?? mapping.agentName)}>
               <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedMappingIds.has(mappingId)}
+                    onChange={() => toggleMapping(mappingId)}
+                    className="rounded"
+                    aria-label={`Select ${String(mapping.title ?? mapping.agentName)}`}
+                  />
+                  <span className="text-[11px] text-theme-secondary">Select for bulk action</span>
+                </label>
                 <KeyValue rows={[
                   ['agent', mapping.agentName],
                   ['source', mapping.sourcePath],
@@ -1615,6 +1818,18 @@ function MandatoryContextSection({ repoId, agents, mappings: initialMappings, on
           );
         }) : <EmptyState text="No mandatory context mapped for this agent." />}
       </div>
+      <DeleteConfirmDialog
+        open={showBulkDeactivateConfirm}
+        resourceType="mandatory context mappings"
+        resourceName={`${selectedCount} selected mappings`}
+        title={`Deactivate ${selectedCount} mandatory context mappings`}
+        description={`This will deactivate all ${selectedCount} selected mappings by setting enabled=false. Agent runs will immediately stop receiving these mandatory context entries. The mappings are preserved for history and can be re-enabled.`}
+        confirmLabel={`Deactivate ${selectedCount} mappings`}
+        requireTypedName={false}
+        busy={bulkDeactivating}
+        onConfirm={() => void bulkDeactivateSelected()}
+        onCancel={() => setShowBulkDeactivateConfirm(false)}
+      />
     </div>
   );
 }

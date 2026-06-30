@@ -20,7 +20,7 @@ import type {
   ResumeContext,
 } from './types.js';
 import { aggregateTokenUsage } from './token-usage.js';
-import { executeNode, type NodeExecutorDeps, type NodeResult } from './node-executor.js';
+import { executeNode, resolveAgentNodeEffectiveProvider, type NodeExecutorDeps, type NodeResult } from './node-executor.js';
 import { evaluateCondition } from './condition-parser.js';
 import { renderTemplate, renderTemplateWithBindings, collectPlaceholders } from './template.js';
 import { mergeParallelOutputs } from './parallel.js';
@@ -75,6 +75,8 @@ export interface EngineConfig {
   aliasMap?: Record<string, string>;
   /** Registry-backed per-MTok cost map, keyed by alias and fullId. Optional — cost falls back to the provider-reported figure when absent. */
   costMap?: Record<string, import('./types.js').ModelCostInfo>;
+  /** Registry-backed model owner map, keyed by alias and fullId. Used for provider inference when only a model is overridden. */
+  modelProviderMap?: Record<string, string>;
 }
 
 export interface RunOptions {
@@ -1285,7 +1287,14 @@ ${lines.join('\n')}
       try {
         const renderedNodePrompt = nodeDef.prompt ? renderTemplate(nodeDef.prompt, exec.state) : undefined;
         const agentDef = nodeDef.agent ? this.config.agents[nodeDef.agent] : undefined;
-        const packetProvider = (nodeDef.agentOverrides?.provider === 'codex' || agentDef?.provider === 'codex') ? 'codex' : 'claude';
+        const effectiveProvider = resolveAgentNodeEffectiveProvider(
+          nodeName,
+          nodeDef,
+          exec.state,
+          agentDef,
+          { aliasMap: this.config.aliasMap, modelProviderMap: this.config.modelProviderMap },
+        );
+        const packetProvider = effectiveProvider === 'codex' ? 'codex' : 'claude';
         repoKnowledgePacket = await this.config.services.repoKnowledge.buildNodeContextPacket({
           executionId: exec.id,
           workflowName: exec.workflowName,
@@ -1436,6 +1445,7 @@ ${lines.join('\n')}
       } : undefined,
       aliasMap: this.config.aliasMap,
       costMap: this.config.costMap,
+      modelProviderMap: this.config.modelProviderMap,
     };
     // Effective model/provider for the node-start log.  agentOverrides win over
     // agent document defaults — mirrors the resolution inside executeNode so the
@@ -1443,7 +1453,9 @@ ${lines.join('\n')}
     const logAgent = nodeType === 'agent' && nodeDef.agent ? deps.agents[nodeDef.agent] : undefined;
     const logRecoveryOverrides = exec.state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
     const logRecoveryOverride = logRecoveryOverrides?.[nodeName]?.at(-1);
-    const logEffectiveProvider = logRecoveryOverride?.provider ?? nodeDef.agentOverrides?.provider ?? logAgent?.provider;
+    const logEffectiveProvider = nodeType === 'agent'
+      ? resolveAgentNodeEffectiveProvider(nodeName, nodeDef, exec.state, logAgent, deps)
+      : undefined;
     const logEffectiveModel = logRecoveryOverride?.model ?? nodeDef.agentOverrides?.model ?? logAgent?.model;
     this.log(exec.id, {
       category: 'system',
@@ -1926,7 +1938,13 @@ ${lines.join('\n')}
         const role = nodeDef.agent ? this.config.agents[nodeDef.agent] : undefined;
         const recoveryOverrides = exec.state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
         const latestOverride = recoveryOverrides?.[nodeName]?.at(-1);
-        const effectiveProvider = latestOverride?.provider ?? nodeDef.agentOverrides?.provider ?? role?.provider ?? 'claude';
+        const effectiveProvider = resolveAgentNodeEffectiveProvider(
+          nodeName,
+          nodeDef,
+          exec.state,
+          role,
+          { aliasMap: this.config.aliasMap, modelProviderMap: this.config.modelProviderMap },
+        );
         const effectiveModel = latestOverride?.model ?? nodeDef.agentOverrides?.model ?? role?.model ?? 'sonnet';
 
         const cls = classifyFailure(err, { provider: effectiveProvider, model: effectiveModel });
@@ -2351,6 +2369,7 @@ ${lines.join('\n')}
           buildClaudeCompatibleEnvOverlay: this.config.buildClaudeCompatibleEnvOverlay,
           aliasMap: this.config.aliasMap,
           costMap: this.config.costMap,
+          modelProviderMap: this.config.modelProviderMap,
         };
 
         // Each branch reads from the snapshot, not the live state
@@ -2388,7 +2407,13 @@ ${lines.join('\n')}
           const role = nodeDef.agent ? this.config.agents[nodeDef.agent] : undefined;
           const recoveryOverrides = exec.state.__model_overrides as Record<string, import('./model-recovery.js').NodeModelOverride[]> | undefined;
           const latestOverride = recoveryOverrides?.[nodeName]?.at(-1);
-          const effectiveProvider = latestOverride?.provider ?? nodeDef.agentOverrides?.provider ?? role?.provider ?? 'claude';
+          const effectiveProvider = resolveAgentNodeEffectiveProvider(
+            nodeName,
+            nodeDef,
+            exec.state,
+            role,
+            { aliasMap: this.config.aliasMap, modelProviderMap: this.config.modelProviderMap },
+          );
           const effectiveModel = latestOverride?.model ?? nodeDef.agentOverrides?.model ?? role?.model ?? 'sonnet';
           const cls = classifyFailure(err, { provider: effectiveProvider, model: effectiveModel });
 
@@ -2651,6 +2676,7 @@ ${lines.join('\n')}
                   buildClaudeCompatibleEnvOverlay: this.config.buildClaudeCompatibleEnvOverlay,
                   aliasMap: this.config.aliasMap,
                   costMap: this.config.costMap,
+                  modelProviderMap: this.config.modelProviderMap,
                 };
                 const retryResult = await executeNode(brName, recNodeDef, stateSnapshot, exec.sessions, deps);
 

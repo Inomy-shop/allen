@@ -8,7 +8,8 @@ The UI is Allen's React application. It gives operators a browser-based way to c
 
 ## Responsibilities
 
-- Render the dashboard, chat, workflow, execution, workspace, repo, agent, team, ticket, PR, design, and settings screens. Chat includes a **Steer** button that injects a typed message into the running agent turn mid-stream — visible only when the agent is streaming and the input is non-empty, distinct from the Stop button.
+- Render the dashboard, chat, workflow, execution, workspace, repo, agent, team, ticket, PR, design, and settings screens. Chat includes a **Steer** button that injects a typed message into the running agent turn mid-stream — visible only when the agent is streaming and the input is non-empty, distinct from the Stop button. Chat also includes **Export** (downloads the conversation as a portable JSON bundle via `ChatExportDialog`) and **Import** (reads an Allen chat export file and creates a read-only replay via `ChatImportPreviewModal`).
+- Render imported replay state: when `session.isImported` is set, the UI shows a persistent yellow `ImportedChatBanner` above the message list, disables the composer (with `replayLabel` as the disabled reason), suppresses intervention-answer callbacks, and shows a yellow "Imported" badge on the conversation list entry.
 - Stream execution progress and show logs, traces, artifacts, checkpoints, token usage, and **execution watcher status lines** (one live non-clickable line per running execution, updated in-place via SSE `watcher_update` events).
 - Render model-recovery prompts (`ModelRecoveryPrompt`) when a workflow node encounters a recoverable provider error — shows the failed node, provider/model, error summary, topology context (sequential vs. parallel branch), and lets the operator select a replacement provider/model to retry.
 - Provide workspace-aware chat and terminal/preview surfaces.

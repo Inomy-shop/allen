@@ -3,6 +3,7 @@ import {
   buildAgentRetryExhaustedError,
   MAIN_AGENT_CALL_MAX_ATTEMPTS,
   redactAgentRetryDiagnostic,
+  resolveAgentNodeEffectiveProvider,
 } from './node-executor.js';
 import { classifyFailure } from './model-recovery.js';
 
@@ -60,5 +61,60 @@ describe('agent call retry diagnostics', () => {
     const redacted = redactAgentRetryDiagnostic('Your api key: live-secret-token is invalid');
     expect(redacted).toContain('api key: <REDACTED>');
     expect(redacted).not.toContain('live-secret-token');
+  });
+});
+
+describe('agent node provider resolution for model-only overrides', () => {
+  it('infers a Claude-compatible provider from a per-node model override when provider is omitted', () => {
+    const provider = resolveAgentNodeEffectiveProvider(
+      'implement',
+      {
+        type: 'agent',
+        agent: 'engineering-lead',
+        agentOverrides: { model: 'deepseek-v4-flash' },
+      },
+      {},
+      { name: 'engineering-lead', provider: 'claude', model: 'claude-sonnet-4-6' } as any,
+      {
+        modelProviderMap: {
+          'deepseek-v4-flash': 'deepseek',
+          'claude-sonnet-4-6': 'claude',
+        },
+      },
+    );
+
+    expect(provider).toBe('deepseek');
+  });
+
+  it('lets an explicit provider override win over model-owner inference', () => {
+    const provider = resolveAgentNodeEffectiveProvider(
+      'review',
+      {
+        type: 'agent',
+        agent: 'code-reviewer',
+        agentOverrides: { provider: 'claude', model: 'deepseek-v4-flash' },
+      },
+      {},
+      { name: 'code-reviewer', provider: 'claude', model: 'claude-sonnet-4-6' } as any,
+      { modelProviderMap: { 'deepseek-v4-flash': 'deepseek' } },
+    );
+
+    expect(provider).toBe('claude');
+  });
+
+  it('falls back to the agent provider for unknown model override strings', () => {
+    const provider = resolveAgentNodeEffectiveProvider(
+      'plan',
+      {
+        type: 'agent',
+        agent: 'planner',
+        agentOverrides: { model: 'custom-unregistered-model' },
+      },
+      {},
+      { name: 'planner', provider: 'claude', model: 'claude-sonnet-4-6' } as any,
+      { modelProviderMap: { 'deepseek-v4-flash': 'deepseek' } },
+    );
+
+    expect(provider).toBe('claude');
   });
 });

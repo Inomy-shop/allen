@@ -180,3 +180,50 @@ export function useRepoContextSetup(repoId: string) {
     resumeSetup,
   };
 }
+
+// ── New types for SetupDetailResponse (client-side mirrors of server DTO types)
+
+export type MandatoryMappingRowStatus =
+  | 'saved'
+  | 'deactivated'
+  | 'consumed_into_proposal'
+  | 'staged'
+  | 'missing';
+
+export type MandatoryMappingRow = {
+  agentName: string;
+  title: string;
+  sourcePath?: string;
+  status: MandatoryMappingRowStatus;
+  updatedAt?: string;
+  reason?: string;
+};
+
+export type CurationFileFailure = {
+  path: string;
+  sourceHash?: string;
+  status: string;
+  reason?: string;
+  updatedAt?: string;
+};
+
+export type MandatoryProposalDetail = {
+  stagedCount: number;
+  consumedIntoProposalCount: number;
+  activeProposalCount: number;
+  rows: MandatoryMappingRow[];
+};
+
+/**
+ * Extended return type of repos.contextSetup.get().
+ * Additive superset — all existing fields preserved.
+ */
+export type SetupDetailResponse = {
+  setupRun: RepoContextSetupRun;
+  curationProfile: Record<string, unknown> | null;
+  curationStageStatus: Record<string, unknown> | null;
+  curationFileFailures: CurationFileFailure[];
+  mandatoryMappings: { activeCount: number; inactiveCount: number };
+  mandatoryProposalDetail: MandatoryProposalDetail | null;
+  cogneeStatus: Record<string, unknown> | null;
+};

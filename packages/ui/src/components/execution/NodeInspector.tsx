@@ -217,7 +217,7 @@ interface Trace {
   };
   learningsInjected?: Array<{ id?: string; content: string; contextTags?: string[] }>;
   agentOverrides?: {
-    model?: string; reasoningEffort?: string; planMode?: boolean;
+    provider?: string; model?: string; reasoningEffort?: string; planMode?: boolean;
     sources: Record<string, string>;
   };
   tokenUsagePerTool?: Array<{ toolUseId: string; tool: string; inputTokens: number; outputTokens: number; estimatedCost: number }>;
@@ -360,6 +360,7 @@ export default function NodeInspector({
         {trace.agentOverrides ? (
           <KeyValueGrid
             rows={[
+              ['provider', trace.agentOverrides.provider, trace.agentOverrides.sources.provider],
               ['model', trace.agentOverrides.model, trace.agentOverrides.sources.model],
               ['reasoning effort', trace.agentOverrides.reasoningEffort, trace.agentOverrides.sources.reasoningEffort],
               ['plan mode', trace.agentOverrides.planMode != null ? String(trace.agentOverrides.planMode) : undefined, trace.agentOverrides.sources.planMode],

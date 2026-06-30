@@ -5,6 +5,7 @@ vi.mock('@allen/engine', () => ({
   loadAgents: vi.fn(() => ({})),
   getBuiltIns: vi.fn(() => ({})),
   generateMermaid: vi.fn(() => 'graph TD\n  A-->B'),
+  normalizeModelAlias: vi.fn((model: string | undefined) => model),
 }));
 
 import express from 'express';

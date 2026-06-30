@@ -1,3 +1,5 @@
+import type { CurationStageStatus } from '../curation/repo-context-curation-runner.js';
+
 export type SetupPhase =
   | 'preflight'
   | 'curation'
@@ -116,4 +118,56 @@ export type MandatoryContextProposal = {
   consumedAt?: Date;
   rejectedAt?: Date;
   rejectionReason?: string;
+};
+
+/** A single failed file entry from `repo_context_curation_stage_file_statuses`. */
+export type CurationFileFailure = {
+  path: string;
+  sourceHash?: string;
+  status: string;
+  reason?: string;
+  updatedAt?: Date;
+};
+
+export type MandatoryMappingRowStatus =
+  | 'saved'                  // persisted to repo_mandatory_context_mappings, enabled=true
+  | 'deactivated'            // exists in mappings, enabled=false, deactivatedByRunId matches
+  | 'consumed_into_proposal' // proposal row status='consumed_into_proposal'
+  | 'staged'                 // proposal row status='staged'
+  | 'missing';               // agent in affectedAgentNames but no row found in either collection
+
+/** One row in the MandatoryProposalDetail panel — one row per (agentName, title, sourcePath?) key. */
+export type MandatoryMappingRow = {
+  agentName: string;
+  title: string;
+  sourcePath?: string;
+  status: MandatoryMappingRowStatus;
+  reason?: string;
+  updatedAt?: Date;
+};
+
+/** Aggregated detail for the Mandatory Mapping section of the setup progress panel. */
+export type MandatoryProposalDetail = {
+  stagedCount: number;
+  consumedIntoProposalCount: number;
+  activeProposalCount: number;
+  rows: MandatoryMappingRow[];
+};
+
+/**
+ * Extended response shape for `RepoContextSetupService.get()`.
+ * Adds curation file failure list, mandatory proposal detail, and uses the
+ * correctly computed `CurationStageStatus` from `getRepoContextCurationStageStatus()`.
+ */
+export type SetupDetailResponse = {
+  setupRun: RepoContextSetupRun;
+  curationProfile: Record<string, unknown> | null;
+  /** Now correctly computed via getRepoContextCurationStageStatus() — bug fix */
+  curationStageStatus: CurationStageStatus | null;
+  /** Failed files from repo_context_curation_stage_file_statuses, capped at 20. */
+  curationFileFailures: CurationFileFailure[];
+  mandatoryMappings: { activeCount: number; inactiveCount: number };
+  /** null when no proposals and no mappings exist for this setup run. */
+  mandatoryProposalDetail: MandatoryProposalDetail | null;
+  cogneeStatus: Record<string, unknown> | null;
 };

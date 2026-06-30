@@ -99,6 +99,16 @@ export interface ChatSession {
     threadTs: string;
     teamId: string;
   };
+  /** Whether this session is an imported replay bundle. */
+  isImported?: boolean;
+  /** Bundle ID the session was imported from. */
+  importBundleId?: string;
+  /** Source environment metadata from the origin Allen instance. */
+  sourceEnvironment?: { appName: string; appVersion: string; hostname?: string; exportedAt?: string };
+  /** Original session ID on the source instance. */
+  sourceSessionId?: string;
+  /** Human-readable label shown in the UI, e.g. "Imported replay". */
+  replayLabel?: string;
 }
 
 export interface ToolCallRecord {

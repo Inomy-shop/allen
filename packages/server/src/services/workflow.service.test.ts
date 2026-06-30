@@ -14,6 +14,11 @@ vi.mock('@allen/engine', () => ({
   loadAgents: vi.fn(() => ({})),
   getBuiltIns: vi.fn(() => ({})),
   generateMermaid: vi.fn(() => 'graph TD\n  A-->B'),
+  normalizeModelAlias: vi.fn((model: string | undefined) => {
+    if (model === 'sonnet') return 'claude-sonnet-4-6';
+    if (model === 'opus') return 'claude-opus-4-7';
+    return model;
+  }),
 }));
 
 import { MongoMemoryServer } from 'mongodb-memory-server';
@@ -43,9 +48,28 @@ describe('WorkflowService soft delete and restore', () => {
 
   beforeEach(async () => {
     await db.collection('workflows').deleteMany({});
+    await db.collection('model_registry').deleteMany({});
   });
 
   // ── FR3-AC1: Delete workflow keeps the document, hides it from all lists ──
+
+  it('adds provider to model-only node agentOverrides on create', async () => {
+    await db.collection('model_registry').insertOne({
+      provider: 'deepseek',
+      fullId: 'deepseek-v4-pro[1m]',
+      displayName: 'DeepSeek V4 Pro',
+      providerDisplayName: 'DeepSeek',
+      isActive: true,
+    });
+
+    const created = await service.create({
+      yaml: `name: provider-backfill\ndescription: test\nversion: 1\nnodes:\n  draft:\n    type: agent\n    agent: requirements-analyst\n    agentOverrides:\n      model: deepseek-v4-pro[1m]\n    prompt: draft\nedges: []\n`,
+    });
+
+    const overrides = (created.parsed as any).nodes.draft.agentOverrides;
+    expect(overrides).toEqual({ provider: 'deepseek', model: 'deepseek-v4-pro[1m]' });
+    expect(created.yaml).toContain('provider: deepseek');
+  });
 
   it('FR3-AC1: delete sets isDeleted=true, document remains in collection', async () => {
     const id = new ObjectId();

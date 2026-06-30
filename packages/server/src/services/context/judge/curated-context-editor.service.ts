@@ -234,6 +234,39 @@ export class CuratedContextEditorService {
       .toArray() as Promise<CurationRevision[]>;
   }
 
+  async archiveMany(
+    repoId: string,
+    entryIds: string[],
+    meta: { actor: string; source: string },
+  ): Promise<{ requested: number; affected: number; skipped: number; items: Array<{ entryId: string; status: 'archived' | 'skipped'; reason?: string }> }> {
+    const results: Array<{ entryId: string; status: 'archived' | 'skipped'; reason?: string }> = [];
+    for (const entryId of entryIds) {
+      try {
+        const existing = await this.getEntry(repoId, entryId);
+        if (!existing) {
+          results.push({ entryId, status: 'skipped', reason: 'not_found' });
+          continue;
+        }
+        if (existing.active === false) {
+          results.push({ entryId, status: 'skipped', reason: 'already_archived' });
+          continue;
+        }
+        await this.applyEdit(
+          repoId,
+          entryId,
+          {},
+          { actor: meta.actor, source: meta.source, action: 'archive' },
+        );
+        results.push({ entryId, status: 'archived' });
+      } catch (err: unknown) {
+        results.push({ entryId, status: 'skipped', reason: (err as Error).message });
+      }
+    }
+    const affected = results.filter((r) => r.status === 'archived').length;
+    const skipped = results.filter((r) => r.status === 'skipped').length;
+    return { requested: entryIds.length, affected, skipped, items: results };
+  }
+
   async revert(
     repoId: string,
     entryId: string,

@@ -33,6 +33,7 @@ import { isContextEngineEnabled } from '../services/context/config/context-provi
 import { param } from '../types.js';
 import { buildHumanResumeInput, renderHumanIntervention, sanitizeErrorSummary, type HumanInterventionPayload } from '@allen/engine';
 import { ModelRegistryService } from '../services/model-registry.service.js';
+import { ChatService } from '../services/chat.service.js';
 
 export function interventionRoutes(db: Db): Router {
   const router = Router();
@@ -136,6 +137,18 @@ export function interventionRoutes(db: Db): Router {
         return res.status(409).json({
           error: `Intervention is already ${existing.status}`,
         });
+      }
+
+      // AC16 guard: imported replay sessions are read-only
+      if (existing.chat_session_id) {
+        const chatService = new ChatService(db);
+        const isImported = await chatService.isSessionImported(existing.chat_session_id);
+        if (isImported) {
+          return res.status(403).json({
+            error: 'IMPORTED_SESSION_READONLY',
+            message: 'Cannot respond to interventions on imported replay sessions',
+          });
+        }
       }
 
       const execCol = db.collection('executions');

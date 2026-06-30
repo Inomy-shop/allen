@@ -260,6 +260,22 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
     }
   });
 
+  it('agent builder seed enforces the same adaptive core-job gate as planning and validation', async () => {
+    const db = makeDb();
+
+    await new OrgSeedService(db).seed();
+
+    const agent = db.store.agents.find((a: any) => a.name === 'agent-builder-agent');
+    expect(agent, 'agent-builder-agent must be seeded').toBeDefined();
+    const system: string = agent.system;
+
+    expect(system).toContain('adaptive core-job instruction gate');
+    expect(system).toContain('task-appropriate');
+    expect(system).toContain('not merely a role label');
+    expect(system).toContain('core-job verdict did not pass');
+    expect(system).toContain('does not repair non-compliant blueprints');
+  });
+
   it('design agent seeds include the professional visual quality / no-emoji / no-decorative constraints', async () => {
     const db = makeDb();
 

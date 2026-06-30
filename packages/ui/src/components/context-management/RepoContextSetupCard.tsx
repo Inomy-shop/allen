@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
@@ -9,7 +9,17 @@ import {
   MinusCircle,
   XCircle,
 } from 'lucide-react';
-import { useRepoContextSetup, type RepoContextSetupRun, type SetupPhaseSnapshot, type SetupPhaseStatus } from '../../hooks/useRepoContextSetup';
+import { repos as repoApi } from '../../services/api';
+import {
+  useRepoContextSetup,
+  type CurationFileFailure,
+  type MandatoryMappingRow,
+  type MandatoryMappingRowStatus,
+  type RepoContextSetupRun,
+  type SetupDetailResponse,
+  type SetupPhaseSnapshot,
+  type SetupPhaseStatus,
+} from '../../hooks/useRepoContextSetup';
 
 // ── Small local helpers ───────────────────────────────────────────────────────
 
@@ -130,6 +140,254 @@ function failedPhaseLabel(run: RepoContextSetupRun): string | null {
   return failed ? failed[0] : null;
 }
 
+// ── Setup Detail Panel ────────────────────────────────────────────────────────
+
+function SetupDetailPanel({
+  setupRun,
+  detailData,
+  detailLoading,
+  detailError,
+  onRetry,
+}: {
+  setupRun: RepoContextSetupRun;
+  detailData: SetupDetailResponse | null;
+  detailLoading: boolean;
+  detailError: string | null;
+  onRetry: () => void;
+}) {
+  if (detailLoading) {
+    return (
+      <div className="rounded border border-app bg-app-elevated/60 p-3 flex items-center gap-2 text-[11px] text-theme-muted">
+        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+        Loading details…
+      </div>
+    );
+  }
+  if (detailError) {
+    return (
+      <div className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 flex flex-wrap items-center gap-2">
+        <XCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />
+        <span className="text-xs text-red-400 grow">{detailError}</span>
+        <button type="button" onClick={onRetry} className="btn btn-secondary btn-sm">
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (!detailData) return null;
+  return (
+    <div className="rounded border border-app bg-app-elevated/60 p-3 space-y-3 text-[11px]">
+      <CurationDetailSection setupRun={setupRun} detailData={detailData} />
+      <hr className="border-app" />
+      <MandatoryDetailSection setupRun={setupRun} detailData={detailData} />
+      <hr className="border-app" />
+      <GraphSummarySection setupRun={setupRun} detailData={detailData} />
+    </div>
+  );
+}
+
+function CurationDetailSection({
+  setupRun,
+  detailData,
+}: {
+  setupRun: RepoContextSetupRun;
+  detailData: SetupDetailResponse;
+}) {
+  const phase = setupRun.phases.curation;
+  const stage = detailData.curationStageStatus;
+  const failures = detailData.curationFileFailures ?? [];
+
+  return (
+    <div className="space-y-1">
+      <div className="font-semibold text-theme-primary">Curation</div>
+      <div className="space-y-0.5 font-mono text-theme-muted">
+        {stage && typeof stage['expectedFiles'] === 'number' && (
+          <div>Total files: <span className="text-theme-primary">{stage['expectedFiles'] as number}</span></div>
+        )}
+        {phase.unchangedCount !== undefined && (
+          <div>Unchanged / reused: <span className="text-theme-primary">{phase.unchangedCount}</span></div>
+        )}
+        {phase.changedCount !== undefined && (
+          <div>Changed (needed curation): <span className="text-theme-primary">{phase.changedCount}</span></div>
+        )}
+        {stage && typeof stage['stagedEntries'] === 'number' && (
+          <div>Staged entries: <span className="text-theme-primary">{stage['stagedEntries'] as number}</span></div>
+        )}
+        {stage && typeof stage['validEntries'] === 'number' && (
+          <div>Valid entries: <span className="text-theme-primary">{stage['validEntries'] as number}</span></div>
+        )}
+        {stage && Array.isArray(stage['retryFiles']) && (
+          <div>Retry files: <span className="text-theme-primary">{(stage['retryFiles'] as unknown[]).length}</span></div>
+        )}
+        {phase.promotedCount !== undefined && (
+          <div>Promoted: <span className="text-theme-primary">{phase.promotedCount}</span></div>
+        )}
+        {phase.startedAt && (
+          <div>Started: <span className="text-theme-primary">{formatDateShort(phase.startedAt)}</span></div>
+        )}
+        {phase.completedAt && (
+          <div>Completed: <span className="text-theme-primary">{formatDateShort(phase.completedAt)}</span></div>
+        )}
+        {phase.message && (
+          <div>Message: <span className="text-theme-primary">{phase.message}</span></div>
+        )}
+      </div>
+      {failures.length > 0 && (
+        <div className="mt-1 space-y-0.5">
+          <div className="text-red-400 font-medium">Failed files ({failures.length}):</div>
+          {failures.map((f: CurationFileFailure, i: number) => (
+            <div key={i} className="pl-2 font-mono">
+              <span className="text-red-300">{f.path}</span>
+              {f.reason && <span className="text-theme-muted"> — {f.reason}</span>}
+            </div>
+          ))}
+          {stage && Array.isArray(stage['retryFiles']) &&
+            (stage['retryFiles'] as unknown[]).length > failures.length && (
+            <div className="text-theme-muted italic">Showing most recent failures.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function statusBadgeClass(status: MandatoryMappingRowStatus): string {
+  switch (status) {
+    case 'saved': return 'text-green-500';
+    case 'deactivated': return 'text-orange-500';
+    case 'consumed_into_proposal': return 'text-blue-500';
+    case 'staged': return 'text-yellow-500';
+    case 'missing': return 'text-theme-muted';
+  }
+}
+
+function MandatoryDetailSection({
+  setupRun,
+  detailData,
+}: {
+  setupRun: RepoContextSetupRun;
+  detailData: SetupDetailResponse;
+}) {
+  const phase = setupRun.phases.mandatoryMapping;
+  const detail = detailData.mandatoryProposalDetail;
+
+  // Group rows by agentName
+  const grouped = new Map<string, MandatoryMappingRow[]>();
+  if (detail) {
+    for (const row of detail.rows) {
+      const arr = grouped.get(row.agentName) ?? [];
+      arr.push(row);
+      grouped.set(row.agentName, arr);
+    }
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="font-semibold text-theme-primary">Mandatory Mapping</div>
+      <div className="flex flex-wrap gap-x-4 font-mono text-theme-muted">
+        {Array.isArray((phase as Record<string, unknown>)['affectedAgentNames']) && (
+          <span>
+            Affected agents:{' '}
+            <span className="text-theme-primary">
+              {((phase as Record<string, unknown>)['affectedAgentNames'] as string[]).length}
+            </span>
+          </span>
+        )}
+        <span>
+          Staged: <span className="text-theme-primary">{detail?.stagedCount ?? '—'}</span>
+        </span>
+        {phase.savedMappingCount !== undefined && (
+          <span>
+            Saved mappings: <span className="text-theme-primary">{phase.savedMappingCount}</span>
+          </span>
+        )}
+        {phase.deactivatedMappingCount !== undefined && (
+          <span>
+            Deactivated: <span className="text-theme-primary">{phase.deactivatedMappingCount}</span>
+          </span>
+        )}
+      </div>
+      {detail === null ? (
+        <div className="text-theme-muted italic">
+          Detailed proposal records unavailable (7-day retention policy).
+        </div>
+      ) : (
+        <div className="space-y-2 mt-1">
+          {Array.from(grouped.entries()).map(([agent, rows]) => (
+            <div key={agent} className="space-y-0.5">
+              <div className="text-theme-secondary font-medium">{agent}</div>
+              {rows.map((row: MandatoryMappingRow, i: number) => (
+                <div key={i} className="pl-2 font-mono text-theme-muted flex flex-wrap items-start gap-1.5">
+                  <span className={statusBadgeClass(row.status)}>[{row.status}]</span>
+                  <span>{row.title}</span>
+                  {row.sourcePath && (
+                    <span
+                      className="text-theme-muted opacity-70"
+                      title={row.sourcePath}
+                    >
+                      ({row.sourcePath.length > 40
+                        ? `…${row.sourcePath.slice(-37)}`
+                        : row.sourcePath})
+                    </span>
+                  )}
+                  {row.reason && (
+                    <span className="text-orange-400">— {row.reason}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GraphSummarySection({
+  setupRun,
+  detailData,
+}: {
+  setupRun: RepoContextSetupRun;
+  detailData: SetupDetailResponse;
+}) {
+  const cogneeStatus = detailData.cogneeStatus;
+  const contextRefresh = setupRun.phases.contextRefresh;
+  const showHint = ['running', 'completed', 'failed'].includes(contextRefresh.status);
+
+  return (
+    <div className="space-y-1">
+      <div className="font-semibold text-theme-primary">Graph</div>
+      <div className="flex flex-wrap gap-x-4 font-mono text-theme-muted">
+        {cogneeStatus && cogneeStatus['status'] !== undefined && (
+          <span>
+            Status: <span className="text-theme-primary">{String(cogneeStatus['status'])}</span>
+          </span>
+        )}
+        {cogneeStatus && cogneeStatus['stage'] != null && (
+          <span>
+            Stage: <span className="text-theme-primary">{String(cogneeStatus['stage'])}</span>
+          </span>
+        )}
+        {cogneeStatus && cogneeStatus['buildMode'] != null && (
+          <span>
+            Build mode: <span className="text-theme-primary">{String(cogneeStatus['buildMode'])}</span>
+          </span>
+        )}
+        {cogneeStatus && cogneeStatus['message'] != null && (
+          <span>
+            Message: <span className="text-theme-primary">{String(cogneeStatus['message'])}</span>
+          </span>
+        )}
+      </div>
+      {showHint && (
+        <div className="text-theme-muted italic">
+          For detailed graph progress, see the Graph Refresh section below ↓
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── M1: throttle constant ─────────────────────────────────────────────────────
 
 const COGNEE_ACTIVITY_THROTTLE_MS = 5_000;
@@ -147,11 +405,16 @@ export default function RepoContextSetupCard({
 }) {
   const { setupRun, label, active, isLoading, error, startSetup, cancelSetup, resumeSetup } = useRepoContextSetup(repoId);
 
-  const [showProgress, setShowProgress] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [cleanRebuild, setCleanRebuild] = useState(false);
   const [forceCuration, setForceCuration] = useState(false);
   const [acting, setActing] = useState(false);
+
+  // Detail panel state
+  const [showDetail, setShowDetail] = useState(false);
+  const [detailData, setDetailData] = useState<SetupDetailResponse | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   // M3: collapsed state — auto-collapsed for completed runs, expanded for everything else.
   // manuallyExpanded lets the user override the auto-collapse by clicking the chevron.
@@ -167,6 +430,12 @@ export default function RepoContextSetupCard({
       if (setupRun?.status !== 'completed') setManuallyExpanded(false);
     }
   }, [setupRun?.status]);
+
+  // Clear detail data when a new run starts (setupRunId changes)
+  useEffect(() => {
+    setDetailData(null);
+    setShowDetail(false);
+  }, [setupRun?.setupRunId]);
 
   // M1: notify parent when the contextRefresh phase is actively running.
   // Depends on setupRun's object identity (the poll replaces the object every few
@@ -184,6 +453,18 @@ export default function RepoContextSetupCard({
     onCogneeActivity();
   }, [setupRun, onCogneeActivity]);
 
+  const fetchDetail = useCallback(() => {
+    if (!setupRun) return;
+    setDetailLoading(true);
+    setDetailError(null);
+    repoApi.contextSetup.get(repoId, setupRun.setupRunId)
+      .then((data) => { setDetailData(data); })
+      .catch((err: unknown) => {
+        setDetailError(String((err as Error)?.message ?? 'Failed to load details'));
+      })
+      .finally(() => { setDetailLoading(false); });
+  }, [repoId, setupRun]);
+
   const act = async (fn: () => Promise<void>) => {
     setActing(true);
     try { await fn(); } finally { setActing(false); }
@@ -196,9 +477,14 @@ export default function RepoContextSetupCard({
       case 'prepare':
         void act(() => startSetup(advancedOpen ? { cleanRebuildCognee: cleanRebuild, forceCuration } : undefined));
         break;
-      case 'view_progress':
-        setShowProgress((v) => !v);
+      case 'view_progress': {
+        const next = !showDetail;
+        setShowDetail(next);
+        if (next && detailData === null) {
+          fetchDetail();
+        }
         break;
+      }
       case 'resume_setup':
         if (setupRun) void act(() => resumeSetup(setupRun.setupRunId));
         break;
@@ -213,7 +499,7 @@ export default function RepoContextSetupCard({
 
   const primaryLabel: Record<typeof label, string> = {
     prepare:             'Prepare repo context',
-    view_progress:       'View progress',
+    view_progress:       showDetail ? 'Hide details' : 'Show details',
     resume_setup:        'Resume setup',
     check_for_updates:   'Check for updates',
     refresh_stale_graph: 'Refresh stale context graph',
@@ -325,15 +611,15 @@ export default function RepoContextSetupCard({
       {/* ── Counts row ──────────────────────────────────────────────────────── */}
       {setupRun && <CountsRow run={setupRun} />}
 
-      {/* ── Progress pane (toggled by "View progress") ───────────────────────── */}
-      {(active || showProgress) && setupRun && (
-        <div className="rounded border border-app bg-app-elevated/60 p-2 space-y-1 text-[11px] font-mono text-theme-muted">
-          <div>Phase: <span className="text-theme-primary">{setupRun.currentPhase}</span></div>
-          <div>Status: <span className="text-theme-primary">{setupRun.status}</span></div>
-          {setupRun.phases.contextRefresh.cogneeStage && (
-            <div>Graph stage: <span className="text-theme-primary">{setupRun.phases.contextRefresh.cogneeStage}</span></div>
-          )}
-        </div>
+      {/* ── Detail panel (toggled by "Show details" / "Hide details") ────────── */}
+      {showDetail && setupRun && (
+        <SetupDetailPanel
+          setupRun={setupRun}
+          detailData={detailData}
+          detailLoading={detailLoading}
+          detailError={detailError}
+          onRetry={fetchDetail}
+        />
       )}
 
       {/* ── Failed-phase banner ──────────────────────────────────────────────── */}
@@ -399,6 +685,21 @@ export default function RepoContextSetupCard({
           </div>
         )}
       </div>
+
+      {/* ── Secondary details toggle (for terminal/expanded runs only) ──────── */}
+      {label !== 'view_progress' && manuallyExpanded && setupRun && (
+        <button
+          type="button"
+          onClick={() => {
+            const next = !showDetail;
+            setShowDetail(next);
+            if (next && detailData === null) fetchDetail();
+          }}
+          className="text-[11px] text-theme-muted underline"
+        >
+          {`Details ${showDetail ? '▴' : '▾'}`}
+        </button>
+      )}
     </Card>
   );
 }

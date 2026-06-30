@@ -600,6 +600,25 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { repoId: 1, agentName: 1, enabled: 1 },
     { sparse: true, name: 'idx_mandatory_repo_agent_enabled' },
   );
+  // repo_context_curation_stage_file_statuses — get() filters by runId for failure list
+  await db.collection('repo_context_curation_stage_file_statuses').createIndex(
+    { runId: 1 },
+    { name: 'idx_curation_file_statuses_run_id' },
+  );
+  // repo_context_curation_stage_entries — indexed for fast runId lookups
+  await db.collection('repo_context_curation_stage_entries').createIndex(
+    { runId: 1 },
+    { name: 'idx_curation_stage_entries_run_id' },
+  );
+  // repo_mandatory_context_mappings — sparse indexes for setup-run progress queries
+  await db.collection('repo_mandatory_context_mappings').createIndex(
+    { stagedBySetupRunId: 1 },
+    { sparse: true, name: 'idx_mandatory_staged_by_run' },
+  );
+  await db.collection('repo_mandatory_context_mappings').createIndex(
+    { deactivatedByRunId: 1 },
+    { sparse: true, name: 'idx_mandatory_deactivated_by_run' },
+  );
   // Design Studio (Allen Design) — workspaces → sessions → versions → messages
   await db.collection('dstudio_workspaces').createIndex({ ownerUserId: 1, updatedAt: -1 }, { sparse: true });
   await db.collection('dstudio_workspaces').createIndex({ kind: 1, sourceRepoId: 1 }, { sparse: true });
@@ -629,6 +648,22 @@ export async function ensureIndexes(db: Db): Promise<void> {
   );
   await db.collection('execution_watchers').createIndex(
     { updatedAt: 1 },
+  );
+
+  // ── Chat Export / Import Bundles ──────────────────────────────────────────
+  await db.collection('chat_export_bundles').createIndex({ bundleId: 1 }, { unique: true });
+  await db.collection('chat_export_bundles').createIndex({ chatSessionId: 1, operation: 1 });
+  await db.collection('chat_export_bundles').createIndex({ userId: 1, createdAt: -1 });
+  await db.collection('chat_export_bundles').createIndex(
+    { importSessionId: 1 },
+    { sparse: true },
+  );
+  await db.collection('chat_export_bundles').createIndex({ createdAt: -1 });
+
+  // Imported chat sessions — partial index so only imported rows participate
+  await db.collection('chat_sessions').createIndex(
+    { isImported: 1 },
+    { partialFilterExpression: { isImported: true } },
   );
 
   console.log('Database indexes ensured');

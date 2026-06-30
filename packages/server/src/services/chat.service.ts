@@ -84,6 +84,16 @@ export interface ChatSession {
   workspaceBaseBranch?: string;
   workspacePrNumber?: number;
   workspacePrUrl?: string;
+  /** True when this session was created by importing a ChatExportBundle. */
+  isImported?: boolean;
+  /** Links back to chat_export_bundles.bundleId for imported sessions. */
+  importBundleId?: string;
+  /** Source environment metadata from the export bundle. */
+  sourceEnvironment?: { appName: string; appVersion: string; hostname?: string; exportedAt?: string };
+  /** Original chat session ID from the source environment. */
+  sourceSessionId?: string;
+  /** Human-readable label for the replay, e.g. "Imported replay". */
+  replayLabel?: string;
   streaming?: boolean;
   archivedWorkspace?: ArchivedWorkspaceSnapshot;
   ownerUserId?: string | null;
@@ -545,6 +555,11 @@ Key Allen tools (under the \`allen\` MCP server — codex shows them as \`allen.
 - create_workspace, get_workspace, create_workspace_for_pr
 - allen_save_artifact, allen_list_artifacts, allen_get_artifact, upload_file
 - submit_execution_input, ask_user
+
+ASKING THE USER:
+- Do not call Claude's built-in AskUserQuestion tool; Allen disables it in chat.
+- For ordinary clarification, ask the question directly in your assistant response and stop.
+- Use Allen's ask_user tool only when a durable pending question panel is explicitly required.
 
 Other MCP servers (Linear, GitHub, etc.) are also available when configured.
 Before choosing a route for execution work, compare matching workflows, specialized leads/agents, and external MCP tools. Do not jump straight to a raw MCP tool if a specialist agent or lead owns the end-to-end task.
@@ -1579,6 +1594,20 @@ export class ChatService {
   isStreaming(sessionId: string): boolean { return activeQueries.has(sessionId); }
 
   /**
+   * Check whether a chat session is an imported read-only replay.
+   * Used by server-side guards to block mutating actions on imported chats.
+   */
+  async isSessionImported(sessionId: string): Promise<boolean> {
+    if (typeof sessionId !== 'string' || !sessionId) return false;
+    if (!ObjectId.isValid(sessionId)) return false;
+    const session = await this.sessions.findOne(
+      { _id: new ObjectId(sessionId) },
+      { projection: { isImported: 1 } },
+    );
+    return Boolean(session?.isImported);
+  }
+
+  /**
    * Steer a user message into the currently running agent turn.
    * If an active persistent runtime accepts the injection, the message is
    * persisted and broadcast as a `steered_message` SSE event.
@@ -2550,8 +2579,9 @@ SPAWN FLOW:
 3. To follow up with context, spawn the same agent again and include the prior execution result when available.
 
 ASKING THE USER:
-- If you need info from the user, call ask_user(question). Blocks until user answers.
-- Only use ask_user when NO agent can answer.
+- Do not call Claude's built-in AskUserQuestion tool; Allen disables it in chat.
+- For ordinary clarification, ask the question directly in your assistant response and stop.
+- Use Allen's ask_user tool only when a durable pending question panel is explicitly required and no agent can answer.
 
 RULES:
 1. You are an LLM routing agent. Decide from the user's intent whether to answer directly, inspect data with tools, spawn a team/lead/specialist agent, or run an allowed workflow. Do not rely on a backend heuristic router.
@@ -2570,7 +2600,7 @@ RULES:
    - Workflows that already contain a create_workspace node should receive the registered repo_path and create their own isolated worktree.
    - Ask "Which repo?" only when code work is required and no repo/workspace context is available.
 9. If a spawned execution is waiting_for_input, explain the requested input to the user and use submit_execution_input after the user answers.
-10. If you don't know required information, call ask_user to ask the user.
+10. If you don't know required information, ask a concise question directly in your assistant response. Use ask_user only when a durable pending question panel is explicitly required.
 11. NEVER respond to the user before ALL spawned executions you started for the task are complete, failed, blocked, or clearly still running after progress has been surfaced.
 12. Use report_to_user for progress updates. When wait_for_execution returns status="waiting" with messages, summarize the newest useful message before waiting again.
 12a. Context query for spawned agents: when calling spawn_agent for repo-related work, pass a compact context_query object as a separate tool argument. Include user_request, task_type, retrieval-relevant requirements, topics, target_files/path_hints, and required_categories/preferred_categories when obvious. Consolidate relevant prior chat discussion so phrases like "implement what we discussed" still carry the actual retrieval intent. Never embed context query XML/JSON in prompt. Keep execution guardrails, artifact instructions, no-edit/no-commit/no-PR constraints, and process constraints in prompt, not context_query.

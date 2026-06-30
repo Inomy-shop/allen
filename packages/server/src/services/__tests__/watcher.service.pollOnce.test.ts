@@ -45,8 +45,10 @@ describe('WatcherService.pollOnce() — state transitions', () => {
   it('flips watcherStatus to waiting and sends trigger when execution is waiting_for_input (AC9)', async () => {
     const startTime = Date.now() - 60_000;
 
-    // pollOnce execution lookup
     chainable.findOne
+      // AC15 guard: executions findOne for meta.imported check → null (not imported)
+      .mockResolvedValueOnce(null)
+      // pollOnce execution lookup
       .mockResolvedValueOnce({
         status: 'waiting_for_input',
         workflowName: 'test-workflow',
@@ -266,8 +268,10 @@ describe('WatcherService.pollOnce() — state transitions', () => {
 
     const startTime = Date.now() - 120_000;
 
-    // pollOnce execution lookup
     chainable.findOne
+      // AC15 guard: executions findOne for meta.imported check → null (not imported)
+      .mockResolvedValueOnce(null)
+      // pollOnce execution lookup
       .mockResolvedValueOnce({
         status: 'completed',
         workflowName: 'test-workflow',
@@ -310,6 +314,8 @@ describe('WatcherService.pollOnce() — state transitions', () => {
     const startTime = Date.now() - 120_000;
 
     chainable.findOne
+      // AC15 guard: executions findOne for meta.imported check → null (not imported)
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({
         status: 'waiting_for_input',
         workflowName: 'test-workflow',
@@ -347,6 +353,8 @@ describe('WatcherService.pollOnce() — state transitions', () => {
     const startTime = Date.now() - 60_000;
 
     chainable.findOne
+      // AC15 guard: executions findOne for meta.imported check → null (not imported)
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({
         status: 'running',
         workflowName: 'test-workflow',

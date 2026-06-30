@@ -31,7 +31,7 @@ Allen runs a multi-team organization of AI agents against your codebases. You ta
 
 ## What Allen does
 
-- **Chat-driven agent work.** Open a chat, describe a task, and Allen routes it to the right agent or workflow. Agents can delegate to other agents; the full delegation tree is visible.
+- **Chat-driven agent work.** Open a chat, describe a task, and Allen routes it to the right agent or workflow. Agents can delegate to other agents; the full delegation tree is visible. Export any chat as a portable JSON bundle (messages, executions, logs, traces, artifacts) with configurable redaction, and import the bundle on another Allen instance for read-only replay.
 - **A seeded agent org.** On first boot Allen seeds 6 teams (executive, product, engineering, quality, meta, unassigned) and 20+ agents — team leads that orchestrate and specialists that write code, review, test, document, investigate bugs, and resolve PR feedback.
 - **YAML workflows.** Multi-step pipelines with agent nodes, code nodes, conditionals, parallel branches, sub-workflows, and human checkpoints. Nine workflows ship built-in (planning, bug fix, feature implementation, PR review resolution, self-healing, and more).
 - **Isolated workspaces.** Every coding task runs in a dedicated git worktree with a live terminal (WebSocket PTY), file watcher, and a reverse proxy to preview dev servers.
@@ -161,6 +161,8 @@ See [`docs/first-workflow.md`](docs/first-workflow.md) for a step-by-step walkth
 **Workspaces.** Each coding task gets a git worktree under `<ALLEN_HOME>/worktrees/`. Clicking a workspace in the sidebar opens it in a **workspace-mode chat** (`/chat?workspaceId=…`): a browser-style tab strip of linked chats with `+ New Chat`, close/restore, and a context bar showing the repo, branch, and worktree path. Agents in a workspace-linked chat automatically run with `cwd` set to the worktree. The Workspaces page (accessible from the context bar) still gives you the live terminal, file browser, and dev-server preview proxy.
 
 **Executions & traces.** The Executions page lists running and recent runs (paginated, filterable). Drill into any execution for the node timeline, per-node logs, tool calls with payloads, token usage breakdown (cached input, non-cached input, output — per-node and execution totals), cost accounting, checkpoints, and artifacts.
+
+**Chat export/import.** Export any chat session as a downloadable JSON bundle that includes messages, tool calls, execution trees, logs, traces, artifacts, interventions, watcher state, and code-diff snapshots. Toggles control what goes in; redaction options sanitise paths, identity, and secrets. Import a bundle on another Allen instance: a preview step shows counts and warnings, then the import creates a new local chat clearly labelled as read-only replay with disabled composer and a persistent banner.
 
 **Multi-window desktop.** The Electron desktop app supports multiple independent windows (File → New Window, Cmd+N, or macOS Dock right-click → New Window). Each window shares the same backend but navigates independently — working in one window on Chat while another browses Workspaces, for instance. Closing a window does not shut down the shared runtime or affect other open windows. See [Desktop module](docs/modules/desktop.md).
 

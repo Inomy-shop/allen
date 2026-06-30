@@ -15,6 +15,34 @@ import { isClaudeFamilyProvider } from '../services/chat-providers.js';
 import { buildHumanResumeInput, type HumanInterventionPayload } from '@allen/engine';
 import { ChatContextPacketService } from '../services/context/core/chat-context-packet.service.js';
 
+/**
+ * Guard: reject mutations on imported (read-only replay) sessions.
+ * Returns 403 if the session is imported; call this at the top of mutating handlers.
+ */
+async function rejectIfImportedSession(
+  db: Db,
+  res: Response,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    if (!ObjectId.isValid(sessionId)) return false;
+    const session = await db.collection('chat_sessions').findOne(
+      { _id: new ObjectId(sessionId) },
+      { projection: { isImported: 1 } },
+    );
+    if (session?.isImported) {
+      res.status(403).json({
+        error: 'IMPORTED_SESSION_READONLY',
+        message: 'Cannot perform this action on imported replay sessions',
+      });
+      return true;
+    }
+  } catch {
+    // If lookup fails, allow the request to proceed
+  }
+  return false;
+}
+
 // Simple in-memory rate limiter for the automation-message endpoint.
 // Limits each authenticated caller (by sub) to 60 requests per minute.
 const _automationMsgRateLimit = new Map<string, { count: number; windowStart: number }>();
@@ -164,6 +192,7 @@ export function chatRoutes(db: Db): Router {
   // message without hitting "session busy" or "no rollout found" errors.
   router.post('/sessions/:id/cancel', async (req: Request, res: Response) => {
     const sessionId = param(req, 'id');
+    if (await rejectIfImportedSession(db, res, sessionId)) return;
     const result = await cancelChatSession(sessionId, db);
     res.json(result);
   });
@@ -175,6 +204,7 @@ export function chatRoutes(db: Db): Router {
   router.post('/sessions/:id/steer', async (req: Request, res: Response) => {
     try {
       const sessionId = param(req, 'id');
+      if (await rejectIfImportedSession(db, res, sessionId)) return;
       const { content } = req.body ?? {};
       if (!content || typeof content !== 'string' || !content.trim()) {
         return res.status(400).json({ error: 'content is required' });
@@ -466,6 +496,7 @@ export function chatRoutes(db: Db): Router {
   router.post('/sessions/:id/code-diffs', async (req: Request, res: Response) => {
     try {
       const sessionId = param(req, 'id');
+      if (await rejectIfImportedSession(db, res, sessionId)) return;
       const parentMessageId = typeof req.body.messageId === 'string' ? req.body.messageId : '';
       const executionIds = Array.isArray(req.body.executionIds) ? req.body.executionIds.map(String).filter(Boolean) : [];
       const requestedMode = req.body.mode === 'branch' || req.body.mode === 'working' || req.body.mode === 'auto' || req.body.mode === 'workspace'
@@ -522,6 +553,7 @@ export function chatRoutes(db: Db): Router {
   router.post('/sessions/:id/messages', async (req: Request, res: Response) => {
     try {
       const sessionId = param(req, 'id');
+      if (await rejectIfImportedSession(db, res, sessionId)) return;
       const { content, agent } = req.body;
       const cwd = typeof req.body.cwd === 'string' ? req.body.cwd : undefined;
       if (!content || typeof content !== 'string') {
@@ -551,6 +583,7 @@ export function chatRoutes(db: Db): Router {
   router.post('/sessions/:id/queue', async (req: Request, res: Response) => {
     try {
       const sessionId = param(req, 'id');
+      if (await rejectIfImportedSession(db, res, sessionId)) return;
       const { content, agent } = req.body;
       const cwd = typeof req.body.cwd === 'string' ? req.body.cwd : undefined;
       if (!content || typeof content !== 'string') {
@@ -764,6 +797,7 @@ export function chatRoutes(db: Db): Router {
   router.post('/sessions/:id/agent-answer', async (req: Request, res: Response) => {
     try {
       const sessionId = param(req, 'id');
+      if (await rejectIfImportedSession(db, res, sessionId)) return;
       const { answer } = req.body;
       if (!answer) return res.status(400).json({ error: 'answer is required' });
 
@@ -824,6 +858,7 @@ export function chatRoutes(db: Db): Router {
     }
 
     const id = param(req, 'id');
+    if (await rejectIfImportedSession(db, res, id)) return;
     const { role, content } = req.body as { role?: string; content?: string };
     if (!role || !['user', 'assistant'].includes(role)) {
       return res.status(400).json({ error: 'role must be one of: user, assistant' });

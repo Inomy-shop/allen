@@ -2,7 +2,7 @@ import express from 'express';
 import request from 'supertest';
 import { MongoClient, type Db } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockSubmitInput = vi.hoisted(() => vi.fn());
 
@@ -386,5 +386,96 @@ describe('POST /api/executions/:id/recover-model', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('invalid_reasoning_effort');
+  });
+});
+
+describe('POST /api/executions/:id/input — imported execution guard', () => {
+  let mongo: MongoMemoryServer;
+  let client: MongoClient;
+  let db: Db;
+  let app: express.Express;
+
+  beforeAll(async () => {
+    mongo = await MongoMemoryServer.create();
+    client = new MongoClient(mongo.getUri());
+    await client.connect();
+    db = client.db('execution-input-guard-test');
+
+    app = express();
+    app.use(express.json());
+    app.use('/api/executions', executionRoutes(db));
+  });
+
+  afterEach(async () => {
+    await db.collection('executions').deleteMany({});
+  });
+
+  afterAll(async () => {
+    await client.close();
+    await mongo.stop();
+  });
+
+  it('returns 403 IMPORTED_SESSION_READONLY when execution has meta.imported === true', async () => {
+    const execId = 'imported-exec-001';
+
+    // Seed an execution with imported flag
+    await db.collection('executions').insertOne({
+      id: execId,
+      meta: { imported: true },
+      status: 'waiting_for_input',
+      workflowId: 'wf-1',
+      workflowName: 'test',
+      state: {},
+      currentNodes: ['ask_user'],
+      input: {},
+      sessions: {},
+      retryCounts: {},
+      nodeAttempts: {},
+      completedNodes: [],
+      cost: { actual: null, estimated: 0 },
+      durationMs: 0,
+      startedAt: new Date(),
+    });
+
+    const res = await request(app)
+      .post(`/api/executions/${execId}/input`)
+      .send({ node: 'ask_user', data: { response: 'yes' } });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: 'IMPORTED_SESSION_READONLY',
+      message: 'Cannot resume or retry imported execution records',
+    });
+  });
+
+  it('returns 200 for non-imported execution', async () => {
+    const execId = 'normal-exec-001';
+
+    // Seed a normal execution (no meta.imported)
+    await db.collection('executions').insertOne({
+      id: execId,
+      meta: {},
+      status: 'waiting_for_input',
+      workflowId: 'wf-1',
+      workflowName: 'test',
+      state: {},
+      currentNodes: ['ask_user'],
+      input: {},
+      sessions: {},
+      retryCounts: {},
+      nodeAttempts: {},
+      completedNodes: [],
+      cost: { actual: null, estimated: 0 },
+      durationMs: 0,
+      startedAt: new Date(),
+    });
+
+    const res = await request(app)
+      .post(`/api/executions/${execId}/input`)
+      .send({ node: 'ask_user', data: { response: 'yes' } });
+
+    // Should pass the guard and proceed to submitInput
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'input_received' });
   });
 });

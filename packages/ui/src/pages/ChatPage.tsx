@@ -12,7 +12,9 @@ import { ToolCallLog } from '../components/common/ToolCallLog';
 import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, type ChatQueueItem } from '../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
 import WorkspaceChatTabs, { type WorkspaceChatTab, getTabKey } from '../components/chat/WorkspaceChatTabs';
-import { AppWindow, BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Server, Terminal, X, Check, Navigation2, Pencil, Trash2 } from 'lucide-react';
+import ChatExportDialog from '../components/chat/ChatExportDialog';
+import ImportedChatBanner from '../components/chat/ImportedChatBanner';
+import { AppWindow, BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Server, Terminal, X, Check, Navigation2, Pencil, Trash2, Upload } from 'lucide-react';
 import { XTerminal } from '../components/workspace/XTerminal';
 import WorkspaceServersTab from '../components/workspace/WorkspaceServersTab';
 
@@ -267,6 +269,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const workspaceTerminalCounterRef = useRef(0);
   const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null);
   const [ideMenuOpen, setIdeMenuOpen] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
@@ -1351,7 +1354,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         ? { id: selectedRepo._id, name: selectedRepo.name, path: selectedRepo.path }
         : null;
 
-  const composerDisabled = activeSession?.source === 'slack' || Boolean(config?.disabled);
+  const composerDisabled = activeSession?.source === 'slack' || Boolean(config?.disabled) || Boolean(activeSession?.isImported);
   const { dragActive, dropProps } = useFileDropZone(
     (files) => chatInputRef.current?.uploadFiles(files),
     composerDisabled,
@@ -1409,7 +1412,32 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           </div>
         )}
         {!workspaceServersActive && (
-          loadingMessages && messages.length === 0 && !streaming ? (
+          <>
+          {activeSessionId && (
+            <>
+              {activeSession?.isImported && (
+                <ImportedChatBanner session={activeSession} />
+              )}
+              <div className="flex items-center justify-between border-b border-app px-5 py-1.5 min-h-[33px]">
+                <span className="text-[12px] font-medium text-theme-primary truncate max-w-[400px]">
+                  {activeSession?.title || 'Untitled conversation'}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setExportDialogOpen(true)}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors"
+                    title="Export this chat"
+                    aria-label="Export chat"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    Export
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+          {loadingMessages && messages.length === 0 && !streaming ? (
             <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
           ) : messages.length === 0 && !activeSessionId && !streaming ? (
             isDesignMode ? (
@@ -1445,8 +1473,9 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
               <div className="chat-empty-stream" aria-label="New conversation" />
             )
           ) : (
-            <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentReports={agentReports} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={answerUserQuestion} onAnswerWorkflowIntervention={answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} watchers={watchers} />
-          )
+            <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentReports={agentReports} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={activeSession?.isImported ? undefined : answerUserQuestion} onAnswerWorkflowIntervention={activeSession?.isImported ? undefined : answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} watchers={watchers} />
+          )}
+          </>
         )}
         </>
       )}
@@ -1623,6 +1652,8 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
               ? config.disabledReason
               : activeSession?.source === 'slack'
               ? 'This conversation is managed via Slack. Reply in the Slack thread to continue.'
+              : activeSession?.isImported
+              ? (activeSession.replayLabel || 'Imported replay (read-only)')
               : undefined
           }
           providers={providers}
@@ -1780,6 +1811,14 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           filesViewRequest={filesViewRequest}
           onAnswerWorkflowIntervention={answerWorkflowIntervention}
           onClose={() => setSidePanelOpen(false)}
+        />
+      )}
+      {activeSessionId && (
+        <ChatExportDialog
+          sessionId={activeSessionId}
+          sessionTitle={activeSession?.title || 'Conversation'}
+          isOpen={exportDialogOpen}
+          onClose={() => setExportDialogOpen(false)}
         />
       )}
     </div>

@@ -46,6 +46,7 @@ nodes:
   draft_prd_v1:
     agent: requirements-analyst
     agentOverrides:
+      provider: claude
       model: claude-opus-4-8
     prompt: |
       You are writing a comprehensive Product Requirements Document (PRD).
@@ -153,6 +154,7 @@ nodes:
   synthesize_prd:
     agent: product-manager
     agentOverrides:
+      provider: claude
       model: claude-opus-4-8
     prompt: |
       You are the Product Manager. Three parallel requirements-analyst agents

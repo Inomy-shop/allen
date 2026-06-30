@@ -13,8 +13,10 @@ The server is Allen's API, persistence, integration, and runtime coordination la
 - Seed the built-in teams, agents, workflows, and scheduled jobs.
 - Manage users, auth, repos, chats, executions, interventions, artifacts, files, and workspaces.
   - Repo management includes a `PUT /api/repos/:id/default-branch` endpoint that fetches remote refs, validates `origin/<branch>` exists, switches the checkout via `git switch -C <branch> origin/<branch>`, and persists the branch as the new `detected.defaultBranch`. Local-only branches are rejected.
-  - Chat management includes send, queue, and steer endpoints. `POST /api/chat/sessions/:id/steer` injects a user message into the running agent turn mid-stream — it bypasses the turn queue and delivers the message directly into the active persistent runtime (Claude or Codex). If no active turn exists, the message falls back transparently to the existing queue behavior.
-- Run the **Execution Watcher** — a background poller (`WatcherService`) that automatically monitors chat-started workflow and agent executions, generates deterministic status text from execution logs and known milestones, publishes `watcher_update` SSE events in real time, and sends hidden Assistant triggers when executions complete, fail, are cancelled, or wait for input. Boot-time reconciliation recovers watchers after server restart.
+  - Chat management includes send, queue, steer, export, and import endpoints. `POST /api/chat/sessions/:id/steer` injects a user message into the running agent turn mid-stream — it bypasses the turn queue and delivers the message directly into the active persistent runtime (Claude or Codex). If no active turn exists, the message falls back transparently to the existing queue behavior.
+  - **Chat export/import**: `GET /api/chat/sessions/:id/export-options` returns counts and estimated size for a download preview. `POST /api/chat/sessions/:id/export` assembles and streams a portable JSON bundle with configurable toggles (messages, tool calls, logs, traces, artifacts, code-diffs, thinking text) and server-side redaction (paths, identity, secrets). `GET /api/chat/sessions/:id/export-bundle` returns the last completed export. `POST /api/chat/import/preview` validates bundle JSON, version, required fields, XSS patterns, and size. `POST /api/chat/import/confirm` persists the bundle with full ID remapping and reverse-order rollback on failure.
+  - **Imported replay guards**: imported sessions block message send, cancel, steer, queue, code-diff creation, agent answer, and automation messages. Imported executions block resume and retry. Interventions on imported sessions block respond. Watcher registration rejects imported sessions; `pollOnce()` force-resolves any watcher linked to an imported session or imported execution.
+- Run the **Execution Watcher** — a background poller (`WatcherService`) that automatically monitors chat-started workflow and agent executions, generates deterministic status text from execution logs and known milestones, publishes `watcher_update` SSE events in real time, and sends hidden Assistant triggers when executions complete, fail, are cancelled, or wait for input. Boot-time reconciliation recovers watchers after server restart. Imported replay watchers are stored with `watcherStatus: 'resolved'` so the poller never picks them up; `pollOnce()` also force-resolves any watcher for an imported session or imported execution.
 - Coordinate workspaces, terminals, file watchers, and preview proxies.
 - Integrate with GitHub, Linear, Slack, MCP servers, and scheduled jobs.
 - Dispatch workflow and agent runs through the engine, including model-recovery retries via `POST /api/executions/:executionId/recover-model`.
@@ -46,6 +48,8 @@ The server is the boundary between product actions and runtime execution. It sho
 - Runtime config: `packages/server/src/runtime/`
 - Execution Watcher service: `packages/server/src/services/watcher.service.ts`
 - Execution Watcher routes: `packages/server/src/routes/watcher.routes.ts`
+- Chat Export/Import services: `packages/server/src/services/chat-export.service.ts`, `packages/server/src/services/chat-import.service.ts`
+- Chat Export/Import routes: `packages/server/src/routes/chat-export-import.routes.ts`
 
 ## Related concepts
 

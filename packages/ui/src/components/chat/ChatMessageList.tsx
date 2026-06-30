@@ -565,16 +565,26 @@ function artifactIdFromUrl(url: string): string | null {
   return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
+function resolveChatHref(href: string): URL | null {
+  try {
+    return new URL(href, typeof window !== 'undefined' ? window.location.href : 'http://localhost/');
+  } catch {
+    return null;
+  }
+}
+
+function isSafeChatHref(href: string): boolean {
+  const resolved = resolveChatHref(href);
+  if (!resolved) return false;
+  return ['http:', 'https:', 'mailto:', 'tel:'].includes(resolved.protocol);
+}
+
 function openNonArtifactChatLink(event: React.MouseEvent<HTMLAnchorElement>, href: string): void {
   if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
 
   if (typeof window !== 'undefined' && window.allenDesktop?.openExternal) {
-    let resolved: URL;
-    try {
-      resolved = new URL(href, window.location.href);
-    } catch {
-      return;
-    }
+    const resolved = resolveChatHref(href);
+    if (!resolved) return;
 
     const isHttpUrl = resolved.protocol === 'http:' || resolved.protocol === 'https:';
     const isSameOrigin = resolved.origin === window.location.origin;
@@ -588,12 +598,17 @@ function openNonArtifactChatLink(event: React.MouseEvent<HTMLAnchorElement>, hre
 
 function ArtifactMarkdownLink({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) {
   const artifactId = artifactIdFromUrl(href);
+  const safeHref = isSafeChatHref(href);
   const [artifact, setArtifact] = useState<ArtifactDoc | null>(null);
   const [content, setContent] = useState('');
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (!safeHref) {
+    return <span className={className} title="Unsafe link removed">{children}</span>;
+  }
 
   if (!artifactId) {
     return (
