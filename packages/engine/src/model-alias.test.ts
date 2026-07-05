@@ -16,6 +16,10 @@ describe('normalizeModelAlias', () => {
     expect(normalizeModelAlias('claude-sonnet-4-6')).toBe('claude-sonnet-4-6');
   });
 
+  it('passes Claude Sonnet 5 fullId through unchanged', () => {
+    expect(normalizeModelAlias('claude-sonnet-5')).toBe('claude-sonnet-5');
+  });
+
   // ── Legacy alias resolution ──
 
   it('resolves legacy "sonnet" alias to fullId', () => {

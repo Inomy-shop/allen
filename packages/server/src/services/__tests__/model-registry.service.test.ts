@@ -188,10 +188,10 @@ describe('ModelRegistryService', () => {
   describe('syncSeedModels (AC-001)', () => {
     it('seeds all models into an empty collection with seededWith snapshots', async () => {
       const result = await service.syncSeedModels();
-      expect(result.inserted).toBe(35);
+      expect(result.inserted).toBe(36);
       expect(result.refreshed).toBe(0);
       const all = await service.list({ includeInactive: true });
-      expect(all).toHaveLength(35);
+      expect(all).toHaveLength(36);
       expect(all.every((m) => (m as any).seededWith)).toBe(true);
     });
 
@@ -199,7 +199,7 @@ describe('ModelRegistryService', () => {
       await service.syncSeedModels();
       const second = await service.syncSeedModels();
       expect(second).toEqual({ inserted: 0, refreshed: 0, preserved: 0 });
-      expect(mockDb.store.model_registry).toHaveLength(35);
+      expect(mockDb.store.model_registry).toHaveLength(36);
     });
 
     it('refreshes untouched rows when the seed catalog prices change', async () => {
@@ -240,7 +240,7 @@ describe('ModelRegistryService', () => {
       const result = await service.syncSeedModels();
       const opus = mockDb.store.model_registry.find((m: any) => m.fullId === 'claude-opus-4-7') as any;
       expect(result.refreshed).toBe(1);
-      expect(result.inserted).toBe(34); // the other 34 seed rows
+      expect(result.inserted).toBe(35); // the other 35 seed rows
       expect(opus.costInputPerMTok).toBe(5);
       expect('costPerTurn' in opus).toBe(false);
       expect(opus.seededWith).toBeTruthy();
@@ -443,13 +443,25 @@ describe('ModelRegistryService', () => {
     it('seed data includes models from seeded providers only; OpenRouter is manual-only', async () => {
       await service.syncSeedModels();
       const all = await service.list({ includeInactive: true });
-      expect(all.filter((m) => m.provider === 'claude')).toHaveLength(5);
+      expect(all.filter((m) => m.provider === 'claude')).toHaveLength(6);
       expect(all.filter((m) => m.provider === 'codex')).toHaveLength(10);
       expect(all.filter((m) => m.provider === 'deepseek')).toHaveLength(2);
       expect(all.filter((m) => m.provider === 'xiaomi-mimo')).toHaveLength(1);
       expect(all.filter((m) => m.provider === 'kimi')).toHaveLength(2);
       expect(all.filter((m) => m.provider === 'zai')).toHaveLength(15);
       expect(all.filter((m) => m.provider === 'openrouter')).toHaveLength(0);
+    });
+
+    it('claude-sonnet-5 has current intro pricing and default tier', async () => {
+      await service.syncSeedModels();
+      const all = await service.list({ includeInactive: true });
+      const m = all.find((x) => x.fullId === 'claude-sonnet-5')!;
+      expect(m.provider).toBe('claude');
+      expect(m.displayName).toBe('Sonnet 5');
+      expect(m.costInputPerMTok).toBe(2);
+      expect(m.costCacheReadPerMTok).toBe(0.20);
+      expect(m.costOutputPerMTok).toBe(10);
+      expect(m.tier).toBe('default');
     });
 
     // ── REQ-005 / R1, R5, R6: Z.AI seed models ──
@@ -518,12 +530,12 @@ describe('ModelRegistryService', () => {
         expect(m.costOutputPerMTok).toBe(0.10);
       });
 
-      it('re-running syncSeedModels keeps registry count at 35 (idempotent)', async () => {
+      it('re-running syncSeedModels keeps registry count at 36 (idempotent)', async () => {
         await service.syncSeedModels();
         const second = await service.syncSeedModels();
         expect(second).toEqual({ inserted: 0, refreshed: 0, preserved: 0 });
         const all = await service.list({ includeInactive: true });
-        expect(all).toHaveLength(35);
+        expect(all).toHaveLength(36);
       });
     });
   });
@@ -743,13 +755,14 @@ describe('ModelRegistryService', () => {
   // ── LEGACY_ALIAS_LOOKUP_MAP ──
 
   describe('LEGACY_ALIAS_LOOKUP_MAP', () => {
-    it('contains all 35 seed entries and no OpenRouter defaults', () => {
+    it('contains all 36 seed entries and no OpenRouter defaults', () => {
       const keys = Object.keys(LEGACY_ALIAS_LOOKUP_MAP);
-      expect(keys).toHaveLength(35);
+      expect(keys).toHaveLength(36);
       expect(keys).toContain('fable');
       expect(keys).toContain('sonnet');
       expect(keys).toContain('opus');
       expect(keys).toContain('haiku');
+      expect(keys).toContain('claude-sonnet-5');
       expect(keys).toContain('claude-opus-4-8');
       expect(keys).toContain('gpt-5.5');
       expect(keys).toContain('kimi-k2.5');

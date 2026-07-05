@@ -116,6 +116,159 @@ describe('OrgSeedService SEED_OVERRIDE policy', () => {
     expect(team.mission).not.toBe('custom mission');
   });
 
+  it('preserves existing agent provider and model during SEED_OVERRIDE=true seed refresh (AC1, AC2, AC3)', async () => {
+    process.env.SEED_OVERRIDE = 'true';
+    const db = makeDb({
+      agents: [
+        {
+          name: 'engineering-lead',
+          displayName: 'Old Engineering Lead',
+          system: 'old instructions — should be refreshed',
+          provider: 'codex',
+          model: 'gpt-9-custom-test-value',
+          spawnTargets: ['ui-copywriter'],
+          teamName: 'engineering',
+          teamRole: 'lead',
+          isBuiltIn: true,
+        },
+      ],
+    });
+
+    await new OrgSeedService(db).seed();
+
+    const lead = db.store.agents.find((a: any) => a.name === 'engineering-lead');
+    expect(lead.provider).toBe('codex');
+    expect(lead.model).toBe('gpt-9-custom-test-value');
+    expect(lead.displayName).toBe('Engineering Lead');
+    expect(lead.system).not.toContain('old instructions');
+  });
+
+  it('preserves team lead agent provider and model during seed refresh (AC5)', async () => {
+    process.env.SEED_OVERRIDE = 'true';
+    const db = makeDb({
+      agents: [
+        {
+          name: 'qa-lead',
+          displayName: 'Old QA Lead',
+          system: 'old qa lead prompt',
+          provider: 'codex',
+          model: 'claude-5-custom',
+          spawnTargets: ['acceptance-tester'],
+          teamName: 'quality',
+          teamRole: 'lead',
+          isBuiltIn: true,
+        },
+      ],
+    });
+
+    await new OrgSeedService(db).seed();
+
+    const lead = db.store.agents.find((a: any) => a.name === 'qa-lead');
+    expect(lead.provider).toBe('codex');
+    expect(lead.model).toBe('claude-5-custom');
+    expect(lead.displayName).toBe('QA Lead');
+    expect(lead.system).not.toContain('old qa lead prompt');
+  });
+
+  it('preserves workflow-related agent provider and model during seed refresh (AC6)', async () => {
+    process.env.SEED_OVERRIDE = 'true';
+    const db = makeDb({
+      agents: [
+        {
+          name: 'backend-developer',
+          displayName: 'Old Backend Dev',
+          system: 'old backend prompt',
+          provider: 'google',
+          model: 'gemini-ultra-custom',
+          spawnTargets: [],
+          teamName: 'engineering',
+          teamRole: 'member',
+          isBuiltIn: true,
+        },
+      ],
+    });
+
+    await new OrgSeedService(db).seed();
+
+    const agent = db.store.agents.find((a: any) => a.name === 'backend-developer');
+    expect(agent.provider).toBe('google');
+    expect(agent.model).toBe('gemini-ultra-custom');
+    expect(agent.system).not.toContain('old backend prompt');
+  });
+
+  it('preserves custom provider/model on multiple existing agents during seed refresh (AC7 regression)', async () => {
+    process.env.SEED_OVERRIDE = 'true';
+    const db = makeDb({
+      agents: [
+        {
+          name: 'engineering-lead',
+          displayName: 'Old Engineering Lead',
+          system: 'old lead prompt',
+          provider: 'codex',
+          model: 'gpt-lead-custom',
+          spawnTargets: ['backend-developer', 'frontend-developer'],
+          teamName: 'engineering',
+          teamRole: 'lead',
+          isBuiltIn: true,
+        },
+        {
+          name: 'backend-developer',
+          displayName: 'Old Backend Dev',
+          system: 'old backend prompt',
+          provider: 'anthropic',
+          model: 'claude-4-custom',
+          spawnTargets: [],
+          teamName: 'engineering',
+          teamRole: 'member',
+          isBuiltIn: true,
+        },
+        {
+          name: 'frontend-developer',
+          displayName: 'Old Frontend Dev',
+          system: 'old frontend prompt',
+          provider: 'google',
+          model: 'gemini-ultra-custom',
+          spawnTargets: [],
+          teamName: 'engineering',
+          teamRole: 'member',
+          isBuiltIn: true,
+        },
+      ],
+    });
+
+    await new OrgSeedService(db).seed();
+
+    const lead = db.store.agents.find((a: any) => a.name === 'engineering-lead');
+    const backend = db.store.agents.find((a: any) => a.name === 'backend-developer');
+    const frontend = db.store.agents.find((a: any) => a.name === 'frontend-developer');
+
+    expect(lead.provider).toBe('codex');
+    expect(lead.model).toBe('gpt-lead-custom');
+    expect(lead.displayName).toBe('Engineering Lead');
+    expect(lead.system).not.toContain('old lead prompt');
+
+    expect(backend.provider).toBe('anthropic');
+    expect(backend.model).toBe('claude-4-custom');
+    expect(backend.system).not.toContain('old backend prompt');
+
+    expect(frontend.provider).toBe('google');
+    expect(frontend.model).toBe('gemini-ultra-custom');
+    expect(frontend.system).not.toContain('old frontend prompt');
+  });
+
+  it('creates new seeded agents with seed provider and model defaults (AC4)', async () => {
+    const db = makeDb();
+
+    await new OrgSeedService(db).seed();
+
+    const lead = db.store.agents.find((a: any) => a.name === 'engineering-lead');
+    expect(lead, 'engineering-lead must be seeded').toBeDefined();
+    expect(typeof lead.provider).toBe('string');
+    expect(lead.provider.length).toBeGreaterThan(0);
+    expect(typeof lead.model).toBe('string');
+    expect(lead.model.length).toBeGreaterThan(0);
+  });
+
   it('does not overwrite pr-creator when SEED_OVERRIDE is disabled', async () => {
     // pr-creator used to be in FORCE_UPDATE_AGENT_NAMES, but that bypass
     // was removed so SEED_OVERRIDE=false means ALL built-ins are preserved.

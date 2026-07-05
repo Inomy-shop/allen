@@ -12,7 +12,7 @@ import type { Response } from 'express';
 import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
 import { getDefaultChatModel, getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getEnabledProvidersFromRegistry, getTitleGenProviderModel, isClaudeCompatibleProvider, isClaudeFamilyProvider } from './chat-providers.js';
 import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
-import { buildPlannerSystemPrompt, selectChatPersona, type ChatPersona } from './chat-persona.js';
+import { buildPlannerSystemPrompt, selectChatPersona, DOCUMENT_COMMENT_WORKFLOW, type ChatPersona } from './chat-persona.js';
 import { AlertService } from './alert.service.js';
 import { registerActiveSession, unregisterActiveSession, waitForBackgroundTasks } from './chat-tools.js';
 import { resolveCostUsd } from './model-cost.service.js';
@@ -582,7 +582,7 @@ Examples:
 - "Work on LIN-123" → load the matching routing playbook silently, inspect the ticket via Linear if available, compare workflows/agents/MCP tools, present plan and exact workflow/agent inputs, ask confirmation, then execute if confirmed
 - If an execution is waiting for input → present the fields, then submit_execution_input
 
-For code tasks: direct specialist spawns need an Allen workspace first; workflows with their own create_workspace node should receive the registered repo_path and create the worktree themselves. For read-only planning or explanation, answer directly or use read-only tools. Remind any sub-agent you spawn to save its deliverables via allen_save_artifact so they appear in this chat's Artifacts panel.${orgBlock}${reposBlock}`;
+For code tasks: direct specialist spawns need an Allen workspace first; workflows with their own create_workspace node should receive the registered repo_path and create the worktree themselves. For read-only planning or explanation, answer directly or use read-only tools. Remind any sub-agent you spawn to save its deliverables via allen_save_artifact so they appear in this chat's Artifacts panel.${orgBlock}${reposBlock}${DOCUMENT_COMMENT_WORKFLOW}`;
 }
 
 // ── Active Query Tracking ──

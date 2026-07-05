@@ -232,7 +232,7 @@ export const PROVIDERS: ProviderConfig[] = [
   {
     provider: 'claude',
     label: 'Claude',
-    models: ['claude-fable-5', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'],
+    models: ['claude-fable-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'],
     defaultModel: 'claude-sonnet-4-6',
     requiresKey: null,
     supportsMcp: true,

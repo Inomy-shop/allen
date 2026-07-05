@@ -26,6 +26,7 @@ const LEGACY_ALIAS_LOOKUP_MAP: Record<string, string> = {
   'opus': 'claude-opus-4-7',
   'haiku': 'claude-haiku-4-5-20251001',
   // Identity entries (alias === fullId) needed for read-time resolution
+  'claude-sonnet-5': 'claude-sonnet-5',
   'gpt-5.5': 'gpt-5.5',
   'gpt-5.4': 'gpt-5.4',
   'gpt-5.3-codex': 'gpt-5.3-codex',

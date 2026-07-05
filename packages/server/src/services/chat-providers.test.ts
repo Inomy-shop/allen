@@ -342,7 +342,7 @@ describe('Claude provider registry', () => {
   it('exposes Fable in the Claude CLI model list', () => {
     const claude = PROVIDERS.find(p => p.provider === 'claude');
     expect(claude).toBeDefined();
-    expect(claude?.models).toEqual(['claude-fable-5', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-haiku-4-5-20251001']);
+    expect(claude?.models).toEqual(['claude-fable-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-haiku-4-5-20251001']);
   });
 });
 
@@ -814,7 +814,7 @@ describe('getEnabledProvidersFromRegistry (REQ-014)', () => {
     const providers = await getEnabledProvidersFromRegistry(db);
     const claude = providers.find((p) => p.provider === 'claude');
     expect(claude).toBeDefined();
-    expect(claude!.models).toEqual(['claude-fable-5', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-haiku-4-5-20251001']);
+    expect(claude!.models).toEqual(['claude-fable-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-haiku-4-5-20251001']);
   });
 
   it('falls back to static defaults when registry query throws', async () => {

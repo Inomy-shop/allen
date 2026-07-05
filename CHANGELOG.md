@@ -6,6 +6,20 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-07-05
+
+### Added
+
+- **Document comments, versioning, and agent-assisted revisions** (`packages/server`, `packages/ui`): full document/artifact commenting with a comment timeline, document versioning with restore and version comparison, agent-readable comments, and agent-assisted revision of documents.
+- **Claude Sonnet 5 in the model registry** (`packages/server`): added Claude Sonnet 5 to the seeded model registry.
+
+### Fixed
+
+- **Guard agent capability search** (`packages/ui`): agent capability lists are normalized before rendering and searching, so malformed legacy/imported capability values can no longer crash the Agents and Teams pages.
+- **Watcher polling interval** (`packages/server`): corrected the execution watcher polling interval.
+- **Preserve agent model and provider during seed refresh** (`packages/server`): when `SEED_OVERRIDE=true` refreshes existing seeded agents, it no longer overwrites user-configured model and provider settings, so operators don't need to reconfigure them after a refresh.
+- **Chat tab switching** (`packages/ui`): switching between workspace chat/terminal/servers tabs no longer fully remounts `ChatMessageList`, eliminating the smooth scroll-from-top animation on every tab switch.
+
 ## [0.1.17] - 2026-06-30
 
 ### Added

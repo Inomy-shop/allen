@@ -2,6 +2,36 @@ import type { AuthUser } from '../stores/authStore';
 import { request } from './apiCore';
 import type { JudgeRunDoc, FindingDoc, ReviewTaskDoc, WorkerAssignmentDoc, ReviewDecisionDoc, RemediationDoc, CurationRevisionDoc, LearningPromotionDoc, PagedContextQualityResponse, OrchestrationSessionDoc } from './contextQualityTypes';
 
+// ── Document Comments & Versioning ─────────────────────────────────────────────
+export { documents } from './documents';
+export type {
+  DocumentContentType,
+  VersionOriginType,
+  CommentStatus,
+  AnchorType,
+  AuthorType,
+  DocumentVersion,
+  DocumentIdentityDoc,
+  DocumentIdentitySummary,
+  CommentAnchor,
+  CommentResolution,
+  DocumentCommentDoc,
+  WriteAnchor,
+  DiffLine as DocumentDiffLine,
+  CompareResponse as DocumentCompareResponse,
+  VersionListEntry,
+  VersionListResponse,
+  VersionDetailResponse,
+  CreateVersionResponse,
+  RestoreVersionResponse,
+  CreateCommentResponse,
+  ResolveCommentResponse,
+  ReopenCommentResponse,
+  TimelineEvent,
+  TimelineResponse,
+  ArtifactEligibilityResult,
+} from './documents';
+
 // ── Alerts ───────────────────────────────────────────────────────────────
 export const alerts = {
   list: (unread?: boolean) => request<any[]>(`/alerts${unread ? '?unread=true' : ''}`),

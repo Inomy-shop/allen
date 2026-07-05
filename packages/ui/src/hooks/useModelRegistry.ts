@@ -64,6 +64,7 @@ const LEGACY_ALIAS_MAP: Record<string, string> = {
   sonnet: 'claude-sonnet-4-6',
   opus: 'claude-opus-4-7',
   haiku: 'claude-haiku-4-5-20251001',
+  'claude-sonnet-5': 'claude-sonnet-5',
   'gpt-5.5': 'gpt-5.5',
   'gpt-5.4': 'gpt-5.4',
   'gpt-5.3-codex': 'gpt-5.3-codex',

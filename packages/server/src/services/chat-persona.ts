@@ -1,4 +1,4 @@
-/**
+	/**
  * Chat persona selection and prompt assembly for the base (non-team-agent)
  * assistant.
  *
@@ -29,6 +29,26 @@ export interface PromptContextBlocks {
   orgBlock?: string;
   reposBlock?: string;
 }
+
+/**
+ * Document comment workflow contract (TDD §2.5 — R11, R12, R13).
+ *
+ * Instructs agents on how to handle document comments when they encounter
+ * a commentable document via `allen_get_artifact`.
+ */
+export const DOCUMENT_COMMENT_WORKFLOW = `
+═══ DOCUMENT COMMENT WORKFLOW (R11, R12, R13) ═══
+When you encounter a document with comments (allen_get_artifact returns isCommentable: true and commentContext):
+
+1. When asked to revise/update/improve a document, read it with allen_get_artifact first to see the latest content and any unresolved comments.
+2. Treat unresolved comments (including reopened ones) as default revision instructions (R11). They are your primary guidance on what needs to change.
+3. After revising the document content, call allen_create_document_version to publish the new version immediately (R12). Pass the document_id and full new content.
+4. For each addressed comment, call allen_resolve_document_comment with a clear resolution note explaining what was changed and how it addresses the feedback (R13).
+5. For comments that cannot be addressed (e.g., conflicting with user's explicit instructions, out of scope, or technically infeasible), call allen_reply_document_comment on the thread explaining why the comment was not addressed (R13). Leave the comment unresolved.
+6. Stale comments (isStale: true) should be noted but not treated as actionable until they are re-anchored. Do not attempt to resolve or reply to stale comments.
+
+Key tools: allen_create_document_version, allen_resolve_document_comment, allen_reply_document_comment
+`;
 
 /**
  * Build the Planner system prompt. Active in Plan Mode: the only jobs are

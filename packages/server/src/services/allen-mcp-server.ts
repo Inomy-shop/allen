@@ -311,6 +311,11 @@ const TOOLS = [
   { name: 'allen_save_artifact', description: 'Save a plan, design doc, JSON, CSV, or text artifact that the user should be able to review later. Files under the run that spawned you — a workflow execution, chat session, or agent run. Prefer this over upload_file when the artifact is meant to be browsed from the Allen UI.', params: { filename: 'string (required) — relative path like "plan.md" or "design/api.json". No leading slash, no ".."', content: 'string (required) — file content as text. For binary, base64-encode and set content_type="binary".', content_type: 'string — "markdown" | "json" | "csv" | "text" | "code" | "binary" — inferred from extension if omitted', description: 'string — short human description shown in the artifacts list', language: 'string — language hint for content_type="code" (e.g. "python", "sql")', overwrite: 'boolean — default false; when true, replace an existing artifact with the same filename' } },
   { name: 'allen_list_artifacts', description: 'List the artifacts already saved for this run (or any run). Useful for referencing prior plans/docs when continuing work.', params: { root_id: 'string — override the current run\'s root; omit to list your own run\'s artifacts', root_type: 'string — "chat" | "workflow" | "agent"; used with root_id', limit: 'number — default 50' } },
   { name: 'allen_get_artifact', description: 'Fetch the content of an artifact by id (from allen_save_artifact or allen_list_artifacts).', params: { artifact_id: 'string (required)' } },
+
+  // ── Document Comments & Versioning (TDD §2.5) ──
+  { name: 'allen_create_document_version', description: 'Create a new version of a commentable document. Agents call this after revising document content to address unresolved comments.', params: { document_id: 'string (required) — The documentId from allen_get_artifact response', content: 'string (required) — Full new document content', addressed_comment_ids: 'object — array of comment IDs this version addresses', created_reason: 'string — Free-text reason for the update' } },
+  { name: 'allen_resolve_document_comment', description: 'Mark a document comment as resolved with a resolution note. Agents call this for comments they addressed through a document update.', params: { document_id: 'string (required) — The document identity', comment_id: 'string (required) — The comment to resolve', resolution_note: 'string (required) — Explanation of how the comment was addressed' } },
+  { name: 'allen_reply_document_comment', description: 'Reply to a document comment thread. Agents use this to leave a note on comments they cannot address (R13: "remain unresolved with a clear note explaining why").', params: { document_id: 'string (required) — The document identity', comment_id: 'string (required) — The parent comment to reply to', body: 'string (required) — Reply text' } },
 ];
 
 // ── API Call Helper ──
@@ -1140,7 +1145,73 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       // Fetch content via the public endpoint (same MIME rules as UI).
       const contentRes = await fetch(`${API_BASE}/api/artifacts/${encodeURIComponent(id)}/content`);
       const content = await contentRes.text();
-      return { ...meta, content, publicUrl: `${PUBLIC_BASE}/api/artifacts/${encodeURIComponent(id)}/content` };
+
+      // Check document identity (TDD §2.4 — enhanced response)
+      const docRes = await fetch(`${API_BASE}/api/documents/by-artifact/${encodeURIComponent(id)}`).catch(() => null);
+      const result: Record<string, unknown> = { ...meta, content, publicUrl: `${PUBLIC_BASE}/api/artifacts/${encodeURIComponent(id)}/content` };
+
+      if (docRes && docRes.ok) {
+        const docInfo = await docRes.json() as Record<string, unknown>;
+        result.documentId = docInfo.documentId;
+        result.versionNumber = docInfo.latestVersionNumber;
+        result.isCommentable = true;
+
+        // Build comment context
+        const commentsRes = await fetch(`${API_BASE}/api/documents/${encodeURIComponent(String(docInfo.documentId))}/comments?status=all`).catch(() => null);
+        const allComments = commentsRes && commentsRes.ok ? (await commentsRes.json() as Array<Record<string, unknown>>) : [];
+
+        const unresolvedComments: Array<Record<string, unknown>> = [];
+        let resolvedCount = 0;
+        let latestResolvedAt: string | undefined;
+        let staleCount = 0;
+
+        for (const c of allComments) {
+          if (!c.parentCommentId) {
+            // Count replies in thread
+            const replyCount = allComments.filter((rc) => rc.parentCommentId === c.commentId).length;
+
+            if (c.status === 'open' || c.status === 'stale') {
+              unresolvedComments.push({
+                commentId: c.commentId,
+                threadId: c.threadId,
+                authorType: c.authorType,
+                body: c.body,
+                isStale: c.status === 'stale',
+                staleReason: (c.anchor as Record<string, unknown>)?.staleReason ?? undefined,
+                anchor: c.anchor,
+                replyCount,
+                createdAt: c.createdAt,
+              });
+            } else if (c.status === 'resolved') {
+              resolvedCount++;
+              const resAt = (c.resolution as Record<string, unknown>)?.resolvedAt as string | undefined;
+              if (resAt && (!latestResolvedAt || resAt > latestResolvedAt)) {
+                latestResolvedAt = resAt;
+              }
+            }
+            if (c.status === 'stale') staleCount++;
+          }
+        }
+
+        result.commentContext = {
+          unresolvedComments,
+          resolvedSummary: { count: resolvedCount, latestResolvedAt: latestResolvedAt ?? null },
+          staleCount,
+          totalCommentCount: allComments.filter((c) => !c.parentCommentId).length,
+        };
+      } else if (docRes && docRes.status === 404) {
+        const docBody = await docRes.json().catch(() => ({})) as Record<string, unknown>;
+        // Check eligibility from the 404 response
+        result.isCommentable = false;
+        if (docBody.eligibleForCommenting === true) {
+          result.eligibleForCommenting = true;
+        }
+      } else {
+        // No document identity endpoint or error — not commentable
+        result.isCommentable = false;
+      }
+
+      return result;
     }
     case 'context_quality_trigger_orchestrator':
       return callAPI('/api/context/quality/orchestrator/trigger', 'POST', {
@@ -1402,6 +1473,23 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       return callAPI(`/api/context/quality/curated-edits/${pathSegment(args.repo_id)}/${pathSegment(args.entry_id)}/history`);
     case 'context_quality_revert_curated_edit':
       return callAPI(`/api/context/quality/curated-edits/${pathSegment(args.repo_id)}/${pathSegment(args.entry_id)}/revert/${pathSegment(args.revision_id)}`, 'POST', {});
+
+    // ── Document Comments & Versioning (TDD §2.5) ──
+    case 'allen_create_document_version':
+      return callAPI(`/api/documents/${encodeURIComponent(String(args.document_id))}/versions`, 'POST', {
+        content: args.content,
+        addressedCommentIds: Array.isArray(args.addressed_comment_ids) ? args.addressed_comment_ids : [],
+        createdReason: args.created_reason ?? undefined,
+      });
+    case 'allen_resolve_document_comment':
+      return callAPI(`/api/documents/${encodeURIComponent(String(args.document_id))}/comments/${encodeURIComponent(String(args.comment_id))}/resolve`, 'POST', {
+        resolutionNote: args.resolution_note,
+      });
+    case 'allen_reply_document_comment':
+      return callAPI(`/api/documents/${encodeURIComponent(String(args.document_id))}/comments/${encodeURIComponent(String(args.comment_id))}/reply`, 'POST', {
+        body: args.body,
+      });
+
     default: {
       // Fallback dispatcher: forward any tool not handled above to the generic
       // /api/chat/tools/:toolName endpoint, which dispatches via executeChatTool().

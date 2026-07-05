@@ -26,6 +26,28 @@ The server is Allen's API, persistence, integration, and runtime coordination la
   during all Claude-compatible provider runs so the provider's `ANTHROPIC_AUTH_TOKEN` is never silently overridden.
 - Manage the model registry (`/api/system/models`, Settings → Models) that drives every model dropdown, display name resolution, and per-MTok cost calculation. The same data populates the recovery model selector via `GET /api/system/models/recovery`, which returns provider-grouped active models for model-recovery prompts. Each entry carries `fullId` (canonical DB key), `displayName` (human label, required), and `providerDisplayName` (provider-level label, e.g. "Claude", "Codex", "OpenRouter", "GLM/Z.AI"). The unique index is `{provider, fullId}`; the `alias` field has been removed. The seed catalog syncs on every boot without overwriting admin edits. OpenRouter has no seeded models; users register OpenRouter provider slugs manually as `fullId` values in Settings → Models.
 - Run an idempotent alias→fullId migration at boot (`runAliasToFullIdMigration`) that rewrites legacy aliases (e.g. `sonnet` → `claude-sonnet-4-6`) in `agents.model`, `chat_sessions.model`, `chat_sessions.agentOverrides.model`, and `workflows.nodes[].agentOverrides.model` using a frozen `LEGACY_ALIAS_LOOKUP_MAP` covering all supported providers. Historical execution trace records are NOT rewritten — a read-time legacy alias lookup in `model-cost.service.ts` keeps pre-migration cost figures accurate (FR-3.3).
+- Manage **document commenting and versioning** through the `/api/documents` route group (mounted at `server.ts`). Endpoints:
+  - `GET /api/documents/by-artifact/:artifactId` — look up document identity by source artifact. Returns identity summary or a 404 with `eligibleForCommenting` flag.
+  - `POST /api/documents` — lazily create a document identity from an artifact (bridge).
+  - `GET /api/documents/:documentId` — get document summary with latest version + comment counts.
+  - `GET /api/documents/:documentId/versions` — list version metadata.
+  - `GET /api/documents/:documentId/versions/:versionNumber` — get full version content.
+  - `POST /api/documents/:documentId/versions` — create a new version (agent or human).
+  - `POST /api/documents/:documentId/versions/:versionNumber/restore` — restore a prior version (creates a new version with restored content, marks affected comments stale).
+  - `GET /api/documents/:documentId/versions/compare?v1=N&v2=M` — diff two versions (line-level added/removed/modified).
+  - `GET /api/documents/:documentId/comments?status=open|resolved|stale|all` — list comments.
+  - `POST /api/documents/:documentId/comments` — add a comment (with text anchor).
+  - `POST /api/documents/:documentId/comments/:commentId/reply` — reply to a comment thread.
+  - `POST /api/documents/:documentId/comments/:commentId/resolve` — resolve a comment.
+  - `POST /api/documents/:documentId/comments/:commentId/reopen` — reopen a resolved comment.
+  - `GET /api/documents/:documentId/timeline` — chronological event feed.
+
+  Database collections: `document_identities` (unique: `documentId`, indexed: `sourceArtifactId`), `document_comments` (indexed: `commentId`, `{documentId, status, createdAt}`, `{documentId, threadId, createdAt}`), plus version data embedded in the identity document.
+- Inject a **document comment workflow contract** (`DOCUMENT_COMMENT_WORKFLOW`) into the base chat persona system prompt. This instructs chat agents to read comments when they fetch a commentable artifact, treat unresolved comments as revision instructions, publish new versions via `allen_create_document_version`, and resolve/reply to comments via the corresponding MCP tools. Stale comments are noted but not actionable until re-anchored.
+- Register three agent-accessible MCP tools for document interactions:
+  - `allen_create_document_version` — publish a new version of a commentable document.
+  - `allen_resolve_document_comment` — mark a comment as resolved with a note.
+  - `allen_reply_document_comment` — reply to a comment thread (used when a comment cannot be addressed).
 
 ## How it fits with the rest of Allen
 
@@ -43,11 +65,14 @@ The server is the boundary between product actions and runtime execution. It sho
 - App and route wiring: `packages/server/src/app.ts`
 - Embeddable server startup: `packages/server/src/server.ts`
 - API routes: `packages/server/src/routes/`
+  - Document routes: `packages/server/src/routes/document.routes.ts`
 - Runtime services: `packages/server/src/services/`
+  - Document service: `packages/server/src/services/document.service.ts`
 - Auth: `packages/server/src/auth/`, `packages/server/src/middleware/`
 - Runtime config: `packages/server/src/runtime/`
 - Execution Watcher service: `packages/server/src/services/watcher.service.ts`
 - Execution Watcher routes: `packages/server/src/routes/watcher.routes.ts`
+- MCP tool definitions: `packages/server/src/services/allen-mcp-server.ts`
 - Chat Export/Import services: `packages/server/src/services/chat-export.service.ts`, `packages/server/src/services/chat-import.service.ts`
 - Chat Export/Import routes: `packages/server/src/routes/chat-export-import.routes.ts`
 

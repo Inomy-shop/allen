@@ -111,13 +111,13 @@ export const KNOWN_MILESTONES = new Set([
 ]);
 
 // ── Polling Interval Policy ─────────────────────────────────────────────────
-// Per AC5: 1 min for first 10 min, 5 min for 10–60 min, 10 min after 60 min.
+// Watcher status generation is deterministic and does not call an LLM, so every
+// active/waiting watcher should be eligible for refresh on each 10s sweep.
 
-export function intervalForDuration(durationMs: number): number {
-  const minutes = durationMs / 60_000;
-  if (minutes < 10) return 60_000;      // <10 min → 1 min
-  if (minutes <= 60) return 300_000;     // 10–60 min → 5 min
-  return 600_000;                         // >60 min → 10 min
+const WATCHER_POLL_INTERVAL_MS = 10_000;
+
+export function intervalForDuration(_durationMs: number): number {
+  return WATCHER_POLL_INTERVAL_MS;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

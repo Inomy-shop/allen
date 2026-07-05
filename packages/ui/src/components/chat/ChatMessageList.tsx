@@ -2219,9 +2219,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
   const autoScrollRef = useRef(true);
   const scrollToBottomIfPinned = useCallback(() => {
     if (autoScrollRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      bottomRef.current?.scrollIntoView({ behavior: streaming ? 'smooth' : 'instant' });
     }
-  }, []);
+  }, [streaming]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -2236,9 +2236,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
 
   useEffect(() => {
     if (autoScrollRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      bottomRef.current?.scrollIntoView({ behavior: streaming ? 'smooth' : 'instant' });
     }
-  }, [messages, streamText, pendingWorkflowIntervention?.intervention.intervention_id]);
+  }, [messages, streamText, pendingWorkflowIntervention?.intervention.intervention_id, streaming]);
 
   const renderWorkflowInterventionHeaderAction = (run: SpawnedAgent) => {
     if (!pendingWorkflowIntervention || !onAnswerWorkflowIntervention) return null;

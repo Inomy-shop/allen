@@ -1,6 +1,7 @@
 import { Crown, Play, Pencil, Trash2, Eye, ArrowRight, FolderGit2 } from 'lucide-react';
 import RoleIcon from '../common/RoleIcon';
 import { registryDefaultModelForProvider, getModelDisplay } from '../../hooks/useModelRegistry';
+import { normalizeStringList } from '../../utils/stringList';
 
 interface AgentCardProps {
   agent: Record<string, unknown>;
@@ -17,7 +18,7 @@ export function AgentCard({
 }: AgentCardProps) {
   const isLead = agent.teamRole === 'lead';
   const isBuiltIn = !!agent.isBuiltIn;
-  const capabilities = (agent.capabilities as string[] | undefined) ?? [];
+  const capabilities = normalizeStringList(agent.capabilities);
   const spawnTargets = (agent.spawnTargets as string[] | undefined) ?? [];
   const fromRepo = !!agent.sourceRepoId;
   const provider = String(agent.provider ?? 'claude');

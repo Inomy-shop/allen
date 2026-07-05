@@ -4431,6 +4431,10 @@ export class OrgSeedService {
         }
         // If not overriding, skip soft-deleted agents
       } else if (override) {
+        // Refresh instructions and metadata WITHOUT overwriting the
+        // operator's model/provider choices. Provider/model are operator-owned
+        // runtime settings; the seed must preserve them during refresh.
+        // See docs/tdd/agent-seed-preserve-model-provider.md
         await agentsCol.updateOne(
           { name: agent.name },
           {
@@ -4444,8 +4448,8 @@ export class OrgSeedService {
               personality: agent.personality,
               icon: agent.icon,
               color: agent.color,
-              provider,
-              model,
+              // provider and model intentionally OMITTED —
+              // preserve existing DB values set by the operator
               tools: agent.tools,
               teamName: agent.teamName,
               teamRole: agent.teamRole,

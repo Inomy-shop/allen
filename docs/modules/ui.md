@@ -11,6 +11,11 @@ The UI is Allen's React application. It gives operators a browser-based way to c
 - Render the dashboard, chat, workflow, execution, workspace, repo, agent, team, ticket, PR, design, and settings screens. Chat includes a **Steer** button that injects a typed message into the running agent turn mid-stream — visible only when the agent is streaming and the input is non-empty, distinct from the Stop button. Chat also includes **Export** (downloads the conversation as a portable JSON bundle via `ChatExportDialog`) and **Import** (reads an Allen chat export file and creates a read-only replay via `ChatImportPreviewModal`).
 - Render imported replay state: when `session.isImported` is set, the UI shows a persistent yellow `ImportedChatBanner` above the message list, disables the composer (with `replayLabel` as the disabled reason), suppresses intervention-answer callbacks, and shows a yellow "Imported" badge on the conversation list entry.
 - Stream execution progress and show logs, traces, artifacts, checkpoints, token usage, and **execution watcher status lines** (one live non-clickable line per running execution, updated in-place via SSE `watcher_update` events).
+- The artifact viewer (`ArtifactViewer`) renders artifact content by type (markdown → rendered prose, JSON → tree, CSV → table, code → monospace) and, for text-based artifacts, checks for an associated **document identity**. When an identity exists, the viewer adds version badges and three toggle side panels:
+  - **Comments panel** — browse threads anchored to text positions; resolve, reopen, and navigate to anchor locations.
+  - **Version history panel** — browse version metadata, view content at a specific version, compare any two versions side by side, and restore a prior version.
+  - **Timeline panel** — chronological event view of version creates, comments, and resolutions.
+  Text selection on commentable documents activates an inline comment input anchored to the selected range. An **Enable Commenting** button appears for eligible artifacts that have not yet been enabled.
 - Render model-recovery prompts (`ModelRecoveryPrompt`) when a workflow node encounters a recoverable provider error — shows the failed node, provider/model, error summary, topology context (sequential vs. parallel branch), and lets the operator select a replacement provider/model to retry.
 - Provide workspace-aware chat and terminal/preview surfaces.
 - Manage forms for integrations, MCP servers, design repos, and admin settings. The repository edit dialog includes a **Default branch** field — the initial value is resolved from `detected.defaultBranch → defaultBranch → branch → 'main'`, and saving a changed branch calls `PUT /api/repos/:id/default-branch`.
@@ -37,7 +42,9 @@ The UI should not contain orchestration rules that belong in workflows, agents, 
 - App routes: `packages/ui/src/App.tsx`
 - Pages: `packages/ui/src/pages/`
 - Shared components: `packages/ui/src/components/`
+  - Artifact commenting and versioning UI: `packages/ui/src/components/artifacts/ArtifactViewer.tsx`, `CommentPanel.tsx`, `CommentInput.tsx`, `CommentAnchorOverlay.tsx`, `CommentTimeline.tsx`, `VersionHistoryPanel.tsx`, `VersionDiffViewer.tsx`
 - API wrappers: `packages/ui/src/services/`
+  - Document API client: `packages/ui/src/services/documents.ts`
 - State stores: `packages/ui/src/stores/`
 - Hooks and utilities: `packages/ui/src/hooks/`, `packages/ui/src/utils/`
 
