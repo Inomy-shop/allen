@@ -1401,84 +1401,116 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
       )}
 
       {/* Messages */}
-      {!workspaceTerminalActive && (
-        <>
-        {workspaceServersTabOpen && activeWorkspaceId && (
-          <div className={`${workspaceServersActive ? 'flex-1 min-h-0' : 'fixed -left-[10000px] top-0 h-[720px] w-[1100px] pointer-events-none opacity-0'}`}>
+
+      {/* Servers tab — kept alive off-screen when not active (moved outside terminal gate to mirror terminal keep-alive) */}
+      {workspaceServersTabOpen && activeWorkspaceId && (
+        <div className={`${workspaceServersActive ? 'flex-1 min-h-0' : 'fixed -left-[10000px] top-0 h-[720px] w-[1100px] pointer-events-none opacity-0'}`}>
           <WorkspaceServersTab
             workspaceId={activeWorkspaceId}
             services={activeWorkspace?.services ?? []}
           />
-          </div>
-        )}
-        {!workspaceServersActive && (
+        </div>
+      )}
+
+      {/* Chat content — kept alive off-screen when terminal or servers tab is active, mirroring terminal keep-alive */}
+      <div className={workspaceUtilityTabActive
+        ? 'fixed -left-[10000px] top-0 h-[720px] w-[1100px] pointer-events-none opacity-0'
+        : 'flex-1 min-h-0 flex flex-col'
+      }>
+        {activeSessionId && (
           <>
-          {activeSessionId && (
-            <>
-              {activeSession?.isImported && (
-                <ImportedChatBanner session={activeSession} />
-              )}
-              <div className="flex items-center justify-between border-b border-app px-5 py-1.5 min-h-[33px]">
-                <span className="text-[12px] font-medium text-theme-primary truncate max-w-[400px]">
-                  {activeSession?.title || 'Untitled conversation'}
-                </span>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setExportDialogOpen(true)}
-                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors"
-                    title="Export this chat"
-                    aria-label="Export chat"
-                  >
-                    <Upload className="h-3.5 w-3.5" />
-                    Export
-                  </button>
-                </div>
+            {activeSession?.isImported && (
+              <ImportedChatBanner session={activeSession} />
+            )}
+            <div className="flex items-center justify-between border-b border-app px-5 py-1.5 min-h-[33px]">
+              <span className="text-[12px] font-medium text-theme-primary truncate max-w-[400px]">
+                {activeSession?.title || 'Untitled conversation'}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setExportDialogOpen(true)}
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors"
+                  title="Export this chat"
+                  aria-label="Export chat"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Export
+                </button>
               </div>
-            </>
-          )}
-          {loadingMessages && messages.length === 0 && !streaming ? (
-            <div className="flex-1 flex items-center justify-center"><div className="text-xs text-theme-subtle animate-pulse">Loading...</div></div>
-          ) : messages.length === 0 && !activeSessionId && !streaming ? (
-            isDesignMode ? (
-              <div className="flex flex-col items-center justify-center flex-1 px-8 py-12 text-center gap-4" aria-label="Design empty state">
-                <div className="flex flex-col items-center gap-2 mb-2">
-                  <h2 className="text-[18px] font-semibold text-theme-primary">Design with Allen</h2>
-                  <p className="text-[13px] text-theme-muted max-w-sm">
-                    Describe what you'd like to design or build. Allen will generate specs, prototypes, and iterate with you.
-                  </p>
-                </div>
-                <div className="flex flex-wrap justify-center gap-2">
-                  {[
-                    'Design a dashboard for analytics',
-                    'Build a login/signup flow',
-                    'Create a responsive landing page',
-                    'Design a mobile settings screen',
-                  ].map((prompt) => (
-                    <button
-                      key={prompt}
-                      type="button"
-                      onClick={() => handleSuggestionClick(prompt)}
-                      className="rounded-full border border-app bg-app-card px-3 py-1.5 text-[12px] text-theme-secondary hover:bg-app-muted transition-colors"
-                    >
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-theme-subtle mt-2">
-                  Use the <strong>Preview</strong> panel on the right to set up your design repo and live preview.
-                </p>
-              </div>
-            ) : (
-              <div className="chat-empty-stream" aria-label="New conversation" />
-            )
-          ) : (
-            <ChatMessageList messages={messages} streamText={streamText} thinkingText={thinkingText} streaming={streaming} activeToolCalls={activeToolCalls} agentReports={agentReports} spawnedAgents={spawnedAgents} pendingUserQuestion={pendingUserQuestion} onAnswerUserQuestion={activeSession?.isImported ? undefined : answerUserQuestion} onAnswerWorkflowIntervention={activeSession?.isImported ? undefined : answerWorkflowIntervention} activeAgent={activeSession?.activeAgent} onSuggestionClick={handleSuggestionClick} onSaveToLearnings={handleSaveToLearnings} onOpenExecutionsPanel={() => openSidePanel('tasks')} onOpenFilesPanel={() => openSidePanel('changes', 'changes')} watchers={watchers} />
-          )}
+            </div>
           </>
         )}
-        </>
-      )}
+
+        {/* Loading indicator: only when loading messages for an existing session (not blank new tabs) */}
+        {loadingMessages && messages.length === 0 && !streaming && activeSessionId && (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-xs text-theme-subtle animate-pulse">Loading...</div>
+          </div>
+        )}
+
+        {/* Empty state: only when no session is active (new blank tab or no chats yet) */}
+        {messages.length === 0 && !activeSessionId && !streaming && !loadingMessages && (
+          isDesignMode ? (
+            <div className="flex flex-col items-center justify-center flex-1 px-8 py-12 text-center gap-4" aria-label="Design empty state">
+              <div className="flex flex-col items-center gap-2 mb-2">
+                <h2 className="text-[18px] font-semibold text-theme-primary">Design with Allen</h2>
+                <p className="text-[13px] text-theme-muted max-w-sm">
+                  Describe what you'd like to design or build. Allen will generate specs, prototypes, and iterate with you.
+                </p>
+              </div>
+              <div className="flex flex-wrap justify-center gap-2">
+                {[
+                  'Design a dashboard for analytics',
+                  'Build a login/signup flow',
+                  'Create a responsive landing page',
+                  'Design a mobile settings screen',
+                ].map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    onClick={() => handleSuggestionClick(prompt)}
+                    className="rounded-full border border-app bg-app-card px-3 py-1.5 text-[12px] text-theme-secondary hover:bg-app-muted transition-colors"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-theme-subtle mt-2">
+                Use the <strong>Preview</strong> panel on the right to set up your design repo and live preview.
+              </p>
+            </div>
+          ) : (
+            <div className="chat-empty-stream" aria-label="New conversation" />
+          )
+        )}
+
+        {/* ChatMessageList: kept mounted in DOM to preserve scroll state.
+            Hidden (display:none) during initial load to avoid layout conflict with loading indicator above.
+            When hidden is removed after load, instant scroll (PI-1 fix) ensures no visible animation. */}
+        {(activeSessionId || messages.length > 0 || streaming) && (
+          <div className={loadingMessages && messages.length === 0 && !streaming ? 'hidden' : 'flex-1 min-h-0 flex flex-col'}>
+            <ChatMessageList
+              messages={messages}
+              streamText={streamText}
+              thinkingText={thinkingText}
+              streaming={streaming}
+              activeToolCalls={activeToolCalls}
+              agentReports={agentReports}
+              spawnedAgents={spawnedAgents}
+              pendingUserQuestion={pendingUserQuestion}
+              onAnswerUserQuestion={activeSession?.isImported ? undefined : answerUserQuestion}
+              onAnswerWorkflowIntervention={activeSession?.isImported ? undefined : answerWorkflowIntervention}
+              activeAgent={activeSession?.activeAgent}
+              onSuggestionClick={handleSuggestionClick}
+              onSaveToLearnings={handleSaveToLearnings}
+              onOpenExecutionsPanel={() => openSidePanel('tasks')}
+              onOpenFilesPanel={() => openSidePanel('changes', 'changes')}
+              watchers={watchers}
+            />
+          </div>
+        )}
+      </div>
       {floatingPullRequest && <FloatingPullRequestCard pullRequest={floatingPullRequest} />}
 
       {/* Input */}

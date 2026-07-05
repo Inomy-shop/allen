@@ -8,11 +8,12 @@
  * providers via claude-code) are registered here and their model suggestions
  * are sourced from this collection rather than hardcoded constants.
  *
- * PRICING SOURCES (REQ-005) — web-researched, verified 2026-06-12:
+ * PRICING SOURCES (REQ-005) — web-researched, verified 2026-06-30:
  * - Anthropic (https://www.anthropic.com/pricing; cache read = 0.1× input):
- *   - Claude Fable 5:   $10/M input, $50/M output, $1.00/M cache read
- *   - Claude Opus 4.x:  $5/M input,  $25/M output, $0.50/M cache read
- *   - Claude Sonnet 4.6: $3/M input, $15/M output, $0.30/M cache read
+ *   - Claude Fable 5:    $10/M input, $50/M output, $1.00/M cache read
+ *   - Claude Opus 4.x:   $5/M input,  $25/M output, $0.50/M cache read
+ *   - Claude Sonnet 5:   $2/M input,  $10/M output, $0.20/M cache read (intro pricing through 2026-08-31)
+ *   - Claude Sonnet 4.6: $3/M input,  $15/M output, $0.30/M cache read
  *   - Claude Haiku 4.5:  $1/M input,  $5/M output, $0.10/M cache read
  * - OpenAI (https://openai.com/api/pricing/; cached input = 90% off):
  *   - GPT-5.5: $5/M input, $30/M output, $0.50/M cached input
@@ -88,9 +89,11 @@ interface SeedEntry {
 
 const SEED_MODELS: SeedEntry[] = [
   // ── Claude (provider: 'claude') ──
-  // Pricing: https://www.anthropic.com/pricing (verified 2026-06-12; cache read = 0.1× input)
+  // Pricing: https://www.anthropic.com/pricing (verified 2026-06-30; cache read = 0.1× input)
   // Claude Fable 5: $10/M input, $50/M output, $1.00/M cache read
   { provider: 'claude', fullId: 'claude-fable-5', displayName: 'Fable 5', providerDisplayName: 'Claude', tier: 'default', costInputPerMTok: 10, costOutputPerMTok: 50, costCacheReadPerMTok: 1.00 },
+  // Claude Sonnet 5: $2/M input, $10/M output, $0.20/M cache read (intro pricing through 2026-08-31)
+  { provider: 'claude', fullId: 'claude-sonnet-5', displayName: 'Sonnet 5', providerDisplayName: 'Claude', tier: 'default', costInputPerMTok: 2, costOutputPerMTok: 10, costCacheReadPerMTok: 0.20 },
   // Claude Sonnet 4.6: $3/M input, $15/M output, $0.30/M cache read
   { provider: 'claude', fullId: 'claude-sonnet-4-6', displayName: 'Sonnet 4.6', providerDisplayName: 'Claude', tier: 'default', costInputPerMTok: 3, costOutputPerMTok: 15, costCacheReadPerMTok: 0.30 },
   // Claude Opus 4.7: $5/M input, $25/M output, $0.50/M cache read
@@ -189,6 +192,7 @@ const LEGACY_ALIAS_REWRITE_MAP_IDEMPOTENT: Record<string, string> = {
 // Includes identity pairs needed for resolution.
 export const LEGACY_ALIAS_LOOKUP_MAP: Record<string, string> = {
   ...LEGACY_ALIAS_REWRITE_MAP_IDEMPOTENT,
+  'claude-sonnet-5': 'claude-sonnet-5',
   'claude-opus-4-8': 'claude-opus-4-8',
   'gpt-5.5': 'gpt-5.5', 'gpt-5.4': 'gpt-5.4',
   'gpt-5.3-codex': 'gpt-5.3-codex', 'gpt-5.2-codex': 'gpt-5.2-codex',

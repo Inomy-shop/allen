@@ -48,6 +48,7 @@ import { runTrustBootstrap } from './services/trust-bootstrap.service.js';
 import { seedContextQuality } from './services/context/judge/context-quality-seed.service.js';
 import { cronRoutes } from './routes/cron.routes.js';
 import { designDocRoutes } from './routes/design-doc.routes.js';
+import { documentRoutes } from './routes/document.routes.js';
 import { designStudioRoutes } from './routes/design-studio.routes.js';
 import { createPreviewHandler, createChatPreviewHandler, DSTUDIO_PREVIEW_PREFIX, DSTUDIO_CHAT_PREVIEW_PREFIX } from './services/design-studio/preview.service.js';
 import { createWorkspaceSiteHandler, DSTUDIO_SITE_PREFIX } from './services/design-studio/workspace-fs.js';
@@ -308,6 +309,7 @@ export function createAllenExpressApp(db: Db, cronService: CronService, options:
   app.use('/api/pull-requests', pullRequestRoutes(db));
   app.use('/api/crons', cronRoutes(db, cronService));
   app.use('/api/design-docs', designDocRoutes(db));
+  app.use('/api/documents', documentRoutes(db));
   app.use('/api/design-studio', designStudioRoutes(db));
   app.use('/api/interventions', interventionRoutes(db));
   app.use('/api/execution-watchers', watcherRoutes(db));

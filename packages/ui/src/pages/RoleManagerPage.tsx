@@ -32,6 +32,7 @@ import {
 import { AgentCard } from '../components/agents/AgentCard';
 import { registryDefaultModelForProvider, getModelDisplay, useModelRegistry } from '../hooks/useModelRegistry';
 import RepoManagerPage from './RepoManagerPage';
+import { normalizeStringList, stringListIncludes } from '../utils/stringList';
 
 type Agent = Record<string, unknown>;
 type Selection = { kind: 'overview' } | { kind: 'team'; name: string } | { kind: 'unassigned' };
@@ -49,7 +50,7 @@ function AgentDetailPanel({
   runs7d?: number;
 }) {
   const system = (agent.system as string) ?? '';
-  const capabilities = (agent.capabilities as string[] | undefined) ?? [];
+  const capabilities = normalizeStringList(agent.capabilities);
   const spawnTargets = (agent.spawnTargets as string[] | undefined) ?? [];
   const tools = (agent.tools as string[] | undefined) ?? [];
   const externalMcpServers = Array.isArray(agent.externalMcpServers)
@@ -852,7 +853,7 @@ export default function RoleManagerPage() {
     return activeMembers.filter((a: any) =>
       (a.name as string).toLowerCase().includes(mq)
       || ((a.displayName as string) ?? '').toLowerCase().includes(mq)
-      || ((a.capabilities as string[]) ?? []).some(c => c.toLowerCase().includes(mq)),
+      || stringListIncludes(a.capabilities, mq),
     );
   }, [activeMembers, memberSearch]);
 
@@ -1464,7 +1465,7 @@ function LibraryTeamsAgentsPane({
       || String(member.name ?? '').toLowerCase().includes(memberQ)
       || String(member.displayName ?? '').toLowerCase().includes(memberQ)
       || String(member.teamName ?? '').toLowerCase().includes(memberQ)
-      || ((member.capabilities as string[] | undefined) ?? []).some(cap => cap.toLowerCase().includes(memberQ));
+      || stringListIncludes(member.capabilities, memberQ);
     return matchesRole && matchesText;
   };
   const filteredMembers = activeMembers.filter(matchesAgentFilters);
@@ -2203,7 +2204,7 @@ function DirectoryTab({
       const filteredMembers = members.filter((a: any) =>
         (a.name as string).toLowerCase().includes(query)
         || ((a.displayName as string) ?? '').toLowerCase().includes(query)
-        || ((a.capabilities as string[]) ?? []).some((c: string) => c.toLowerCase().includes(query)),
+        || stringListIncludes(a.capabilities, query),
       );
       return { team, members: filteredMembers };
     })

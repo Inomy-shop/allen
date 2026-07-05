@@ -110,6 +110,9 @@ export const ALLEN_MCP_TOOL_NAMES: readonly string[] = [
   'allen_save_artifact',
   'allen_list_artifacts',
   'allen_get_artifact',
+  'allen_create_document_version',
+  'allen_resolve_document_comment',
+  'allen_reply_document_comment',
 ];
 
 export const ALLEN_MCP_CLAUDE_TOOL_NAMES: readonly string[] = ALLEN_MCP_TOOL_NAMES.map(

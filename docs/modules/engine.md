@@ -14,7 +14,7 @@ The engine is Allen's workflow runtime. It loads workflow definitions, starts ag
 - Run configured agents through supported providers.
 - Classify and manage model-recovery retries when an agent node fails with a recoverable provider error (rate limits, server errors, model unavailability, transient connectivity, or session exhaustion).
 - Capture artifacts, traces, logs, token usage, and structured outputs.
-- Load MCP server definitions and expose approved tools to agents.
+- Load MCP server definitions and expose approved tools to agents. Allen's own MCP tool registry (`allen-mcp-tools.ts`) defines the standard tool set agents can call, including three document-interaction tools for commentable artifact versioning and comment lifecycle: `allen_create_document_version`, `allen_resolve_document_comment`, and `allen_reply_document_comment`.
 - Store and retrieve learnings that can be injected into later runs.
 
 ## How it fits with the rest of Allen
@@ -36,6 +36,7 @@ The engine is not a web server and does not own the product UI. It is the orches
 - Workflow schema and validation: `packages/engine/src/validator.ts`
 - Workflow definitions: `packages/engine/workflows/`
 - Agent defaults and routing: `packages/engine/agents.yml`, `packages/engine/router.yml`
+- MCP tool name registry: `packages/engine/src/allen-mcp-tools.ts`
 - Model alias resolution: `packages/engine/src/model-alias.ts` (normalizes legacy aliases and unknown strings to canonical fullIds at the CLI/SDK boundary using a frozen `LEGACY_ALIAS_LOOKUP_MAP`; resolution order: env override → registry alias map → legacy lookup → known fullId passthrough → unknown passthrough unchanged)
 - Cost calculation: `packages/engine/src/cost-calculator.ts` (registry-backed `aliasMap`/`costMap` supplied by the server; costs are token-computed from per-MTok prices)
 - MCP loading: `packages/engine/src/mcp-loader.ts`

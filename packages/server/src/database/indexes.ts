@@ -627,6 +627,30 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection('dstudio_versions').createIndex({ groupId: 1 }, { sparse: true });
   await db.collection('dstudio_messages').createIndex({ sessionId: 1, createdAt: 1 });
 
+  // ── Document Identities (TDD §1.1) ─────────────────────────────────────────
+  await db.collection('document_identities').createIndex(
+    { documentId: 1 },
+    { unique: true },
+  );
+  await db.collection('document_identities').createIndex(
+    { sourceArtifactId: 1 },
+  );
+
+  // ── Document Comments (TDD §1.1) ──────────────────────────────────────────
+  await db.collection('document_comments').createIndex(
+    { commentId: 1 },
+    { unique: true },
+  );
+  await db.collection('document_comments').createIndex(
+    { documentId: 1, status: 1, createdAt: 1 },
+  );
+  await db.collection('document_comments').createIndex(
+    { documentId: 1, threadId: 1, createdAt: 1 },
+  );
+  await db.collection('document_comments').createIndex(
+    { documentId: 1, createdAt: 1 },
+  );
+
   // ── Execution Watchers ──────────────────────────────────────────────────────
   // Deterministic Execution Watcher — see TDD §1.1 for index rationale.
   await db.collection('execution_watchers').createIndex(

@@ -9,22 +9,44 @@
  *   - text      → monospace pre
  *   - binary    → download-only link with metadata
  *
- * Content is fetched from the public /api/artifacts/:id/content URL so the
- * viewer stays auth-independent — same URL agents can embed in markdown.
+ * For text-based content types, checks for an associated document identity for
+ * commenting and versioning. When identity exists, shows comment/version controls
+ * in the header bar. When the artifact is eligible but no identity exists, shows
+ * an "Enable Commenting" button. Reading experience remains unchanged when panels
+ * are closed (R20).
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   X as XIcon, Download, Copy, Trash2,
   FileText, FileJson, FileSpreadsheet, Code2, File, Database,
+  MessageSquare, History, MessageSquarePlus,
 } from 'lucide-react';
 import { artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
+import { documents as documentsApi } from '../../services/documents';
+import type { DocumentIdentitySummary, DocumentContentType, DocumentCommentDoc, WriteAnchor } from '../../services/documents';
 import { renderMarkdown } from '../chat/ChatMessageList';
+import CommentPanel from './CommentPanel';
+import CommentInput from './CommentInput';
+import CommentAnchorOverlay from './CommentAnchorOverlay';
+import VersionHistoryPanel from './VersionHistoryPanel';
+import VersionDiffViewer from './VersionDiffViewer';
+import CommentTimeline from './CommentTimeline';
 
 export interface ArtifactViewerProps {
   artifact: ArtifactDoc;
   onClose?: () => void;
   onDelete?: () => void;
 }
+
+// Text-based content types eligible for commenting.
+const COMMENTABLE_TYPES: ReadonlySet<string> = new Set(['markdown', 'text', 'code', 'json', 'csv']);
+
+type PanelView =
+  | null
+  | { kind: 'comments' }
+  | { kind: 'versionHistory' }
+  | { kind: 'diff'; v1: number; v2: number }
+  | { kind: 'timeline' };
 
 export default function ArtifactViewer({ artifact, onClose, onDelete }: ArtifactViewerProps) {
   const [content, setContent] = useState<string | null>(null);
@@ -34,6 +56,30 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
 
   const url = artifactsApi.contentUrl(artifact.artifactId);
 
+  // ── Document Identity State ────────────────────────────────────────────
+  const [docIdentity, setDocIdentity] = useState<DocumentIdentitySummary | null>(null);
+  const [identityLoading, setIdentityLoading] = useState(false);
+  const [creatingIdentity, setCreatingIdentity] = useState(false);
+  const [identityError, setIdentityError] = useState<string | null>(null);
+
+  // ── Panel State ────────────────────────────────────────────────────────
+  const [panel, setPanel] = useState<PanelView>(null);
+  const [selectedAnchor, setSelectedAnchor] = useState<WriteAnchor | undefined>(undefined);
+  const [showCommentInput, setShowCommentInput] = useState(false);
+  const [comments, setComments] = useState<DocumentCommentDoc[]>([]);
+
+  // ── Viewing an older version ───────────────────────────────────────────
+  const [viewingVersion, setViewingVersion] = useState<number | null>(null);
+  const [vintageContent, setVintageContent] = useState<string | null>(null);
+  const [vintageLoading, setVintageLoading] = useState(false);
+
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const isCommentable = COMMENTABLE_TYPES.has(artifact.contentType);
+  const eligibleForCommenting = isCommentable && !docIdentity;
+
+  // ── Load artifact content ────────────────────────────────────────────
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -41,7 +87,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
     fetch(url)
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        if (artifact.contentType === 'binary') return ''; // don't load binary content
+        if (artifact.contentType === 'binary') return '';
         return r.text();
       })
       .then(text => { if (!cancelled) setContent(text); })
@@ -49,6 +95,47 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [url, artifact.contentType]);
+
+  // ── Check for document identity ──────────────────────────────────────
+
+  useEffect(() => {
+    if (!isCommentable) {
+      setIdentityLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setIdentityLoading(true);
+    setIdentityError(null);
+    documentsApi.getByArtifactId(artifact.artifactId)
+      .then(data => {
+        if (cancelled) return;
+        if ('documentId' in data && data.documentId) {
+          setDocIdentity(data as DocumentIdentitySummary);
+        } else {
+          setDocIdentity(null);
+        }
+      })
+      .catch(err => {
+        if (cancelled) return;
+        if ((err as any)?.status === 404) {
+          setDocIdentity(null);
+        } else {
+          setIdentityError((err as Error).message);
+        }
+      })
+      .finally(() => { if (!cancelled) setIdentityLoading(false); });
+    return () => { cancelled = true; };
+  }, [artifact.artifactId, isCommentable]);
+
+  // Close panels when artifact changes
+  useEffect(() => {
+    setPanel(null);
+    setSelectedAnchor(undefined);
+    setShowCommentInput(false);
+    setComments([]);
+    setViewingVersion(null);
+    setVintageContent(null);
+  }, [artifact.artifactId]);
 
   async function handleCopy() {
     if (!content) return;
@@ -59,122 +146,431 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
     } catch { /* ignore */ }
   }
 
+  // ── Lazy identity creation ──────────────────────────────────────────
+
+  async function handleEnableCommenting() {
+    setCreatingIdentity(true);
+    setIdentityError(null);
+    try {
+      const doc = await documentsApi.create({ artifactId: artifact.artifactId });
+      setDocIdentity({
+        documentId: doc.documentId,
+        sourceArtifactId: doc.sourceArtifactId,
+        latestVersionNumber: doc.latestVersionNumber,
+        contentType: doc.contentType as DocumentContentType,
+        latestContent: doc.versions[doc.versions.length - 1]?.content ?? '',
+        unresolvedCommentCount: 0,
+        resolvedCommentCount: 0,
+        staleCommentCount: 0,
+      });
+    } catch (err) {
+      setIdentityError((err as Error).message);
+    } finally {
+      setCreatingIdentity(false);
+    }
+  }
+
+  // ── Version actions ─────────────────────────────────────────────────
+
+  const displayContent = vintageContent ?? content;
+
+  const closePanel = useCallback(() => {
+    setPanel(null);
+    setShowCommentInput(false);
+    setSelectedAnchor(undefined);
+  }, []);
+
+  async function handleViewVersion(vn: number) {
+    if (!docIdentity) return;
+    setVintageLoading(true);
+    try {
+      const data = await documentsApi.getVersion(docIdentity.documentId, vn);
+      setViewingVersion(vn);
+      setVintageContent(data.version.content);
+    } catch (err) {
+      setIdentityError((err as Error).message);
+    } finally {
+      setVintageLoading(false);
+    }
+  }
+
+  function handleCompareToLatest(vn: number) {
+    if (!docIdentity) return;
+    setPanel({ kind: 'diff', v1: vn, v2: docIdentity.latestVersionNumber });
+  }
+
+  function handleRestoreVersion(_vn: number) {
+    // Panel will refresh; parent reloads identity
+    setViewingVersion(null);
+    setVintageContent(null);
+    // The VersionHistoryPanel handles the API call; we refresh identity
+    setTimeout(() => {
+      documentsApi.getByArtifactId(artifact.artifactId).then(data => {
+        if ('documentId' in data && data.documentId) {
+          setDocIdentity(data as DocumentIdentitySummary);
+        }
+      }).catch(() => {});
+    }, 500);
+  }
+
+  function handleJumpToAnchor(anchor: DocumentCommentDoc['anchor']) {
+    // Scroll content area to approximate line position
+    if (contentRef.current && anchor.lineStart) {
+      const lineHeight = 20; // approximate
+      const targetY = (anchor.lineStart - 1) * lineHeight;
+      contentRef.current.scrollTop = Math.max(0, targetY - 100);
+    }
+    // Open comment panel if closed
+    if (!panel || panel.kind !== 'comments') {
+      setPanel({ kind: 'comments' });
+    }
+  }
+
+  // ── Text selection → anchor ──────────────────────────────────────────
+
+  function handleTextSelect() {
+    if (!docIdentity) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      setSelectedAnchor(undefined);
+      setShowCommentInput(false);
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    const snippet = sel.toString().trim();
+    if (!snippet) return;
+
+    // Count lines from selection start
+    const container = contentRef.current;
+    if (!container) return;
+
+    // If the selection is within our content div, approximate line numbers
+    // by counting newlines in the content before the selection start
+    const fullText = displayContent ?? '';
+    const textBefore = fullText.substring(0, findNodeOffset(range.startContainer, range.startOffset, container));
+    const startLine = (textBefore.match(/\n/g)?.length ?? 0) + 1;
+    const endLine = startLine + (snippet.match(/\n/g)?.length ?? 0);
+
+    // Extract context: 2 lines before and after
+    const lines = fullText.split('\n');
+    const contextStart = Math.max(0, startLine - 3);
+    const contextEnd = Math.min(lines.length, endLine + 2);
+    const context = lines.slice(contextStart, contextEnd).join('\n');
+
+    const anchor: WriteAnchor = {
+      type: startLine === endLine ? 'line' : 'range',
+      lineStart: startLine,
+      lineEnd: endLine,
+      snippet,
+      context,
+    };
+    setSelectedAnchor(anchor);
+    setShowCommentInput(true);
+  }
+
+  // Content lines for anchor overlay
+  const contentLines = useMemo(() => displayContent?.split('\n') ?? [], [displayContent]);
+
   const Icon = iconForType(artifact.contentType);
 
   return (
-    <div className="flex h-full flex-col bg-surface">
-      {/* Header */}
-      <div className="shrink-0 border-b border-app bg-app-card px-4 py-3">
-        <div className="flex items-center gap-2.5 mb-1">
-          <Icon className={`w-4 h-4 shrink-0 ${colorForType(artifact.contentType)}`} />
-          <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-mono text-theme-primary truncate">
-              {artifact.relativePath}
+    <div className="flex h-full">
+      {/* Viewer panel */}
+      <div className="flex h-full min-w-0 flex-1 flex-col bg-surface">
+        {/* Header */}
+        <div className="shrink-0 border-b border-app bg-app-card px-4 py-3">
+          <div className="flex items-center gap-2.5 mb-1">
+            <Icon className={`w-4 h-4 shrink-0 ${colorForType(artifact.contentType)}`} />
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-mono text-theme-primary truncate">
+                {artifact.relativePath}
+              </div>
+              <div className="flex items-center gap-2 mt-0.5 text-[10px] font-mono text-theme-subtle">
+                <span className="uppercase">{artifact.contentType}</span>
+                {artifact.language && (
+                  <>
+                    <span>·</span>
+                    <span>{artifact.language}</span>
+                  </>
+                )}
+                <span>·</span>
+                <span>{formatSize(artifact.sizeBytes)}</span>
+                {artifact.createdByAgent && (
+                  <>
+                    <span>·</span>
+                    <span className="truncate">by {artifact.createdByAgent}</span>
+                  </>
+                )}
+                {/* Document version badge */}
+                {docIdentity && (
+                  <>
+                    <span>·</span>
+                    <span className="text-accent-blue font-semibold">
+                      v{docIdentity.latestVersionNumber}
+                    </span>
+                    {docIdentity.unresolvedCommentCount > 0 && (
+                      <span className="text-accent-orange">
+                        {docIdentity.unresolvedCommentCount} open
+                      </span>
+                    )}
+                  </>
+                )}
+                {viewingVersion && docIdentity && (
+                  <>
+                    <span>·</span>
+                    <span className="text-accent-purple">Viewing v{viewingVersion}</span>
+                    <button
+                      type="button"
+                      onClick={() => { setViewingVersion(null); setVintageContent(null); }}
+                      className="text-[9px] font-mono text-accent-blue hover:underline"
+                    >
+                      Back to latest
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
-            <div className="flex items-center gap-2 mt-0.5 text-[10px] font-mono text-theme-subtle">
-              <span className="uppercase">{artifact.contentType}</span>
-              {artifact.language && (
+            <div className="shrink-0 flex items-center gap-1">
+              {/* Comment/version controls — only when identity exists */}
+              {docIdentity && (
                 <>
-                  <span>·</span>
-                  <span>{artifact.language}</span>
+                  <button
+                    onClick={() => setPanel(p => p?.kind === 'comments' ? null : { kind: 'comments' })}
+                    title="Toggle comments"
+                    className={`rounded-md p-1.5 transition-colors ${
+                      panel?.kind === 'comments'
+                        ? 'bg-accent-blue/15 text-accent-blue'
+                        : 'text-theme-muted hover:bg-app-muted hover:text-theme-primary'
+                    }`}
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setPanel(p => p?.kind === 'versionHistory' ? null : { kind: 'versionHistory' })}
+                    title="Version history"
+                    className={`rounded-md p-1.5 transition-colors ${
+                      panel?.kind === 'versionHistory'
+                        ? 'bg-accent-blue/15 text-accent-blue'
+                        : 'text-theme-muted hover:bg-app-muted hover:text-theme-primary'
+                    }`}
+                  >
+                    <History className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setPanel(p => p?.kind === 'timeline' ? null : { kind: 'timeline' })}
+                    title="Timeline"
+                    className={`rounded-md p-1.5 transition-colors ${
+                      panel?.kind === 'timeline'
+                        ? 'bg-accent-blue/15 text-accent-blue'
+                        : 'text-theme-muted hover:bg-app-muted hover:text-theme-primary'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                  </button>
                 </>
               )}
-              <span>·</span>
-              <span>{formatSize(artifact.sizeBytes)}</span>
-              {artifact.createdByAgent && (
-                <>
-                  <span>·</span>
-                  <span className="truncate">by {artifact.createdByAgent}</span>
-                </>
-              )}
-            </div>
-          </div>
-          <div className="shrink-0 flex items-center gap-1">
-            <button
-              onClick={handleCopy}
-              disabled={!content || artifact.contentType === 'binary'}
-              title="Copy content"
-              className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:opacity-30"
-            >
-              <Copy className="w-3.5 h-3.5" />
-            </button>
-            <a
-              href={url}
-              download={artifact.filename}
-              title="Download"
-              className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
-            >
-              <Download className="w-3.5 h-3.5" />
-            </a>
-            {onDelete && (
               <button
-                onClick={onDelete}
-                title="Delete artifact"
-                className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-accent-red/10 hover:text-accent-red"
+                onClick={handleCopy}
+                disabled={!content || artifact.contentType === 'binary'}
+                title="Copy content"
+                className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:opacity-30"
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <Copy className="w-3.5 h-3.5" />
               </button>
-            )}
-            {onClose && (
-              <button
-                onClick={onClose}
-                title="Close viewer"
+              <a
+                href={url}
+                download={artifact.filename}
+                title="Download"
                 className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
               >
-                <XIcon className="w-3.5 h-3.5" />
-              </button>
-            )}
+                <Download className="w-3.5 h-3.5" />
+              </a>
+              {onDelete && (
+                <button
+                  onClick={onDelete}
+                  title="Delete artifact"
+                  className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-accent-red/10 hover:text-accent-red"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {onClose && (
+                <button
+                  onClick={onClose}
+                  title="Close viewer"
+                  className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
+                >
+                  <XIcon className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
+          {artifact.description && (
+            <div className="text-[11px] text-theme-muted font-body italic">
+              {artifact.description}
+            </div>
+          )}
+          {copied && (
+            <div className="text-[10px] font-mono text-accent-green mt-1">Copied ✓</div>
+          )}
+
+          {/* Identity error / Enable Commenting */}
+          {identityError && (
+            <div className="text-[10px] text-accent-red font-mono mt-1">{identityError}</div>
+          )}
+          {eligibleForCommenting && !creatingIdentity && (
+            <button
+              type="button"
+              onClick={handleEnableCommenting}
+              className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-dashed border-accent-blue/40 px-2.5 py-1 text-[10px] font-mono text-accent-blue transition-colors hover:border-accent-blue hover:bg-accent-blue/5"
+            >
+              <MessageSquarePlus className="w-3 h-3" />
+              Enable Commenting
+            </button>
+          )}
+          {eligibleForCommenting && creatingIdentity && (
+            <div className="mt-1.5 text-[10px] font-mono text-theme-muted animate-pulse">
+              Enabling commenting…
+            </div>
+          )}
         </div>
-        {artifact.description && (
-          <div className="text-[11px] text-theme-muted font-body italic">
-            {artifact.description}
-          </div>
-        )}
-        {copied && (
-          <div className="text-[10px] font-mono text-accent-green mt-1">Copied ✓</div>
+
+        {/* Body */}
+        <div
+          ref={contentRef}
+          className="min-h-0 flex-1 overflow-auto relative"
+          onMouseUp={handleTextSelect}
+        >
+          {loading && (
+            <div className="p-6 text-xs text-theme-muted font-mono">Loading…</div>
+          )}
+          {identityLoading && !content && (
+            <div className="p-6 text-xs text-theme-muted font-mono">Checking comment eligibility…</div>
+          )}
+          {error && (
+            <div className="p-6 text-xs text-accent-red font-mono">Failed to load: {error}</div>
+          )}
+          {vintageLoading && (
+            <div className="p-6 text-xs text-theme-muted font-mono">Loading version…</div>
+          )}
+          {!loading && !error && displayContent !== null && (
+            <div className="p-4 md:p-5">
+              {artifact.contentType === 'markdown' && (
+                <div className="prose prose-sm prose-invert max-w-none">
+                  {renderMarkdown(displayContent) as React.ReactNode}
+                </div>
+              )}
+              {artifact.contentType === 'json' && (
+                <JsonViewer text={displayContent} />
+              )}
+              {artifact.contentType === 'csv' && (
+                <CsvTable text={displayContent} />
+              )}
+              {artifact.contentType === 'code' && (
+                <pre className="text-[12px] font-mono text-theme-primary whitespace-pre-wrap break-words leading-relaxed bg-app-muted/50 p-3 rounded border border-app">
+                  {displayContent}
+                </pre>
+              )}
+              {artifact.contentType === 'text' && (
+                <pre className="text-[12px] font-body text-theme-secondary whitespace-pre-wrap break-words leading-relaxed">
+                  {displayContent}
+                </pre>
+              )}
+              {artifact.contentType === 'binary' && (
+                <BinaryPreview url={url} filename={artifact.filename} size={artifact.sizeBytes} />
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Inline comment input (text selection mode) */}
+        {showCommentInput && docIdentity && selectedAnchor && (
+          <CommentInput
+            documentId={docIdentity.documentId}
+            anchor={selectedAnchor}
+            onSubmitted={() => {
+              setShowCommentInput(false);
+              setSelectedAnchor(undefined);
+              // Refresh comment list in panel if open
+              if (panel?.kind === 'comments') {
+                setPanel(null);
+                setTimeout(() => setPanel({ kind: 'comments' }), 50);
+              }
+            }}
+            onCancel={() => {
+              setShowCommentInput(false);
+              setSelectedAnchor(undefined);
+            }}
+          />
         )}
       </div>
 
-      {/* Body */}
-      <div className="min-h-0 flex-1 overflow-auto">
-        {loading && (
-          <div className="p-6 text-xs text-theme-muted font-mono">Loading…</div>
-        )}
-        {error && (
-          <div className="p-6 text-xs text-accent-red font-mono">Failed to load: {error}</div>
-        )}
-        {!loading && !error && (
-          <div className="p-4 md:p-5">
-            {artifact.contentType === 'markdown' && (
-              <div className="prose prose-sm prose-invert max-w-none">
-                {renderMarkdown(content ?? '') as React.ReactNode}
-              </div>
-            )}
-            {artifact.contentType === 'json' && (
-              <JsonViewer text={content ?? ''} />
-            )}
-            {artifact.contentType === 'csv' && (
-              <CsvTable text={content ?? ''} />
-            )}
-            {artifact.contentType === 'code' && (
-              <pre className="text-[12px] font-mono text-theme-primary whitespace-pre-wrap break-words leading-relaxed bg-app-muted/50 p-3 rounded border border-app">
-                {content}
-              </pre>
-            )}
-            {artifact.contentType === 'text' && (
-              <pre className="text-[12px] font-body text-theme-secondary whitespace-pre-wrap break-words leading-relaxed">
-                {content}
-              </pre>
-            )}
-            {artifact.contentType === 'binary' && (
-              <BinaryPreview url={url} filename={artifact.filename} size={artifact.sizeBytes} />
-            )}
-          </div>
-        )}
-      </div>
+      {/* Side panels */}
+      {panel?.kind === 'comments' && docIdentity && (
+        <CommentPanel
+          documentId={docIdentity.documentId}
+          currentVersion={docIdentity.latestVersionNumber}
+          onClose={closePanel}
+          onJumpToAnchor={handleJumpToAnchor}
+        />
+      )}
+      {panel?.kind === 'versionHistory' && docIdentity && (
+        <VersionHistoryPanel
+          documentId={docIdentity.documentId}
+          latestVersionNumber={docIdentity.latestVersionNumber}
+          onViewVersion={handleViewVersion}
+          onCompareToLatest={handleCompareToLatest}
+          onRestoreVersion={handleRestoreVersion}
+          onClose={closePanel}
+        />
+      )}
+      {panel?.kind === 'diff' && docIdentity && (
+        <VersionDiffViewer
+          documentId={docIdentity.documentId}
+          v1={panel.v1}
+          v2={panel.v2}
+          onClose={closePanel}
+        />
+      )}
+      {panel?.kind === 'timeline' && docIdentity && (
+        <CommentTimeline
+          documentId={docIdentity.documentId}
+          onClose={closePanel}
+          onJumpToVersion={handleViewVersion}
+        />
+      )}
     </div>
   );
+}
+
+// ── Helper: Find text offset within a container ─────────────────────────────
+
+function findNodeOffset(node: Node, offset: number, container: HTMLElement): number {
+  let totalOffset = 0;
+  let found = false;
+
+  function walk(n: Node): boolean {
+    if (found) return true;
+    if (n === node) {
+      // For text nodes, offset is within the node's text
+      if (n.nodeType === Node.TEXT_NODE) {
+        totalOffset += offset;
+      }
+      found = true;
+      return true;
+    }
+    if (n.nodeType === Node.TEXT_NODE) {
+      totalOffset += (n.textContent?.length ?? 0);
+    } else {
+      for (let i = 0; i < n.childNodes.length; i++) {
+        if (walk(n.childNodes[i])) return true;
+      }
+    }
+    return false;
+  }
+
+  walk(container);
+  return totalOffset;
 }
 
 // ── JSON ───────────────────────────────────────────────────────────────
@@ -268,8 +664,6 @@ function CsvTable({ text }: { text: string }) {
 // ── Binary ─────────────────────────────────────────────────────────────
 
 function BinaryPreview({ url, filename, size }: { url: string; filename: string; size: number }) {
-  // Image preview for png/jpg/gif/svg/webp — the route serves the right
-  // Content-Type, so the browser handles decoding.
   const ext = filename.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? '';
   const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext);
   if (isImage) {
