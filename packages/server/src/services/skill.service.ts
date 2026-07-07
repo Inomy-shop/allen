@@ -47,7 +47,7 @@ const REQUIRED_BODY_SECTIONS = [
   'evidence',
 ];
 
-function normalizeSlug(value: string): string {
+export function normalizeSlug(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 

@@ -57,6 +57,8 @@ export interface CommentAnchor {
 export interface CommentResolution {
   resolvedByUserId?: string;
   resolvedByAgentName?: string;
+  resolvedByDisplayName?: string;
+  resolvedByEmail?: string;
   resolvedAtVersion: number;
   resolutionNote: string;
   resolvedAt: string;
@@ -70,6 +72,8 @@ export interface DocumentCommentDoc {
   authorType: AuthorType;
   authorUserId?: string;
   authorAgentName?: string;
+  authorDisplayName?: string;
+  authorEmail?: string;
   body: string;
   status: CommentStatus;
   anchor: CommentAnchor;
@@ -209,6 +213,9 @@ export interface TimelineEvent {
   versionNumber?: number;
   /** The comment ID this event relates to, if applicable */
   commentId?: string;
+  /** Optional line anchor metadata for compact timeline rows. */
+  lineStart?: number;
+  lineEnd?: number;
   detail?: string;
 }
 
@@ -223,6 +230,84 @@ export interface ArtifactEligibilityResult {
   error: string;
   eligibleForCommenting: boolean;
   contentType?: DocumentContentType;
+}
+
+
+// ── Timeline Normalization ───────────────────────────────────────────────────
+
+interface RawTimelineEvent {
+  eventType: TimelineEventType;
+  timestamp: string;
+  data?: Record<string, unknown>;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function actorForRawEvent(type: TimelineEventType, data: Record<string, unknown>): { actorName?: string; actorType?: TimelineEvent['actorType'] } {
+  if (type === 'version_created') {
+    const agent = asString(data.createdByAgentName);
+    if (agent) return { actorName: agent, actorType: 'agent' };
+    return {
+      actorName: asString(data.createdByUserDisplayName) ?? asString(data.createdByUserEmail) ?? asString(data.createdByUserId),
+      actorType: (asString(data.createdByUserId) || asString(data.createdByUserDisplayName) || asString(data.createdByUserEmail)) ? 'human' : 'system',
+    };
+  }
+  if (type === 'comment_resolved') {
+    const agent = asString(data.resolvedByAgentName);
+    if (agent) return { actorName: agent, actorType: 'agent' };
+    return {
+      actorName: asString(data.resolvedByDisplayName) ?? asString(data.resolvedByEmail) ?? asString(data.resolvedByUserId),
+      actorType: (asString(data.resolvedByUserId) || asString(data.resolvedByDisplayName) || asString(data.resolvedByEmail)) ? 'human' : 'system',
+    };
+  }
+  if (type === 'comment_created') {
+    const agent = asString(data.authorAgentName);
+    if (agent) return { actorName: agent, actorType: 'agent' };
+    return {
+      actorName: asString(data.authorDisplayName) ?? asString(data.authorEmail) ?? asString(data.authorUserId),
+      actorType: (asString(data.authorUserId) || asString(data.authorDisplayName) || asString(data.authorEmail)) ? 'human' : 'system',
+    };
+  }
+  return { actorName: asString(data.actorName), actorType: 'system' };
+}
+
+function detailForRawEvent(type: TimelineEventType, data: Record<string, unknown>): string | undefined {
+  if (type === 'version_created') return asString(data.createdReason);
+  if (type === 'comment_resolved') return asString(data.resolutionNote);
+  if (type === 'comment_stale') return asString(data.staleReason);
+  if (type === 'comment_created') return asString(data.body);
+  return asString(data.detail);
+}
+
+export function normalizeTimelineResponse(documentId: string, data: TimelineResponse | RawTimelineEvent[]): TimelineResponse {
+  if (!Array.isArray(data)) {
+    return { documentId: data.documentId ?? documentId, events: Array.isArray(data.events) ? data.events : [] };
+  }
+
+  return {
+    documentId,
+    events: data.map((evt, index) => {
+      const raw = evt.data ?? {};
+      const actor = actorForRawEvent(evt.eventType, raw);
+      return {
+        type: evt.eventType,
+        eventId: `${evt.eventType}-${asString(raw.commentId) ?? asNumber(raw.versionNumber) ?? index}-${evt.timestamp}`,
+        timestamp: evt.timestamp,
+        ...actor,
+        versionNumber: asNumber(raw.versionNumber) ?? asNumber(raw.resolvedAtVersion),
+        commentId: asString(raw.commentId),
+        lineStart: asNumber(raw.lineStart),
+        lineEnd: asNumber(raw.lineEnd),
+        detail: detailForRawEvent(evt.eventType, raw),
+      };
+    }),
+  };
 }
 
 // ── API Client ────────────────────────────────────────────────────────────────
@@ -308,6 +393,8 @@ export const documents = {
     }),
 
   // ── D13: Timeline ───────────────────────────────────────────────────────
-  getTimeline: (documentId: string) =>
-    request<TimelineResponse>(`/documents/${documentId}/timeline`),
+  getTimeline: async (documentId: string): Promise<TimelineResponse> => {
+    const data = await request<TimelineResponse | RawTimelineEvent[]>(`/documents/${documentId}/timeline`);
+    return normalizeTimelineResponse(documentId, data);
+  },
 };

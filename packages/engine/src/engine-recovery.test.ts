@@ -109,6 +109,18 @@ function succeed(): BuiltInFunction {
   return async () => ({ ok: true, result: 'success' });
 }
 
+async function waitFor(
+  predicate: () => Promise<boolean>,
+  timeoutMs = 1000,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await predicate()) return;
+    await new Promise(r => setTimeout(r, 10));
+  }
+  throw new Error('Timed out waiting for condition');
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 
 describe('AllenEngine model recovery — single node', () => {
@@ -354,6 +366,80 @@ describe('AllenEngine model recovery — single node', () => {
     const overrides = state.__model_overrides as Record<string, unknown[]>;
     expect(overrides.my_node).toBeDefined();
     expect(overrides.my_node.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('AllenEngine model recovery — parallel branch retries', () => {
+  it('retries a recovered parallel branch with the selected provider/model override in state', async () => {
+    const observedOverrides: Array<Record<string, unknown> | undefined> = [];
+    let calls = 0;
+
+    const recoveringBranch: BuiltInFunction = async (_config, state) => {
+      calls += 1;
+      const overrides = state.__model_overrides as Record<string, Array<Record<string, unknown>>> | undefined;
+      observedOverrides.push(overrides?.left?.at(-1));
+
+      if (calls === 1) {
+        const err = new Error('Rate limit exhausted for model gpt-5.5');
+        (err as any).status = 429;
+        throw err;
+      }
+
+      const selected = overrides?.left?.at(-1);
+      if (selected?.provider !== 'claude' || selected?.model !== 'claude-haiku-4-5-20251001') {
+        throw new Error('missing recovery override in retry state');
+      }
+
+      return { recovered: true };
+    };
+
+    const sibling: BuiltInFunction = async () => ({ sibling: true });
+    const { engine, db } = makeEngine({ recovering_branch: recoveringBranch, sibling });
+
+    const workflow: WorkflowDef = {
+      name: 'parallel-recovery-override-test',
+      version: 1,
+      nodes: {
+        left: { type: 'code', function: 'recovering_branch', outputs: { recovered: 'branch recovered' } },
+        right: { type: 'code', function: 'sibling', outputs: { sibling: 'sibling completed' } },
+      },
+      edges: [
+        { from: 'START', to: ['left', 'right'], parallel: true, join: 'wait-all' },
+        { from: ['left', 'right'], to: 'END' },
+      ],
+    };
+
+    const runPromise = engine.run(workflow, {}, 0, { executionId: 'exec-rec-parallel-override' });
+
+    await waitFor(async () => {
+      const execution = await db.collection('executions').findOne({ id: 'exec-rec-parallel-override' });
+      return execution?.status === 'waiting_for_input';
+    });
+
+    const submitted = engine.submitInput('exec-rec-parallel-override', 'left', {
+      provider: 'claude',
+      model: 'claude-haiku-4-5-20251001',
+    });
+    expect(submitted).toBe(true);
+
+    const result = await runPromise;
+
+    expect(result.recovered).toBe(true);
+    expect(result.sibling).toBe(true);
+    expect(calls).toBe(2);
+    expect(observedOverrides[0]).toBeUndefined();
+    expect(observedOverrides[1]).toMatchObject({
+      provider: 'claude',
+      model: 'claude-haiku-4-5-20251001',
+    });
+
+    const execution = await db.collection('executions').findOne({ id: 'exec-rec-parallel-override' });
+    const state = execution!.state as Record<string, unknown>;
+    const overrides = state.__model_overrides as Record<string, Array<Record<string, unknown>>>;
+    expect(overrides.left.at(-1)).toMatchObject({
+      provider: 'claude',
+      model: 'claude-haiku-4-5-20251001',
+    });
   });
 });
 

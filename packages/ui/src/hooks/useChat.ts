@@ -137,6 +137,9 @@ export interface ChatMessage {
   toolCalls?: ToolCallRecord[];
   thinkingText?: string;
   hidden?: boolean;
+  /** Present when this user message was a `/skill <name>` load command —
+   *  rendered as a compact skill slice instead of a text bubble. */
+  skillLoad?: { name: string; displayName: string };
   createdAt: string;
 }
 
@@ -895,12 +898,17 @@ export function useChat() {
   setActiveToolCalls([]);
   setAgentReports([]);
 
-    // Add user message optimistically
+    // Add user message optimistically. `/skill <name>` gets an optimistic
+    // skillLoad marker (slug as display name) so it renders as a skill slice
+    // immediately; the server-persisted message carries the real displayName.
+    const skillSlug = content.trim().match(/^\/skill\s+(\S+)$/)?.[1]
+      ?.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     const userMsg: ChatMessage = {
       sessionId,
       role: 'user',
       content,
       status: 'completed',
+      ...(skillSlug ? { skillLoad: { name: skillSlug, displayName: skillSlug } } : {}),
       ...currentSenderFields(useAuthStore.getState().user),
       createdAt: new Date().toISOString(),
     };
@@ -914,6 +922,9 @@ export function useChat() {
 
     const abortController = new AbortController();
     abortRef.current = abortController;
+    // Set when a pre-stream rejection is handled locally — the server never
+    // persisted anything, so reloading messages would wipe the error bubble.
+    let skipReload = false;
 
     try {
       const response = await fetch(api.sendMessageUrl(sessionId), {
@@ -924,7 +935,21 @@ export function useChat() {
       });
 
       if (!response.ok || !response.body) {
-        throw new Error(`Request failed: ${response.status}`);
+        // Pre-stream rejections (e.g. unknown `/skill <name>`) return a JSON
+        // body with an error message and optional suggestions — surface it.
+        let serverMessage = '';
+        if (!response.ok) {
+          try {
+            const data = await response.json() as { error?: string; suggestions?: string[] };
+            serverMessage = data.error ?? '';
+            if (serverMessage && data.suggestions?.length) {
+              serverMessage += `. Did you mean: ${data.suggestions.map(s => `/skill ${s}`).join(', ')}?`;
+            }
+          } catch { /* non-JSON body */ }
+        }
+        const error = new Error(serverMessage || `Request failed: ${response.status}`) as Error & { isClientError?: boolean };
+        error.isClientError = response.status >= 400 && response.status < 500;
+        throw error;
       }
 
       const reader = response.body.getReader();
@@ -1158,6 +1183,25 @@ export function useChat() {
         // User cancelled — clean up without showing an error message.
         setStreamText('');
         setActiveToolCalls([]);
+      } else if ((err as Error & { isClientError?: boolean }).isClientError) {
+        // The server rejected the message before persisting/streaming (e.g.
+        // unknown /skill). Drop the optimistic user message, restore the
+        // draft, and show the server error in a failed assistant bubble.
+        skipReload = true;
+        setMessages(prev => [
+          ...prev.filter(m => m !== userMsg),
+          {
+            sessionId,
+            role: 'assistant',
+            content: (err as Error).message,
+            status: 'failed',
+            error: (err as Error).message,
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+        setRestoredDraft(content);
+        setStreamText('');
+        setActiveToolCalls([]);
       } else {
         // Network / transport error. Before giving up, check whether the
         // backend session is still streaming so we can attempt to reconnect.
@@ -1260,7 +1304,7 @@ export function useChat() {
       setStreaming(false);
       sendingRef.current = false;
       abortRef.current = null;
-      setMessageReloadNonce(n => n + 1);
+      if (!skipReload) setMessageReloadNonce(n => n + 1);
       loadSessions();
     }
   }, [activeSessionId, streaming, loadSessions]);

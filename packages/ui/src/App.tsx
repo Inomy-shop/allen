@@ -9,7 +9,7 @@ import {
   ChevronRight, Plus, PenTool,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
   SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain, Cpu,
-  Trash2, AlertTriangle, Copy, Check, BarChart3, X, Lightbulb, Loader2,
+  Trash2, AlertTriangle, Copy, Check, BarChart3, X, Lightbulb, Loader2, Zap,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
@@ -140,6 +140,7 @@ const SETTINGS_NAV_GROUPS: NavGroup[] = [
   { id: 'settings-allen', label: 'Allen', items: [
     { to: '/settings/schedules', icon: CalendarClock, label: 'Schedules', activePrefixes: ['/settings/schedules'] },
     { to: '/settings/learnings', icon: Brain, label: 'Learnings', activePrefixes: ['/settings/learnings'] },
+    { to: '/settings/skills', icon: Zap, label: 'Skills', activePrefixes: ['/settings/skills'] },
     { to: '/settings/team', icon: UsersRound, label: 'Team', activePrefixes: ['/settings/team'] },
   ]},
   { id: 'settings-account', label: 'User', items: [
@@ -184,6 +185,7 @@ const COMMANDS: CommandItem[] = [
   { id: 'settings-mcp', label: 'Open MCP servers', group: 'Settings', to: '/settings/mcp', icon: Server },
   { id: 'settings-schedules', label: 'Open schedules', group: 'Settings', to: '/settings/schedules', icon: CalendarClock },
   { id: 'settings-learnings', label: 'Open learnings', group: 'Settings', to: '/settings/learnings', icon: Brain },
+  { id: 'settings-skills', label: 'Open skills', group: 'Settings', to: '/settings/skills', icon: Zap },
   { id: 'workflows', label: 'Open workflows', group: 'Studio', to: '/workflows', icon: Workflow },
   { id: 'agents', label: 'Open teams & agents', group: 'Studio', to: '/agents?section=teams-agents', icon: UsersRound },
 ];
@@ -202,6 +204,7 @@ const SETTINGS_ROUTE_DETAILS: Array<{ prefix: string; label: string }> = [
   { prefix: '/settings/mcp', label: 'MCP Servers' },
   { prefix: '/settings/schedules', label: 'Schedules' },
   { prefix: '/settings/learnings', label: 'Learnings' },
+  { prefix: '/settings/skills', label: 'Skills' },
   { prefix: '/settings/team', label: 'Team' },
   { prefix: '/settings/account', label: 'Account' },
   { prefix: '/settings/general', label: 'General' },

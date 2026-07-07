@@ -29,6 +29,7 @@ vi.mock('@allen/engine', async (orig) => {
 });
 
 import { designStudioRoutes, type DesignStudioRoutesOptions } from './design-studio.routes.js';
+import { workspaceDir } from '../services/design-studio/workspace-fs.js';
 import type { Completer } from '../services/design-studio/llm.service.js';
 
 // Deterministic completer that branches on the system prompt's intent.
@@ -406,6 +407,96 @@ describe('design-studio routes', () => {
       const res = await request(app)
         .post(`/api/design-studio/workspaces/${new ObjectId().toString()}/refresh`);
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /workspaces/import-new (fork designs into a new workspace)', () => {
+    /** A repo-linked, profiled source workspace with one design on disk. */
+    async function seedSourceWorkspace(): Promise<string> {
+      const inserted = await db.collection('dstudio_workspaces').insertOne({
+        kind: 'repo',
+        name: 'Design source',
+        sourceRepoId: 'repo-1',
+        sourceRepoPath: '/tmp/source-repo',
+        ownerUserId: 'u2',
+        profileStatus: 'confirmed',
+        profile: {
+          summaryMarkdown: 'Compact Inter-based system.',
+          colors: [{ name: 'Primary', value: '#123456', role: 'primary' }],
+          consistency: { consistent: true, issues: [] },
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const id = inserted.insertedId.toString();
+      const designDir = join(workspaceDir(id), 'designs', 'checkout');
+      await fs.mkdir(designDir, { recursive: true });
+      await fs.writeFile(join(workspaceDir(id), 'styles.css'), ':root { --brand: #ff0000; }', 'utf8');
+      await fs.writeFile(join(designDir, 'index.html'), '<link rel="stylesheet" href="../../styles.css" /><body>CHECKOUT</body>', 'utf8');
+      return id;
+    }
+
+    it('creates a confirmed workspace with adopted designs, inherited repo link, and profile', async () => {
+      const sourceId = await seedSourceWorkspace();
+
+      // The source is offered as a global import source.
+      const sources = (await request(app).get('/api/design-studio/import-sources').expect(200)).body;
+      expect(sources.map((s: { _id: string }) => s._id)).toContain(sourceId);
+      expect(sources.find((s: { _id: string }) => s._id === sourceId)?.designCount).toBe(1);
+
+      const { workspace, report } = (await request(app)
+        .post('/api/design-studio/workspaces/import-new')
+        .send({ sourceWorkspaceId: sourceId })
+        .expect(201)).body;
+
+      // Immediately usable: confirmed, named after the source, brief records provenance.
+      expect(workspace.kind).toBe('greenfield');
+      expect(workspace.name).toBe('Design source (imported)');
+      expect(workspace.profileStatus).toBe('confirmed');
+      expect(workspace.greenfieldBrief.references).toBe(`workspace:${sourceId}`);
+      // Repo link and analyzed profile carried over from the source.
+      expect(workspace.sourceRepoId).toBe('repo-1');
+      expect(workspace.sourceRepoPath).toBe('/tmp/source-repo');
+      expect(workspace.profile.colors[0].value).toBe('#123456');
+
+      // Fresh gallery → the source design system is adopted wholesale.
+      expect(report.stylesMode).toBe('adopted');
+      expect(report.imported).toEqual([{ name: 'checkout', as: 'checkout', renamed: false, stylesMode: 'adopted' }]);
+      expect(await fs.readFile(join(workspaceDir(workspace._id), 'styles.css'), 'utf8')).toContain('#ff0000');
+      expect(await fs.readFile(join(workspaceDir(workspace._id), 'designs', 'checkout', 'index.html'), 'utf8')).toContain('CHECKOUT');
+      // Repo pointer materialized for design chats.
+      const pointer = JSON.parse(await fs.readFile(join(workspaceDir(workspace._id), 'system', 'source-repo.json'), 'utf8'));
+      expect(pointer.path).toBe('/tmp/source-repo');
+    });
+
+    it('links a bundle import to an explicitly chosen repo', async () => {
+      const repo = await db.collection('repos').insertOne({ name: 'my-app', path: '/tmp/my-app' });
+      const bundleDir = join(TMP, 'exports', 'shared-designs');
+      await fs.mkdir(bundleDir, { recursive: true });
+      await fs.writeFile(join(bundleDir, 'index.html'), '<html>BUNDLE</html>', 'utf8');
+
+      const { workspace } = (await request(app)
+        .post('/api/design-studio/workspaces/import-new')
+        .send({ sourceDir: bundleDir, repoId: repo.insertedId.toString(), name: 'Shared designs' })
+        .expect(201)).body;
+
+      expect(workspace.name).toBe('Shared designs');
+      expect(workspace.sourceRepoId).toBe(repo.insertedId.toString());
+      expect(workspace.sourceRepoPath).toBe('/tmp/my-app');
+    });
+
+    it('validates sources and rolls the workspace back when the import fails', async () => {
+      await request(app).post('/api/design-studio/workspaces/import-new').send({}).expect(400);
+      await request(app).post('/api/design-studio/workspaces/import-new')
+        .send({ sourceWorkspaceId: new ObjectId().toString() }).expect(404);
+      await request(app).post('/api/design-studio/workspaces/import-new')
+        .send({ sourceDir: join(TMP, 'exports', 'nope'), repoId: new ObjectId().toString() }).expect(404);
+
+      // A source with no designs fails the import → the created workspace is rolled back.
+      const empty = (await request(app).post('/api/design-studio/workspaces').send({ kind: 'greenfield', name: 'Empty' }).expect(201)).body;
+      await request(app).post('/api/design-studio/workspaces/import-new').send({ sourceWorkspaceId: empty._id }).expect(400);
+      const list = (await request(app).get('/api/design-studio/workspaces').expect(200)).body;
+      expect(list.map((w: { name: string }) => w.name)).toEqual(['Empty']);
     });
   });
 });

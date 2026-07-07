@@ -65,18 +65,14 @@ export default function CommentInput({ documentId, anchor, onSubmitted, onCancel
       </div>
 
       {anchor && (
-        <div className="mb-2 rounded border border-app bg-app-muted/40 px-2.5 py-1.5 text-[10px] font-mono text-theme-muted space-y-0.5">
-          {anchor.type === 'line' && anchor.lineStart && (
-            <div>Line {anchor.lineStart}</div>
-          )}
-          {anchor.type === 'range' && anchor.lineStart && anchor.lineEnd && (
-            <div>Lines {anchor.lineStart}–{anchor.lineEnd}</div>
-          )}
-          {anchor.type === 'text_snippet' && (
-            <div>Selected text</div>
-          )}
+        <div className="mb-2 flex min-w-0 items-center gap-2 text-[10px] text-theme-muted">
+          <span className="shrink-0 rounded bg-yellow-400/15 px-1.5 py-0.5 font-mono text-yellow-700 dark:text-yellow-300">
+            {anchor.type === 'line' && anchor.lineStart && <>Line {anchor.lineStart}</>}
+            {anchor.type === 'range' && anchor.lineStart && anchor.lineEnd && <>Lines {anchor.lineStart}–{anchor.lineEnd}</>}
+            {anchor.type === 'text_snippet' && <>Selected text</>}
+          </span>
           {anchor.snippet && (
-            <div className="truncate italic text-theme-subtle">"{anchor.snippet}"</div>
+            <span className="truncate font-body italic text-theme-subtle">"{anchor.snippet}"</span>
           )}
         </div>
       )}

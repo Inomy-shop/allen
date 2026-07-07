@@ -21,6 +21,7 @@ import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import { chatCodeDiffs, pullRequests } from '../services/workspaceService';
 import { useAuthStore } from '../stores/authStore';
 import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
+import { useSkillSlashCommands } from '../hooks/useSkillSlashCommands';
 import { useFileDropZone, FileDropOverlay } from '../hooks/useFileDropZone';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
 
@@ -699,6 +700,7 @@ export default function DashboardPage() {
   const location = useLocation();
   const user = useAuthStore((s) => s.user);
   const chatInputRef = useRef<ChatInputHandle>(null);
+  const skillSlashCommands = useSkillSlashCommands();
   const [pendingInterventions, setPendingInterventions] = useState<InterventionItem[]>([]);
   const [reviewPrs, setReviewPrs] = useState<PullRequestReviewItem[]>([]);
   const [allPullRequests, setAllPullRequests] = useState<PullRequestReviewItem[]>([]);
@@ -1043,6 +1045,7 @@ export default function DashboardPage() {
               ref={chatInputRef}
               onSend={sendPrompt}
               streaming={false}
+              slashCommands={skillSlashCommands}
               providers={providers}
               selectedProvider={selectedProvider}
               selectedModel={selectedModel}

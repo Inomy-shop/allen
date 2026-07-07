@@ -17,6 +17,7 @@ import { materializeRepoContext, type RepoContextData } from '../services/design
 import type { RepoContextAnalysis } from '../services/design-studio/llm.service.js';
 import { buildPreview } from '../services/design-studio/preview.service.js';
 import { exportVersion } from '../services/design-studio/export.service.js';
+import { importAsNewWorkspace, listAllImportSources } from '../services/design-studio/import.service.js';
 import { RepoService } from '../services/repo.service.js';
 import { ChatService } from '../services/chat.service.js';
 import { getEnabledProvidersFromRegistry, type ProviderConfig } from '../services/chat-providers.js';
@@ -491,6 +492,49 @@ export function designStudioRoutes(db: Db, opts: DesignStudioRoutesOptions = {})
       res.json(result);
     } catch (e) {
       err(res, 500, (e as Error).message, 'EXPORT_FAILED');
+    }
+  });
+
+  // All workspaces with designs — sources for "import as new workspace".
+  router.get('/import-sources', async (_req, res) => {
+    try {
+      res.json(await listAllImportSources(store));
+    } catch (e) {
+      err(res, 500, (e as Error).message, 'INTERNAL_ERROR');
+    }
+  });
+
+  // Fork designs into a brand-new workspace (created + imported + confirmed in
+  // one step). The fresh gallery guarantees the source system is adopted as-is.
+  router.post('/workspaces/import-new', async (req, res) => {
+    try {
+      const sourceWorkspaceId = typeof req.body?.sourceWorkspaceId === 'string' && req.body.sourceWorkspaceId.trim()
+        ? req.body.sourceWorkspaceId.trim() : undefined;
+      const sourceDir = typeof req.body?.sourceDir === 'string' && req.body.sourceDir.trim()
+        ? req.body.sourceDir.trim() : undefined;
+      if (!sourceWorkspaceId && !sourceDir) return err(res, 400, 'sourceWorkspaceId or sourceDir required', 'IMPORT_SOURCE_REQUIRED');
+      if (sourceWorkspaceId && sourceDir) return err(res, 400, 'provide either sourceWorkspaceId or sourceDir, not both', 'IMPORT_SOURCE_AMBIGUOUS');
+      // Optional explicit repo link (defaults to the source workspace's repo).
+      let repo: { id: string; path?: string; name?: string } | undefined;
+      const repoId = typeof req.body?.repoId === 'string' && req.body.repoId.trim() ? req.body.repoId.trim() : undefined;
+      if (repoId) {
+        const doc = await repos.getById(repoId);
+        if (!doc) return err(res, 404, 'repo not found', 'REPO_NOT_FOUND');
+        repo = { id: repoId, path: String(doc.path ?? '') || undefined, name: doc.name ? String(doc.name) : undefined };
+      }
+      const result = await importAsNewWorkspace(store, {
+        name: typeof req.body?.name === 'string' ? req.body.name : undefined,
+        sourceWorkspaceId,
+        sourceDir,
+        ownerUserId: userId(req) ?? null,
+        repo,
+      });
+      res.status(201).json(result);
+    } catch (e) {
+      const message = (e as Error).message;
+      const status = /not found/i.test(message) ? 404
+        : /required|absolute path|no designs|does not exist/i.test(message) ? 400 : 500;
+      err(res, status, message, 'IMPORT_FAILED');
     }
   });
 

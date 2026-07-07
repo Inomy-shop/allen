@@ -29,7 +29,7 @@ export default function CommentTimeline({
     setLoading(true);
     setError(null);
     documentsApi.getTimeline(documentId)
-      .then(data => { if (!cancelled) setEvents(data.events); })
+      .then(data => { if (!cancelled) setEvents(data.events ?? []); })
       .catch(err => { if (!cancelled) setError((err as Error).message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -47,7 +47,7 @@ export default function CommentTimeline({
           <button
             onClick={() => {
               setLoading(true);
-              documentsApi.getTimeline(documentId).then(data => setEvents(data.events)).catch(err => setError((err as Error).message)).finally(() => setLoading(false));
+              documentsApi.getTimeline(documentId).then(data => setEvents(data.events ?? [])).catch(err => setError((err as Error).message)).finally(() => setLoading(false));
             }}
             disabled={loading}
             className="rounded p-1 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:opacity-50"
@@ -119,6 +119,11 @@ export default function CommentTimeline({
                       v{evt.versionNumber}
                     </button>
                   )}
+                  {anchorLabel(evt) && (
+                    <span className="rounded bg-yellow-400/15 px-1 py-0.5 text-[9px] font-mono text-yellow-700 dark:text-yellow-300">
+                      {anchorLabel(evt)}
+                    </span>
+                  )}
                 </div>
                 <div className="text-[10px] font-mono text-theme-subtle mt-0.5">
                   {evt.actorName && <span>{evt.actorName} · </span>}
@@ -149,6 +154,12 @@ function eventLabel(evt: TimelineEvent): string {
     case 'comment_created':   return 'Comment added';
     default:                  return evt.type;
   }
+}
+
+function anchorLabel(evt: TimelineEvent): string | null {
+  if (evt.lineStart && evt.lineEnd && evt.lineEnd !== evt.lineStart) return `Lines ${evt.lineStart}–${evt.lineEnd}`;
+  if (evt.lineStart) return `Line ${evt.lineStart}`;
+  return null;
 }
 
 function formatTime(iso: string): string {

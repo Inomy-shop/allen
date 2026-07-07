@@ -19,7 +19,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   X as XIcon, Download, Copy, Trash2,
   FileText, FileJson, FileSpreadsheet, Code2, File, Database,
-  MessageSquare, History, MessageSquarePlus,
+  MessageSquare, History, MessageSquarePlus, AlertTriangle,
 } from 'lucide-react';
 import { artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
 import { documents as documentsApi } from '../../services/documents';
@@ -137,10 +137,31 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
     setVintageContent(null);
   }, [artifact.artifactId]);
 
-  async function handleCopy() {
-    if (!content) return;
+  const displayContent = vintageContent ?? docIdentity?.latestContent ?? content;
+  const displayedVersionNumber = viewingVersion ?? docIdentity?.latestVersionNumber ?? null;
+  const isViewingLatestDocument = Boolean(docIdentity) && !viewingVersion;
+
+  const refreshComments = useCallback(async () => {
+    if (!docIdentity) {
+      setComments([]);
+      return;
+    }
     try {
-      await navigator.clipboard.writeText(content);
+      const data = await documentsApi.listComments(docIdentity.documentId, 'all');
+      setComments(data);
+    } catch {
+      setComments([]);
+    }
+  }, [docIdentity]);
+
+  useEffect(() => {
+    refreshComments();
+  }, [refreshComments]);
+
+  async function handleCopy() {
+    if (!displayContent) return;
+    try {
+      await navigator.clipboard.writeText(displayContent);
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch { /* ignore */ }
@@ -171,8 +192,6 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
   }
 
   // ── Version actions ─────────────────────────────────────────────────
-
-  const displayContent = vintageContent ?? content;
 
   const closePanel = useCallback(() => {
     setPanel(null);
@@ -208,17 +227,26 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
       documentsApi.getByArtifactId(artifact.artifactId).then(data => {
         if ('documentId' in data && data.documentId) {
           setDocIdentity(data as DocumentIdentitySummary);
+          setViewingVersion(null);
+          setVintageContent(null);
         }
       }).catch(() => {});
     }, 500);
   }
 
   function handleJumpToAnchor(anchor: DocumentCommentDoc['anchor']) {
-    // Scroll content area to approximate line position
     if (contentRef.current && anchor.lineStart) {
-      const lineHeight = 20; // approximate
-      const targetY = (anchor.lineStart - 1) * lineHeight;
-      contentRef.current.scrollTop = Math.max(0, targetY - 100);
+      const renderedLine = findRenderedLineElement(contentRef.current, anchor.lineStart);
+      if (renderedLine) {
+        contentRef.current.scrollTo({
+          top: Math.max(0, renderedLine.offsetTop - 100),
+          behavior: 'smooth',
+        });
+      } else {
+        const lineHeight = 20; // fallback for plain text/code overlays
+        const targetY = (anchor.lineStart - 1) * lineHeight;
+        contentRef.current.scrollTop = Math.max(0, targetY - 100);
+      }
     }
     // Open comment panel if closed
     if (!panel || panel.kind !== 'comments') {
@@ -244,12 +272,22 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
     const container = contentRef.current;
     if (!container) return;
 
-    // If the selection is within our content div, approximate line numbers
-    // by counting newlines in the content before the selection start
+    const startSourceLine = findSourceLineForNode(range.startContainer, container, 'start');
+    const endSourceLine = findSourceLineForNode(range.endContainer, container, 'end');
+
+    // Prefer rendered markdown source-line metadata. Falling back to offset
+    // math keeps plain text/code/json/csv behavior unchanged.
     const fullText = displayContent ?? '';
-    const textBefore = fullText.substring(0, findNodeOffset(range.startContainer, range.startOffset, container));
-    const startLine = (textBefore.match(/\n/g)?.length ?? 0) + 1;
-    const endLine = startLine + (snippet.match(/\n/g)?.length ?? 0);
+    let startLine: number;
+    let endLine: number;
+    if (startSourceLine && endSourceLine) {
+      startLine = Math.min(startSourceLine, endSourceLine);
+      endLine = Math.max(startSourceLine, endSourceLine);
+    } else {
+      const textBefore = fullText.substring(0, findNodeOffset(range.startContainer, range.startOffset, container));
+      startLine = (textBefore.match(/\n/g)?.length ?? 0) + 1;
+      endLine = startLine + (snippet.match(/\n/g)?.length ?? 0);
+    }
 
     // Extract context: 2 lines before and after
     const lines = fullText.split('\n');
@@ -270,6 +308,10 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
 
   // Content lines for anchor overlay
   const contentLines = useMemo(() => displayContent?.split('\n') ?? [], [displayContent]);
+  const renderMarkdownLineAnchors = artifact.contentType === 'markdown' && Boolean(docIdentity);
+  const artifactBodyClass = renderMarkdownLineAnchors
+    ? 'py-4 pr-4 pl-10 md:py-5 md:pr-5 md:pl-12'
+    : 'p-4 md:p-5';
 
   const Icon = iconForType(artifact.contentType);
 
@@ -306,7 +348,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
                   <>
                     <span>·</span>
                     <span className="text-accent-blue font-semibold">
-                      v{docIdentity.latestVersionNumber}
+                      {isViewingLatestDocument ? 'Latest ' : ''}v{displayedVersionNumber ?? docIdentity.latestVersionNumber}
                     </span>
                     {docIdentity.unresolvedCommentCount > 0 && (
                       <span className="text-accent-orange">
@@ -371,7 +413,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
               )}
               <button
                 onClick={handleCopy}
-                disabled={!content || artifact.contentType === 'binary'}
+                disabled={!displayContent || artifact.contentType === 'binary'}
                 title="Copy content"
                 className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:opacity-30"
               >
@@ -454,11 +496,20 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
             <div className="p-6 text-xs text-theme-muted font-mono">Loading version…</div>
           )}
           {!loading && !error && displayContent !== null && (
-            <div className="p-4 md:p-5">
+            <div className={artifactBodyClass}>
               {artifact.contentType === 'markdown' && (
-                <div className="prose prose-sm prose-invert max-w-none">
-                  {renderMarkdown(displayContent) as React.ReactNode}
-                </div>
+                renderMarkdownLineAnchors ? (
+                  <MarkdownWithCommentAnchors
+                    text={displayContent}
+                    comments={comments}
+                    currentVersion={displayedVersionNumber ?? docIdentity?.latestVersionNumber ?? 0}
+                    onJumpToComment={() => setPanel({ kind: 'comments' })}
+                  />
+                ) : (
+                  <div className="prose prose-sm prose-invert max-w-none">
+                    {renderMarkdown(displayContent) as React.ReactNode}
+                  </div>
+                )
               )}
               {artifact.contentType === 'json' && (
                 <JsonViewer text={displayContent} />
@@ -481,6 +532,14 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
               )}
             </div>
           )}
+          {docIdentity && comments.length > 0 && !renderMarkdownLineAnchors && (
+            <CommentAnchorOverlay
+              contentLines={contentLines}
+              comments={comments}
+              currentVersion={docIdentity.latestVersionNumber}
+              onJumpToComment={() => setPanel({ kind: 'comments' })}
+            />
+          )}
         </div>
 
         {/* Inline comment input (text selection mode) */}
@@ -491,6 +550,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
             onSubmitted={() => {
               setShowCommentInput(false);
               setSelectedAnchor(undefined);
+              refreshComments();
               // Refresh comment list in panel if open
               if (panel?.kind === 'comments') {
                 setPanel(null);
@@ -512,6 +572,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
           currentVersion={docIdentity.latestVersionNumber}
           onClose={closePanel}
           onJumpToAnchor={handleJumpToAnchor}
+          onCommentsChanged={refreshComments}
         />
       )}
       {panel?.kind === 'versionHistory' && docIdentity && (
@@ -543,7 +604,215 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
   );
 }
 
+// ── Markdown line anchoring ────────────────────────────────────────────────
+
+export interface MarkdownLineBlock {
+  key: string;
+  startLine: number;
+  endLine: number;
+  text: string;
+  blank: boolean;
+}
+
+/**
+ * Split markdown into rendered source-line blocks. Most lines render one-to-one
+ * so comment anchors can attach to the actual displayed line. Fenced code blocks
+ * and tables render as a single semantic block because splitting them would
+ * destroy their markdown rendering.
+ */
+export function splitMarkdownIntoRenderedLineBlocks(text: string): MarkdownLineBlock[] {
+  const lines = text.split('\n');
+  const blocks: MarkdownLineBlock[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const lineNo = i + 1;
+    const line = lines[i] ?? '';
+
+    if (line.trim() === '') {
+      blocks.push({
+        key: `blank-${lineNo}`,
+        startLine: lineNo,
+        endLine: lineNo,
+        text: '',
+        blank: true,
+      });
+      i++;
+      continue;
+    }
+
+    if (line.match(/^\s*```/)) {
+      const start = i;
+      i++;
+      while (i < lines.length && !lines[i].match(/^\s*```/)) i++;
+      if (i < lines.length) i++;
+      blocks.push({
+        key: `fence-${start + 1}`,
+        startLine: start + 1,
+        endLine: i,
+        text: lines.slice(start, i).join('\n'),
+        blank: false,
+      });
+      continue;
+    }
+
+    if (line.includes('|') && i + 1 < lines.length && lines[i + 1]?.match(/^\|?[\s-:|]+\|/)) {
+      const start = i;
+      i += 2;
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') i++;
+      blocks.push({
+        key: `table-${start + 1}`,
+        startLine: start + 1,
+        endLine: i,
+        text: lines.slice(start, i).join('\n'),
+        blank: false,
+      });
+      continue;
+    }
+
+    blocks.push({
+      key: `line-${lineNo}`,
+      startLine: lineNo,
+      endLine: lineNo,
+      text: line,
+      blank: false,
+    });
+    i++;
+  }
+
+  return blocks;
+}
+
+export function commentOverlapsMarkdownBlock(
+  comment: DocumentCommentDoc,
+  block: Pick<MarkdownLineBlock, 'startLine' | 'endLine'>,
+): boolean {
+  const anchor = comment.anchor;
+  if (!anchor.lineStart) return false;
+  const anchorEnd = anchor.type === 'range'
+    ? (anchor.lineEnd ?? anchor.lineStart)
+    : anchor.lineStart;
+  return anchor.lineStart <= block.endLine && anchorEnd >= block.startLine;
+}
+
+export function commentStartsInMarkdownBlock(
+  comment: DocumentCommentDoc,
+  block: Pick<MarkdownLineBlock, 'startLine' | 'endLine'>,
+): boolean {
+  const lineStart = comment.anchor.lineStart;
+  return Boolean(lineStart && lineStart >= block.startLine && lineStart <= block.endLine);
+}
+
+function MarkdownWithCommentAnchors({
+  text,
+  comments,
+  currentVersion,
+  onJumpToComment,
+}: {
+  text: string;
+  comments: DocumentCommentDoc[];
+  currentVersion: number;
+  onJumpToComment: (commentId: string) => void;
+}) {
+  const blocks = useMemo(() => splitMarkdownIntoRenderedLineBlocks(text), [text]);
+
+  return (
+    <div className="prose prose-sm prose-invert max-w-none">
+      <div className="artifact-markdown-lines space-y-0">
+        {blocks.map(block => {
+          if (block.blank) {
+            return (
+              <div
+                key={block.key}
+                data-source-line={block.startLine}
+                data-source-line-end={block.endLine}
+                className="h-3"
+              />
+            );
+          }
+
+          const blockComments = comments.filter(comment => commentOverlapsMarkdownBlock(comment, block));
+          const markerComments = blockComments.filter(comment => commentStartsInMarkdownBlock(comment, block));
+          const hasComments = blockComments.length > 0;
+          const hasStale = blockComments.some(comment => comment.status === 'stale');
+          const markerHasStale = markerComments.some(comment => comment.status === 'stale');
+          const markerIsCurrent = markerComments.some(comment => comment.anchor.anchoredAtVersion === currentVersion);
+          const label = block.startLine === block.endLine
+            ? `Line ${block.startLine}`
+            : `Lines ${block.startLine}-${block.endLine}`;
+
+          return (
+            <div
+              key={block.key}
+              data-source-line={block.startLine}
+              data-source-line-end={block.endLine}
+              className={`artifact-markdown-line relative -mx-2 rounded-sm border-l-2 px-2 py-0.5 ${
+                hasComments
+                  ? 'border-yellow-500/70 bg-yellow-300/20 dark:bg-yellow-300/15'
+                  : 'border-transparent'
+              } ${hasStale ? 'border-accent-orange/80 bg-accent-orange/10' : ''}`}
+            >
+              {markerComments.length > 0 && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onJumpToComment(markerComments[0].commentId);
+                  }}
+                  className="not-prose absolute -left-6 top-1 inline-flex items-center rounded p-0.5 text-yellow-700 transition-colors hover:bg-yellow-300/30 dark:text-yellow-300"
+                  title={`${markerComments.length} comment${markerComments.length === 1 ? '' : 's'} starting at ${label.toLowerCase()}`}
+                  aria-label={`${markerComments.length} comment${markerComments.length === 1 ? '' : 's'} starting at ${label}`}
+                >
+                  {markerHasStale || !markerIsCurrent ? (
+                    <AlertTriangle className="h-3 w-3 text-accent-orange" />
+                  ) : (
+                    <MessageSquare className="h-3 w-3" />
+                  )}
+                </button>
+              )}
+              <div className="[&_.markdown-body]:my-0 [&_.markdown-body>*:first-child]:mt-0 [&_.markdown-body>*:last-child]:mb-0">
+                {renderMarkdown(block.text) as React.ReactNode}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Helper: Find text offset within a container ─────────────────────────────
+
+function findSourceLineForNode(
+  node: Node,
+  container: HTMLElement,
+  boundary: 'start' | 'end',
+): number | null {
+  let el: Element | null = node.nodeType === Node.ELEMENT_NODE
+    ? node as Element
+    : node.parentElement;
+
+  while (el && el !== container) {
+    if (el instanceof HTMLElement && el.dataset.sourceLine) {
+      const start = Number.parseInt(el.dataset.sourceLine, 10);
+      const end = Number.parseInt(el.dataset.sourceLineEnd ?? el.dataset.sourceLine, 10);
+      const line = boundary === 'end' ? end : start;
+      return Number.isFinite(line) ? line : null;
+    }
+    el = el.parentElement;
+  }
+
+  return null;
+}
+
+export function findRenderedLineElement(container: HTMLElement, line: number): HTMLElement | null {
+  const nodes = Array.from(container.querySelectorAll<HTMLElement>('[data-source-line]'));
+  return nodes.find(node => {
+    const start = Number.parseInt(node.dataset.sourceLine ?? '', 10);
+    const end = Number.parseInt(node.dataset.sourceLineEnd ?? node.dataset.sourceLine ?? '', 10);
+    return Number.isFinite(start) && Number.isFinite(end) && line >= start && line <= end;
+  }) ?? null;
+}
 
 function findNodeOffset(node: Node, offset: number, container: HTMLElement): number {
   let totalOffset = 0;

@@ -71,7 +71,7 @@ export default function ArtifactsDrawer({ rootType, rootId, open, onClose }: Pro
       <button className="absolute inset-0" type="button" onClick={onClose} aria-label="Close artifacts" />
 
       <aside
-        className="relative ml-auto flex h-full w-[min(1120px,calc(100vw-48px))] overflow-hidden rounded-lg border border-app-strong bg-app-card shadow-2xl"
+        className="relative ml-auto flex h-full w-[min(1440px,calc(100vw-32px))] overflow-hidden rounded-lg border border-app-strong bg-app-card shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div

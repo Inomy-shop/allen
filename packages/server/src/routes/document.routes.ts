@@ -9,8 +9,8 @@
  *   Otherwise Express would match "compare" as `:versionNumber`.
  */
 import { Router, type Request, type Response } from 'express';
-import type { Db } from 'mongodb';
-import { DocumentService } from '../services/document.service.js';
+import { ObjectId, type Db } from 'mongodb';
+import { DocumentService, type DocumentCommentDoc, type TimelineEvent } from '../services/document.service.js';
 import { param } from '../types.js';
 
 export function documentRoutes(db: Db): Router {
@@ -69,11 +69,11 @@ export function documentRoutes(db: Db): Router {
         return res.status(400).json({ error: '"artifactId" is required', code: 'ARTIFACT_ID_REQUIRED' });
       }
 
-      const user = (req as unknown as { user?: { _id?: unknown } }).user;
+      const user = (req as unknown as { user?: { _id?: unknown; sub?: string } }).user;
       const agentName = (req.headers['x-agent-name'] as string) || req.body?._agentName;
 
       const identity = await service.createFromArtifact(artifactId, {
-        createdByUserId: user?._id ? String(user._id) : undefined,
+        createdByUserId: getUserId(user),
         createdByAgentName: agentName || undefined,
       });
       res.status(201).json(identity);
@@ -151,11 +151,11 @@ export function documentRoutes(db: Db): Router {
   router.post('/:documentId/versions', async (req: Request, res: Response) => {
     try {
       const { content, addressedCommentIds, createdReason } = req.body ?? {};
-      const user = (req as unknown as { user?: { _id?: unknown } }).user;
+      const user = (req as unknown as { user?: { _id?: unknown; sub?: string } }).user;
       const agentName = (req.headers['x-agent-name'] as string) || req.body?._agentName;
 
       const result = await service.addVersion(param(req, 'documentId'), content, {
-        createdByUserId: user?._id ? String(user._id) : undefined,
+        createdByUserId: getUserId(user),
         createdByAgentName: agentName || undefined,
         addressedCommentIds: addressedCommentIds ?? [],
         createdReason: createdReason || undefined,
@@ -175,11 +175,11 @@ export function documentRoutes(db: Db): Router {
       if (!Number.isInteger(versionNumber) || versionNumber < 1) {
         return res.status(400).json({ error: 'versionNumber must be a positive integer', code: 'VERSION_NOT_FOUND' });
       }
-      const user = (req as unknown as { user?: { _id?: unknown } }).user;
+      const user = (req as unknown as { user?: { _id?: unknown; sub?: string } }).user;
       const agentName = (req.headers['x-agent-name'] as string) || req.body?._agentName;
 
       const result = await service.restoreVersion(param(req, 'documentId'), versionNumber, {
-        createdByUserId: user?._id ? String(user._id) : undefined,
+        createdByUserId: getUserId(user),
         createdByAgentName: agentName || undefined,
       });
       res.status(201).json(result);
@@ -202,7 +202,7 @@ export function documentRoutes(db: Db): Router {
         param(req, 'documentId'),
         status as 'open' | 'resolved' | 'stale' | 'all',
       );
-      res.json(comments);
+      res.json(await enrichCommentsWithActors(db, comments));
     } catch (err: unknown) {
       const e = err as { statusCode?: number; message: string; code?: string };
       const code = e.statusCode ?? 500;
@@ -214,14 +214,15 @@ export function documentRoutes(db: Db): Router {
   router.post('/:documentId/comments', async (req: Request, res: Response) => {
     try {
       const { body, anchor } = req.body ?? {};
-      const user = (req as unknown as { user?: { _id?: unknown } }).user;
+      const user = (req as unknown as { user?: { _id?: unknown; sub?: string } }).user;
       const agentName = (req.headers['x-agent-name'] as string) || req.body?._agentName;
 
       const comment = await service.addComment(param(req, 'documentId'), body, anchor, {
-        userId: user?._id ? String(user._id) : undefined,
+        userId: getUserId(user),
         agentName: agentName || undefined,
       });
-      res.status(201).json(comment);
+      const [enriched] = await enrichCommentsWithActors(db, [comment]);
+      res.status(201).json(enriched);
     } catch (err: unknown) {
       const e = err as { statusCode?: number; message: string; code?: string };
       const code = e.statusCode ?? 500;
@@ -233,7 +234,7 @@ export function documentRoutes(db: Db): Router {
   router.post('/:documentId/comments/:commentId/reply', async (req: Request, res: Response) => {
     try {
       const { body } = req.body ?? {};
-      const user = (req as unknown as { user?: { _id?: unknown } }).user;
+      const user = (req as unknown as { user?: { _id?: unknown; sub?: string } }).user;
       const agentName = (req.headers['x-agent-name'] as string) || req.body?._agentName;
 
       const reply = await service.addReply(
@@ -241,11 +242,12 @@ export function documentRoutes(db: Db): Router {
         param(req, 'commentId'),
         body,
         {
-          userId: user?._id ? String(user._id) : undefined,
+          userId: getUserId(user),
           agentName: agentName || undefined,
         },
       );
-      res.status(201).json(reply);
+      const [enriched] = await enrichCommentsWithActors(db, [reply]);
+      res.status(201).json(enriched);
     } catch (err: unknown) {
       const e = err as { statusCode?: number; message: string; code?: string };
       const code = e.statusCode ?? 500;
@@ -257,7 +259,7 @@ export function documentRoutes(db: Db): Router {
   router.post('/:documentId/comments/:commentId/resolve', async (req: Request, res: Response) => {
     try {
       const { resolutionNote } = req.body ?? {};
-      const user = (req as unknown as { user?: { _id?: unknown } }).user;
+      const user = (req as unknown as { user?: { _id?: unknown; sub?: string } }).user;
       const agentName = (req.headers['x-agent-name'] as string) || req.body?._agentName;
 
       const result = await service.resolveComment(
@@ -265,11 +267,12 @@ export function documentRoutes(db: Db): Router {
         param(req, 'commentId'),
         resolutionNote,
         {
-          userId: user?._id ? String(user._id) : undefined,
+          userId: getUserId(user),
           agentName: agentName || undefined,
         },
       );
-      res.json(result);
+      const [enriched] = await enrichCommentsWithActors(db, [result]);
+      res.json(enriched);
     } catch (err: unknown) {
       const e = err as { statusCode?: number; message: string; code?: string };
       const code = e.statusCode ?? 500;
@@ -280,13 +283,14 @@ export function documentRoutes(db: Db): Router {
   // ── D12: POST /:documentId/comments/:commentId/reopen  ───────────────
   router.post('/:documentId/comments/:commentId/reopen', async (req: Request, res: Response) => {
     try {
-      const user = (req as unknown as { user?: { _id?: unknown } }).user;
+      const user = (req as unknown as { user?: { _id?: unknown; sub?: string } }).user;
       const result = await service.reopenComment(
         param(req, 'documentId'),
         param(req, 'commentId'),
-        user?._id ? String(user._id) : undefined,
+        getUserId(user),
       );
-      res.json(result);
+      const [enriched] = await enrichCommentsWithActors(db, [result]);
+      res.json(enriched);
     } catch (err: unknown) {
       const e = err as { statusCode?: number; message: string; code?: string };
       const code = e.statusCode ?? 500;
@@ -298,7 +302,7 @@ export function documentRoutes(db: Db): Router {
   router.get('/:documentId/timeline', async (req: Request, res: Response) => {
     try {
       const events = await service.getTimeline(param(req, 'documentId'));
-      res.json(events);
+      res.json(await enrichTimelineEventsWithActors(db, events));
     } catch (err: unknown) {
       const e = err as { statusCode?: number; message: string; code?: string };
       const code = e.statusCode ?? 500;
@@ -307,6 +311,89 @@ export function documentRoutes(db: Db): Router {
   });
 
   return router;
+}
+
+function getUserId(user?: { _id?: unknown; sub?: string }): string | undefined {
+  return user?.sub || (user?._id ? String(user._id) : undefined);
+}
+
+interface UserNameEmail {
+  name?: string;
+  email?: string;
+}
+
+async function lookupUsers(db: Db, ids: string[]): Promise<Map<string, UserNameEmail>> {
+  const objectIds = [...new Set(ids)].filter(ObjectId.isValid).map(id => new ObjectId(id));
+  if (objectIds.length === 0) return new Map();
+
+  const users = await db.collection('users')
+    .find({ _id: { $in: objectIds } }, { projection: { name: 1, email: 1 } })
+    .toArray();
+
+  const map = new Map<string, UserNameEmail>();
+  for (const user of users) {
+    map.set(String(user._id), {
+      name: typeof user.name === 'string' ? user.name : undefined,
+      email: typeof user.email === 'string' ? user.email : undefined,
+    });
+  }
+  return map;
+}
+
+async function enrichCommentsWithActors(db: Db, comments: DocumentCommentDoc[]) {
+  const ids = comments.flatMap(comment => [
+    comment.authorUserId,
+    comment.resolution?.resolvedByUserId,
+  ]).filter((id): id is string => Boolean(id));
+  const users = await lookupUsers(db, ids);
+
+  return comments.map(comment => {
+    const author = comment.authorUserId ? users.get(comment.authorUserId) : undefined;
+    const resolver = comment.resolution?.resolvedByUserId
+      ? users.get(comment.resolution.resolvedByUserId)
+      : undefined;
+    return {
+      ...comment,
+      authorDisplayName: author?.name,
+      authorEmail: author?.email,
+      resolution: comment.resolution
+        ? {
+            ...comment.resolution,
+            resolvedByDisplayName: resolver?.name,
+            resolvedByEmail: resolver?.email,
+          }
+        : undefined,
+    };
+  });
+}
+
+async function enrichTimelineEventsWithActors(db: Db, events: TimelineEvent[]): Promise<TimelineEvent[]> {
+  const ids = events.flatMap(event => [
+    event.data.createdByUserId,
+    event.data.authorUserId,
+    event.data.resolvedByUserId,
+  ]).filter((id): id is string => typeof id === 'string' && id.length > 0);
+  const users = await lookupUsers(db, ids);
+
+  return events.map(event => {
+    const data = { ...event.data };
+    const createdBy = typeof data.createdByUserId === 'string' ? users.get(data.createdByUserId) : undefined;
+    const author = typeof data.authorUserId === 'string' ? users.get(data.authorUserId) : undefined;
+    const resolver = typeof data.resolvedByUserId === 'string' ? users.get(data.resolvedByUserId) : undefined;
+    if (createdBy) {
+      data.createdByUserDisplayName = createdBy.name;
+      data.createdByUserEmail = createdBy.email;
+    }
+    if (author) {
+      data.authorDisplayName = author.name;
+      data.authorEmail = author.email;
+    }
+    if (resolver) {
+      data.resolvedByDisplayName = resolver.name;
+      data.resolvedByEmail = resolver.email;
+    }
+    return { ...event, data };
+  });
 }
 
 /**

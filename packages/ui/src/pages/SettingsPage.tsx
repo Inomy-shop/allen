@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Sun,
   User,
+  Zap,
 } from 'lucide-react';
 import McpServerManager from '../components/settings/McpServerManager';
 import { ProviderModelRegistrySection } from '../components/settings/ModelRegistryPanel';
@@ -31,6 +32,7 @@ import { useEnabledProvidersStatus, type CliAuthStatus } from '../hooks/useEnabl
 import { type ColorMode } from '../lib/theme';
 import CronManagerPage from './CronManagerPage';
 import LearningsPage from './LearningsPage';
+import SkillsSettingsPage from './SkillsSettingsPage';
 import UsersAdminPage from './UsersAdminPage';
 
 const TABS = [
@@ -41,6 +43,7 @@ const TABS = [
   { id: 'mcp', adminOnly: false },
   { id: 'schedules', adminOnly: false },
   { id: 'learnings', adminOnly: false },
+  { id: 'skills', adminOnly: false },
   { id: 'team', adminOnly: true },
   { id: 'account', adminOnly: false },
 ] as const;
@@ -82,6 +85,11 @@ const PAGE_COPY: Record<TabId, { title: string; description: string; icon: React
     title: 'Learnings',
     description: 'Review reusable knowledge Allen has collected from work.',
     icon: Brain,
+  },
+  skills: {
+    title: 'Skills',
+    description: 'Manage the Allen Library skills that guide routing and playbooks in chat.',
+    icon: Zap,
   },
   team: {
     title: 'Team',
@@ -1499,6 +1507,16 @@ function LearningsTab() {
   );
 }
 
+function SkillsTab() {
+  return (
+    <SettingsPageShell activeTab="skills" wide>
+      <div className="settings-embedded-page">
+        <SkillsSettingsPage />
+      </div>
+    </SettingsPageShell>
+  );
+}
+
 function UsageTab() {
   return (
     <SettingsPageShell activeTab="usage" wide>
@@ -1600,6 +1618,7 @@ const TAB_COMPONENTS: Record<TabId, React.FC> = {
   mcp: McpTab,
   runtime: RuntimeTab,
   schedules: SchedulesTab,
+  skills: SkillsTab,
   team: TeamTab,
   usage: UsageTab,
 };
@@ -1627,7 +1646,7 @@ export default function SettingsPage() {
 
   return (
     <div className="content scroll-hide" data-screen-label="settings">
-      <main className="settings-main">
+      <main className={activeTab === 'skills' ? 'settings-main settings-main-full' : 'settings-main'}>
         <TabContent />
       </main>
     </div>

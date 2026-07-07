@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Bot, AlertCircle, AlertTriangle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
   Sparkles, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
   ChevronDown, ChevronRight, GitPullRequest, FolderGit2, FileText, PlayCircle, StopCircle, Timer,
-  Send, Bookmark, Download, X,
+  Send, Bookmark,
 } from 'lucide-react';
 import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentReport, SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { AgentQuestionPrompt } from './AgentQuestionPrompt';
@@ -11,6 +11,7 @@ import RoleIcon from '../common/RoleIcon';
 import TokenUsageDisplay from '../common/TokenUsageDisplay';
 import MermaidChatBlock from './MermaidChatBlock';
 import { WatcherStatusLines } from './WatcherStatusLines';
+import ArtifactViewer from '../artifacts/ArtifactViewer';
 import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc, type WatcherUIDoc } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { WorkflowInterventionAction } from '../execution/WorkflowInterventionAction';
@@ -600,10 +601,8 @@ function ArtifactMarkdownLink({ href, children, className }: { href: string; chi
   const artifactId = artifactIdFromUrl(href);
   const safeHref = isSafeChatHref(href);
   const [artifact, setArtifact] = useState<ArtifactDoc | null>(null);
-  const [content, setContent] = useState('');
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!safeHref) {
@@ -621,36 +620,17 @@ function ArtifactMarkdownLink({ href, children, className }: { href: string; chi
 
   async function openArtifact() {
     setOpen(true);
-    if (artifact && content) return;
+    if (artifact) return;
     setLoading(true);
     setError(null);
     try {
-      const doc = await artifactsApi.get(resolvedArtifactId);
-      setArtifact(doc);
-      if (doc.contentType === 'binary') {
-        setContent('');
-      } else {
-        const response = await fetch(artifactsApi.contentUrl(resolvedArtifactId));
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        setContent(await response.text());
-      }
+      setArtifact(await artifactsApi.get(resolvedArtifactId));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load artifact');
     } finally {
       setLoading(false);
     }
   }
-
-  async function copyContent() {
-    if (!content) return;
-    await navigator.clipboard.writeText(content).catch(() => {});
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
-  }
-
-  const downloadUrl = artifactsApi.contentUrl(resolvedArtifactId);
-  const filename = artifact?.filename ?? 'artifact.md';
-  const title = artifact?.relativePath ?? filename;
 
   return (
     <>
@@ -664,60 +644,25 @@ function ArtifactMarkdownLink({ href, children, className }: { href: string; chi
       {open && createPortal(
         <div className="artifact-modal-backdrop" role="dialog" aria-modal="true" aria-label="Artifact viewer">
           <div className="artifact-modal">
-            <div className="flex h-full flex-col">
-              <div className="shrink-0 border-b border-app bg-app-muted/40 px-4 py-2.5">
-                <div className="flex items-center gap-2.5">
-                  <FileText className="h-4 w-4 shrink-0 text-accent-blue" />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-mono text-[13px] text-theme-primary">{title}</div>
-                    <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px] text-theme-subtle">
-                      <span>{artifact?.contentType ?? 'artifact'}</span>
-                      {artifact?.sizeBytes != null && <span>{artifact.sizeBytes.toLocaleString()} bytes</span>}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={copyContent}
-                    disabled={!content}
-                    className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-secondary disabled:opacity-30"
-                    title="Copy content"
-                  >
-                    {copied ? <Check className="h-3.5 w-3.5 text-accent-green" /> : <Copy className="h-3.5 w-3.5" />}
-                  </button>
-                  <a
-                    href={downloadUrl}
-                    download={filename}
-                    className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-secondary"
-                    title="Download"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                  </a>
+            {loading && <div className="p-4 font-mono text-xs text-theme-muted">Loading artifact...</div>}
+            {error && !loading && (
+              <div className="flex h-full flex-col">
+                <div className="flex shrink-0 items-center justify-between border-b border-app bg-app-muted/40 px-4 py-2.5">
+                  <div className="font-mono text-[13px] text-theme-primary">Artifact</div>
                   <button
                     type="button"
                     onClick={() => setOpen(false)}
-                    className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-secondary"
-                    title="Close viewer"
+                    className="rounded-md px-2 py-1 text-xs text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-secondary"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    Close
                   </button>
                 </div>
+                <div className="p-4 font-mono text-xs text-accent-red">Failed to load artifact: {error}</div>
               </div>
-              <div className="min-h-0 flex-1 overflow-auto p-4">
-                {loading && <div className="font-mono text-xs text-theme-muted">Loading artifact...</div>}
-                {error && <div className="font-mono text-xs text-accent-red">Failed to load artifact: {error}</div>}
-                {!loading && !error && artifact?.contentType === 'markdown' && (
-                  <div className="prose prose-sm prose-invert max-w-none">{renderMarkdown(content)}</div>
-                )}
-                {!loading && !error && artifact?.contentType !== 'markdown' && artifact?.contentType !== 'binary' && (
-                  <pre className="whitespace-pre-wrap break-words rounded-md border border-app bg-app-muted/50 p-3 font-mono text-[12px] leading-relaxed text-theme-primary">{content}</pre>
-                )}
-                {!loading && !error && artifact?.contentType === 'binary' && (
-                  <div className="rounded-md border border-app bg-app-muted/40 p-4 text-sm text-theme-muted">
-                    Binary artifact. Use the download button to save it.
-                  </div>
-                )}
-              </div>
-            </div>
+            )}
+            {!loading && !error && artifact && (
+              <ArtifactViewer artifact={artifact} onClose={() => setOpen(false)} />
+            )}
           </div>
         </div>,
         document.body,
@@ -741,6 +686,47 @@ function splitLeadingSlashCommand(content: string): { command: string | null; re
   const match = content.match(/^\s*(\/[A-Za-z0-9:_-]+)([\s\S]*)$/);
   if (!match) return { command: null, rest: content };
   return { command: match[1], rest: match[2].replace(/^\s+/, '') };
+}
+
+/* ── Skill load slice ─────────────────────────────────────────────────────── */
+
+/** Compact card shown in place of the text bubble for `/skill <name>` loads. */
+function SkillLoadSlice({ skillLoad }: { skillLoad: { name: string; displayName: string } }) {
+  return (
+    <div
+      data-testid="skill-load-slice"
+      className="flex items-center gap-3 rounded-[10px] border px-3.5 py-2.5"
+      style={{
+        borderColor: 'rgb(var(--color-accent) / 0.25)',
+        backgroundColor: 'rgb(var(--color-accent) / 0.07)',
+      }}
+    >
+      <span
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border"
+        style={{
+          borderColor: 'rgb(var(--color-accent) / 0.35)',
+          color: 'rgb(var(--color-accent))',
+        }}
+        aria-hidden="true"
+      >
+        <Zap className="h-3.5 w-3.5" />
+      </span>
+      <span className="min-w-0">
+        <span
+          className="block font-mono text-[9px] font-medium uppercase tracking-[0.14em]"
+          style={{ color: 'rgb(var(--color-accent))' }}
+        >
+          Skill load
+        </span>
+        <span className="block truncate text-[13px] font-semibold text-theme-primary">
+          {skillLoad.displayName}
+        </span>
+        <span className="block truncate font-mono text-[11px] text-theme-muted">
+          {skillLoad.name}
+        </span>
+      </span>
+    </div>
+  );
 }
 
 /* ── Markdown rendering pipeline ─────────────────────────────────────────── */
@@ -1059,28 +1045,28 @@ function renderInline(text: string): React.ReactNode {
       // bold **text**
       parts.push(
         <strong key={k++} className="text-theme-primary font-semibold">
-          {m[2].slice(2, -2)}
+          {renderInline(m[2].slice(2, -2))}
         </strong>,
       );
     } else if (m[3]) {
       // italic *text*
       parts.push(
         <em key={k++} className="text-theme-secondary italic">
-          {m[3].slice(1, -1)}
+          {renderInline(m[3].slice(1, -1))}
         </em>,
       );
     } else if (m[4]) {
       // italic _text_
       parts.push(
         <em key={k++} className="text-theme-secondary italic">
-          {m[4].slice(1, -1)}
+          {renderInline(m[4].slice(1, -1))}
         </em>,
       );
     } else if (m[5]) {
       // strikethrough ~~text~~
       parts.push(
         <del key={k++} className="text-theme-muted line-through">
-          {m[5].slice(2, -2)}
+          {renderInline(m[5].slice(2, -2))}
         </del>,
       );
     } else if (m[6]) {
@@ -2262,6 +2248,23 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       {chatTimeline.map((item) => {
         const msg = item.message;
         const i = item.index;
+        // `/skill <name>` loads render as a compact slice, not a text bubble.
+        if (msg.role === 'user' && msg.skillLoad) {
+          return (
+            <div key={item.key} className="ch-msg you al-msg-enter">
+              <div className="ch-avatar">{senderInitial(userDisplayName(msg))}</div>
+              <div className="ch-msg-body">
+                <div className="ch-msg-head">
+                  <span className="ch-msg-who">{userDisplayName(msg)}</span>
+                  <span className="ch-msg-ts" title={formatTimestampTitle(msg.createdAt)}>
+                    {formatTime(msg.createdAt)}
+                  </span>
+                </div>
+                <SkillLoadSlice skillLoad={msg.skillLoad} />
+              </div>
+            </div>
+          );
+        }
         const showThinking = msg.role === 'assistant' && Boolean(msg.thinkingText);
         const senderLabel = msg.role === 'user' ? userDisplayName(msg) : '';
         const visibleContent = msg.role === 'assistant' ? sanitizeChatAssistantResponse(msg.content) : msg.content;

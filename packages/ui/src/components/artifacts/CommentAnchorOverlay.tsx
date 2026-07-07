@@ -50,7 +50,8 @@ export default function CommentAnchorOverlay({
     return map;
   }, [comments, contentLines.length]);
 
-  // Build range overlays
+  // Build line/range overlays. These are deliberately yellow so anchors are
+  // visibly comments, not selections or status colors.
   const ranges = useMemo(() => {
     const result: Array<{
       lineStart: number;
@@ -59,15 +60,16 @@ export default function CommentAnchorOverlay({
     }> = [];
     for (const c of comments) {
       const a = c.anchor;
-      if (a.type === 'range' && a.lineStart && a.lineEnd) {
+      if ((a.type === 'range' || a.type === 'line') && a.lineStart) {
+        const lineEnd = a.type === 'range' ? (a.lineEnd ?? a.lineStart) : a.lineStart;
         // Check overlap with existing
         const existing = result.find(
-          r => r.lineStart === a.lineStart && r.lineEnd === a.lineEnd,
+          r => r.lineStart === a.lineStart && r.lineEnd === lineEnd,
         );
         if (existing) {
           existing.comments.push(c);
         } else {
-          result.push({ lineStart: a.lineStart, lineEnd: a.lineEnd, comments: [c] });
+          result.push({ lineStart: a.lineStart, lineEnd, comments: [c] });
         }
       }
     }
@@ -99,7 +101,7 @@ export default function CommentAnchorOverlay({
               {hasStale ? (
                 <AlertTriangle className="w-3 h-3 text-accent-orange" />
               ) : (
-                <MessageSquare className="w-3 h-3 text-accent-blue" />
+                <MessageSquare className="w-3 h-3 text-yellow-600 dark:text-yellow-300" />
               )}
             </button>
           );
@@ -119,7 +121,7 @@ export default function CommentAnchorOverlay({
             key={i}
             type="button"
             onClick={() => onJumpToComment(r.comments[0].commentId)}
-            className="pointer-events-auto absolute left-6 right-0 rounded-sm transition-colors hover:bg-accent-blue/10 border-l-2 border-accent-blue/40"
+            className="pointer-events-auto absolute left-6 right-0 rounded-sm border-l-2 border-yellow-500/70 bg-yellow-300/20 transition-colors hover:bg-yellow-300/35"
             style={{ top: `${topPct}%`, height: `${heightPct}%` }}
             title={`${r.comments.length} comment${r.comments.length > 1 ? 's' : ''} on lines ${r.lineStart}–${r.lineEnd}`}
           >

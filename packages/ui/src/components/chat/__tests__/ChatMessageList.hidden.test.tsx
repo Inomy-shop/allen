@@ -138,4 +138,25 @@ describe('ChatMessageList hidden message filter', () => {
     // Streaming text should still appear
     expect(screen.getByText('Streaming text')).toBeInTheDocument();
   });
+
+  it('renders artifact markdown links inside bold text as clickable controls', () => {
+    const messages: ChatMessage[] = [
+      makeMessage({
+        _id: 'm1',
+        role: 'assistant',
+        content: '📄 **[manual-skill-loading-plan.md](/api/artifacts/test-artifact/content)** — complete plan.',
+      }),
+    ];
+
+    render(
+      <ChatMessageList
+        messages={messages}
+        streamText=""
+        streaming={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'manual-skill-loading-plan.md' })).toBeInTheDocument();
+    expect(screen.queryByText('[manual-skill-loading-plan.md](/api/artifacts/test-artifact/content)')).not.toBeInTheDocument();
+  });
 });

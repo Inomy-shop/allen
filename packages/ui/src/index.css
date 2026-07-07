@@ -359,6 +359,253 @@
     color: rgb(var(--color-accent));
   }
 
+  .lib-skills-gallery-section {
+    @apply gap-0 overflow-hidden;
+  }
+
+  .lib-skills-gallery-head {
+    @apply mb-4 flex shrink-0 items-center justify-between gap-4;
+  }
+
+  .lib-skills-gallery-toolbar {
+    @apply mb-3.5 flex shrink-0 items-center gap-3;
+  }
+
+  .lib-skills-gallery-search {
+    @apply w-full max-w-[380px];
+  }
+
+  .lib-skills-filter-chips {
+    @apply mb-4 flex shrink-0 flex-wrap gap-2;
+  }
+
+  .lib-skills-filter-chip {
+    @apply inline-flex h-7 items-center gap-1.5 rounded-full border border-app bg-app-card px-3 text-[12px] font-medium text-theme-muted transition-colors;
+  }
+
+  .lib-skills-filter-chip:hover {
+    @apply border-app-strong text-theme-primary;
+  }
+
+  .lib-skills-filter-chip.active {
+    @apply border-accent bg-accent text-white;
+  }
+
+  .lib-skills-filter-chip span {
+    @apply font-mono text-[10.5px] opacity-80;
+  }
+
+  .lib-skills-card-grid {
+    @apply grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4 overflow-y-auto pb-4 pr-1;
+    align-content: start;
+  }
+
+  .lib-skill-card {
+    @apply flex min-h-[218px] cursor-pointer flex-col gap-3 rounded-lg border border-app bg-app-card p-3.5 text-left transition-colors;
+  }
+
+  .lib-skill-card:hover {
+    border-color: rgb(var(--color-accent) / 0.45);
+    background: rgb(var(--color-surface-200) / 0.45);
+  }
+
+  .lib-skill-card.active {
+    @apply border-accent/60 ring-2 ring-accent/10;
+  }
+
+  .lib-skill-card.is-off {
+    opacity: 0.72;
+  }
+
+  .lib-skill-card-top {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    @apply items-start gap-2.5;
+  }
+
+  .lib-skill-card-icon {
+    @apply grid h-[34px] w-[34px] shrink-0 place-items-center rounded-lg border border-app bg-app-muted text-accent;
+    box-shadow: inset 0 0 0 1px rgb(var(--color-accent) / 0.08);
+  }
+
+  .lib-skill-card-title {
+    @apply truncate pt-0.5 text-[14px] font-semibold leading-tight text-theme-primary;
+  }
+
+  .lib-skill-card-name {
+    @apply mt-0.5 truncate font-mono text-[11px] text-theme-subtle;
+  }
+
+  .lib-skill-card-desc {
+    @apply m-0 min-h-[56px] flex-1 overflow-hidden text-[12.5px] leading-relaxed text-theme-muted;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+  }
+
+  .lib-skill-card-routes,
+  .lib-skill-drawer-routes {
+    @apply flex flex-wrap gap-1.5;
+  }
+
+  .lib-skill-route-pill {
+    @apply inline-flex h-6 items-center gap-1 rounded-full px-2 font-mono text-[10.5px] font-medium leading-none;
+  }
+
+  .lib-skill-route-pill.on {
+    @apply bg-accent-blue/15 text-accent-blue;
+  }
+
+  .lib-skill-route-pill.off {
+    @apply bg-app-muted text-theme-subtle;
+  }
+
+  .lib-skill-route-pill.route-button {
+    @apply cursor-pointer border border-transparent px-2.5 py-1 transition-colors;
+  }
+
+  .lib-skill-route-pill.route-button:hover {
+    @apply border-app-strong text-theme-primary;
+  }
+
+  .lib-skill-route-dot {
+    @apply h-1.5 w-1.5 rounded-full bg-current;
+  }
+
+  .lib-skill-card-foot {
+    @apply mt-0.5 flex items-center justify-between gap-3 border-t border-app pt-3;
+  }
+
+  .lib-skill-category-pill {
+    @apply inline-flex h-6 min-w-0 max-w-[58%] items-center truncate rounded-full border border-app bg-app-muted px-2.5 text-[11px] font-medium text-theme-secondary;
+  }
+
+  .lib-skill-card-meta {
+    @apply flex shrink-0 items-center gap-1.5 whitespace-nowrap font-mono text-[10.5px] text-theme-muted;
+  }
+
+  .lib-skill-meta-dot {
+    @apply h-1 w-1 rounded-full;
+    background: rgb(var(--color-text-subtle));
+  }
+
+  .lib-skill-card-switch {
+    @apply relative shrink-0 rounded-full transition-colors;
+    width: 40px;
+    height: 22px;
+    margin-top: 1px;
+    border: 1px solid rgb(var(--color-border-strong));
+    background: rgb(var(--color-surface-200));
+  }
+
+  .lib-skill-card-switch span {
+    @apply absolute rounded-full;
+    left: 3px;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    border: 1px solid rgb(var(--color-border-strong));
+    background: rgb(var(--color-surface-100));
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+    transform: translate(0, -50%);
+    transition: transform 120ms ease, background-color 120ms ease, border-color 120ms ease;
+  }
+
+  .lib-skill-card-switch.on {
+    border-color: rgb(var(--color-accent));
+    background: rgb(var(--color-accent));
+  }
+
+  .lib-skill-card-switch.on span {
+    transform: translate(18px, -50%);
+    border-color: #fff;
+    background: #fff;
+  }
+
+  .dark .lib-skill-card-switch:not(.on) span {
+    border-color: rgb(var(--color-text-muted));
+    background: rgb(var(--color-text-secondary));
+  }
+
+  .lib-skill-card-switch.labelled {
+    @apply flex w-auto items-center border-0 bg-transparent py-0 pl-12 pr-0;
+    height: 22px;
+    margin-top: 0;
+  }
+
+  .lib-skill-card-switch.labelled::before {
+    content: "";
+    @apply absolute left-0 top-1/2 -translate-y-1/2 rounded-full transition-colors;
+    width: 40px;
+    height: 22px;
+    border: 1px solid rgb(var(--color-border-strong));
+    background: rgb(var(--color-surface-200));
+  }
+
+  .lib-skill-card-switch.labelled.on::before {
+    border-color: rgb(var(--color-accent));
+    background: rgb(var(--color-accent));
+  }
+
+  .lib-skill-card-switch.labelled span {
+    @apply absolute top-1/2 block;
+    left: 3px;
+    transform: translateY(-50%);
+  }
+
+  .lib-skill-card-switch.labelled.on span {
+    transform: translate(18px, -50%);
+    @apply bg-white;
+  }
+
+  .lib-skill-card-switch.labelled em {
+    @apply font-mono text-[11px] not-italic text-theme-muted;
+  }
+
+  .lib-skill-card-skel {
+    @apply h-[210px] animate-pulse rounded-lg border border-app bg-app-muted;
+  }
+
+  .lib-skills-empty-card {
+    @apply col-span-full rounded-lg border border-dashed border-app bg-app-muted px-6 py-12 text-center text-[13px] text-theme-subtle;
+  }
+
+  .lib-skill-drawer-scrim {
+    @apply pointer-events-none fixed inset-0 z-[60] bg-slate-950/40 opacity-0 backdrop-blur-[2px] transition-opacity;
+  }
+
+  .lib-skill-drawer-scrim.open {
+    @apply pointer-events-auto opacity-100;
+  }
+
+  .lib-skill-drawer {
+    @apply fixed right-0 top-0 z-[61] flex h-screen w-[min(540px,94vw)] translate-x-full flex-col border-l border-app bg-app-card shadow-2xl transition-transform duration-300 ease-out;
+  }
+
+  .lib-skill-drawer.open {
+    @apply translate-x-0;
+  }
+
+  .lib-skill-drawer-head {
+    @apply flex shrink-0 items-start gap-3 border-b border-app px-[18px] py-4;
+  }
+
+  .lib-skill-drawer-head h3 {
+    @apply m-0 truncate text-[15px] font-bold text-theme-primary;
+  }
+
+  .lib-skill-drawer-head p {
+    @apply mt-1 truncate font-mono text-[11px] text-theme-subtle;
+  }
+
+  .lib-skill-drawer-body {
+    @apply min-h-0 flex-1 overflow-y-auto px-[18px] pb-6 pt-4;
+  }
+
+  .lib-skill-drawer-foot {
+    @apply flex shrink-0 items-center justify-between gap-3 border-t border-app bg-app-muted px-[18px] py-3;
+  }
+
   .lib-skill-editor,
   .lib-skill-tester {
     @apply border-b border-app pb-7;
@@ -366,6 +613,10 @@
 
   .lib-skill-tester {
     @apply pb-0;
+  }
+
+  .skill-editor-overline {
+    @apply mb-2 mt-6 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-theme-muted;
   }
 
   .lib-integrations-section {
@@ -864,6 +1115,13 @@
     @apply mx-auto min-w-0;
     width: min(100%, 980px);
     padding: 32px 0 56px;
+  }
+
+  /* Full-bleed settings tabs (skills) span the viewport like the Studio pages. */
+  .settings-main.settings-main-full {
+    width: 100%;
+    padding-left: 28px;
+    padding-right: 28px;
   }
 
   .settings-page {
@@ -1948,6 +2206,14 @@
   .settings-embedded-page > .content {
     height: auto;
     min-height: 0;
+  }
+
+  /* The skills pane manages its own two-column scroll; give it a bounded height
+     inside the settings shell (which otherwise grows with content). */
+  .settings-embedded-page .lib-skills-section {
+    height: calc(100vh - 248px);
+    min-height: 480px;
+    padding: 0;
   }
 
   .settings-embedded-page .card,
@@ -8734,8 +9000,8 @@
   }
 
   .artifact-modal {
-    width: min(980px, calc(100vw - 64px));
-    height: min(780px, calc(100vh - 64px));
+    width: min(1280px, calc(100vw - 48px));
+    height: min(860px, calc(100vh - 48px));
     overflow: hidden;
     border: 1px solid rgb(var(--color-border-strong));
     border-radius: 10px;
