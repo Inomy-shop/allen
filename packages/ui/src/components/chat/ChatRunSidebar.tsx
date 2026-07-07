@@ -976,10 +976,12 @@ function usePanelArtifactItems({
   rootType,
   rootId,
   runs,
+  refreshKey,
 }: {
   rootType?: 'chat' | 'workflow' | 'agent';
   rootId?: string | null;
   runs: SpawnedAgent[];
+  refreshKey?: string | number;
 }) {
   const [items, setItems] = useState<PanelArtifactItem[]>([]);
 
@@ -1036,8 +1038,11 @@ function usePanelArtifactItems({
       .catch(() => {
         if (!cancelled) setItems([]);
       });
-    return () => { cancelled = true; };
-  }, [artifactRoots]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactRoots, refreshKey]);
 
   return useMemo(() => {
     const seen = new Set<string>();
@@ -1058,12 +1063,14 @@ function ChatArtifactsSummarySection({
   rootType,
   rootId,
   runs,
+  refreshKey,
 }: {
   rootType?: 'chat' | 'workflow' | 'agent';
   rootId?: string | null;
   runs: SpawnedAgent[];
+  refreshKey?: string | number;
 }) {
-  const artifacts = usePanelArtifactItems({ rootType, rootId, runs });
+  const artifacts = usePanelArtifactItems({ rootType, rootId, runs, refreshKey });
   const [expanded, setExpanded] = useState(false);
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactDoc | null>(null);
   const [loadingArtifactId, setLoadingArtifactId] = useState<string | null>(null);
@@ -2782,6 +2789,7 @@ function TasksPanel({
   onOpenNode,
   onOpenExecution,
   onAnswerWorkflowIntervention,
+  refreshKey,
 }: {
   activeRun: SpawnedAgent;
   activeContext: RunStatus | null;
@@ -2793,6 +2801,7 @@ function TasksPanel({
   onOpenNode: (executionId: string, nodeId: string) => void;
   onOpenExecution: (executionId: string) => void;
   onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
+  refreshKey?: string | number;
 }) {
   const attemptRuns = sortedRuns;
   const showAttempts = attemptRuns.length > 1;
@@ -2802,7 +2811,7 @@ function TasksPanel({
   return (
     <div className={`cr-task-panel ${expanded ? 'expanded' : 'compact'}`}>
       <WorkContextSection runs={contextRuns} />
-      <ChatArtifactsSummarySection rootType={rootType} rootId={rootId} runs={contextRuns} />
+      <ChatArtifactsSummarySection rootType={rootType} rootId={rootId} runs={contextRuns} refreshKey={refreshKey} />
 
       {showAttempts && (
         <RailSection title="runs" count={`${attemptRuns.length}`}>
@@ -2869,6 +2878,7 @@ export default function ChatRunSidebar({
   activeTab,
   onTabChange,
   filesViewRequest,
+  artifactRefreshKey,
   onAnswerWorkflowIntervention,
   onClose,
 }: {
@@ -2881,6 +2891,7 @@ export default function ChatRunSidebar({
   activeTab: ChatRunPanelTab;
   onTabChange: (tab: ChatRunPanelTab) => void;
   filesViewRequest?: { view: FilePanelView; nonce: number };
+  artifactRefreshKey?: string | number;
   onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
   onClose: () => void;
 }) {
@@ -2965,9 +2976,15 @@ export default function ChatRunSidebar({
                 onOpenNode={() => undefined}
                 onOpenExecution={() => undefined}
                 onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
+                refreshKey={artifactRefreshKey}
               />
             )
-            : <div className="cr-empty">No task sequence is linked to this chat yet.</div>
+            : (
+              <div className="cr-task-panel compact">
+                <ChatArtifactsSummarySection rootType={rootType} rootId={rootId} runs={allRuns} refreshKey={artifactRefreshKey} />
+                <div className="cr-empty">No task sequence is linked to this chat yet.</div>
+              </div>
+            )
         )}
         {(visibleTab === 'files' || visibleTab === 'changes') && (
           <FileChangesPanel

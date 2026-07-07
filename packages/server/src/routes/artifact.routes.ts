@@ -102,6 +102,7 @@ export function artifactRoutes(db: Db): Router {
         return res.status(400).json({ error: `contentType must be one of ${[...CONTENT_TYPES].join(', ')}` });
       }
       const user = (req as unknown as { user?: { _id?: unknown } }).user;
+      const createdByUserId = user?._id ? String(user._id) : undefined;
       const result = await service.save({
         rootType: body.rootType as ArtifactRootType,
         rootId: body.rootId,
@@ -112,7 +113,8 @@ export function artifactRoutes(db: Db): Router {
         language: body.language,
         spawnContext: body.spawnContext,
         overwrite: body.overwrite,
-        createdByUserId: user?._id ? String(user._id) : undefined,
+        createdByAgent: body.createdByAgent,
+        createdByUserId,
       });
       res.status(201).json(result);
     } catch (err: unknown) {

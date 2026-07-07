@@ -93,6 +93,115 @@ Produce these sections (omit any that genuinely do not apply; never pad with inv
 ## Output
 Save the PRD as a markdown artifact via allen_save_artifact (e.g. \`prd-<slug>.md\`), filed under the current chat session, link to it with its publicUrl, and also show it inline so the user can read it without leaving chat.`;
 
+export const BRAINSTORMING_BODY = `# Brainstorming
+
+A facilitation playbook for open-ended ideation: product ideas, feature shaping, naming, architecture options, "how should we approach X". Apply it when the user wants to think out loud with you before committing to anything.
+
+## When to use
+Use when the user wants to explore a problem or generate options — "let's brainstorm", "what are some ways to", "help me think through" — or is clearly still forming the idea.
+
+## When not to use
+Not for executing a decision that is already made, writing final documents, or fixing a concrete bug. When the user converges on a direction, offer to switch mode (e.g. write it up as a PRD, or route it to implementation).
+
+## Core principles
+- **Diverge before you converge.** First widen the option space; only narrow once the user signals a preference. Never latch onto the first plausible idea.
+- **Build on their thinking.** Ask one or two sharp questions that expose the real constraint or goal before generating options. Reflect their language back.
+- **Options come with tradeoffs.** Present 3-5 distinct options, each with a one-line pitch and its main tradeoff. Distinct means genuinely different shapes, not variations of one idea.
+- **Stay concrete.** Anchor ideas in the user's actual product, repo, or workflow — use what you know about their context rather than generic advice.
+- **No premature commitment.** Do not pick a winner unless asked; recommend one only when the user requests a recommendation, and say why in one sentence.
+
+## Working method
+1. Restate the problem in one sentence and confirm it.
+2. Ask the 1-2 questions that most change the answer (users? constraints? success looks like?).
+3. Generate a diverse option set; group related ideas; name each option memorably.
+4. Invite reaction — which direction feels right, what to drop, what to combine.
+5. Iterate: deepen the chosen direction, discard the rest explicitly.
+
+## Wrap up
+End with a short summary of where the thinking landed: chosen direction, discarded options and why, and open questions. Offer the natural next step — usually writing the direction up as a PRD or spec.`;
+
+export const FRONTEND_DEVELOPMENT_BODY = `# Frontend Development
+
+An operating playbook for building and changing user interfaces: components, pages, styling, client-side state, and frontend accessibility/performance.
+
+## When to use
+Use when the work is UI code — creating or modifying components, layouts, styles, client state, or user-facing interactions.
+
+## When not to use
+Not for API/server logic, database work, infrastructure, or pure investigation. If the change spans frontend and backend, apply this playbook to the frontend half only.
+
+## Core principles
+- **Match the existing design system.** Before writing any UI, read the surrounding components and the project's design tokens/utility classes. New UI must be indistinguishable in style from what is already there — same spacing, type scale, icon set, and color usage.
+- **Reuse before creating.** Search for an existing component, hook, or utility that already does the job. Extending or composing beats duplicating.
+- **Components stay focused.** One responsibility per component; lift shared state only as far as it must go. Prefer local state; reach for global stores only for genuinely cross-page state.
+- **Handle the non-happy paths.** Every data-driven view needs loading, empty, and error states that match the app's existing patterns.
+- **Accessibility is not optional.** Interactive elements are real buttons/links, have accessible names, and remain keyboard-operable. Do not remove focus states.
+- **Type safety end to end.** Props, API responses, and store shapes are typed; no silent \`any\` escapes.
+
+## Working method
+1. Locate the surface: find the page/component that owns the change and the patterns it already uses.
+2. Plan the smallest component/state change that satisfies the requirement.
+3. Implement, reusing existing primitives and matching local code style.
+4. Verify: type-check/lint/build, exercise the changed flow (including loading/empty/error), and check both light and dark themes when styling changed.
+
+## Definition of done
+The change builds, lints, and type-checks; the affected flow works when driven end to end; visuals match the design system in both themes; no unrelated files were touched.`;
+
+export const BACKEND_DEVELOPMENT_BODY = `# Backend Development
+
+An operating playbook for server-side work: API routes, services, background jobs, persistence, and integrations.
+
+## When to use
+Use when the work is server code — adding or changing endpoints, business logic, data models, queues/schedulers, or third-party integrations.
+
+## When not to use
+Not for UI work, pure investigation, or infrastructure provisioning. If a change spans frontend and backend, apply this playbook to the backend half only.
+
+## Core principles
+- **Respect module boundaries.** Routes stay thin; business logic lives in services; persistence access stays behind the service layer. Follow the layering the codebase already uses.
+- **Validate at the edge.** Every input from a request, queue message, or external system is validated before use. Reject early with a clear, specific error; never trust caller-supplied ids or payload shapes.
+- **Errors are deliberate.** Distinguish expected failures (return typed/status-coded errors) from bugs (fail loudly). No silent catch-and-continue; no swallowing errors that callers need to see.
+- **Backwards compatibility by default.** Changing a persisted shape or an API contract requires handling existing data/clients — migrations, optional fields, or read-time fallbacks. Never break stored documents silently.
+- **Security first in sensitive areas.** Auth, credentials, repo access, file paths, and anything executing commands get extra scrutiny and focused tests. Never log secrets.
+- **Idempotency and concurrency.** Assume handlers can run twice and requests can race; use upserts, unique indexes, and atomic updates where correctness depends on it.
+
+## Working method
+1. Trace the existing flow first: route → service → persistence. Understand the current contract before changing it.
+2. Design the change at the correct layer; keep the diff surgical.
+3. Implement with input validation, deliberate error paths, and types that match the persistence boundary.
+4. Write or update unit tests for the changed logic, including failure cases.
+5. Verify: build, lint, run the affected test suites; exercise the endpoint or job end to end when feasible.
+
+## Definition of done
+The change builds, lints, and passes tests including new coverage of failure paths; contracts remain compatible with existing data and clients; security-sensitive surfaces have explicit tests.`;
+
+export const TESTING_BODY = `# Testing
+
+An operating playbook for writing, extending, and fixing tests — unit, integration, and end-to-end.
+
+## When to use
+Use when the ask is about tests: adding coverage, writing tests for new code, fixing failing or flaky tests, or deciding what to test.
+
+## When not to use
+Not for implementing features (though features should ship with tests — apply the relevant development playbook there and use this one for the test half).
+
+## Core principles
+- **Test behavior, not implementation.** Assert what the code does — outputs, state changes, calls with meaningful arguments — not private internals. A refactor that preserves behavior should not break tests.
+- **Pick the right level.** Unit tests for isolated logic; integration tests where components meet (service + database, route + service); end-to-end only for user journeys that cross the full stack. Prefer the cheapest level that can catch the bug.
+- **Failure cases carry the value.** Cover invalid input, empty results, permission denials, timeouts, and boundary values — the happy path alone proves little.
+- **Deterministic or it does not merge.** No real time, randomness, network, or shared global state without control. Flaky tests get fixed or rewritten, never retried into passing.
+- **Follow house patterns.** Reuse the project's existing test setup, factories, mocks, and naming. A new test file should look like it was always there.
+- **One behavior per test.** Small, clearly named tests (arrange–act–assert) that read as documentation of the expected behavior.
+
+## Working method
+1. Read the code under test and its existing tests; identify the observable behaviors and the gaps.
+2. List the cases worth testing: happy path, each failure mode, boundaries.
+3. Write tests using existing utilities and fixtures; keep each one independent.
+4. Run the focused suite first, then the package suite; fix real defects the tests expose rather than bending the tests.
+
+## Definition of done
+New/changed behavior has tests at the right level including failure cases; the full affected suite passes repeatably; no test depends on execution order or external state.`;
+
 /**
  * Seed the database with agents returned by loadAgents().
  *
@@ -359,6 +468,10 @@ export async function seedDefaultWorkflows(db: Db): Promise<void> {
   console.log(`Seeded ${seeded} new, updated ${updated} default workflows (${files.length} checked)`);
 }
 
+// Legacy operating-rule sections. Earlier seeds appended these to every skill
+// body on boot; the same guidance now lives only in the assistant system
+// prompt. The exact text is kept so stripSkillOperatingRules can remove it
+// from previously seeded bodies without touching user-authored content.
 const SKILL_CLARIFY_CONFIRM_SECTION = `## Clarify and confirm
 If the user's intent, target repo/resource, scope, or desired outcome is unclear, ask a concise clarifying question before choosing a route. Do not guess or assume missing intent.
 
@@ -389,19 +502,18 @@ If wait_for_execution returns "waiting", keep waiting with wait_for_execution un
 
 Top-level direct tool calls are reserved for: read-only data queries, normal conversation, explanation/brainstorming, and forwarding answers to a spawned execution that is waiting for input.`;
 
-function withSkillOperatingRules(body: string): string {
-  let next = body.trim();
-  const lower = next.toLowerCase();
-  if (!lower.includes('## clarify and confirm')) {
-    next = `${next}\n\n${SKILL_CLARIFY_CONFIRM_SECTION}`;
+export const LEGACY_SKILL_OPERATING_RULE_SECTIONS = [
+  SKILL_CLARIFY_CONFIRM_SECTION,
+  SKILL_CAPABILITY_DISCOVERY_SECTION,
+  SKILL_ASSIGN_TO_AGENTS_SECTION,
+];
+
+export function stripSkillOperatingRules(body: string): string {
+  let next = body;
+  for (const section of LEGACY_SKILL_OPERATING_RULE_SECTIONS) {
+    next = next.replace(section, '');
   }
-  if (!lower.includes('## capability discovery')) {
-    next = `${next}\n\n${SKILL_CAPABILITY_DISCOVERY_SECTION}`;
-  }
-  if (!lower.includes('## assign to agents')) {
-    next = `${next}\n\n${SKILL_ASSIGN_TO_AGENTS_SECTION}`;
-  }
-  return next;
+  return next.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 const DEFAULT_SKILLS: SkillInput[] = [
@@ -810,6 +922,53 @@ Return: the route chosen (review-gated workflow or builder agent), the workflow 
     body: PRD_AUTHORING_BODY,
   },
   {
+    name: 'brainstorming',
+    displayName: 'Brainstorming',
+    category: 'authoring-guidelines',
+    description: 'Facilitation playbook for open-ended ideation: diverge before converging, ask the questions that change the answer, present distinct options with tradeoffs, and end with a summary plus next step. Use when the user wants to explore or shape an idea — not to execute a decision already made.',
+    triggers: ['brainstorm', 'brainstorming', 'ideate', 'ideas for', 'think through', 'explore options', 'ways to approach'],
+    excludes: ['fix bug', 'implement', 'run workflow'],
+    priority: 40,
+    allowedRoutes: ['direct_answer'],
+    body: BRAINSTORMING_BODY,
+  },
+  {
+    name: 'frontend-development',
+    displayName: 'Frontend Development',
+    category: 'implementation-guidelines',
+    description: 'Operating playbook for UI work: match the existing design system, reuse components, keep state local, cover loading/empty/error paths, keep interactions accessible, and verify the flow in both themes. Use when writing or changing frontend code.',
+    triggers: ['frontend', 'front-end', 'ui component', 'react component', 'styling', 'css', 'client-side'],
+    excludes: ['api endpoint', 'database', 'migration'],
+    priority: 40,
+    allowedRoutes: ['direct_answer'],
+    relatedAgents: ['frontend-developer'],
+    body: FRONTEND_DEVELOPMENT_BODY,
+  },
+  {
+    name: 'backend-development',
+    displayName: 'Backend Development',
+    category: 'implementation-guidelines',
+    description: 'Operating playbook for server-side work: respect module boundaries, validate inputs at the edge, handle errors deliberately, stay backwards compatible with persisted data, and give security-sensitive surfaces focused tests. Use when writing or changing backend code.',
+    triggers: ['backend', 'back-end', 'api endpoint', 'server-side', 'service layer', 'database', 'migration'],
+    excludes: ['ui component', 'styling', 'css'],
+    priority: 40,
+    allowedRoutes: ['direct_answer'],
+    relatedAgents: ['backend-developer'],
+    body: BACKEND_DEVELOPMENT_BODY,
+  },
+  {
+    name: 'testing',
+    displayName: 'Testing',
+    category: 'quality-guidelines',
+    description: 'Operating playbook for writing and fixing tests: test behavior not implementation, pick the cheapest level that catches the bug, cover failure cases, keep tests deterministic, and follow the house test patterns. Use when the ask is about test coverage or failing/flaky tests.',
+    triggers: ['write tests', 'add tests', 'test coverage', 'unit test', 'integration test', 'flaky test', 'failing test'],
+    excludes: ['run e2e suite'],
+    priority: 40,
+    allowedRoutes: ['direct_answer'],
+    relatedAgents: ['test-writer', 'test-planner'],
+    body: TESTING_BODY,
+  },
+  {
     name: 'team-assignment-routing',
     displayName: 'Team Assignment Routing',
     category: 'coordination',
@@ -852,7 +1011,6 @@ export async function seedDefaultSkills(db: Db): Promise<void> {
     const existing = await col.findOne({ name: skill.name });
     const doc = {
       ...skill,
-      body: withSkillOperatingRules(skill.body),
       enabled: skill.enabled ?? true,
       version: (existing?.version as number | undefined) ?? 1,
       createdBy: 'system',
@@ -874,64 +1032,22 @@ export async function seedDefaultSkills(db: Db): Promise<void> {
       continue;
     }
 
+    // One-time cleanup: earlier seeds appended the operating-rule sections to
+    // every system skill body on boot. Strip the exact legacy text so bodies
+    // return to their authored playbook content; user edits are untouched.
     const existingBody = String(existing.body ?? '');
-    const existingLower = existingBody.toLowerCase();
-    if (
-      existing.createdBy === 'system'
-      && (
-        !existingLower.includes('## clarify and confirm')
-        || !existingLower.includes('## capability discovery')
-        || !existingLower.includes('## assign to agents')
-      )
-    ) {
-      await col.updateOne(
-        { _id: existing._id },
-        {
-          $set: {
-            body: withSkillOperatingRules(existingBody),
-            updatedAt: now,
+    if (existing.createdBy === 'system') {
+      const strippedBody = stripSkillOperatingRules(existingBody);
+      if (strippedBody !== existingBody) {
+        await col.updateOne(
+          { _id: existing._id },
+          {
+            $set: { body: strippedBody, updatedAt: now },
+            $inc: { version: 1 },
           },
-          $inc: { version: 1 },
-        },
-      );
-      updated++;
-      continue;
-    }
-
-    // When SEED_OVERRIDE is active, resync agent-workflow-builder and
-    // capability-routing so their routing logic stays in lockstep with the
-    // source tree (they carry team/agent/workflow-builder assignment contracts).
-    // When override is off, user edits to these skills are preserved.
-    if (override && existing.createdBy === 'system') {
-      const isResync = skill.name === 'agent-workflow-builder' || skill.name === 'capability-routing';
-      if (!isResync) continue;
-      // capability-routing preserves user body edits for backward compat;
-      // agent-workflow-builder always overwrites body because it carries
-      // the team/agent/workflow-builder assignment contract.
-      const nextBody = skill.name === 'capability-routing'
-        ? withSkillOperatingRules(existingBody || skill.body)
-        : withSkillOperatingRules(skill.body);
-      await col.updateOne(
-        { _id: existing._id },
-        {
-          $set: {
-            displayName: doc.displayName,
-            description: doc.description,
-            category: doc.category,
-            triggers: doc.triggers,
-            excludes: doc.excludes,
-            priority: doc.priority,
-            allowedRoutes: doc.allowedRoutes,
-            relatedWorkflows: doc.relatedWorkflows,
-            relatedAgents: doc.relatedAgents,
-            tags: doc.tags,
-            body: nextBody,
-            updatedAt: now,
-          },
-          $inc: { version: 1 },
-        },
-      );
-      updated++;
+        );
+        updated++;
+      }
     }
   }
 

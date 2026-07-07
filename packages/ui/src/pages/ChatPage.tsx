@@ -3,13 +3,14 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useChat, type ChatSession, type SpawnedAgent } from '../hooks/useChat';
 import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
 import { useFileDropZone, FileDropOverlay } from '../hooks/useFileDropZone';
+import { buildSkillSlashCommands } from '../hooks/useSkillSlashCommands';
 import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
 import ChatRunSidebar, { type ChatRunPanelTab } from '../components/chat/ChatRunSidebar';
 import { ToolCallLog } from '../components/common/ToolCallLog';
-import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, type ChatQueueItem } from '../services/api';
+import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, skills as skillsApi, type ChatQueueItem, type SkillRecord } from '../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
 import WorkspaceChatTabs, { type WorkspaceChatTab, getTabKey } from '../components/chat/WorkspaceChatTabs';
 import ChatExportDialog from '../components/chat/ChatExportDialog';
@@ -282,6 +283,13 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   } = useChat();
 
   const activeSession = sessions.find(s => s._id === activeSessionId);
+  const latestMessage = messages[messages.length - 1];
+  const artifactRefreshKey = [
+    activeSessionId ?? '',
+    messages.length,
+    latestMessage?._id ?? '',
+    activeToolCalls.length,
+  ].join(':');
   const activeProvider = activeSession?.provider ?? selectedProvider;
   const pullRequests = collectPullRequests(spawnedAgents);
   const floatingPullRequest = !sidePanelOpen ? pullRequests[0] ?? null : null;
@@ -368,9 +376,13 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   useEffect(() => {
     const provider = activeSession?.provider ?? selectedProvider;
     const cwd = activeSession?.repoPath ?? selectedRepo?.path ?? undefined;
-    chatApi.slashCommands({ provider, sessionId: activeSessionId ?? undefined, cwd })
-      .then((commands: SlashCommandOption[]) => setSlashCommands(commands ?? []))
-      .catch(() => setSlashCommands([]));
+    Promise.all([
+      chatApi.slashCommands({ provider, sessionId: activeSessionId ?? undefined, cwd })
+        .catch(() => [] as SlashCommandOption[]),
+      skillsApi.list(false).catch(() => [] as SkillRecord[]),
+    ]).then(([commands, skillList]) => {
+      setSlashCommands([...(commands ?? []), ...buildSkillSlashCommands(skillList)]);
+    });
   }, [activeSessionId, activeSession?.provider, activeSession?.repoPath, selectedProvider, selectedRepo?.path]);
 
   // Reset pending overrides and repo selection whenever the user switches to a
@@ -1841,6 +1853,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           activeTab={sidePanelTab}
           onTabChange={handleSidePanelTabChange}
           filesViewRequest={filesViewRequest}
+          artifactRefreshKey={artifactRefreshKey}
           onAnswerWorkflowIntervention={answerWorkflowIntervention}
           onClose={() => setSidePanelOpen(false)}
         />

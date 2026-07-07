@@ -2678,7 +2678,18 @@ ${lines.join('\n')}
                   costMap: this.config.costMap,
                   modelProviderMap: this.config.modelProviderMap,
                 };
-                const retryResult = await executeNode(brName, recNodeDef, stateSnapshot, exec.sessions, deps);
+                // The original parallel branch snapshot preserves isolation
+                // for normal branch work, but model recovery stores the
+                // operator-selected provider/model on live execution state.
+                // Re-run with the snapshot plus the live recovery metadata so
+                // node-executor can see __model_overrides and honor the
+                // selected replacement provider/model.
+                const retryState = {
+                  ...stateSnapshot,
+                  __model_overrides: exec.state.__model_overrides,
+                  __recovery_state: exec.state.__recovery_state,
+                };
+                const retryResult = await executeNode(brName, recNodeDef, retryState, exec.sessions, deps);
 
                 // Recovery succeeded — record as a completed branch
                 const lastEntry = recState.overrideHistory[recState.overrideHistory.length - 1];

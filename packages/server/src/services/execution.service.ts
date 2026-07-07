@@ -2896,6 +2896,9 @@ export class ExecutionService {
               kind: normalizedIntervention?.kind === 'clarify' || normalizedIntervention?.kind === 'review' || normalizedIntervention?.kind === 'recover' || normalizedIntervention?.kind === 'model_recovery'
                 ? normalizedIntervention.kind
                 : undefined,
+              widget: normalizedIntervention?.widget === 'dynamic_form' || normalizedIntervention?.widget === 'approval_gate' || normalizedIntervention?.widget === 'retry_exhausted_gate' || normalizedIntervention?.widget === 'escalation_gate' || normalizedIntervention?.widget === 'model_recovery'
+                ? normalizedIntervention.widget
+                : undefined,
               severity,
               title,
               summary,

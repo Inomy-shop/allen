@@ -14,10 +14,15 @@ export interface SlashCommandOption {
   description: string;
   provider: string;
   source: 'builtin' | 'project' | 'user';
-  kind?: 'builtin' | 'skill' | 'command';
+  kind?: 'builtin' | 'skill' | 'command' | 'allen-skill';
   path?: string;
   dispatchable: boolean;
   unavailableReason?: string;
+}
+
+/** True when the trimmed input is a complete `/skill <name>` load command. */
+export function isSkillLoadMessage(trimmed: string): boolean {
+  return /^\/skill\s+\S+$/.test(trimmed);
 }
 
 interface SessionOverrides {
@@ -521,9 +526,12 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     const cursorPos = e.target.selectionStart;
     const textBeforeCursor = text.slice(0, cursorPos);
     const slashMatch = textBeforeCursor.match(/^\/([A-Za-z0-9:_-]*)$/);
-    if (slashMatch) {
+    // `/skill <partial>` keeps the popup open: Allen skill options are named
+    // "/skill <slug>", so a "skill <partial>" query filters exactly them.
+    const skillMatch = textBeforeCursor.match(/^\/skill ([A-Za-z0-9:_-]*)$/);
+    if (slashMatch || skillMatch) {
       setSlashVisible(true);
-      setSlashQuery(slashMatch[1]);
+      setSlashQuery(slashMatch ? slashMatch[1] : `skill ${skillMatch![1]}`);
       setSlashSelectedIdx(0);
       setMentionVisible(false);
       return;
@@ -631,7 +639,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const handleSend = useCallback(() => {
     const trimmed = value.trim();
     if ((!trimmed && attachments.length === 0) || disabled) return;
-    const slashName = trimmed.match(/^\/[^\s]+/)?.[0];
+    // `/skill <name>` always goes through the normal send path — the server
+    // resolves it; never treat it as a dispatchable/blocked slash command.
+    const slashName = isSkillLoadMessage(trimmed) ? undefined : trimmed.match(/^\/[^\s]+/)?.[0];
     const slashCommand = slashName ? slashCommands.find(command => command.name === slashName) : undefined;
     if (slashCommand && onSlashCommand?.(slashCommand, trimmed)) {
       setValue('');

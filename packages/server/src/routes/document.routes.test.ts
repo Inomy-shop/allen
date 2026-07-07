@@ -9,7 +9,7 @@ vi.mock('../services/artifact.service.js');
 
 import express from 'express';
 import request from 'supertest';
-import { MongoClient, type Db } from 'mongodb';
+import { MongoClient, ObjectId, type Db } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { documentRoutes } from './document.routes.js';
@@ -44,6 +44,7 @@ describe('documentRoutes', () => {
     await db.collection('document_identities').deleteMany({});
     await db.collection('document_comments').deleteMany({});
     await db.collection('artifacts').deleteMany({});
+    await db.collection('users').deleteMany({});
   });
 
   // Helper: seed an artifact for document creation tests
@@ -471,5 +472,40 @@ describe('documentRoutes', () => {
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body.length).toBeGreaterThan(0);
     expect(res.body[0].eventType).toBeDefined();
+  });
+
+  it('enriches human comment actors with user name and email', async () => {
+    await seedDocument({ documentId: 'actor-doc', content: 'Actor doc' });
+    const userId = new ObjectId();
+    await db.collection('users').insertOne({
+      _id: userId,
+      email: 'alice@test.local',
+      name: 'Alice',
+      role: 'user',
+      passwordHash: 'hash',
+      mustResetPassword: false,
+      createdBy: 'system',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastLoginAt: null,
+    });
+    await db.collection('document_comments').insertOne({
+      commentId: 'actor-cmt',
+      documentId: 'actor-doc',
+      threadId: 'actor-thread',
+      authorType: 'human',
+      authorUserId: userId.toHexString(),
+      body: 'Needs a label',
+      status: 'open',
+      anchor: { type: 'line', lineStart: 1, lineEnd: 1, context: 'Actor doc', anchoredAtVersion: 1 },
+      reopenCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await request(app).get('/api/documents/actor-doc/comments?status=all');
+    expect(res.status).toBe(200);
+    expect(res.body[0].authorDisplayName).toBe('Alice');
+    expect(res.body[0].authorEmail).toBe('alice@test.local');
   });
 });

@@ -76,6 +76,26 @@ export interface Screen { id: string; name: string; fileName: string; html: stri
 export interface WorkspaceFile { path: string; size: number; isHtml: boolean }
 export interface WorkspaceFileContent { path: string; size: number; content: string; truncated: boolean }
 
+// ── Design import (from another workspace on the same repo, or a bundle dir) ──
+
+export interface ImportSource {
+  _id: string;
+  name: string;
+  kind: 'repo' | 'greenfield';
+  ownerUserId: string | null;
+  designCount: number;
+  updatedAt: string;
+}
+
+export type ImportStylesMode = 'adopted' | 'shared' | 'snapshot' | 'self_contained';
+
+export interface ImportReport {
+  sourceType: 'workspace' | 'bundle';
+  stylesMode: ImportStylesMode;
+  imported: { name: string; as: string; renamed: boolean; stylesMode: ImportStylesMode }[];
+  skipped: { name: string; reason: string }[];
+}
+
 /** Static-site URL for a workspace's design-system folder (openable in browser). */
 export function workspaceSitePath(workspaceId: string, file = 'index.html'): string {
   return `/dstudio-site/${encodeURIComponent(workspaceId)}/${file}`;
@@ -177,6 +197,16 @@ export const designStudio = {
     request<WorkspaceFileContent>(`${B}/workspaces/${workspaceId}/files/content?path=${encodeURIComponent(path)}`),
   exportSystem: (workspaceId: string, destinationDir?: string) =>
     request<{ dir: string; files: string[] }>(`${B}/workspaces/${workspaceId}/export`, { method: 'POST', body: JSON.stringify({ destinationDir }) }),
+
+  // Fork designs into a brand-new workspace (any source workspace or bundle).
+  // A repoId links the new workspace to a registered repo; workspace sources
+  // pass their repo link on automatically.
+  listAllImportSources: () => request<ImportSource[]>(`${B}/import-sources`),
+  importAsNewWorkspace: async (body: { name?: string; sourceWorkspaceId?: string; sourceDir?: string; repoId?: string }) => {
+    const result = await request<{ workspace: Workspace; report: ImportReport }>(`${B}/workspaces/import-new`, { method: 'POST', body: JSON.stringify(body) });
+    emitWorkspaceUpdated({ workspaceId: result.workspace._id, workspace: result.workspace, profileStatus: result.workspace.profileStatus });
+    return result;
+  },
 
   // Sessions
   listSessions: (workspaceId: string) => request<Session[]>(`${B}/workspaces/${workspaceId}/sessions`),

@@ -26,9 +26,10 @@ import {
   AlertCircle, CheckSquare, Square,
 } from 'lucide-react';
 import { renderMarkdown } from '../chat/ChatMessageList';
+import ArtifactViewer from '../artifacts/ArtifactViewer';
 import { CopyButton } from '../common/CopyDownload';
 import Select from '../common/Select';
-import { authHeaders } from '../../services/api';
+import { artifacts as artifactsApi, authHeaders, type ArtifactDoc } from '../../services/api';
 
 // ── Public types ───────────────────────────────────────────────────────
 
@@ -552,6 +553,7 @@ function ArtifactPreviewSidebar({
   doc: { label: string; url: string };
   onClose: () => void;
 }) {
+  const [artifact, setArtifact] = useState<ArtifactDoc | null>(null);
   const [content, setContent] = useState('');
   const [contentType, setContentType] = useState('text/plain');
   const [loading, setLoading] = useState(true);
@@ -562,7 +564,24 @@ function ArtifactPreviewSidebar({
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setArtifact(null);
     setContent('');
+
+    const artifactId = artifactIdFromUrl(doc.url);
+    if (artifactId) {
+      artifactsApi.get(artifactId)
+        .then((artifactDoc) => {
+          if (!cancelled) setArtifact(artifactDoc);
+        })
+        .catch((err) => {
+          if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load artifact');
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+      return () => { cancelled = true; };
+    }
+
     fetch(doc.url, { headers: authHeaders() })
       .then(async (response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -599,6 +618,17 @@ function ArtifactPreviewSidebar({
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
+  }
+
+
+  if (artifact) {
+    return (
+      <div className="absolute inset-y-0 right-0 z-[35] flex w-full justify-end bg-black/25 backdrop-blur-[2px]">
+        <aside className="flex h-full w-full max-w-5xl flex-col border-l border-app-strong bg-app-card shadow-2xl">
+          <ArtifactViewer artifact={artifact} onClose={onClose} />
+        </aside>
+      </div>
+    );
   }
 
   return (
@@ -654,6 +684,21 @@ function ArtifactPreviewSidebar({
       </aside>
     </div>
   );
+}
+
+
+function artifactIdFromUrl(url: string): string | null {
+  try {
+    const base = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+    const parsed = new URL(url, base);
+    const match = parsed.pathname.match(/\/api\/artifacts\/([^/]+)(?:\/content)?$/)
+      ?? parsed.pathname.match(/\/artifacts\/([^/]+)(?:\/content)?$/);
+    return match?.[1] ? decodeURIComponent(match[1]) : null;
+  } catch {
+    const match = url.match(/(?:^|\/)api\/artifacts\/([^/?#]+)(?:\/content)?(?:[?#].*)?$/)
+      ?? url.match(/(?:^|\/)artifacts\/([^/?#]+)(?:\/content)?(?:[?#].*)?$/);
+    return match?.[1] ? decodeURIComponent(match[1]) : null;
+  }
 }
 
 function renderArtifactContent(content: string, contentType: string, url: string): React.ReactNode {

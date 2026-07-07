@@ -25,6 +25,7 @@ import { LinearService } from './linear.service.js';
 import { runPersistentChatSlashCommand, steerPersistentChat } from './chat-runtime-manager.js';
 import { listSlashCommands, type SlashCommandInfo } from './slash-commands.js';
 import type { RuntimeSlashCommand } from './chat-runtime-types.js';
+import { SkillService, normalizeSlug } from './skill.service.js';
 import { ChatContextPacketService } from './context/core/chat-context-packet.service.js';
 // Note: embedding.service.ts re-exports from @allen/engine — single implementation shared by engine + server
 
@@ -127,6 +128,9 @@ export interface ChatMessage {
   triggerType?: 'watcher_completed' | 'watcher_failed' | 'watcher_cancelled' | 'watcher_waiting_for_input';
   /** Compact structured context payload for the Assistant (see TDD §1.2). */
   triggerContext?: Record<string, unknown>;
+  /** Present when this user message was a `/skill <name>` load command.
+   *  The UI renders it as a compact skill slice instead of a text bubble. */
+  skillLoad?: SkillLoadInfo;
   createdAt: Date;
   completedAt?: Date;
 }
@@ -236,6 +240,45 @@ function resolveSlashCommand(content: string, commands: SlashCommandInfo[]): Run
     kind: command.kind,
     path: command.path,
   };
+}
+
+// ── /skill Load Command ──
+
+export interface SkillLoadInfo {
+  name: string;
+  displayName: string;
+}
+
+export type SkillLoadResolution =
+  | { ok: true; skillLoad: SkillLoadInfo; llmContent: string }
+  | { ok: false; error: string; suggestions: string[] };
+
+/** Extract the skill name from a `/skill <name>` message, or null when the
+ *  content is not a skill-load command. */
+export function parseSkillLoadCommand(content: string): string | null {
+  const match = content.trim().match(/^\/skill\s+(\S+)\s*$/);
+  return match ? match[1] : null;
+}
+
+/** Canonical instruction the LLM receives in place of the raw `/skill` text. */
+export function buildSkillLoadInstruction(displayName: string, name: string): string {
+  return `The user loaded the skill '${displayName}' (${name}). Call the get_skill tool for it now, read the playbook, and apply it for the remainder of this session whenever the user's request falls within its scope. If multiple skills have been loaded, the most recently loaded takes precedence where they overlap. Acknowledge in one short sentence.`;
+}
+
+/**
+ * Resolve the provider-CLI slash command for a chat turn.
+ * `/skill <name>` is an Allen-level command handled before the LLM turn —
+ * it must NEVER be forwarded to the provider CLI slash dispatch.
+ */
+export function resolveProviderSlashCommand(content: string, provider: ChatProvider, workspaceCwd?: string): RuntimeSlashCommand | null {
+  if (parseSkillLoadCommand(content)) return null;
+  if (provider === 'codex') {
+    return resolveSlashCommand(content, listSlashCommands('codex', workspaceCwd));
+  }
+  if (isClaudeFamilyProvider(provider)) {
+    return resolveSlashCommand(content, listSlashCommands('claude', workspaceCwd));
+  }
+  return null;
 }
 
 // ── SSE Helper ──
@@ -1482,6 +1525,38 @@ export class ChatService {
     }
   }
 
+  /**
+   * Resolve a `/skill <name>` user message against the skill registry.
+   * Returns null for regular messages; on success, `llmContent` is the
+   * canonical load instruction that replaces the raw command in the LLM turn.
+   */
+  async resolveSkillLoad(content: string): Promise<SkillLoadResolution | null> {
+    const rawName = parseSkillLoadCommand(content);
+    if (!rawName) return null;
+
+    const slug = normalizeSlug(rawName);
+    const skillService = new SkillService(this.db);
+    const skill = slug ? await skillService.getByName(slug) : null;
+    if (skill && skill.enabled !== false) {
+      const displayName = String(skill.displayName ?? '').trim() || slug;
+      return {
+        ok: true,
+        skillLoad: { name: slug, displayName },
+        llmContent: buildSkillLoadInstruction(displayName, slug),
+      };
+    }
+
+    let suggestions: string[] = [];
+    try {
+      const { matches } = await skillService.search({ query: rawName, limit: 3 }) as { matches: Array<{ name?: unknown }> };
+      suggestions = matches.map(m => String(m.name ?? '')).filter(name => name && name !== slug).slice(0, 3);
+    } catch { /* suggestions are best-effort */ }
+    const error = skill
+      ? `Skill "${slug}" is disabled`
+      : `Unknown skill "${slug || rawName}"`;
+    return { ok: false, error, suggestions };
+  }
+
   async sendMessage(sessionId: string, content: string, res: Response, agent?: string, cwd?: string, sender?: ChatMessageSender): Promise<void> {
     const session = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
     if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
@@ -1490,9 +1565,18 @@ export class ChatService {
       res.status(409).json({ error: 'Session already has an active response' }); return;
     }
 
+    // `/skill <name>` fails fast BEFORE anything is persisted or streamed.
+    const skillLoad = await this.resolveSkillLoad(content);
+    if (skillLoad && !skillLoad.ok) {
+      res.status(400).json({ error: skillLoad.error, suggestions: skillLoad.suggestions });
+      return;
+    }
+    const llmContent = skillLoad?.ok ? skillLoad.llmContent : content;
+
     const now = new Date();
     await this.messages.insertOne({
       sessionId, role: 'user', content, status: 'completed',
+      ...(skillLoad?.ok ? { skillLoad: skillLoad.skillLoad } : {}),
       ...senderFields(sender),
       createdAt: now, completedAt: now,
     });
@@ -1514,7 +1598,7 @@ export class ChatService {
     attachHeartbeat(res);
     res.on('close', () => { detachHeartbeat(res); entry.listeners.delete(res); });
 
-    this.runLLM(sessionId, assistantMsgId, content, entry, agent, 0, cwd).catch(() => {});
+    this.runLLM(sessionId, assistantMsgId, llmContent, entry, agent, 0, cwd).catch(() => {});
   }
 
   /**
@@ -1535,9 +1619,19 @@ export class ChatService {
     if (!session) throw new Error('Session not found');
     if (activeQueries.has(sessionId)) throw new Error('Session busy');
 
+    // Same `/skill <name>` expansion as sendMessage — queued and Slack
+    // messages run through this path.
+    const skillLoad = await this.resolveSkillLoad(content);
+    if (skillLoad && !skillLoad.ok) {
+      const hint = skillLoad.suggestions.length > 0 ? ` Did you mean: ${skillLoad.suggestions.join(', ')}?` : '';
+      throw new Error(`${skillLoad.error}.${hint}`);
+    }
+    const llmContent = skillLoad?.ok ? skillLoad.llmContent : content;
+
     const now = new Date();
     await this.messages.insertOne({
       sessionId, role: 'user', content, status: 'completed',
+      ...(skillLoad?.ok ? { skillLoad: skillLoad.skillLoad } : {}),
       ...senderFields(sender),
       createdAt: now, completedAt: now,
     });
@@ -1561,7 +1655,7 @@ export class ChatService {
     activeQueries.set(sessionId, entry);
 
     // runLLM handles all DB updates, error logging, and active session cleanup
-    await this.runLLM(sessionId, assistantMsgId, content, entry, agent, 0, cwd);
+    await this.runLLM(sessionId, assistantMsgId, llmContent, entry, agent, 0, cwd);
 
     // Read the final result from DB (runLLM has already saved it)
     const msg = await this.messages.findOne({ _id: new ObjectId(assistantMsgId) });
@@ -2003,7 +2097,11 @@ User: ${userMessage.slice(0, 500)}`;
         history.reverse();
         llmMessages = history.map(m => ({
           role: m.role as 'user' | 'assistant',
-          content: m.content as string,
+          // Past `/skill` loads keep their canonical instruction in rebuilt
+          // history so API providers retain the load across turns.
+          content: (m as unknown as ChatMessage).skillLoad
+            ? buildSkillLoadInstruction((m as unknown as ChatMessage).skillLoad!.displayName, (m as unknown as ChatMessage).skillLoad!.name)
+            : m.content as string,
         }));
         // Replace last user message with enriched version
         if (llmMessages.length > 0 && llmMessages[llmMessages.length - 1].role === 'user') {
@@ -2155,15 +2253,7 @@ User: ${userMessage.slice(0, 500)}`;
 
       const effectiveProvider = (resolvedSettings?.provider as ChatProvider) ?? provider;
       const effectiveModel = resolvedSettings?.model || model || PROVIDERS.find(p => p.provider === effectiveProvider)?.defaultModel || 'gpt-5.5';
-      const slashCommand = (() => {
-        if (effectiveProvider === 'codex') {
-          return resolveSlashCommand(content, listSlashCommands('codex', workspaceCwd));
-        }
-        if (isClaudeFamilyProvider(effectiveProvider)) {
-          return resolveSlashCommand(content, listSlashCommands('claude', workspaceCwd));
-        }
-        return null;
-      })();
+      const slashCommand = resolveProviderSlashCommand(content, effectiveProvider, workspaceCwd);
 
       const result = slashCommand
         ? {

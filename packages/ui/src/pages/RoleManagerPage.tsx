@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAgents } from '../hooks/useAgents';
 import { agents as agentsApi, teams as teamsApi, repos as reposApi, executions as executionsApi, skills as skillsApi, type SkillRecord } from '../services/api';
@@ -14,6 +14,7 @@ import {
   X, FolderGit2, Plus, Pencil, Trash2, LayoutGrid, Info, Home,
   ChevronRight, GitBranch, ExternalLink,
   Layers, Tag, FileText, Monitor, Download, Upload, ScanSearch, Settings, BookOpen,
+  Columns, Eye, Zap,
 } from 'lucide-react';
 import { SpawnTargetGraph } from '../components/agents/SpawnTargetGraph';
 import McpServerManager from '../components/settings/McpServerManager';
@@ -1025,6 +1026,12 @@ export default function RoleManagerPage() {
 }
 
 const ROUTE_OPTIONS = ['direct_answer', 'data_query', 'spawn_agent', 'run_workflow'];
+const ROUTE_SHORT_LABELS: Record<string, string> = {
+  direct_answer: 'direct',
+  data_query: 'data',
+  spawn_agent: 'agent',
+  run_workflow: 'workflow',
+};
 
 function csvToArray(value: string): string[] {
   return value.split(',').map(part => part.trim()).filter(Boolean);
@@ -1093,35 +1100,54 @@ function blankSkill(): SkillRecord {
   };
 }
 
-function LibrarySkillsPane({
-  skills, loading, onRefresh, onSave, onDelete,
+export function LibrarySkillsPane({
+  skills, loading, onRefresh, onSave, onDelete, variant = 'library',
 }: {
   skills: SkillRecord[];
   loading: boolean;
   onRefresh: () => void;
   onSave: (skill: Partial<SkillRecord>) => Promise<void>;
   onDelete: (skill: SkillRecord) => Promise<void>;
+  /** 'settings' hides the pane's own page title (the settings shell provides one). */
+  variant?: 'library' | 'settings';
 }) {
   const toast = useToast();
   const [query, setQuery] = useState('');
   const [activeId, setActiveId] = useState<string>('new');
   const [draft, setDraft] = useState<SkillRecord>(blankSkill());
+  const [bodyMode, setBodyMode] = useState<'edit' | 'split' | 'preview'>('edit');
   const [saving, setSaving] = useState(false);
   const [testerQuery, setTesterQuery] = useState('');
   const [testerResult, setTesterResult] = useState<any>(null);
   const [testing, setTesting] = useState(false);
 
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    skills.forEach(skill => {
+      const category = String(skill.category || 'routing');
+      counts.set(category, (counts.get(category) ?? 0) + 1);
+    });
+    return Array.from(counts.entries()).sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]));
+  }, [skills]);
+
+  const enabledCount = useMemo(() => skills.filter(skill => skill.enabled !== false).length, [skills]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return skills;
-    return skills.filter(skill =>
-      String(skill.name ?? '').toLowerCase().includes(q)
-      || String(skill.displayName ?? '').toLowerCase().includes(q)
-      || String(skill.description ?? '').toLowerCase().includes(q)
-      || String(skill.category ?? '').toLowerCase().includes(q)
-      || (skill.triggers ?? []).some(t => t.toLowerCase().includes(q)),
-    );
-  }, [query, skills]);
+    return skills.filter(skill => {
+      const category = String(skill.category || 'routing');
+      if (variant === 'settings' && categoryFilter !== 'all' && category !== categoryFilter) return false;
+      if (!q) return true;
+      return String(skill.name ?? '').toLowerCase().includes(q)
+        || String(skill.displayName ?? '').toLowerCase().includes(q)
+        || String(skill.description ?? '').toLowerCase().includes(q)
+        || category.toLowerCase().includes(q)
+        || (skill.triggers ?? []).some(t => t.toLowerCase().includes(q));
+    });
+  }, [categoryFilter, query, skills, variant]);
 
   async function selectSkill(skill: SkillRecord) {
     const key = skill._id ?? skill.id ?? skill.name;
@@ -1143,9 +1169,20 @@ function LibrarySkillsPane({
     }
   }
 
+  async function openSkillDrawer(skill: SkillRecord) {
+    setDrawerOpen(true);
+    await selectSkill(skill);
+  }
+
   function newSkill() {
     setActiveId('new');
     setDraft(blankSkill());
+  }
+
+  function openNewSkillDrawer() {
+    newSkill();
+    setBodyMode('edit');
+    setDrawerOpen(true);
   }
 
   function duplicateSkill(skill: SkillRecord) {
@@ -1160,6 +1197,21 @@ function LibrarySkillsPane({
       updatedAt: undefined,
       version: undefined,
     });
+    if (variant === 'settings') setDrawerOpen(true);
+  }
+
+  async function toggleSkillEnabled(skill: SkillRecord, event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    const id = skill._id ?? skill.id;
+    if (!id) return;
+    const nextEnabled = skill.enabled === false;
+    try {
+      await onSave({ ...skill, enabled: nextEnabled });
+      const activeKey = skill._id ?? skill.id ?? skill.name;
+      if (activeId === activeKey) setDraft(prev => ({ ...prev, enabled: nextEnabled }));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update skill');
+    }
   }
 
   async function saveDraft() {
@@ -1170,7 +1222,10 @@ function LibrarySkillsPane({
     setSaving(true);
     try {
       await onSave(draft);
-      if (activeId === 'new') newSkill();
+      if (activeId === 'new') {
+        if (variant === 'settings') setDrawerOpen(false);
+        newSkill();
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save skill');
     } finally {
@@ -1214,6 +1269,289 @@ function LibrarySkillsPane({
     });
   }
 
+  useEffect(() => {
+    if (variant !== 'settings' || !drawerOpen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDrawerOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [drawerOpen, variant]);
+
+  const drawerTitle = activeId === 'new' ? 'new skill' : (draft.displayName || draft.name || 'skill');
+  const drawerSubtitle = activeId === 'new'
+    ? 'Create a routing playbook'
+    : `${draft.name || 'unnamed'} · p${draft.priority ?? 50}`;
+
+  if (variant === 'settings') {
+    return (
+      <div className="lib-section lib-skills-section lib-skills-gallery-section">
+        <div className="lib-skills-gallery-head">
+          <p className="m-0 text-[13px] text-theme-muted">
+            {skills.length} playbooks · {enabledCount} enabled · load with <span className="font-mono text-[12px] text-theme-secondary">/skill</span>
+          </p>
+          <div className="lib-actions">
+            <button className="btn btn-secondary btn-sm" onClick={onRefresh} title="Refresh skills"><RefreshCw className="w-3 h-3" /></button>
+            <button className="btn btn-primary btn-sm" onClick={openNewSkillDrawer}><Plus className="w-3 h-3" /> new skill</button>
+          </div>
+        </div>
+
+        <div className="lib-skills-gallery-toolbar">
+          <div className="lib-search lib-skills-gallery-search">
+            <Search className="w-4 h-4" />
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search skills, triggers, categories" />
+          </div>
+        </div>
+
+        <div className="lib-skills-filter-chips" aria-label="Filter skills by category">
+          <button
+            type="button"
+            className={`lib-skills-filter-chip ${categoryFilter === 'all' ? 'active' : ''}`}
+            onClick={() => setCategoryFilter('all')}
+          >
+            All <span>{skills.length}</span>
+          </button>
+          {categoryCounts.map(([category, count]) => (
+            <button
+              key={category}
+              type="button"
+              className={`lib-skills-filter-chip ${categoryFilter === category ? 'active' : ''}`}
+              onClick={() => setCategoryFilter(category)}
+            >
+              {category} <span>{count}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="lib-skills-card-grid scroll-hide">
+          {loading ? (
+            Array.from({ length: 8 }).map((_, i) => <div key={i} className="lib-skill-card-skel" />)
+          ) : filtered.length === 0 ? (
+            <div className="lib-skills-empty-card">No skills match this filter.</div>
+          ) : filtered.map(skill => {
+            const id = skill._id ?? skill.id ?? skill.name;
+            const active = drawerOpen && activeId === id;
+            const enabled = skill.enabled !== false;
+            const routes = skill.allowedRoutes ?? [];
+            return (
+              <article
+                key={id}
+                className={`lib-skill-card ${active ? 'active' : ''} ${enabled ? '' : 'is-off'}`}
+                onClick={() => { void openSkillDrawer(skill); }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    void openSkillDrawer(skill);
+                  }
+                }}
+              >
+                <div className="lib-skill-card-top">
+                  <div className="lib-skill-card-icon"><Zap className="h-3.5 w-3.5" /></div>
+                  <div className="min-w-0 flex-1">
+                    <div className="lib-skill-card-title">{skill.displayName ?? skill.name}</div>
+                    <div className="lib-skill-card-name">{skill.name}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className={`lib-skill-card-switch ${enabled ? 'on' : ''}`}
+                    aria-pressed={enabled}
+                    aria-label={`${enabled ? 'Disable' : 'Enable'} ${skill.displayName ?? skill.name}`}
+                    onClick={event => { void toggleSkillEnabled(skill, event); }}
+                  >
+                    <span />
+                  </button>
+                </div>
+
+                <p className="lib-skill-card-desc">{skill.description || 'No description'}</p>
+
+                <div className="lib-skill-card-routes">
+                  {ROUTE_OPTIONS.map(route => (
+                    <span key={route} className={`lib-skill-route-pill ${routes.includes(route) ? 'on' : 'off'}`}>
+                      {routes.includes(route) && <span className="lib-skill-route-dot" />}
+                      {ROUTE_SHORT_LABELS[route] ?? route}
+                    </span>
+                  ))}
+                </div>
+
+                <div className="lib-skill-card-foot">
+                  <span className="lib-skill-category-pill">{skill.category ?? 'routing'}</span>
+                  <div className="lib-skill-card-meta">
+                    <span>p{skill.priority ?? 50}</span>
+                    <span className="lib-skill-meta-dot" />
+                    <span>{(skill.triggers ?? []).length} triggers</span>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+
+        <div
+          className={`lib-skill-drawer-scrim ${drawerOpen ? 'open' : ''}`}
+          onClick={() => setDrawerOpen(false)}
+          aria-hidden="true"
+        />
+        <aside className={`lib-skill-drawer ${drawerOpen ? 'open' : ''}`} aria-hidden={!drawerOpen} aria-label="Skill editor">
+          <div className="lib-skill-drawer-head">
+            <div className="lib-skill-card-icon"><Zap className="h-3.5 w-3.5" /></div>
+            <div className="min-w-0 flex-1">
+              <h3>{drawerTitle}</h3>
+              <p>{drawerSubtitle}</p>
+            </div>
+            <button type="button" className="settings-icon-button" onClick={() => setDrawerOpen(false)} title="Close skill editor">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="lib-skill-drawer-body scroll-hide">
+            <div className="skill-editor-overline">identity</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label className="form-field">
+                <span>name</span>
+                <input value={draft.name} onChange={e => setDraft(prev => ({ ...prev, name: e.target.value }))} placeholder="bug-fix-routing" />
+              </label>
+              <label className="form-field">
+                <span>category</span>
+                <input value={draft.category ?? ''} onChange={e => setDraft(prev => ({ ...prev, category: e.target.value }))} placeholder="implementation" />
+              </label>
+              <label className="form-field md:col-span-2">
+                <span>display name</span>
+                <input value={draft.displayName ?? ''} onChange={e => setDraft(prev => ({ ...prev, displayName: e.target.value }))} placeholder="Bug Fix Routing" />
+              </label>
+              <label className="form-field md:col-span-2">
+                <span>description</span>
+                <textarea value={draft.description ?? ''} onChange={e => setDraft(prev => ({ ...prev, description: e.target.value }))} placeholder="What this skill routes or explains" className="min-h-[68px]" />
+              </label>
+              <label className="form-field">
+                <span>priority</span>
+                <input type="number" value={draft.priority ?? 50} onChange={e => setDraft(prev => ({ ...prev, priority: Number(e.target.value) }))} />
+              </label>
+            </div>
+
+            <div className="skill-editor-overline">matching</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label className="form-field md:col-span-2">
+                <span>triggers</span>
+                <input value={arrayToCsv(draft.triggers)} onChange={e => setArrayField('triggers', e.target.value)} placeholder="fix bug, regression, error" />
+              </label>
+              <label className="form-field md:col-span-2">
+                <span>excludes</span>
+                <input value={arrayToCsv(draft.excludes)} onChange={e => setArrayField('excludes', e.target.value)} placeholder="build feature, create workflow" />
+              </label>
+              <label className="form-field">
+                <span>related workflows</span>
+                <input value={arrayToCsv(draft.relatedWorkflows)} onChange={e => setArrayField('relatedWorkflows', e.target.value)} placeholder="bug-investigate-and-fix" />
+              </label>
+              <label className="form-field">
+                <span>related agents</span>
+                <input value={arrayToCsv(draft.relatedAgents)} onChange={e => setArrayField('relatedAgents', e.target.value)} placeholder="coding-investigator" />
+              </label>
+            </div>
+
+            <div className="skill-editor-overline">routes</div>
+            <div className="lib-skill-drawer-routes">
+              {ROUTE_OPTIONS.map(route => (
+                <button
+                  key={route}
+                  type="button"
+                  className={`lib-skill-route-pill route-button ${draft.allowedRoutes?.includes(route) ? 'on' : 'off'}`}
+                  onClick={() => toggleRoute(route)}
+                >
+                  {draft.allowedRoutes?.includes(route) && <span className="lib-skill-route-dot" />}
+                  {route}
+                </button>
+              ))}
+            </div>
+
+            <div className="skill-editor-overline">playbook</div>
+            <div className="overflow-hidden rounded-lg border border-app">
+              <div className="flex items-center justify-between gap-3 border-b border-app bg-app-muted/25 px-3 py-1.5">
+                <span className="font-mono text-[10px] text-theme-subtle">markdown — headings, lists, links, code blocks</span>
+                <div className="flex items-center overflow-hidden rounded-md border border-app bg-app-muted/50">
+                  <button
+                    type="button"
+                    onClick={() => setBodyMode('edit')}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono transition-colors ${
+                      bodyMode === 'edit' ? 'bg-accent-blue/15 text-accent-blue' : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
+                    }`}
+                  >
+                    <Pencil className="w-3 h-3" /> Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBodyMode('split')}
+                    className={`inline-flex items-center gap-1 border-l border-app px-2.5 py-1 text-[10px] font-mono transition-colors ${
+                      bodyMode === 'split' ? 'bg-accent-blue/15 text-accent-blue' : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
+                    }`}
+                  >
+                    <Columns className="w-3 h-3" /> Split
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBodyMode('preview')}
+                    className={`inline-flex items-center gap-1 border-l border-app px-2.5 py-1 text-[10px] font-mono transition-colors ${
+                      bodyMode === 'preview' ? 'bg-accent-blue/15 text-accent-blue' : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
+                    }`}
+                  >
+                    <Eye className="w-3 h-3" /> Preview
+                  </button>
+                </div>
+              </div>
+              <div className={bodyMode === 'split' ? 'grid grid-cols-2' : 'flex flex-col'}>
+                {(bodyMode === 'edit' || bodyMode === 'split') && (
+                  <textarea
+                    value={draft.body ?? ''}
+                    onChange={e => setDraft(prev => ({ ...prev, body: e.target.value }))}
+                    spellCheck={false}
+                    className={`min-h-[300px] w-full flex-1 resize-y border-0 bg-app-muted/30 px-4 py-3 font-mono text-xs leading-relaxed text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:bg-app-muted/45 ${
+                      bodyMode === 'split' ? 'resize-none border-r border-app' : ''
+                    }`}
+                  />
+                )}
+                {(bodyMode === 'preview' || bodyMode === 'split') && (
+                  <div className="max-h-[520px] min-h-[300px] flex-1 overflow-y-auto px-4 py-3">
+                    {(draft.body ?? '').trim() ? (
+                      <div className="prose-allen text-sm leading-relaxed text-theme-secondary">
+                        {renderMarkdown(draft.body ?? '')}
+                      </div>
+                    ) : (
+                      <div className="text-[12px] italic text-theme-muted">Nothing to preview yet. Write some markdown in Edit mode.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="lib-skill-drawer-foot">
+            <button
+              type="button"
+              className={`lib-skill-card-switch labelled ${draft.enabled === false ? '' : 'on'}`}
+              aria-pressed={draft.enabled !== false}
+              onClick={() => setDraft(prev => ({ ...prev, enabled: prev.enabled === false }))}
+            >
+              <span />
+              <em>{draft.enabled === false ? 'disabled' : 'enabled'}</em>
+            </button>
+            <div className="lib-actions">
+              {(draft._id || draft.id) && (
+                <>
+                  <button className="btn btn-secondary btn-sm" onClick={() => duplicateSkill(draft)}>duplicate</button>
+                  <button className="btn btn-danger btn-sm" onClick={deleteActive}><Trash2 className="w-3 h-3" /></button>
+                </>
+              )}
+              <button className="btn btn-primary btn-sm" onClick={saveDraft} disabled={saving}>
+                {saving ? 'saving...' : 'save skill'}
+              </button>
+            </div>
+          </div>
+        </aside>
+      </div>
+    );
+  }
+
   return (
     <div className="lib-section lib-skills-section">
       <div className="lib-page-head lib-skills-head">
@@ -1254,12 +1592,11 @@ function LibrarySkillsPane({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="skill-row-title font-medium text-theme-primary truncate">{skill.displayName ?? skill.name}</span>
-                        <span className={`badge ${skill.enabled === false ? 'badge-muted' : 'badge-ok'}`}>
-                          {skill.enabled === false ? 'disabled' : 'enabled'}
-                        </span>
+                        {skill.enabled === false && <span className="badge badge-muted">disabled</span>}
                       </div>
                       <p className="text-xs text-theme-secondary mt-1 line-clamp-2">{skill.description || 'No description'}</p>
                       <div className="lib-workflow-meta mt-2">
+                        <span className="font-mono">{skill.name}</span>
                         <span>{skill.category ?? 'routing'}</span>
                         <span>p{skill.priority ?? 50}</span>
                         <span>{(skill.triggers ?? []).length} triggers</span>
@@ -1292,6 +1629,7 @@ function LibrarySkillsPane({
               </div>
             </div>
 
+            <div className="skill-editor-overline">identity</div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <label className="form-field">
                 <span>name</span>
@@ -1313,6 +1651,10 @@ function LibrarySkillsPane({
                 <span>description</span>
                 <input value={draft.description ?? ''} onChange={e => setDraft(prev => ({ ...prev, description: e.target.value }))} placeholder="What this skill routes or explains" />
               </label>
+            </div>
+
+            <div className="skill-editor-overline">matching</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <label className="form-field">
                 <span>triggers</span>
                 <input value={arrayToCsv(draft.triggers)} onChange={e => setArrayField('triggers', e.target.value)} placeholder="fix bug, regression, error" />
@@ -1331,9 +1673,10 @@ function LibrarySkillsPane({
               </label>
             </div>
 
-            <div className="mt-4">
-              <div className="text-xs font-medium text-theme-secondary mb-2">allowed routes</div>
-              <div className="flex flex-wrap gap-2">
+            <div className="skill-editor-overline">routes &amp; status</div>
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-theme-secondary">routes</span>
                 {ROUTE_OPTIONS.map(route => (
                   <button
                     key={route}
@@ -1344,6 +1687,9 @@ function LibrarySkillsPane({
                     {route}
                   </button>
                 ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-theme-secondary">status</span>
                 <button
                   type="button"
                   className={`badge ${draft.enabled === false ? 'badge-muted' : 'badge-ok'}`}
@@ -1354,14 +1700,67 @@ function LibrarySkillsPane({
               </div>
             </div>
 
-            <label className="form-field mt-4">
-              <span>skill body</span>
-              <textarea
-                className="font-mono text-xs min-h-[360px]"
-                value={draft.body ?? ''}
-                onChange={e => setDraft(prev => ({ ...prev, body: e.target.value }))}
-              />
-            </label>
+            <div className="skill-editor-overline">playbook</div>
+            <div className="overflow-hidden rounded-lg border border-app">
+              <div className="flex items-center justify-between gap-3 border-b border-app bg-app-muted/25 px-3 py-1.5">
+                <span className="font-mono text-[10px] text-theme-subtle">markdown — headings, lists, links, code blocks</span>
+                <div className="flex items-center overflow-hidden rounded-md border border-app bg-app-muted/50">
+                  <button
+                    type="button"
+                    onClick={() => setBodyMode('edit')}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono transition-colors ${
+                      bodyMode === 'edit' ? 'bg-accent-blue/15 text-accent-blue' : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
+                    }`}
+                    title="Edit only"
+                  >
+                    <Pencil className="w-3 h-3" /> Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBodyMode('split')}
+                    className={`inline-flex items-center gap-1 border-l border-app px-2.5 py-1 text-[10px] font-mono transition-colors ${
+                      bodyMode === 'split' ? 'bg-accent-blue/15 text-accent-blue' : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
+                    }`}
+                    title="Split view"
+                  >
+                    <Columns className="w-3 h-3" /> Split
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBodyMode('preview')}
+                    className={`inline-flex items-center gap-1 border-l border-app px-2.5 py-1 text-[10px] font-mono transition-colors ${
+                      bodyMode === 'preview' ? 'bg-accent-blue/15 text-accent-blue' : 'text-theme-muted hover:text-theme-primary hover:bg-app-muted'
+                    }`}
+                    title="Preview only"
+                  >
+                    <Eye className="w-3 h-3" /> Preview
+                  </button>
+                </div>
+              </div>
+              <div className={bodyMode === 'split' ? 'grid grid-cols-2' : 'flex flex-col'}>
+                {(bodyMode === 'edit' || bodyMode === 'split') && (
+                  <textarea
+                    value={draft.body ?? ''}
+                    onChange={e => setDraft(prev => ({ ...prev, body: e.target.value }))}
+                    spellCheck={false}
+                    className={`min-h-[360px] w-full flex-1 resize-y border-0 bg-app-muted/30 px-4 py-3 font-mono text-xs leading-relaxed text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:bg-app-muted/45 ${
+                      bodyMode === 'split' ? 'resize-none border-r border-app' : ''
+                    }`}
+                  />
+                )}
+                {(bodyMode === 'preview' || bodyMode === 'split') && (
+                  <div className="max-h-[560px] min-h-[360px] flex-1 overflow-y-auto px-4 py-3">
+                    {(draft.body ?? '').trim() ? (
+                      <div className="prose-allen text-sm leading-relaxed text-theme-secondary">
+                        {renderMarkdown(draft.body ?? '')}
+                      </div>
+                    ) : (
+                      <div className="text-[12px] italic text-theme-muted">Nothing to preview yet. Write some markdown in Edit mode.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="lib-skill-tester">

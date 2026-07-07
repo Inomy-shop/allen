@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { listDefaultWorkflowNames, seedDefaultWorkflows, seedDefaultSkills } from './seed.js';
+import { LEGACY_SKILL_OPERATING_RULE_SECTIONS, listDefaultWorkflowNames, seedDefaultWorkflows, seedDefaultSkills } from './seed.js';
 import { seedCronJobs } from './services/cron-seed.service.js';
 
 function makeDb(seed: Record<string, Record<string, unknown>[]> = {}): any {
@@ -150,6 +150,63 @@ describe('seedDefaultSkills', () => {
     const skill = db.store.skills?.find((s: any) => s.name === 'coding-guidelines');
     // User-owned skill must not be overwritten
     expect(skill.body).toBe('custom user body');
+  });
+
+  it('does not append operating-rule sections to any seeded skill body', async () => {
+    const db = makeDb();
+
+    await seedDefaultSkills(db);
+
+    const skills: any[] = db.store.skills ?? [];
+    expect(skills.length).toBeGreaterThan(0);
+    for (const skill of skills) {
+      expect(skill.body, `${skill.name} must not carry appended operating rules`).not.toContain('## Clarify and confirm');
+      expect(skill.body, `${skill.name} must not carry appended operating rules`).not.toContain('## Capability discovery');
+      expect(skill.body, `${skill.name} must not carry appended operating rules`).not.toContain('## Assign to agents');
+    }
+  });
+
+  it('strips legacy operating-rule sections from an existing system skill body', async () => {
+    const legacyBody = `# PRD Authoring\n\nauthored playbook content\n\n${LEGACY_SKILL_OPERATING_RULE_SECTIONS.join('\n\n')}`;
+    const db = makeDb({
+      skills: [
+        {
+          _id: 'skill-prd-authoring',
+          name: 'prd-authoring',
+          body: legacyBody,
+          createdBy: 'system',
+          version: 3,
+        },
+      ],
+    });
+
+    await seedDefaultSkills(db);
+
+    const skill = db.store.skills?.find((s: any) => s.name === 'prd-authoring');
+    expect(skill.body).toContain('authored playbook content');
+    expect(skill.body).not.toContain('## Clarify and confirm');
+    expect(skill.body).not.toContain('## Capability discovery');
+    expect(skill.body).not.toContain('## Assign to agents');
+  });
+
+  it('leaves legacy sections alone in a user-owned skill body', async () => {
+    const userBody = `my own rules\n\n${LEGACY_SKILL_OPERATING_RULE_SECTIONS[0]}`;
+    const db = makeDb({
+      skills: [
+        {
+          _id: 'skill-coding-guidelines',
+          name: 'coding-guidelines',
+          body: userBody,
+          createdBy: 'user',
+          version: 1,
+        },
+      ],
+    });
+
+    await seedDefaultSkills(db);
+
+    const skill = db.store.skills?.find((s: any) => s.name === 'coding-guidelines');
+    expect(skill.body).toBe(userBody);
   });
 });
 

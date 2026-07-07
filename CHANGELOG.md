@@ -6,6 +6,21 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-07-07
+
+### Added
+
+- **Manual skill loading in assistant chat** (`packages/server`, `packages/ui`): `/skill <name>` loads an Allen Library skill in a single chat turn (the server expands it to a `get_skill` load instruction and persists a skill-load marker), plus a new Skills settings page and seeded playbook skills.
+- **Import Design Studio designs into a new workspace** (`packages/server`, `packages/ui`): fork designs created in another user's Design Studio workspace (or an exported folder) into a fresh workspace of your own.
+- **Direct chat artifacts in the sidebar** (`packages/ui`): direct-chat artifacts now appear in the sidebar, the artifact viewer is unified, and comments are enabled by default.
+
+### Fixed
+
+- **Bold artifact chat links** (`packages/ui`): nested inline markdown inside emphasis is now parsed, so artifact links wrapped in bold render as clickable chat controls.
+- **Model recovery provider overrides** (`packages/server`, `packages/engine`): model-recovery override metadata is propagated into parallel-branch retries so selected fallback providers/models are visible to node execution, and the model-recovery intervention widget is persisted.
+- **Artifact document comments and versions** (`packages/server`, `packages/ui`): assorted fixes to artifact document comments and versioning.
+- **Skills settings cards** (`packages/ui`): updated the skills settings cards.
+
 ## [0.1.18] - 2026-07-05
 
 ### Added

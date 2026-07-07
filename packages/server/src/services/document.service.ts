@@ -1096,6 +1096,8 @@ export class DocumentService {
             authorUserId: c.authorUserId,
             body: c.body,
             status: c.status,
+            lineStart: c.anchor.lineStart,
+            lineEnd: c.anchor.lineEnd,
           },
         });
       }
@@ -1110,6 +1112,8 @@ export class DocumentService {
             resolvedByAgentName: c.resolution.resolvedByAgentName,
             resolvedByUserId: c.resolution.resolvedByUserId,
             resolutionNote: c.resolution.resolutionNote,
+            lineStart: c.anchor.lineStart,
+            lineEnd: c.anchor.lineEnd,
           },
         });
       }
@@ -1121,6 +1125,8 @@ export class DocumentService {
           data: {
             commentId: c.commentId,
             reopenCount: c.reopenCount,
+            lineStart: c.anchor.lineStart,
+            lineEnd: c.anchor.lineEnd,
           },
         });
       }
@@ -1132,6 +1138,8 @@ export class DocumentService {
           data: {
             commentId: c.commentId,
             staleReason: c.anchor.staleReason,
+            lineStart: c.anchor.lineStart,
+            lineEnd: c.anchor.lineEnd,
           },
         });
       }

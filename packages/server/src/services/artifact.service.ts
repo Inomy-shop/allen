@@ -48,6 +48,8 @@ import {
 export type ArtifactRootType = 'chat' | 'workflow' | 'agent';
 export type ArtifactContentType = 'markdown' | 'json' | 'csv' | 'text' | 'code' | 'binary';
 
+const COMMENTABLE_CONTENT_TYPES = new Set<ArtifactContentType>(['markdown', 'json', 'csv', 'text', 'code']);
+
 export interface ArtifactSpawnContext {
   /** Where the save call originated. */
   originType: 'chat' | 'workflow_node' | 'spawn_agent' | 'standalone' | 'system';
@@ -278,6 +280,11 @@ export class ArtifactService {
       await this.col.insertOne(doc);
     }
 
+    await this.enableCommentingByDefault(artifactId, contentType, input.content, {
+      createdByUserId: input.createdByUserId,
+      createdByAgentName: input.createdByAgent ?? input.spawnContext?.agentName,
+    });
+
     return {
       artifactId,
       url: `/api/artifacts/${artifactId}/content`,
@@ -291,6 +298,41 @@ export class ArtifactService {
       s3Key: location.s3Key,
       s3Bucket: location.s3Bucket,
     };
+  }
+
+
+  private async enableCommentingByDefault(
+    artifactId: string,
+    contentType: ArtifactContentType,
+    content: string,
+    opts: { createdByUserId?: string; createdByAgentName?: string },
+  ): Promise<void> {
+    if (!COMMENTABLE_CONTENT_TYPES.has(contentType)) return;
+
+    try {
+      const { DocumentService } = await import('./document.service.js');
+      const documentService = new DocumentService(this.db);
+      const existing = await documentService.findIdentityByArtifactId(artifactId);
+      if (!existing) {
+        await documentService.createFromArtifact(artifactId, opts);
+        return;
+      }
+
+      const latestVersion = existing.versions[existing.versions.length - 1];
+      if (latestVersion?.content === content) return;
+
+      await documentService.addVersion(existing.documentId, content, {
+        ...opts,
+        createdReason: 'Artifact content updated',
+      });
+    } catch (err: unknown) {
+      // Commenting/versioning should be enabled by default for text artifacts,
+      // but artifact persistence itself is the primary operation.
+      console.warn(
+        `[artifacts] Failed to enable commenting for artifact ${artifactId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   async get(artifactId: string): Promise<ArtifactDoc | null> {
