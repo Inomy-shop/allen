@@ -12,6 +12,7 @@
  * artifact UUID acts as the access control — same pattern as /api/files/.
  */
 import { Router, type Request, type Response } from 'express';
+import { createHash } from 'node:crypto';
 import type { Db } from 'mongodb';
 import {
   ArtifactService,
@@ -38,13 +39,29 @@ export function publicArtifactRoutes(db: Db): Router {
       const { doc, content } = result;
       const mime = mimeForArtifact(doc.contentType, doc.filename);
       res.setHeader('Content-Type', mime);
-      res.setHeader('Content-Length', String(doc.sizeBytes));
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('ETag', `"${doc.sha256 ?? contentSha256(content)}"`);
       // Add a filename hint for downloads without forcing the download.
       res.setHeader(
         'Content-Disposition',
         `inline; filename="${doc.filename.replace(/"/g, '')}"`,
       );
-      res.send(content);
+
+      const range = parseByteRange(req.headers.range, content.length);
+      if (range === 'invalid') {
+        res.setHeader('Content-Range', `bytes */${content.length}`);
+        return res.status(416).end();
+      }
+      if (range) {
+        const chunk = content.subarray(range.start, range.end + 1);
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${content.length}`);
+        res.setHeader('Content-Length', String(chunk.length));
+        return res.end(chunk);
+      }
+
+      res.setHeader('Content-Length', String(content.length));
+      res.end(content);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -163,6 +180,41 @@ function guessBinaryMime(filename: string): string | null {
     png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
     gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
     pdf: 'application/pdf', zip: 'application/zip',
+    mp4: 'video/mp4', webm: 'video/webm',
   };
   return map[ext] ?? null;
+}
+
+function contentSha256(content: Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function parseByteRange(
+  header: string | undefined,
+  size: number,
+): { start: number; end: number } | 'invalid' | null {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match || size === 0) return 'invalid';
+
+  const [, startText, endText] = match;
+  if (!startText && !endText) return 'invalid';
+
+  if (!startText) {
+    const suffixLength = Number(endText);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return 'invalid';
+    return { start: Math.max(size - suffixLength, 0), end: size - 1 };
+  }
+
+  const start = Number(startText);
+  const requestedEnd = endText ? Number(endText) : size - 1;
+  if (
+    !Number.isSafeInteger(start)
+    || !Number.isSafeInteger(requestedEnd)
+    || start < 0
+    || start >= size
+    || requestedEnd < start
+  ) return 'invalid';
+
+  return { start, end: Math.min(requestedEnd, size - 1) };
 }

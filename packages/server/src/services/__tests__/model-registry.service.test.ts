@@ -188,10 +188,10 @@ describe('ModelRegistryService', () => {
   describe('syncSeedModels (AC-001)', () => {
     it('seeds all models into an empty collection with seededWith snapshots', async () => {
       const result = await service.syncSeedModels();
-      expect(result.inserted).toBe(36);
+      expect(result.inserted).toBe(37);
       expect(result.refreshed).toBe(0);
       const all = await service.list({ includeInactive: true });
-      expect(all).toHaveLength(36);
+      expect(all).toHaveLength(37);
       expect(all.every((m) => (m as any).seededWith)).toBe(true);
     });
 
@@ -199,7 +199,7 @@ describe('ModelRegistryService', () => {
       await service.syncSeedModels();
       const second = await service.syncSeedModels();
       expect(second).toEqual({ inserted: 0, refreshed: 0, preserved: 0 });
-      expect(mockDb.store.model_registry).toHaveLength(36);
+      expect(mockDb.store.model_registry).toHaveLength(37);
     });
 
     it('refreshes untouched rows when the seed catalog prices change', async () => {
@@ -240,7 +240,7 @@ describe('ModelRegistryService', () => {
       const result = await service.syncSeedModels();
       const opus = mockDb.store.model_registry.find((m: any) => m.fullId === 'claude-opus-4-7') as any;
       expect(result.refreshed).toBe(1);
-      expect(result.inserted).toBe(35); // the other 35 seed rows
+      expect(result.inserted).toBe(36); // the other 36 seed rows
       expect(opus.costInputPerMTok).toBe(5);
       expect('costPerTurn' in opus).toBe(false);
       expect(opus.seededWith).toBeTruthy();
@@ -444,7 +444,7 @@ describe('ModelRegistryService', () => {
       await service.syncSeedModels();
       const all = await service.list({ includeInactive: true });
       expect(all.filter((m) => m.provider === 'claude')).toHaveLength(6);
-      expect(all.filter((m) => m.provider === 'codex')).toHaveLength(10);
+      expect(all.filter((m) => m.provider === 'codex')).toHaveLength(11);
       expect(all.filter((m) => m.provider === 'deepseek')).toHaveLength(2);
       expect(all.filter((m) => m.provider === 'xiaomi-mimo')).toHaveLength(1);
       expect(all.filter((m) => m.provider === 'kimi')).toHaveLength(2);
@@ -530,12 +530,12 @@ describe('ModelRegistryService', () => {
         expect(m.costOutputPerMTok).toBe(0.10);
       });
 
-      it('re-running syncSeedModels keeps registry count at 36 (idempotent)', async () => {
+      it('re-running syncSeedModels keeps registry count at 37 (idempotent)', async () => {
         await service.syncSeedModels();
         const second = await service.syncSeedModels();
         expect(second).toEqual({ inserted: 0, refreshed: 0, preserved: 0 });
         const all = await service.list({ includeInactive: true });
-        expect(all).toHaveLength(36);
+        expect(all).toHaveLength(37);
       });
     });
   });

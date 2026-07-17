@@ -5,6 +5,18 @@ const allenDesktop = {
   getAuthSession: () => ipcRenderer.invoke('allen:auth-get'),
   setAuthSession: (session) => ipcRenderer.invoke('allen:auth-set', session),
   clearAuthSession: () => ipcRenderer.invoke('allen:auth-clear'),
+  setRealtimeAuth: (token) => ipcRenderer.invoke('allen:realtime-auth', token),
+  subscribeExecutionState: (executionIds) => ipcRenderer.invoke('allen:realtime-subscribe', executionIds),
+  onRealtimeEvent: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('allen:realtime-event', listener);
+    return () => ipcRenderer.off('allen:realtime-event', listener);
+  },
+  onRealtimeStatus: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('allen:realtime-status', listener);
+    return () => ipcRenderer.off('allen:realtime-status', listener);
+  },
   selectDirectory: () => ipcRenderer.invoke('allen:select-directory'),
   showItemInFolder: (path) => ipcRenderer.invoke('allen:show-item-in-folder', path),
   openExternal: (url) => ipcRenderer.invoke('allen:open-external', url),

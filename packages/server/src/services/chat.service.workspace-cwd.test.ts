@@ -16,6 +16,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ObjectId } from 'mongodb';
 
+const AGENT_FALLBACK_CWD = '/tmp/allen';
+
 // ---------------------------------------------------------------------------
 // Inline reproduction of the CWD-resolution block from chat.service.ts
 // (~lines 1556-1580).  Keep in sync with the source.
@@ -35,6 +37,8 @@ interface MockWorkspace {
 interface MockSession {
   _id?: ObjectId;
   workspaceId?: unknown;
+  llmSessionId?: string;
+  llmSessionCwd?: string;
 }
 
 /** Mirrors the $nin filter used in the real query. */
@@ -75,6 +79,23 @@ async function resolveCwd(
 
   const resolvedCwd = linkedWs ? (linkedWs.worktreePath as string | undefined) : undefined;
   return { resolvedCwd, via };
+}
+
+/**
+ * Mirrors the provider process cwd selection in chat.service.ts runLLM().
+ * Prompt/context cwd stays on `resolvedCwd`; only the provider subprocess cwd
+ * switches to the stored session cwd for cwd-scoped resume.
+ */
+function resolveProviderCwd(session: MockSession | null, resolvedCwd: string | undefined): string {
+  const resumeSessionId = session?.llmSessionId;
+  const resumeSessionCwd = typeof session?.llmSessionCwd === 'string' && session.llmSessionCwd.trim()
+    ? session.llmSessionCwd
+    : undefined;
+  return (resumeSessionId && resumeSessionCwd ? resumeSessionCwd : resolvedCwd) ?? AGENT_FALLBACK_CWD;
+}
+
+function resolvePromptAndContextCwd(resolvedCwd: string | undefined): string | undefined {
+  return resolvedCwd;
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +329,46 @@ describe('CWD resolution — fallback path B1 (session.workspaceId)', () => {
     // Primary chatSessionId match wins
     expect(resolvedCwd).toBe(primaryWorktree);
     expect(via).toBe('chatSessionId');
+  });
+});
+
+describe('LLM resume cwd selection', () => {
+  it('uses the freshly resolved cwd when there is no provider session to resume', () => {
+    expect(resolveProviderCwd({}, '/repos/current-workspace')).toBe('/repos/current-workspace');
+  });
+
+  it('uses the stored llmSessionCwd for the provider process when resuming a provider session', () => {
+    const session: MockSession = {
+      llmSessionId: 'claude-session-id',
+      llmSessionCwd: '/repos/original-chat-cwd',
+    };
+
+    expect(resolveProviderCwd(session, '/repos/newly-resolved-cwd')).toBe('/repos/original-chat-cwd');
+  });
+
+  it('does not change prompt/context cwd when resuming a provider session', () => {
+    expect(resolvePromptAndContextCwd('/repos/newly-resolved-cwd')).toBe('/repos/newly-resolved-cwd');
+  });
+
+  it('falls back to the resolved cwd when old sessions do not have llmSessionCwd yet', () => {
+    const session: MockSession = {
+      llmSessionId: 'legacy-session-id',
+    };
+
+    expect(resolveProviderCwd(session, '/repos/current-workspace')).toBe('/repos/current-workspace');
+  });
+
+  it('ignores blank stored llmSessionCwd values', () => {
+    const session: MockSession = {
+      llmSessionId: 'claude-session-id',
+      llmSessionCwd: '   ',
+    };
+
+    expect(resolveProviderCwd(session, '/repos/current-workspace')).toBe('/repos/current-workspace');
+  });
+
+  it('stores and reuses the explicit fallback cwd when no workspace/repo cwd exists', () => {
+    expect(resolveProviderCwd({}, undefined)).toBe('/tmp/allen');
   });
 });
 

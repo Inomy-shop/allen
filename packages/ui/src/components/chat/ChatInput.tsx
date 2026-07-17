@@ -66,6 +66,7 @@ interface ChatInputProps {
   selectedAgent?: string | null;
   selectedModel?: string;
   modelLocked?: boolean;
+  modelLockReason?: string;
   onProviderChange?: (provider: string, model: string) => void;
   /** Current overrides (session or pending). */
   agentOverrides?: SessionOverrides;
@@ -276,6 +277,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     selectedAgent,
     selectedModel,
     modelLocked,
+    modelLockReason,
     onProviderChange,
     agentOverrides,
     inheritedEffort,
@@ -851,7 +853,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   setShowModelPicker(!showModelPicker);
                 }}
                 disabled={modelLocked}
-                title={modelLocked ? 'Model locked for this conversation' : 'Select model'}
+                title={modelLocked ? (modelLockReason ?? 'Model locked for this conversation') : 'Select model'}
                 className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
                   modelLocked
                     ? 'text-theme-subtle cursor-default'

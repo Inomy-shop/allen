@@ -5,6 +5,18 @@ const allenDesktop = {
   getAuthSession: () => ipcRenderer.invoke('allen:auth-get'),
   setAuthSession: (session: unknown) => ipcRenderer.invoke('allen:auth-set', session),
   clearAuthSession: () => ipcRenderer.invoke('allen:auth-clear'),
+  setRealtimeAuth: (token: string | null) => ipcRenderer.invoke('allen:realtime-auth', token),
+  subscribeExecutionState: (executionIds: string[]) => ipcRenderer.invoke('allen:realtime-subscribe', executionIds),
+  onRealtimeEvent: (handler: (payload: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => handler(payload);
+    ipcRenderer.on('allen:realtime-event', listener);
+    return () => ipcRenderer.off('allen:realtime-event', listener);
+  },
+  onRealtimeStatus: (handler: (payload: { status: 'connecting' | 'connected' | 'disconnected' }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { status: 'connecting' | 'connected' | 'disconnected' }) => handler(payload);
+    ipcRenderer.on('allen:realtime-status', listener);
+    return () => ipcRenderer.off('allen:realtime-status', listener);
+  },
   selectDirectory: () => ipcRenderer.invoke('allen:select-directory'),
   showItemInFolder: (path: string) => ipcRenderer.invoke('allen:show-item-in-folder', path),
   openExternal: (url: string) => ipcRenderer.invoke('allen:open-external', url),

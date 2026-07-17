@@ -43,6 +43,10 @@ declare global {
       getAuthSession(): Promise<unknown | null>;
       setAuthSession(session: unknown): Promise<boolean>;
       clearAuthSession(): Promise<boolean>;
+      setRealtimeAuth(token: string | null): Promise<boolean>;
+      subscribeExecutionState(executionIds: string[]): Promise<Array<Record<string, unknown>>>;
+      onRealtimeEvent(handler: (payload: unknown) => void): () => void;
+      onRealtimeStatus(handler: (payload: { status: 'connecting' | 'connected' | 'disconnected' }) => void): () => void;
       selectDirectory(): Promise<string | null>;
       showItemInFolder(path: string): Promise<boolean>;
       openExternal(url: string): Promise<boolean>;

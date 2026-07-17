@@ -126,6 +126,46 @@ function now(): Date {
   return new Date();
 }
 
+type WatcherPollQueue = {
+  promise: Promise<void>;
+  rerunRequested: boolean;
+};
+
+const watcherPollQueues = new WeakMap<object, Map<string, WatcherPollQueue>>();
+
+/** Serialize watcher reads/writes for one execution across service instances.
+ * Calls arriving during a poll are coalesced into one trailing poll so the
+ * latest execution revision is observed without creating an unbounded queue. */
+export function serializeWatcherPoll(
+  dbKey: object,
+  executionId: string,
+  poll: () => Promise<void>,
+): Promise<void> {
+  let queues = watcherPollQueues.get(dbKey);
+  if (!queues) {
+    queues = new Map();
+    watcherPollQueues.set(dbKey, queues);
+  }
+
+  const existing = queues.get(executionId);
+  if (existing) {
+    existing.rerunRequested = true;
+    return existing.promise;
+  }
+
+  const state: WatcherPollQueue = { promise: Promise.resolve(), rerunRequested: false };
+  state.promise = (async () => {
+    do {
+      state.rerunRequested = false;
+      await poll();
+    } while (state.rerunRequested);
+  })().finally(() => {
+    if (queues?.get(executionId) === state) queues.delete(executionId);
+  });
+  queues.set(executionId, state);
+  return state.promise;
+}
+
 function timeAgo(date: Date): string {
   const diffMs = now().getTime() - date.getTime();
   const seconds = Math.floor(diffMs / 1000);
@@ -561,9 +601,13 @@ export class WatcherService {
   // chat-tools completion path so the terminal trigger fires promptly).
 
   async pollWatcherByExecutionId(executionId: string): Promise<void> {
-    const watcher = await this.col.findOne({ executionId });
-    if (!watcher) return;
-    await this.pollOnce(watcher);
+    await serializeWatcherPoll(this.db as object, executionId, async () => {
+      // Read inside the serialized section. The prior poll may have advanced
+      // updateSeq or triggerSentForState while this request was waiting.
+      const watcher = await this.col.findOne({ executionId });
+      if (!watcher) return;
+      await this.pollOnce(watcher);
+    });
   }
 
   // ── Single Poll Cycle ──────────────────────────────────────────────────
@@ -1003,7 +1047,7 @@ export class WatcherService {
 
         await Promise.all(
           watchers.map((w) =>
-            this.pollOnce(w).catch((err) => {
+            this.pollWatcherByExecutionId(w.executionId).catch((err) => {
               logger.warn('[watcher] Poll error per-watcher', {
                 component: 'watcher',
                 executionId: w.executionId,

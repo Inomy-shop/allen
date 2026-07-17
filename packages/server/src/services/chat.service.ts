@@ -10,7 +10,7 @@ import { ObjectId } from 'mongodb';
 import type { TokenUsageInfo } from '@allen/engine';
 import type { Response } from 'express';
 import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
-import { getDefaultChatModel, getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getEnabledProvidersFromRegistry, getTitleGenProviderModel, isClaudeCompatibleProvider, isClaudeFamilyProvider } from './chat-providers.js';
+import { AGENT_FALLBACK_CWD, getDefaultChatModel, getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getEnabledProvidersFromRegistry, getTitleGenProviderModel, isClaudeCompatibleProvider, isClaudeFamilyProvider } from './chat-providers.js';
 import { resolveAgentSettings, type AgentLike, type AgentOverrides, type ResolvedSettings } from './agent-settings.js';
 import { buildPlannerSystemPrompt, selectChatPersona, DOCUMENT_COMMENT_WORKFLOW, type ChatPersona } from './chat-persona.js';
 import { AlertService } from './alert.service.js';
@@ -22,7 +22,7 @@ import { buildOrgContextBlock } from './org-context.js';
 import { MonitoringService } from './self-healing-monitor.service.js';
 import { ExecutionService } from './execution.service.js';
 import { LinearService } from './linear.service.js';
-import { runPersistentChatSlashCommand, steerPersistentChat } from './chat-runtime-manager.js';
+import { closeRuntimeForChatSession, runPersistentChatSlashCommand, steerPersistentChat } from './chat-runtime-manager.js';
 import { listSlashCommands, type SlashCommandInfo } from './slash-commands.js';
 import type { RuntimeSlashCommand } from './chat-runtime-types.js';
 import { SkillService, normalizeSlug } from './skill.service.js';
@@ -62,6 +62,13 @@ export interface ChatSession {
   provider: ChatProvider;
   model?: string;
   llmSessionId?: string;
+  /**
+   * Filesystem cwd used when the current provider-level LLM session was
+   * created. Claude CLI resume is scoped to the original cwd, so a later turn
+   * must resume with this cwd instead of recomputing from the latest chat
+   * workspace/repo context.
+   */
+  llmSessionCwd?: string;
   source?: 'ui' | 'slack' | 'automation';
   automationKey?: string;
   slackContext?: SlackContext;
@@ -109,7 +116,7 @@ export interface ChatMessage {
   sessionId: string;
   role: 'user' | 'assistant';
   content: string;
-  status: 'completed' | 'streaming' | 'failed' | 'interrupted';
+  status: 'completed' | 'streaming' | 'failed' | 'interrupted' | 'cancelled';
   senderUserId?: string;
   senderName?: string;
   senderEmail?: string;
@@ -121,6 +128,14 @@ export interface ChatMessage {
   error?: string;
   toolCalls?: ToolCallRecord[];
   thinkingText?: string;
+  /** Last persisted proof that the server-side runtime was still driving this assistant turn. */
+  lastHeartbeatAt?: Date;
+  /** Coarse active phase persisted while status === 'streaming'. */
+  activePhase?: ActiveQueryPhase;
+  /** Name of the currently-running tool, when a tool call is in flight. */
+  activeToolName?: string;
+  /** Machine-readable reason for an interrupted assistant turn. */
+  interruptedReason?: string;
   /** When true, this message is invisible to the user in the chat UI.
    *  Used by the execution watcher for hidden Assistant triggers. */
   hidden?: boolean;
@@ -298,6 +313,26 @@ function sendSSEToSet(listeners: Iterable<Response>, event: string, data: unknow
     count++;
   }
   return count;
+}
+
+
+type ChatSessionUpdateError = Error & { status?: number; code?: string };
+
+function chatSessionUpdateError(status: number, code: string, message: string): ChatSessionUpdateError {
+  const err = new Error(message) as ChatSessionUpdateError;
+  err.status = status;
+  err.code = code;
+  return err;
+}
+
+function chatProviderFamily(provider: unknown): 'codex' | 'claude' | 'unknown' {
+  if (provider === 'codex') return 'codex';
+  if (provider === 'claude' || provider === 'claude-cli' || isClaudeFamilyProvider(provider)) return 'claude';
+  return 'unknown';
+}
+
+function providerModelOptions(providerConfig: { open?: boolean; models?: string[]; modelSuggestions?: string[] }): string[] {
+  return providerConfig.open ? (providerConfig.modelSuggestions ?? []) : (providerConfig.models ?? []);
 }
 
 // ── Mention Resolution ──
@@ -528,7 +563,7 @@ IMPORTANT RULES:
 5. Normal conversation stays normal. If the user says "hi", asks a general question, brainstorms, asks for an explanation, or asks why you behaved a certain way, answer directly unless live Allen data is needed. For behavior questions, give the direct reason first; do not start with apology templates, synthetic issue labels, routing summaries, or workflow-style sections.
 6. Allen Library skills are internal routing playbooks, distinct from Codex/Claude native runtime skills. In Allen chat, unqualified "skills" means Allen Library skills. For every non-trivial Allen-supported request, silently call list_skills first and use the full enabled skill metadata list (name, description, category, triggers, excludes, allowedRoutes, related workflows/agents, priority) to choose the right skill by user intent. Do not pick a skill only because search_skills ranked it highest; search_skills is only an optional hint after metadata review. After selecting the best skill from metadata, call get_skill for that skill before routing or answering. Do not load every skill body up front. Do not mention the selected skill name, skill id, or skill tool calls in user-facing responses unless the user explicitly asks. Only discuss Codex/Claude/plugin/runtime skills when the user explicitly asks for those.
 7. Capability discovery before route selection: before proposing an execution route, inspect the available Allen workflows, specialized team leads/agents, and relevant external MCP tools that could do the job. Use list_workflows/get_workflow, list_teams/list_agents/get_team/get_agent, and any relevant external MCP discovery/list tools when available. Prefer the most specific workflow or specialized lead/agent that owns the end-to-end task; use raw external MCP tools directly only for simple tool-native queries/actions or as evidence for the selected route.
-8. Intent clarity and confirmation: if the user intent, target repo/resource, scope, desired outcome, or best route is unclear, ask a concise clarifying question instead of guessing. Before starting execution that changes state or consumes a specialist/workflow run, present the selected route, short plan, required inputs, expected outputs, and risks/unknowns, then ask the user to confirm. Read-only answers and read-only data queries may proceed without confirmation after evidence is checked.
+8. Intent clarity and confirmation: if the user intent, target repo/resource, scope, desired outcome, or best route is unclear, ask a concise clarifying question instead of guessing. Before starting execution that changes state or consumes a specialist/workflow run, present the selected route, short plan, required inputs, expected outputs, risks/unknowns, and the model/provider that each agent or workflow node will use, then ask the user to confirm. If the user requested a runtime model override, include it in the preview and pass it via runtime_model to run_workflow or spawn_agent; runtime model overrides are per-execution only and must not be described as changing agent/workflow defaults. Read-only answers and read-only data queries may proceed without confirmation after evidence is checked.
 9. Tool contract: before run_workflow, inspect get_workflow and use exact parsed.input field names. After run_workflow or spawn_agent, wait/monitor until complete, blocked, or clearly still running. Surface progress, human-input pauses, workspace links, PR links, artifacts, and final output with clickable links.
 9a. Context query for spawned agents: when calling spawn_agent for repo-related work, pass a compact context_query object as a separate tool argument. Include user_request, task_type, retrieval-relevant requirements, topics, target_files/path_hints, and required_categories/preferred_categories when obvious. Consolidate relevant prior chat discussion so phrases like "implement what we discussed" still carry the actual retrieval intent. Never embed context query XML/JSON in prompt. Keep execution guardrails, artifact instructions, no-edit/no-commit/no-PR constraints, and process constraints in prompt, not context_query.
 10. Interrupted reruns: if this chat has interrupted/cancelled tasks and the user asks to rerun, retry, continue, or restart that work, ask whether they want a fresh start or to resume the cancelled execution. If they choose resume, use resume_execution. If they choose fresh start, route again from the user's current intent.
@@ -630,11 +665,17 @@ For code tasks: direct specialist spawns need an Allen workspace first; workflow
 
 // ── Active Query Tracking ──
 
+type ActiveQueryPhase = 'thinking' | 'streaming' | 'tool_running';
+
 interface ActiveQuery {
   sessionId: string;
   messageId: string;
   userMessage: string;
   llmSessionId?: string;
+  startedAt: Date;
+  lastHeartbeatAt: Date;
+  activePhase: ActiveQueryPhase;
+  activeToolName?: string;
   currentText: string;
   currentThinking: string;
   toolCalls: ToolCallRecord[];
@@ -655,6 +696,9 @@ const ACTIVE_EXECUTION_STATUSES = ['running', 'queued', 'waiting_for_input'];
 const drainingQueues = new Set<string>();
 const ACTIVE_QUEUE_STATUSES: ChatQueueStatus[] = ['queued', 'editing', 'running'];
 const MAX_CHAT_QUEUE_ITEMS = 3;
+const ACTIVE_QUERY_PERSIST_INTERVAL_MS = 5_000;
+const STALE_STREAMING_TURN_GRACE_MS = 10_000;
+const STALE_STREAMING_TURN_ERROR = 'The assistant was interrupted before it could finish. You can send a new message to continue or retry.';
 
 // ── SSE Heartbeat ──
 // Emits `: keepalive\n\n` every 15 s to every active SSE listener.
@@ -682,6 +726,16 @@ function detachHeartbeat(res: Response): void {
   if (handle !== undefined) {
     clearInterval(handle);
     listenerHeartbeats.delete(res);
+  }
+}
+
+function markActiveQueryHeartbeat(entry: ActiveQuery, phase?: ActiveQueryPhase, activeToolName?: string | null): void {
+  entry.lastHeartbeatAt = new Date();
+  if (phase) entry.activePhase = phase;
+  if (activeToolName === null) {
+    delete entry.activeToolName;
+  } else if (typeof activeToolName === 'string') {
+    entry.activeToolName = activeToolName;
   }
 }
 
@@ -1088,11 +1142,15 @@ export async function cancelChatSession(sessionId: string, db?: Db): Promise<Cha
       cancelledContent = entry.currentText ? `${entry.currentText}\n\n${executionNote}` : executionNote;
       await db.collection('chat_messages').updateOne(
         { _id: new ObjectId(entry.messageId) },
-        { $set: {
-          status: 'cancelled',
-          content: cancelledContent,
-          completedAt: new Date(),
-        } },
+        {
+          $set: {
+            status: 'cancelled',
+            content: cancelledContent,
+            lastHeartbeatAt: new Date(),
+            completedAt: new Date(),
+          },
+          $unset: { activePhase: '', activeToolName: '' },
+        },
       ).catch(() => {});
     }
   }
@@ -1177,6 +1235,54 @@ export class ChatService {
   private get sessions() { return this.db.collection('chat_sessions'); }
   private get messages() { return this.db.collection('chat_messages'); }
   private get messageQueue() { return this.db.collection('chat_message_queue'); }
+
+  private persistActiveQueryState(entry: ActiveQuery): void {
+    const set: Record<string, unknown> = {
+      content: entry.currentText,
+      thinkingText: entry.currentThinking,
+      toolCalls: entry.toolCalls,
+      lastHeartbeatAt: entry.lastHeartbeatAt,
+      activePhase: entry.activePhase,
+    };
+    const update: Record<string, unknown> = { $set: set };
+    if (entry.activeToolName) {
+      set.activeToolName = entry.activeToolName;
+    } else {
+      update.$unset = { activeToolName: '' };
+    }
+    this.messages.updateOne(
+      { _id: new ObjectId(entry.messageId), status: 'streaming' },
+      update,
+    ).catch(() => {});
+  }
+
+  private async reconcileStaleStreamingTurn(sessionId: string, reason: string): Promise<number> {
+    if (activeQueries.has(sessionId)) return 0;
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - STALE_STREAMING_TURN_GRACE_MS);
+    const result = await this.messages.updateMany(
+      {
+        sessionId,
+        role: 'assistant',
+        status: 'streaming',
+        $or: [
+          { lastHeartbeatAt: { $lt: staleBefore } },
+          { lastHeartbeatAt: { $exists: false }, createdAt: { $lt: staleBefore } },
+          { lastHeartbeatAt: null, createdAt: { $lt: staleBefore } },
+        ],
+      },
+      {
+        $set: {
+          status: 'interrupted',
+          error: STALE_STREAMING_TURN_ERROR,
+          interruptedReason: reason,
+          completedAt: now,
+        },
+        $unset: { activePhase: '', activeToolName: '' },
+      },
+    );
+    return result.modifiedCount ?? 0;
+  }
 
   async getProviders() {
     const providers = await getEnabledProvidersFromRegistry(this.db);
@@ -1270,6 +1376,9 @@ export class ChatService {
   async getSession(id: string): Promise<(ChatSession & { messages: ChatMessage[] }) | null> {
     const session = await this.sessions.findOne({ _id: new ObjectId(id) });
     if (!session) return null;
+    if (!activeQueries.has(id)) {
+      await this.reconcileStaleStreamingTurn(id, 'session_load');
+    }
     const msgs = await this.messages.find({ sessionId: id, hidden: { $ne: true } }).sort({ createdAt: -1 }).limit(50).toArray() as ChatMessage[];
     msgs.reverse();
     const [hydrated] = await this.hydrateArchivedWorkspaceSnapshots([session as unknown as ChatSession]);
@@ -1580,7 +1689,16 @@ export class ChatService {
       ...senderFields(sender),
       createdAt: now, completedAt: now,
     });
-    const assistantResult = await this.messages.insertOne({ sessionId, role: 'assistant', content: '', status: 'streaming', createdAt: new Date() });
+    const assistantStartedAt = new Date();
+    const assistantResult = await this.messages.insertOne({
+      sessionId,
+      role: 'assistant',
+      content: '',
+      status: 'streaming',
+      createdAt: assistantStartedAt,
+      lastHeartbeatAt: assistantStartedAt,
+      activePhase: 'thinking',
+    });
     const assistantMsgId = assistantResult.insertedId.toString();
 
     await this.sessions.updateOne(
@@ -1591,7 +1709,9 @@ export class ChatService {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
 
     const entry: ActiveQuery = {
-      sessionId, messageId: assistantMsgId, userMessage: content, currentText: '', currentThinking: '', toolCalls: [],
+      sessionId, messageId: assistantMsgId, userMessage: content,
+      startedAt: assistantStartedAt, lastHeartbeatAt: assistantStartedAt, activePhase: 'thinking',
+      currentText: '', currentThinking: '', toolCalls: [],
       pendingToolCalls: new Map(), listeners: new Set([res]), aborted: false, abortController: new AbortController(),
     };
     activeQueries.set(sessionId, entry);
@@ -1635,8 +1755,11 @@ export class ChatService {
       ...senderFields(sender),
       createdAt: now, completedAt: now,
     });
+    const assistantStartedAt = new Date();
     const assistantResult = await this.messages.insertOne({
-      sessionId, role: 'assistant', content: '', status: 'streaming', createdAt: new Date(),
+      sessionId, role: 'assistant', content: '', status: 'streaming', createdAt: assistantStartedAt,
+      lastHeartbeatAt: assistantStartedAt,
+      activePhase: 'thinking',
     });
     const assistantMsgId = assistantResult.insertedId.toString();
 
@@ -1647,7 +1770,9 @@ export class ChatService {
 
     // ActiveQuery with no SSE listeners — UI can still subscribe via GET /stream
     const entry: ActiveQuery = {
-      sessionId, messageId: assistantMsgId, userMessage: content, currentText: '', currentThinking: '', toolCalls: [],
+      sessionId, messageId: assistantMsgId, userMessage: content,
+      startedAt: assistantStartedAt, lastHeartbeatAt: assistantStartedAt, activePhase: 'thinking',
+      currentText: '', currentThinking: '', toolCalls: [],
       pendingToolCalls: new Map(),
       listeners: new Set(), aborted: false, abortController: new AbortController(),
       ...(onEvent ? { eventHandlers: new Set([onEvent]) } : {}),
@@ -1686,6 +1811,12 @@ export class ChatService {
   }
 
   isStreaming(sessionId: string): boolean { return activeQueries.has(sessionId); }
+
+  async getStreamingState(sessionId: string): Promise<{ streaming: boolean }> {
+    if (this.isStreaming(sessionId)) return { streaming: true };
+    await this.reconcileStaleStreamingTurn(sessionId, 'streaming_status_check');
+    return { streaming: false };
+  }
 
   /**
    * Check whether a chat session is an imported read-only replay.
@@ -1952,13 +2083,9 @@ User: ${userMessage.slice(0, 500)}`;
    */
   private async runLLM(sessionId: string, assistantMsgId: string, content: string, entry: ActiveQuery, agent?: string, retryCount = 0, cwd?: string): Promise<void> {
     const saveInterval = setInterval(() => {
-      if (entry.currentText) {
-        this.messages.updateOne(
-          { _id: new ObjectId(assistantMsgId) },
-          { $set: { content: entry.currentText, thinkingText: entry.currentThinking, toolCalls: entry.toolCalls } },
-        ).catch(() => {});
-      }
-    }, 5000);
+      markActiveQueryHeartbeat(entry);
+      this.persistActiveQueryState(entry);
+    }, ACTIVE_QUERY_PERSIST_INTERVAL_MS);
 
     const startMs = Date.now();
 
@@ -1970,6 +2097,9 @@ User: ${userMessage.slice(0, 500)}`;
     // Agent is LOCKED to the session after first message — ignore agent param on subsequent messages
     const effectiveAgent = previousAgent ?? agent ?? undefined;
     const resumeSessionId = (session?.llmSessionId as string | undefined);
+    const resumeSessionCwd = typeof session?.llmSessionCwd === 'string' && session.llmSessionCwd.trim()
+      ? session.llmSessionCwd
+      : undefined;
 
     try {
 
@@ -2183,22 +2313,29 @@ User: ${userMessage.slice(0, 500)}`;
         }
       }
 
-      // Use already-resolved cwd (workspace path or @repo path)
+      // Keep prompt/context cwd resolution unchanged. Only the provider
+      // process cwd switches to the stored session cwd on resume because Claude
+      // CLI stores conversations under the cwd that created them.
       const workspaceCwd = resolvedCwd;
+      const providerCwd = (resumeSessionId && resumeSessionCwd ? resumeSessionCwd : workspaceCwd) ?? AGENT_FALLBACK_CWD;
 
       const callbacks = {
         signal: entry.abortController.signal,
         onText: (fullText: string) => {
           const visibleText = sanitizeChatAssistantResponse(fullText);
+          markActiveQueryHeartbeat(entry, 'streaming', null);
           entry.currentText = visibleText;
           broadcastToListeners(entry, 'message_delta', { text: visibleText, messageId: assistantMsgId });
         },
         onThinking: (thinking: string) => {
+          markActiveQueryHeartbeat(entry, 'thinking', null);
           entry.currentThinking = thinking;
           broadcastToListeners(entry, 'thinking', { text: thinking, messageId: assistantMsgId });
         },
         onToolStart: (tool: string, args: Record<string, unknown>, toolUseId: string) => {
+          markActiveQueryHeartbeat(entry, 'tool_running', tool);
           entry.pendingToolCalls.set(toolUseId, { tool, args, startMs: Date.now() });
+          this.persistActiveQueryState(entry);
           broadcastToListeners(entry, 'tool_start', { tool, args, toolUseId, tool_use_id: toolUseId });
         },
         onToolResult: (tool: string, resultData: Record<string, unknown>, toolUseId: string, durationMs: number) => {
@@ -2213,9 +2350,21 @@ User: ${userMessage.slice(0, 500)}`;
           };
           entry.toolCalls.push(record);
           entry.pendingToolCalls.delete(toolUseId);
+          const nextPending = entry.pendingToolCalls.values().next().value;
+          markActiveQueryHeartbeat(entry, nextPending ? 'tool_running' : 'thinking', nextPending?.tool ?? null);
           this.messages.updateOne(
             { _id: new ObjectId(assistantMsgId) },
-            { $set: { content: entry.currentText, thinkingText: entry.currentThinking, toolCalls: entry.toolCalls } },
+            {
+              $set: {
+                content: entry.currentText,
+                thinkingText: entry.currentThinking,
+                toolCalls: entry.toolCalls,
+                lastHeartbeatAt: entry.lastHeartbeatAt,
+                activePhase: entry.activePhase,
+                ...(entry.activeToolName ? { activeToolName: entry.activeToolName } : {}),
+              },
+              ...(!entry.activeToolName ? { $unset: { activeToolName: '' } } : {}),
+            },
           ).catch(() => {});
           broadcastToListeners(entry, 'tool_result', { tool, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
           const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
@@ -2244,9 +2393,10 @@ User: ${userMessage.slice(0, 500)}`;
         onSessionId: (sid: string) => {
           entry.llmSessionId = sid;
           // Save session ID to DB immediately so auto-retry can resume even if the process times out
+          const $set: Record<string, unknown> = { llmSessionId: sid, llmSessionCwd: providerCwd };
           this.sessions.updateOne(
             { _id: new ObjectId(sessionId) },
-            { $set: { llmSessionId: sid } },
+            { $set },
           ).catch(() => {});
         },
       };
@@ -2267,7 +2417,7 @@ User: ${userMessage.slice(0, 500)}`;
               messages: llmMessages,
               resumeSessionId: hasSessionResume ? resumeSessionId : undefined,
               skipTools: undefined,
-              cwd: workspaceCwd,
+              cwd: providerCwd,
               callbacks,
             }, slashCommand)),
             durationMs: Date.now() - startMs,
@@ -2281,7 +2431,7 @@ User: ${userMessage.slice(0, 500)}`;
             systemPrompt,
             messages: llmMessages,
             resumeSessionId: hasSessionResume ? resumeSessionId : undefined,
-            cwd: workspaceCwd,
+            cwd: providerCwd,
             // Forwarded down to the Allen MCP subprocess as
             // ALLEN_ARTIFACT_ROOT_TYPE=chat / ALLEN_ARTIFACT_ROOT_ID=<sessionId>
             // so allen_save_artifact files under this chat session.
@@ -2300,7 +2450,20 @@ User: ${userMessage.slice(0, 500)}`;
 
       await this.messages.updateOne(
         { _id: new ObjectId(assistantMsgId) },
-        { $set: { content: visibleResponseText, status: 'completed', costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+        {
+          $set: {
+            content: visibleResponseText,
+            status: 'completed',
+            costUsd,
+            durationMs,
+            tokenUsage,
+            toolCalls: entry.toolCalls,
+            thinkingText: entry.currentThinking,
+            lastHeartbeatAt: new Date(),
+            completedAt: new Date(),
+          },
+          $unset: { activePhase: '', activeToolName: '' },
+        },
       );
 
       // Save execution trace to chat_logs (fire-and-forget)
@@ -2334,7 +2497,10 @@ User: ${userMessage.slice(0, 500)}`;
 
       // Save llmSessionId for session resume on next message
       const sessionUpdate: Record<string, unknown> = { updatedAt: new Date() };
-      if (result.sessionId) sessionUpdate.llmSessionId = result.sessionId;
+      if (result.sessionId) {
+        sessionUpdate.llmSessionId = result.sessionId;
+        sessionUpdate.llmSessionCwd = providerCwd;
+      }
 
       // No totalCostUsd accumulation — per-message costUsd rows are the only
       // stored record; session totals are computed on demand from messages
@@ -2478,12 +2644,16 @@ User: ${userMessage.slice(0, 500)}`;
       // the chat message history (stored in Mongo) is still intact for
       // the system prompt to reference.
       const isResumeFailed = /no rollout found|session.*not found|session.*expired|session.*invalid/i.test(errorMsg);
-      const savedSessionId = (await this.sessions.findOne({ _id: new ObjectId(sessionId) }))?.llmSessionId as string | undefined;
+      const savedSession = await this.sessions.findOne({ _id: new ObjectId(sessionId) });
+      const savedSessionId = savedSession?.llmSessionId as string | undefined;
+      const savedSessionCwd = typeof savedSession?.llmSessionCwd === 'string' && savedSession.llmSessionCwd.trim()
+        ? savedSession.llmSessionCwd
+        : undefined;
       if (isResumeFailed && savedSessionId && retryCount < 1) {
         console.log(`[chat] Resume failed ("${errorMsg.slice(0, 60)}") — clearing stale session and retrying as fresh thread`);
         await this.sessions.updateOne(
           { _id: new ObjectId(sessionId) },
-          { $unset: { llmSessionId: '' } },
+          { $unset: { llmSessionId: '', llmSessionCwd: '' } },
         ).catch(() => {});
         // Retry the same message — runLLM will see no resumeSessionId and start fresh
         return this.runLLM(sessionId, assistantMsgId, content, entry, agent, retryCount + 1, cwd);
@@ -2510,20 +2680,25 @@ User: ${userMessage.slice(0, 500)}`;
               : await getSystemPrompt(provider, this.db, 'continue', { rootType: 'chat', rootId: sessionId, agentName: 'assistant' }),
             messages: [{ role: 'user', content: 'Continue from where you left off. Complete the task and provide the final response.' }],
             resumeSessionId: savedSessionId,
+            cwd: savedSessionCwd,
             // Same artifact-root context as the primary call above so a
             // mid-retry allen_save_artifact still files under this chat.
             chatSessionId: sessionId,
             onText: (fullText) => {
               const visibleText = sanitizeChatAssistantResponse(fullText);
+              markActiveQueryHeartbeat(entry, 'streaming', null);
               entry.currentText = visibleText;
               broadcastToListeners(entry, 'message_delta', { text: visibleText, messageId: assistantMsgId });
             },
             onThinking: (thinking) => {
+              markActiveQueryHeartbeat(entry, 'thinking', null);
               entry.currentThinking = thinking;
               broadcastToListeners(entry, 'thinking', { text: thinking, messageId: assistantMsgId });
             },
             onToolStart: (tool, args, toolUseId) => {
+              markActiveQueryHeartbeat(entry, 'tool_running', tool);
               entry.pendingToolCalls.set(toolUseId, { tool, args, startMs: Date.now() });
+              this.persistActiveQueryState(entry);
               broadcastToListeners(entry, 'tool_start', { tool, args, toolUseId, tool_use_id: toolUseId });
             },
             onToolResult: (tool, resultData, toolUseId, durationMs) => {
@@ -2531,9 +2706,21 @@ User: ${userMessage.slice(0, 500)}`;
               const record = { tool, args: pending?.args ?? {}, result: resultData, durationMs, timestamp: new Date(), toolUseId };
               entry.toolCalls.push(record);
               entry.pendingToolCalls.delete(toolUseId);
+              const nextPending = entry.pendingToolCalls.values().next().value;
+              markActiveQueryHeartbeat(entry, nextPending ? 'tool_running' : 'thinking', nextPending?.tool ?? null);
               this.messages.updateOne(
                 { _id: new ObjectId(assistantMsgId) },
-                { $set: { content: entry.currentText, thinkingText: entry.currentThinking, toolCalls: entry.toolCalls } },
+                {
+                  $set: {
+                    content: entry.currentText,
+                    thinkingText: entry.currentThinking,
+                    toolCalls: entry.toolCalls,
+                    lastHeartbeatAt: entry.lastHeartbeatAt,
+                    activePhase: entry.activePhase,
+                    ...(entry.activeToolName ? { activeToolName: entry.activeToolName } : {}),
+                  },
+                  ...(!entry.activeToolName ? { $unset: { activeToolName: '' } } : {}),
+                },
               ).catch(() => {});
               broadcastToListeners(entry, 'tool_result', { tool, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
               const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
@@ -2560,7 +2747,9 @@ User: ${userMessage.slice(0, 500)}`;
               }
             },
             onSessionId: (sid) => {
-              this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set: { llmSessionId: sid } }).catch(() => {});
+              const $set: Record<string, unknown> = { llmSessionId: sid };
+              if (savedSessionCwd) $set.llmSessionCwd = savedSessionCwd;
+              this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set }).catch(() => {});
             },
           });
 
@@ -2572,10 +2761,25 @@ User: ${userMessage.slice(0, 500)}`;
           entry.currentText = visibleRetryText;
           await this.messages.updateOne(
             { _id: new ObjectId(assistantMsgId) },
-            { $set: { content: visibleRetryText, status: 'completed', costUsd: retryCostUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+            {
+              $set: {
+                content: visibleRetryText,
+                status: 'completed',
+                costUsd: retryCostUsd,
+                durationMs,
+                tokenUsage,
+                toolCalls: entry.toolCalls,
+                thinkingText: entry.currentThinking,
+                lastHeartbeatAt: new Date(),
+                completedAt: new Date(),
+              },
+              $unset: { activePhase: '', activeToolName: '' },
+            },
           );
           if (retryResult.sessionId) {
-            await this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set: { llmSessionId: retryResult.sessionId } });
+            const $set: Record<string, unknown> = { llmSessionId: retryResult.sessionId };
+            if (savedSessionCwd) $set.llmSessionCwd = savedSessionCwd;
+            await this.sessions.updateOne({ _id: new ObjectId(sessionId) }, { $set });
           }
           broadcastToListeners(entry, 'message_complete', { messageId: assistantMsgId, text: visibleRetryText, costUsd: retryCostUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking });
           return; // success — skip error handling below
@@ -2587,7 +2791,18 @@ User: ${userMessage.slice(0, 500)}`;
 
       await this.messages.updateOne(
         { _id: new ObjectId(assistantMsgId) },
-        { $set: { content: entry.currentText || '', status: 'failed', error: errorMsg, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, completedAt: new Date() } },
+        {
+          $set: {
+            content: entry.currentText || '',
+            status: 'failed',
+            error: errorMsg,
+            toolCalls: entry.toolCalls,
+            thinkingText: entry.currentThinking,
+            lastHeartbeatAt: new Date(),
+            completedAt: new Date(),
+          },
+          $unset: { activePhase: '', activeToolName: '' },
+        },
       );
 
       this.db.collection('chat_logs').insertOne({
@@ -2678,7 +2893,7 @@ RULES:
 2. When the user corrects you, silently call save_learning.
 3. Allen Library skills are internal routing playbooks, distinct from Codex/Claude native runtime skills. In Allen chat, unqualified "skills" means Allen Library skills. For every non-trivial Allen-supported request, silently call list_skills first and use the full enabled skill metadata list (name, description, category, triggers, excludes, allowedRoutes, related workflows/agents, priority) to choose the right skill by user intent. Do not pick a skill only because search_skills ranked it highest; search_skills is only an optional hint after metadata review. After selecting the best skill from metadata, call get_skill for that skill before routing or answering. Do not load every skill body up front. Do not mention the selected skill name, skill id, or skill tool calls in user-facing responses unless the user explicitly asks.
 4. Capability discovery before route selection: before proposing an execution route, inspect the available Allen workflows, specialized team leads/agents, and relevant external MCP tools that could do the job. Use list_workflows/get_workflow, list_teams/list_agents/get_team/get_agent, and any relevant external MCP discovery/list tools when available. Prefer the most specific workflow or specialized lead/agent that owns the end-to-end task; use raw external MCP tools directly only for simple tool-native queries/actions or as evidence for the selected route.
-5. Intent clarity and confirmation: if the user intent, target repo/resource, scope, desired outcome, or best route is unclear, ask a concise clarifying question instead of guessing. Before starting execution that changes state or consumes a specialist/workflow run, present the selected route, short plan, required inputs, expected outputs, and risks/unknowns, then ask the user to confirm. Read-only answers and read-only data queries may proceed without confirmation after evidence is checked.
+5. Intent clarity and confirmation: if the user intent, target repo/resource, scope, desired outcome, or best route is unclear, ask a concise clarifying question instead of guessing. Before starting execution that changes state or consumes a specialist/workflow run, present the selected route, short plan, required inputs, expected outputs, risks/unknowns, and the model/provider that each agent or workflow node will use, then ask the user to confirm. If the user requested a runtime model override, include it in the preview and pass it via runtime_model to run_workflow or spawn_agent; runtime model overrides are per-execution only and must not be described as changing agent/workflow defaults. Read-only answers and read-only data queries may proceed without confirmation after evidence is checked.
 6. Route by intent:
    - Explicit user target wins when valid. If the user names a workflow, inspect it with get_workflow and run it with exact schema inputs. If the user names an agent/lead, use that agent unless the request is impossible for them.
    - Use spawn_agent for team leads, cross-team coordination, user requests to assign/route/hand off, and specialist execution such as code inspection, implementation, review, testing, docs, or git operations.
@@ -2892,13 +3107,16 @@ RULES:
   private async startWatcherTriggerAssistantTurn(sessionId: string, content: string): Promise<void> {
     if (activeQueries.has(sessionId)) return;
 
+    const assistantStartedAt = new Date();
     const assistantResult = await this.messages.insertOne({
       sessionId,
       role: 'assistant',
       content: '',
       status: 'streaming',
       senderSource: 'system',
-      createdAt: new Date(),
+      createdAt: assistantStartedAt,
+      lastHeartbeatAt: assistantStartedAt,
+      activePhase: 'thinking',
     });
     const assistantMsgId = assistantResult.insertedId.toString();
 
@@ -2911,6 +3129,9 @@ RULES:
       sessionId,
       messageId: assistantMsgId,
       userMessage: content,
+      startedAt: assistantStartedAt,
+      lastHeartbeatAt: assistantStartedAt,
+      activePhase: 'thinking',
       currentText: '',
       currentThinking: '',
       toolCalls: [],
@@ -2944,18 +3165,68 @@ RULES:
       agentOverrides?: Record<string, unknown> | null;
     },
   ): Promise<ChatSession | null> {
+    const _id = new ObjectId(id);
+    const existing = await this.sessions.findOne({ _id }) as ChatSession | null;
+    if (!existing) return null;
+
     // Only whitelist known fields so clients can't smuggle arbitrary keys in.
     const set: Record<string, unknown> = { updatedAt: new Date() };
+    let providerOrModelChanged = false;
+
     if (update.title !== undefined) {
       set.title = sanitizeChatTitle(update.title) ?? 'New Conversation';
       set.titleSource = 'user';
     }
     if (update.status !== undefined) set.status = update.status;
-    if (update.provider !== undefined) set.provider = update.provider;
-    if (update.model !== undefined) set.model = update.model;
+
+    if (update.provider !== undefined || update.model !== undefined) {
+      if (this.isStreaming(id)) {
+        throw chatSessionUpdateError(409, 'chat_session_streaming', 'Model can only be changed after the current turn completes.');
+      }
+
+      const currentProvider = existing.provider ?? getDefaultChatProvider();
+      const nextProvider = (update.provider ?? currentProvider).trim();
+      const nextModel = (update.model ?? (update.provider !== undefined ? getDefaultChatModel(nextProvider) : existing.model) ?? '').trim();
+      if (!nextProvider) {
+        throw chatSessionUpdateError(400, 'invalid_provider', 'provider must be a non-empty string');
+      }
+      if (!nextModel) {
+        throw chatSessionUpdateError(400, 'invalid_model', 'model must be a non-empty string');
+      }
+
+      const currentFamily = chatProviderFamily(currentProvider);
+      const nextFamily = chatProviderFamily(nextProvider);
+      if (currentFamily === 'unknown' || nextFamily === 'unknown') {
+        throw chatSessionUpdateError(400, 'unknown_provider_family', 'Provider is not supported for in-session model switching.');
+      }
+      if (currentFamily !== nextFamily) {
+        throw chatSessionUpdateError(400, 'incompatible_provider_family', 'Switching between Codex and Claude-compatible providers requires a new chat session.');
+      }
+
+      const enabledProviders = await getEnabledProvidersFromRegistry(this.db);
+      const providerConfig = enabledProviders.find((provider) => provider.provider === nextProvider);
+      if (!providerConfig) {
+        throw chatSessionUpdateError(400, 'provider_not_enabled', `Provider "${nextProvider}" is not enabled.`);
+      }
+      const models = providerModelOptions(providerConfig);
+      if ((!providerConfig.open || models.length > 0) && !models.includes(nextModel)) {
+        throw chatSessionUpdateError(400, 'model_not_available', `Model "${nextModel}" is not available for provider "${nextProvider}".`);
+      }
+
+      providerOrModelChanged = currentProvider !== nextProvider || existing.model !== nextModel;
+      set.provider = nextProvider;
+      set.model = nextModel;
+    }
+
     if (update.agentOverrides !== undefined) set.agentOverrides = update.agentOverrides;
-    await this.sessions.updateOne({ _id: new ObjectId(id) }, { $set: set });
-    return this.sessions.findOne({ _id: new ObjectId(id) }) as Promise<ChatSession | null>;
+    await this.sessions.updateOne({ _id }, { $set: set });
+    if (providerOrModelChanged) {
+      // Close only Allen's in-memory runtime. Keep llmSessionId/llmSessionCwd so
+      // the next turn can use Claude `--resume --model` or Codex `thread/resume`
+      // and continue the same provider-native conversation on the new model.
+      await closeRuntimeForChatSession(id, 'model_changed');
+    }
+    return this.sessions.findOne({ _id }) as Promise<ChatSession | null>;
   }
 
   async deleteSession(id: string): Promise<void> {

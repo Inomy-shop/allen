@@ -127,6 +127,95 @@ describe('TeamService soft delete and restore', () => {
     await expect(service.delete('populated-team')).rejects.toThrow(/still has/);
   });
 
+  it('deletes a non-built-in team and its agents when deleteAgents=true', async () => {
+    await db.collection('teams').insertOne({
+      name: 'obsolete-team',
+      displayName: 'Obsolete',
+      description: 'Can be removed as a unit',
+      leadAgentName: 'obsolete-lead',
+      isBuiltIn: false,
+      createdBy: 'user',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await db.collection('agents').insertMany([
+      {
+        name: 'obsolete-lead',
+        teamName: 'obsolete-team',
+        teamRole: 'lead',
+        isBuiltIn: false,
+        createdBy: 'user',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        name: 'obsolete-member',
+        teamName: 'obsolete-team',
+        teamRole: 'member',
+        isBuiltIn: false,
+        createdBy: 'user',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        name: 'external-agent',
+        teamName: 'other-team',
+        spawnTargets: ['obsolete-lead', 'obsolete-member', 'kept-target'],
+        canTrigger: ['obsolete-member', 'kept-workflow'],
+        isBuiltIn: false,
+        createdBy: 'user',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ]);
+
+    const result = await service.delete('obsolete-team', { deleteAgents: true });
+
+    expect(result.deletedAgents.sort()).toEqual(['obsolete-lead', 'obsolete-member']);
+
+    const team = await db.collection('teams').findOne({ name: 'obsolete-team' });
+    expect(team?.isDeleted).toBe(true);
+
+    const deletedAgents = await db.collection('agents')
+      .find({ name: { $in: ['obsolete-lead', 'obsolete-member'] } })
+      .toArray();
+    expect(deletedAgents).toHaveLength(2);
+    expect(deletedAgents.every((agent) => agent.isDeleted === true)).toBe(true);
+
+    const external = await db.collection('agents').findOne({ name: 'external-agent' });
+    expect(external?.spawnTargets).toEqual(['kept-target']);
+    expect(external?.canTrigger).toEqual(['kept-workflow']);
+  });
+
+  it('deleteAgents=true refuses to delete built-in member agents', async () => {
+    await db.collection('teams').insertOne({
+      name: 'mixed-team',
+      displayName: 'Mixed',
+      description: 'Contains built-in member',
+      leadAgentName: 'custom-lead',
+      isBuiltIn: false,
+      createdBy: 'user',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await db.collection('agents').insertOne({
+      name: 'seeded-member',
+      teamName: 'mixed-team',
+      teamRole: 'member',
+      isBuiltIn: true,
+      createdBy: 'seed',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await expect(service.delete('mixed-team', { deleteAgents: true })).rejects.toThrow(/built-in agent/);
+
+    const team = await db.collection('teams').findOne({ name: 'mixed-team' });
+    const agent = await db.collection('agents').findOne({ name: 'seeded-member' });
+    expect(team?.isDeleted).not.toBe(true);
+    expect(agent?.isDeleted).not.toBe(true);
+  });
+
   // ── FR4-AC4: /api/teams/:name, members, blueprint routes return 404 ──
 
   it('FR4-AC4: getByName returns null for deleted team', async () => {

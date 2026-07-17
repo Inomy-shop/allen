@@ -89,6 +89,8 @@ export interface RunOptions {
   parentExecutionId?: string;
   /** Root of the triggering tree. Defaults to parent's root, else own id. */
   rootExecutionId?: string;
+  /** Execution-scoped model selection plan used to create this run. */
+  runtimeModelPlan?: unknown;
 }
 
 function hasMeaningfulRepoContextUsage(value: unknown): boolean {
@@ -176,6 +178,7 @@ export class AllenEngine {
         inputs: { ...input },
         nodes: {},
         human: {},
+        ...(options?.runtimeModelPlan ? { __runtime_model_plan: options.runtimeModelPlan } : {}),
       },
       sessions: {},
       retryCounts: {},
@@ -199,6 +202,9 @@ export class AllenEngine {
     // even if the workflow is edited later. Stored on the executions row as
     // an extra field (not in ExecutionState type, intentionally out-of-band).
     (exec as unknown as Record<string, unknown>).workflowSnapshot = workflow;
+    if (options?.runtimeModelPlan) {
+      (exec as unknown as Record<string, unknown>).runtimeModelPlan = options.runtimeModelPlan;
+    }
 
     await this.stateManager.createExecution(exec);
     this.emit({ event: 'execution_started', data: { executionId, workflowName: workflow.name } });
@@ -305,14 +311,20 @@ export class AllenEngine {
       startedAt: new Date(),
     };
 
-    await this.stateManager.updateExecution(executionId, {
-      status: 'running',
-      state: exec.state,
-      sessions: exec.sessions,
-      retryCounts: exec.retryCounts,
-      feedbackEntries: exec.feedbackEntries,
-      completedNodes: exec.completedNodes,
-    });
+    await this.stateManager.updateExecutionWithUnset(
+      executionId,
+      {
+        status: 'running',
+        state: exec.state,
+        sessions: exec.sessions,
+        retryCounts: exec.retryCounts,
+        feedbackEntries: exec.feedbackEntries,
+        completedNodes: exec.completedNodes,
+        currentNodes: [],
+      },
+      ['errorMessage', 'failedNode'],
+      { incrementGeneration: true },
+    );
 
     this.emit({ event: 'execution_started', data: { executionId, workflowName: workflow.name } });
 
@@ -453,6 +465,7 @@ export class AllenEngine {
         currentNodes: [],
       },
       ['errorMessage', 'failedNode'],
+      { incrementGeneration: true },
     );
 
     this.emit({ event: 'execution_started', data: { executionId, workflowName: workflow.name } });
@@ -560,6 +573,7 @@ export class AllenEngine {
         completedNodes: exec.completedNodes,
       },
       ['errorMessage', 'failedNode'],
+      { incrementGeneration: true },
     );
 
     this.emit({ event: 'execution_started', data: { executionId, workflowName: workflow.name } });
@@ -1502,6 +1516,15 @@ ${lines.join('\n')}
         this.writeHumanScopedInput(exec.state, nodeName, humanInput, humanInput.route?.targetNode);
         appendHumanEvent(exec.state, buildHumanEvent(intervention, { human_input: humanInput }));
         result.outputs.human_input = humanInput;
+        for (const decisionKey of ['decision', 'approval_decision', 'escalation_decision']) {
+          if (humanInput.decision !== undefined
+            && (Object.prototype.hasOwnProperty.call(exec.state, decisionKey)
+              || Object.prototype.hasOwnProperty.call(nodeDef.outputs ?? {}, decisionKey)
+              || Object.prototype.hasOwnProperty.call(humanInput.fieldsByName, decisionKey))) {
+            exec.state[decisionKey] = humanInput.decision;
+            result.outputs[decisionKey] = humanInput.decision;
+          }
+        }
         for (const field of humanInput.fields) {
           if (nodeDef.outputs && Object.prototype.hasOwnProperty.call(nodeDef.outputs, field.name)) {
             exec.state[field.name] = field.value;

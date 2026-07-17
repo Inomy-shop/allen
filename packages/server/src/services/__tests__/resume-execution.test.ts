@@ -22,6 +22,33 @@ vi.mock('@allen/engine', () => ({
   // Pass-through aggregation matching the real null-aware semantics closely
   // enough for completion-guard tests (real math is covered in engine tests).
   aggregateTokenUsage: (a: unknown, b: unknown) => b ?? a ?? null,
+  StateManager: class FakeStateManager {
+    constructor(private readonly db: any) {}
+    async updateExecutionWhere(filter: unknown, set: Record<string, unknown>) {
+      const result = await this.db.collection('executions').updateOne(filter, { $set: set });
+      return result.matchedCount > 0 ? { executionId: (filter as any).id } : null;
+    }
+    async updateExecution(id: string, set: Record<string, unknown>) {
+      const result = await this.db.collection('executions').updateOne({ id }, { $set: set });
+      return result.matchedCount > 0 ? { executionId: id } : null;
+    }
+    async updateExecutionWithUnset(
+      id: string,
+      set: Record<string, unknown>,
+      unset: string[],
+      options: { incrementGeneration?: boolean } = {},
+    ) {
+      const result = await this.db.collection('executions').updateOne(
+        { id },
+        {
+          $set: set,
+          ...(unset.length > 0 ? { $unset: Object.fromEntries(unset.map((field) => [field, ''])) } : {}),
+          ...(options.incrementGeneration ? { $inc: { runGeneration: 1, revision: 1 } } : {}),
+        },
+      );
+      return result.matchedCount > 0 ? { executionId: id } : null;
+    }
+  },
 }));
 
 vi.mock('../chat-providers.js', () => ({

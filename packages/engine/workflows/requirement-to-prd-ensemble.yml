@@ -46,8 +46,8 @@ nodes:
   draft_prd_v1:
     agent: requirements-analyst
     agentOverrides:
-      provider: claude
-      model: claude-opus-4-8
+      provider: codex
+      model: gpt-5.6-sol
     prompt: |
       You are writing a comprehensive Product Requirements Document (PRD).
       Work from the user requirement and optional context below.
@@ -83,7 +83,7 @@ nodes:
     agent: requirements-analyst
     agentOverrides:
       provider: codex
-      model: gpt-5.5
+      model: gpt-5.6-sol
     prompt: |
       You are writing a comprehensive Product Requirements Document (PRD).
       Work from the user requirement and optional context below.
@@ -118,8 +118,8 @@ nodes:
   draft_prd_v3:
     agent: requirements-analyst
     agentOverrides:
-      provider: deepseek
-      model: deepseek-v4-pro[1m]
+      provider: codex
+      model: gpt-5.6-sol
     prompt: |
       You are writing a comprehensive Product Requirements Document (PRD).
       Work from the user requirement and optional context below.
@@ -154,8 +154,8 @@ nodes:
   synthesize_prd:
     agent: product-manager
     agentOverrides:
-      provider: claude
-      model: claude-opus-4-8
+      provider: codex
+      model: gpt-5.6-sol
     prompt: |
       You are the Product Manager. Three parallel requirements-analyst agents
       (each on a different configured model) have produced independent PRD

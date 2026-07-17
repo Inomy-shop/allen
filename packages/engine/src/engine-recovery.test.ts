@@ -32,6 +32,24 @@ class MemoryCollection {
     }
     return { matchedCount: 1, modifiedCount: 1 };
   }
+  async findOneAndUpdate(filter: Record<string, unknown>, update: Record<string, unknown>[]) {
+    const row = this.rows.find(item => matches(item, filter));
+    if (!row) return null;
+    for (const stage of update) {
+      const set = stage.$set as Record<string, any> | undefined;
+      for (const [key, value] of Object.entries(set ?? {})) {
+        if (value && typeof value === 'object' && '$literal' in value) row[key] = value.$literal;
+        else if (key === 'revision') row[key] = Number(row[key] ?? 0) + 1;
+        else if (key === 'runGeneration') row[key] = value && typeof value === 'object' && '$add' in value
+          ? Number(row[key] ?? 1) + 1
+          : Number(row[key] ?? 1);
+        else if (value === '$$NOW') row[key] = new Date();
+      }
+      const unset = stage.$unset;
+      for (const key of Array.isArray(unset) ? unset : typeof unset === 'string' ? [unset] : []) delete row[key];
+    }
+    return row;
+  }
   async findOne(filter: Record<string, unknown>) {
     return this.rows.find(item => matches(item, filter)) ?? null;
   }
@@ -52,7 +70,13 @@ class MemoryDb {
 }
 
 function matches(row: Record<string, unknown>, filter: Record<string, unknown>) {
-  return Object.entries(filter).every(([key, value]) => row[key] === value);
+  return Object.entries(filter).every(([key, value]) => {
+    if (key === '$and') return (value as Record<string, unknown>[]).every(item => matches(row, item));
+    if (key === '$or') return (value as Record<string, unknown>[]).some(item => matches(row, item));
+    if (value && typeof value === 'object' && '$exists' in value) return (row[key] !== undefined) === Boolean((value as any).$exists);
+    if (value && typeof value === 'object' && '$nin' in value) return !(value as any).$nin.includes(row[key]);
+    return row[key] === value;
+  });
 }
 
 // ── Test Helpers ─────────────────────────────────────────────────────────

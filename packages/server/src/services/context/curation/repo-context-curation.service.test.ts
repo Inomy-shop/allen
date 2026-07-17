@@ -135,6 +135,15 @@ function makeDb(priorEntries: Record<string, unknown>[] = []) {
       insertOne: async () => ({}),
       updateOne: async () => ({}),
       updateMany: async () => ({}),
+      findOneAndUpdate: async (filter: Record<string, unknown>) => name === 'executions'
+        ? {
+            id: String(filter.id ?? 'execution-1'),
+            status: 'completed',
+            revision: 1,
+            runGeneration: 1,
+            updatedAt: new Date(),
+          }
+        : null,
     }),
   } as any;
 }
@@ -697,6 +706,15 @@ describe('Fix H: prepareForCoordinator execution record behavior', () => {
         return { modifiedCount: 1 };
       }),
       updateMany: vi.fn(async () => ({ modifiedCount: 0 })),
+      findOneAndUpdate: vi.fn(async (filter: Record<string, unknown>) => name === 'executions'
+        ? {
+            id: String(filter.id ?? 'execution-1'),
+            status: 'completed',
+            revision: 1,
+            runGeneration: 1,
+            updatedAt: new Date(),
+          }
+        : null),
     });
 
     const cols: Record<string, ReturnType<typeof makeTrackedCol>> = {};
@@ -822,6 +840,15 @@ describe('G1: Snapshot freshness', () => {
         return { modifiedCount: 1 };
       }),
       updateMany: vi.fn(async () => ({ modifiedCount: 0 })),
+      findOneAndUpdate: vi.fn(async (filter: Record<string, unknown>) => name === 'executions'
+        ? {
+            id: String(filter.id ?? 'execution-1'),
+            status: 'completed',
+            revision: 1,
+            runGeneration: 1,
+            updatedAt: new Date(),
+          }
+        : null),
     });
 
     const cols: Record<string, ReturnType<typeof makeCol>> = {};

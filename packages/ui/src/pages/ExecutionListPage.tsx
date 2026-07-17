@@ -16,6 +16,7 @@ import { executions as api } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
 import Select from '../components/common/Select';
 import IconTooltipButton from '../components/common/IconTooltipButton';
+import { mergeExecutionSnapshot, snapshotFromExecution, useExecutionStore } from '../stores/executionStore';
 
 type TypeFilter = '' | 'agent' | 'workflow';
 type SourceFilter = '' | 'chat' | 'workflow' | 'design';
@@ -280,6 +281,7 @@ export default function ExecutionListPage() {
   const [loading, setLoading] = useState(true);
   const [nowMs, setNowMs] = useState(Date.now());
   const [searchParams, setSearchParams] = useSearchParams();
+  const snapshots = useExecutionStore((state) => state.entities);
   const filter = searchParams.get('status') ?? '';
   const typeFilter = (searchParams.get('type') ?? '') as TypeFilter;
   const sourceFilter = (searchParams.get('source') ?? '') as SourceFilter;
@@ -327,6 +329,9 @@ export default function ExecutionListPage() {
         enrich: true,
       });
       setData(result.items);
+      useExecutionStore.getState().ingestMany(
+        result.items.map((item) => snapshotFromExecution(item)).filter((item): item is NonNullable<typeof item> => Boolean(item)),
+      );
       setTotal(result.total ?? result.items.length);
     } catch { /* ignore */ }
     setLoading(false);
@@ -347,23 +352,20 @@ export default function ExecutionListPage() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Auto-refresh every 5s when there are running executions
-  useEffect(() => {
-    const hasRunning = data.some(e => isActiveStatus(e.status));
-    if (!hasRunning) return;
-    const interval = setInterval(refresh, 5000);
-    return () => clearInterval(interval);
-  }, [data, refresh]);
+  const liveData = useMemo(
+    () => data.map((execution) => mergeExecutionSnapshot(execution, snapshots[String(execution.id ?? execution.executionId ?? '')])),
+    [data, snapshots],
+  );
 
   useEffect(() => {
-    const hasRunning = data.some(e => isActiveStatus(e.status));
+    const hasRunning = liveData.some(e => isActiveStatus(e.status));
     if (!hasRunning) return;
     const interval = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, [data]);
+  }, [liveData]);
 
   const sorted = useMemo(() => {
-    const copy = [...data].filter(matchesSourceFilter);
+    const copy = [...liveData].filter(matchesSourceFilter);
     copy.sort((a, b) => {
       const aVal = new Date(a.startedAt ?? 0).getTime();
       const bVal = new Date(b.startedAt ?? 0).getTime();
@@ -371,7 +373,7 @@ export default function ExecutionListPage() {
     });
     return copy;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, sourceFilter]);
+  }, [liveData, sourceFilter]);
 
   const statusOptions = [
     { value: '', label: 'All statuses' },

@@ -71,6 +71,126 @@ describe('WorkflowService soft delete and restore', () => {
     expect(created.yaml).toContain('provider: deepseek');
   });
 
+  it('preserves manual node model/provider overrides when only instructions change', async () => {
+    const id = new ObjectId();
+    await db.collection('workflows').insertOne({
+      _id: id,
+      name: 'preserve-models',
+      description: 'A workflow with a user-selected node model',
+      version: 1,
+      yaml: '',
+      parsed: {
+        name: 'preserve-models',
+        description: 'A workflow with a user-selected node model',
+        version: 1,
+        nodes: {
+          draft: {
+            type: 'agent',
+            agent: 'requirements-analyst',
+            agentOverrides: {
+              provider: 'deepseek',
+              model: 'deepseek-v4-pro[1m]',
+              reasoningEffort: 'high',
+              planMode: false,
+            },
+            prompt: 'Draft the original instructions.',
+          },
+        },
+        edges: [],
+      },
+      validation: { valid: true, errors: [], warnings: [] },
+      createdBy: 'workflow-builder',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const updated = await service.update(id.toHexString(), {
+      yaml: `name: preserve-models
+description: A workflow with a user-selected node model
+version: 1
+nodes:
+  draft:
+    type: agent
+    agent: requirements-analyst
+    agentOverrides:
+      provider: claude
+      model: sonnet
+      reasoningEffort: low
+      planMode: true
+    prompt: Draft the updated instructions only.
+edges: []
+`,
+    });
+
+    const node = (updated.parsed as any).nodes.draft;
+    expect(node.prompt).toBe('Draft the updated instructions only.');
+    expect(node.agentOverrides).toEqual({
+      provider: 'deepseek',
+      model: 'deepseek-v4-pro[1m]',
+      reasoningEffort: 'high',
+      planMode: false,
+    });
+    expect(updated.yaml).toContain('provider: deepseek');
+    expect(updated.yaml).toContain('model: deepseek-v4-pro[1m]');
+  });
+
+  it('allows explicit node model/provider override updates when instructions are unchanged', async () => {
+    const id = new ObjectId();
+    await db.collection('workflows').insertOne({
+      _id: id,
+      name: 'allow-model-change',
+      description: 'A workflow with an editable node model',
+      version: 1,
+      yaml: '',
+      parsed: {
+        name: 'allow-model-change',
+        description: 'A workflow with an editable node model',
+        version: 1,
+        nodes: {
+          draft: {
+            type: 'agent',
+            agent: 'requirements-analyst',
+            agentOverrides: {
+              provider: 'deepseek',
+              model: 'deepseek-v4-pro[1m]',
+            },
+            prompt: 'Keep these instructions.',
+          },
+        },
+        edges: [],
+      },
+      validation: { valid: true, errors: [], warnings: [] },
+      createdBy: 'workflow-builder',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const updated = await service.update(id.toHexString(), {
+      parsed: {
+        name: 'allow-model-change',
+        description: 'A workflow with an editable node model',
+        version: 1,
+        nodes: {
+          draft: {
+            type: 'agent',
+            agent: 'requirements-analyst',
+            agentOverrides: {
+              provider: 'claude',
+              model: 'sonnet',
+            },
+            prompt: 'Keep these instructions.',
+          },
+        },
+        edges: [],
+      } as any,
+    });
+
+    expect((updated.parsed as any).nodes.draft.agentOverrides).toEqual({
+      provider: 'claude',
+      model: 'sonnet',
+    });
+  });
+
   it('FR3-AC1: delete sets isDeleted=true, document remains in collection', async () => {
     const id = new ObjectId();
     await db.collection('workflows').insertOne({

@@ -254,49 +254,45 @@ export function TeamDeleteConfirm({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-6 backdrop-blur-sm">
-      <div className="w-full max-w-[460px] overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200">
+      <div className="w-full max-w-[500px] overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200">
         <div className="border-b border-app px-6 py-5">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-md border border-accent-red/30 bg-accent-red/10 text-accent-red">
               <Trash2 className="h-[18px] w-[18px]" />
             </span>
             <div>
-              <h3 className="text-[17px] font-semibold tracking-tight text-theme-primary">Delete team?</h3>
+              <h3 className="text-[17px] font-semibold tracking-tight text-theme-primary">Delete team and agents?</h3>
               <p className="mt-1 text-[13px] text-theme-muted">{team.displayName}</p>
             </div>
           </div>
         </div>
 
         <div className="space-y-4 px-6 py-5">
-          {memberCount > 0 ? (
-            <div className="flex items-start gap-2 rounded-md border border-accent-yellow/30 bg-accent-yellow/10 px-3 py-2 text-[13px] text-accent-yellow">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>
-                <strong>Cannot delete:</strong> "{team.displayName}" still has {memberCount} agent(s).
-                Move or delete them first.
-              </span>
-            </div>
-          ) : (
-            <div className="text-[13px] leading-6 text-theme-muted">
-              <p>
-                This will permanently remove <span className="font-mono text-theme-primary">{team.name}</span> from
-                the org chart.
-              </p>
-              <p className="mt-2">
-                Deleted teams can be recovered by recreating with the same name.
-              </p>
-            </div>
-          )}
+          <div className="flex items-start gap-2 rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              This is destructive. It will remove the team and soft-delete {memberCount === 0 ? 'no agents' : `${memberCount} agent${memberCount === 1 ? '' : 's'}`} assigned to it.
+            </span>
+          </div>
+          <div className="text-[13px] leading-6 text-theme-muted">
+            <p>
+              <span className="font-mono text-theme-primary">{team.name}</span> will disappear from the org chart and
+              the team&apos;s agents will no longer appear in agent lists, routing, or team assignment flows.
+            </p>
+            <p className="mt-2">
+              Deleted teams and agents can be recovered by recreating resources with the same slug.
+            </p>
+          </div>
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-app px-6 py-4">
           <button onClick={onCancel} disabled={busy} className="btn btn-secondary btn-sm">Cancel</button>
           <button
             onClick={handleConfirm}
-            disabled={busy || memberCount > 0}
+            disabled={busy}
             className="btn btn-danger btn-sm disabled:opacity-30"
           >
-            {busy ? 'Deleting...' : 'Delete'}
+            {busy ? 'Deleting...' : 'Delete team and agents'}
           </button>
         </div>
       </div>

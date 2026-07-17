@@ -33,6 +33,7 @@ import { buildTracesForTimeline } from '../utils/executionState';
 import { workspaceChatPath } from '../lib/workspace-routes';
 import { registryDefaultModelForProvider, getModelDisplay } from '../hooks/useModelRegistry';
 import { pickRecoveryDefaultModel } from '../utils/modelRecoveryDefaults';
+import { useExecutionStore } from '../stores/executionStore';
 
 type ExecutionRightPanelView = 'node' | 'rerun' | 'artifacts';
 
@@ -2802,6 +2803,7 @@ export default function ExecutionDetailPage() {
     spawnSubtree,
     liveToolCallsByNode,
   } = useExecution(id);
+  const executionSnapshot = useExecutionStore(state => id ? state.entities[id] : undefined);
 
   const [rightPanelView, setRightPanelView] = useState<ExecutionRightPanelView>('node');
   // Deep-link node selection via ?node=X query param. Keeps the URL as the
@@ -2883,21 +2885,11 @@ export default function ExecutionDetailPage() {
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    const loadContext = () => {
-      api.context(id)
-        .then((context) => { if (!cancelled) setRunContext(context); })
-        .catch(() => { if (!cancelled) setRunContext(null); });
-    };
-    loadContext();
-    if (execution?.status === 'running' || execution?.status === 'waiting_for_input' || execution?.status === 'queued') {
-      const timer = window.setInterval(loadContext, 10000);
-      return () => {
-        cancelled = true;
-        window.clearInterval(timer);
-      };
-    }
+    api.context(id)
+      .then((context) => { if (!cancelled) setRunContext(context); })
+      .catch(() => { if (!cancelled) setRunContext(null); });
     return () => { cancelled = true; };
-  }, [id, execution?.status, execution?.completedNodes?.length, execution?.currentNodes?.join('|')]);
+  }, [id, executionSnapshot?.revision, executionSnapshot?.runGeneration]);
 
   useEffect(() => {
     if (!id) return;

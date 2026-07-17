@@ -19,6 +19,7 @@ import { sanitizeChatAssistantResponse } from '../../lib/chat-response-sanitize'
 import { workspaceChatPath } from '../../lib/workspace-routes';
 import { humanLabel } from '../../lib/model-catalog';
 import { getModelDisplay } from '../../hooks/useModelRegistry';
+import { isCancelledExecutionStatus, isTerminalExecutionStatus } from '../../lib/execution-status';
 
 const ChatExecutionsPanel = React.lazy(() =>
   import('./ChatRunSidebar').then(module => ({ default: module.ExecutionsPanel })),
@@ -1586,14 +1587,14 @@ function ChatPullRequestCards({ runs }: { runs: SpawnedAgent[] }) {
 /** Build a tree from a flat thread list using parentConversationId */
 function statusTone(status: string): string {
   if (status === 'completed') return 'border-accent-green/35 bg-accent-green/5';
-  if (status === 'failed' || status === 'cancelled') return 'border-accent-red/35 bg-accent-red/5';
+  if (status === 'failed' || isCancelledExecutionStatus(status)) return 'border-accent-red/35 bg-accent-red/5';
   if (status === 'waiting_for_input') return 'border-accent-yellow/45 bg-accent-yellow/5';
   return 'border-accent/40 bg-accent/5';
 }
 
 function StatusIcon({ status }: { status: string }) {
   if (status === 'completed') return <CheckCircle className="w-3.5 h-3.5 text-accent-green" />;
-  if (status === 'failed' || status === 'cancelled') return <AlertCircle className="w-3.5 h-3.5 text-accent-red" />;
+  if (status === 'failed' || isCancelledExecutionStatus(status)) return <AlertCircle className="w-3.5 h-3.5 text-accent-red" />;
   if (status === 'waiting_for_input') return <AlertTriangle className="w-3.5 h-3.5 text-accent-yellow" />;
   return <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />;
 }
@@ -1628,7 +1629,7 @@ function artifactsForRun(run: SpawnedAgent) {
 
 function nodeStatusTone(status: string): string {
   if (status === 'completed' || status === 'skipped') return 'border-accent-green/35 bg-accent-green/5';
-  if (status === 'failed' || status === 'cancelled') return 'border-accent-red/35 bg-accent-red/5';
+  if (status === 'failed' || isCancelledExecutionStatus(status)) return 'border-accent-red/35 bg-accent-red/5';
   if (status === 'waiting_for_input') return 'border-accent-yellow/45 bg-accent-yellow/5';
   if (status === 'running') return 'border-accent/40 bg-accent/5';
   return 'border-app bg-app-card';
@@ -1636,7 +1637,7 @@ function nodeStatusTone(status: string): string {
 
 function NodeStatusIcon({ status }: { status: string }) {
   if (status === 'completed' || status === 'skipped') return <CheckCircle className="w-3.5 h-3.5 text-accent-green" />;
-  if (status === 'failed' || status === 'cancelled') return <AlertCircle className="w-3.5 h-3.5 text-accent-red" />;
+  if (status === 'failed' || isCancelledExecutionStatus(status)) return <AlertCircle className="w-3.5 h-3.5 text-accent-red" />;
   if (status === 'waiting_for_input') return <AlertTriangle className="w-3.5 h-3.5 text-accent-yellow" />;
   if (status === 'running') return <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />;
   return <Clock className="w-3.5 h-3.5 text-theme-subtle" />;
@@ -1806,7 +1807,7 @@ function workflowAttemptFailureLabel(run: SpawnedAgent): string {
   const context = run.runContext;
   const failedStep = context?.execution.failedNode
     ?? context?.progress.currentStep
-    ?? context?.workflowSteps.find(step => step.status === 'failed' || step.status === 'cancelled')?.name
+    ?? context?.workflowSteps.find(step => step.status === 'failed' || isCancelledExecutionStatus(step.status))?.name
     ?? null;
   if (failedStep) return `Failed at ${humanLabel(String(failedStep))}`;
   return 'Failed';
@@ -1816,7 +1817,7 @@ function WorkflowAttemptCard({ run, index }: { run: SpawnedAgent; index: number 
   const context = run.runContext;
   const status = context?.status ?? run.status;
   const summary =
-    status === 'failed' || status === 'cancelled' ? workflowAttemptFailureLabel(run)
+    status === 'failed' || isCancelledExecutionStatus(status) ? workflowAttemptFailureLabel(run)
       : status === 'completed' ? 'Passed'
         : context?.progress.currentStep ? `Running ${humanLabel(context.progress.currentStep)}`
           : humanLabel(context?.progress.phase ?? status);
@@ -1950,7 +1951,9 @@ function RunProgressTimeline({ runs }: { runs: SpawnedAgent[] }) {
   );
 }
 
-const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL_RUN_STATUSES = {
+  has: (status: string) => isTerminalExecutionStatus(status),
+};
 
 function activityLine(run: SpawnedAgent, item: any): { key: string; text: string; at: string | number } | null {
   const at = item.at ?? item.timestamp ?? Date.now();
@@ -2303,7 +2306,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               </div>
             )}
 
-            <div className={`ch-msg-text ${msg.status === 'failed' || msg.status === 'cancelled' ? 'failed' : ''}`}>
+            <div className={`ch-msg-text ${msg.status === 'failed' || msg.status === 'interrupted' || msg.status === 'cancelled' ? 'failed' : ''}`}>
               {showThinking && (
                 <ThinkingBlock text={msg.thinkingText ?? ''} durationMs={msg.durationMs} />
               )}

@@ -35,6 +35,7 @@ import ProtectedRoute from './components/auth/ProtectedRoute';
 import { ToastProvider } from './components/common/Toast';
 import { useSettingsStore } from './stores/settingsStore';
 import { workspaceChatPath } from './lib/workspace-routes';
+import { initializeExecutionRealtime } from './services/realtime/executionRealtime';
 
 if (typeof window !== 'undefined') {
   if (window.allenDesktop) {
@@ -44,6 +45,7 @@ if (typeof window !== 'undefined') {
     }
   }
   useSettingsStore.getState().initFromLocalStorage();
+  initializeExecutionRealtime();
 }
 
 function WorkspaceChatRedirect() {

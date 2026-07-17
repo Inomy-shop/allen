@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { OrgSeedService } from './org-seed.js';
+import { OrgSeedService, validateSeedAgentRuntimePolicy } from './org-seed.js';
 
 function makeDb(seed: Record<string, Record<string, unknown>[]> = {}): any {
   const store: Record<string, Record<string, unknown>[]> = {
@@ -34,14 +34,44 @@ function makeDb(seed: Record<string, Record<string, unknown>[]> = {}): any {
 
 describe('OrgSeedService SEED_OVERRIDE policy', () => {
   const originalSeedOverride = process.env.SEED_OVERRIDE;
+  const originalDefaultAgentProvider = process.env.ALLEN_DEFAULT_AGENT_PROVIDER;
+  const originalDefaultAgentModel = process.env.ALLEN_DEFAULT_AGENT_MODEL;
+  const originalContextLlmProvider = process.env.ALLEN_CONTEXT_LLM_PROVIDER;
+  const originalContextLlmModel = process.env.ALLEN_CONTEXT_LLM_MODEL;
 
   beforeEach(() => {
     delete process.env.SEED_OVERRIDE;
+    delete process.env.ALLEN_DEFAULT_AGENT_PROVIDER;
+    delete process.env.ALLEN_DEFAULT_AGENT_MODEL;
+    delete process.env.ALLEN_CONTEXT_LLM_PROVIDER;
+    delete process.env.ALLEN_CONTEXT_LLM_MODEL;
   });
 
   afterEach(() => {
     if (originalSeedOverride === undefined) delete process.env.SEED_OVERRIDE;
     else process.env.SEED_OVERRIDE = originalSeedOverride;
+    if (originalDefaultAgentProvider === undefined) delete process.env.ALLEN_DEFAULT_AGENT_PROVIDER;
+    else process.env.ALLEN_DEFAULT_AGENT_PROVIDER = originalDefaultAgentProvider;
+    if (originalDefaultAgentModel === undefined) delete process.env.ALLEN_DEFAULT_AGENT_MODEL;
+    else process.env.ALLEN_DEFAULT_AGENT_MODEL = originalDefaultAgentModel;
+    if (originalContextLlmProvider === undefined) delete process.env.ALLEN_CONTEXT_LLM_PROVIDER;
+    else process.env.ALLEN_CONTEXT_LLM_PROVIDER = originalContextLlmProvider;
+    if (originalContextLlmModel === undefined) delete process.env.ALLEN_CONTEXT_LLM_MODEL;
+    else process.env.ALLEN_CONTEXT_LLM_MODEL = originalContextLlmModel;
+  });
+
+  it('pins every enabled seed agent to the required Codex runtime', async () => {
+    expect(validateSeedAgentRuntimePolicy()).toEqual([]);
+
+    const db = makeDb();
+
+    await new OrgSeedService(db).seed();
+
+    const offenders = db.store.agents
+      .filter((agent) => agent.enabled !== false)
+      .filter((agent) => agent.provider !== 'codex' || agent.model !== 'gpt-5.6-sol')
+      .map((agent) => `${String(agent.name)} (${String(agent.provider)}/${String(agent.model)})`);
+    expect(offenders).toEqual([]);
   });
 
   it('creates missing seed rows without overwriting existing agents or teams by default', async () => {

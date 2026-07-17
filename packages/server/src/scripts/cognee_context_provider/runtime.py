@@ -58,7 +58,7 @@ def configure_environment(payload: Dict[str, Any]) -> Dict[str, Any]:
         # credentials and model routing inside Allen. Direct Cognee-native API
         # providers can override them through environment variables.
         os.environ["LLM_PROVIDER"] = "custom"
-        os.environ["LLM_MODEL"] = str(payload.get("llmModel") or "gpt-5.5")
+        os.environ["LLM_MODEL"] = str(payload.get("llmModel") or "gpt-5.6-sol")
         os.environ["LLM_ENDPOINT"] = str(payload.get("llmUrl") or "")
         os.environ["LLM_API_KEY"] = str(payload.get("llmSecret") or "allen-local")
     return storage

@@ -120,6 +120,9 @@ export interface RunStatus {
     workflowId?: string | null;
     workflowName: string;
     status: string;
+    revision?: number;
+    runGeneration?: number;
+    updatedAt?: string;
     source?: string | null;
     startedAt?: string;
     completedAt?: string | null;
@@ -377,6 +380,7 @@ export const executions = {
     return request<{ count: number }>(`/executions/count${qs.toString() ? `?${qs.toString()}` : ''}`);
   },
   get: (id: string) => request<any>(`/executions/${id}`),
+  snapshot: (id: string) => request<import('../stores/executionStore').ExecutionSnapshot>(`/executions/${id}/snapshot`),
   forChat: (sessionId: string) => request<Array<{
     executionId: string;
     sourceMessageId?: string | null;
@@ -396,11 +400,16 @@ export const executions = {
   start: (
     workflowId: string,
     input: Record<string, unknown>,
-    options?: { agentProvider?: 'claude' | 'codex' },
+    options?: { agentProvider?: 'claude' | 'codex'; runtimeModel?: Record<string, unknown> },
   ) =>
     request<any>('/executions', {
       method: 'POST',
-      body: JSON.stringify({ workflowId, input, ...(options?.agentProvider ? { agentProvider: options.agentProvider } : {}) }),
+      body: JSON.stringify({
+        workflowId,
+        input,
+        ...(options?.agentProvider ? { agentProvider: options.agentProvider } : {}),
+        ...(options?.runtimeModel ? { runtimeModel: options.runtimeModel } : {}),
+      }),
     }),
   cancel: (id: string) =>
     request<any>(`/executions/${id}/cancel`, { method: 'POST' }),
@@ -620,8 +629,11 @@ export const teams = {
     }),
   update: (name: string, team: any) =>
     request<any>(`/teams/${name}`, { method: 'PUT', body: JSON.stringify(team) }),
-  delete: (name: string) =>
-    request<void>(`/teams/${name}`, { method: 'DELETE' }),
+  delete: (name: string, options?: { deleteAgents?: boolean }) =>
+    request<{ deletedAgents: string[] }>(`/teams/${name}`, {
+      method: 'DELETE',
+      body: JSON.stringify(options ?? {}),
+    }),
 };
 
 // ── Interventions ──────────────────────────────────────────────────────────

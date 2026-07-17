@@ -707,8 +707,13 @@ export default function RoleManagerPage() {
   async function handleDeleteTeam() {
     if (!deletingTeam) return;
     try {
-      await teamsApi.delete(deletingTeam.name);
-      toast.success(`"${deletingTeam.displayName}" deleted.`);
+      const result = await teamsApi.delete(deletingTeam.name, { deleteAgents: true });
+      const deletedAgentCount = result?.deletedAgents?.length ?? 0;
+      toast.success(
+        deletedAgentCount > 0
+          ? `"${deletingTeam.displayName}" and ${deletedAgentCount} agent${deletedAgentCount === 1 ? '' : 's'} deleted.`
+          : `"${deletingTeam.displayName}" deleted.`,
+      );
       const wasSelected = selection.kind === 'team' && selection.name === deletingTeam.name;
       setDeletingTeam(null);
       if (wasSelected) setSelection({ kind: 'overview' });

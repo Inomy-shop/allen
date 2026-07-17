@@ -351,6 +351,16 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
         return;
       }
       this.steerPending = false;
+      const subtype = typeof msg.subtype === 'string' ? msg.subtype : '';
+      if (subtype && subtype !== 'success') {
+        const done = this.currentTurn;
+        this.currentTurn = undefined;
+        const stderrTail = this.stderrBuffer.trim().slice(-500);
+        const detail = stderrTail ? `: ${stderrTail}` : '';
+        done?.trace.push({ timestamp: new Date(), type: 'error', text: subtype });
+        done?.reject(new Error(`Claude CLI result ${subtype}${detail}`));
+        return;
+      }
       const resultText = typeof msg.result === 'string' ? msg.result : turn.text;
       if (resultText && resultText !== turn.text) {
         turn.text = resultText;

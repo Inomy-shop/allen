@@ -1,12 +1,13 @@
 import express from 'express';
 import request from 'supertest';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MongoClient, type Db } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { artifactRoutes } from './artifact.routes.js';
+import { artifactRoutes, publicArtifactRoutes } from './artifact.routes.js';
 import { DocumentService } from '../services/document.service.js';
 
 describe('artifactRoutes', () => {
@@ -29,6 +30,7 @@ describe('artifactRoutes', () => {
     await new DocumentService(db).ensureIndexes();
     app = express();
     app.use(express.json());
+    app.use('/api/artifacts', publicArtifactRoutes(db));
     app.use('/api/artifacts', artifactRoutes(db));
   });
 
@@ -103,7 +105,7 @@ describe('artifactRoutes', () => {
         rootType: 'agent',
         rootId: 'agent-1',
         filename: 'archive.zip',
-        content: 'not-really-binary',
+        content: Buffer.from('binary bytes').toString('base64'),
         contentType: 'binary',
       });
 
@@ -111,4 +113,109 @@ describe('artifactRoutes', () => {
     const identity = await new DocumentService(db).findIdentityByArtifactId(res.body.artifactId);
     expect(identity).toBeNull();
   });
+
+  const binaryCases = [
+    { filename: 'pixel.png', mime: 'image/png', bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00]) },
+    { filename: 'report.pdf', mime: 'application/pdf', bytes: Buffer.from('%PDF-1.7\n%\xff\xff\n', 'latin1') },
+    { filename: 'clip.mp4', mime: 'video/mp4', bytes: Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0xff, 0x01]) },
+    { filename: 'clip.webm', mime: 'video/webm', bytes: Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0xff]) },
+  ];
+
+  for (const { filename, mime, bytes } of binaryCases) {
+    it(`decodes and serves original ${filename} bytes with media headers`, async () => {
+      const created = await request(app)
+        .post('/api/artifacts')
+        .send({
+          rootType: 'agent',
+          rootId: `binary-${filename}`,
+          filename,
+          content: bytes.toString('base64'),
+          contentType: 'binary',
+        });
+
+      expect(created.status).toBe(201);
+      expect(created.body.sizeBytes).toBe(bytes.length);
+      expect(created.body.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
+
+      const served = await request(app)
+        .get(`/api/artifacts/${created.body.artifactId}/content`)
+        .buffer(true)
+        .parse((res, callback) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+          res.on('end', () => callback(null, Buffer.concat(chunks)));
+        });
+
+      expect(served.status).toBe(200);
+      expect(served.headers['content-type']).toBe(mime);
+      expect(served.headers['content-length']).toBe(String(bytes.length));
+      expect(served.headers['accept-ranges']).toBe('bytes');
+      expect(served.headers.etag).toBe(`"${createHash('sha256').update(bytes).digest('hex')}"`);
+      expect(Buffer.compare(served.body as Buffer, bytes)).toBe(0);
+    });
+  }
+
+  it('serves byte ranges for playable media', async () => {
+    const bytes = binaryCases[2].bytes;
+    const created = await request(app)
+      .post('/api/artifacts')
+      .send({
+        rootType: 'chat',
+        rootId: 'video-range',
+        filename: 'clip.mp4',
+        content: bytes.toString('base64'),
+        contentType: 'binary',
+      });
+
+    const served = await request(app)
+      .get(`/api/artifacts/${created.body.artifactId}/content`)
+      .set('Range', 'bytes=2-5')
+      .buffer(true)
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+
+    expect(served.status).toBe(206);
+    expect(served.headers['content-range']).toBe(`bytes 2-5/${bytes.length}`);
+    expect(served.headers['content-length']).toBe('4');
+    expect(Buffer.compare(served.body as Buffer, bytes.subarray(2, 6))).toBe(0);
+  });
+
+  it('rejects invalid base64 for binary artifacts', async () => {
+    const res = await request(app)
+      .post('/api/artifacts')
+      .send({
+        rootType: 'agent',
+        rootId: 'invalid-binary',
+        filename: 'broken.png',
+        content: 'not-base64',
+        contentType: 'binary',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/valid base64/);
+  });
+
+  for (const [contentType, filename, content, mime] of [
+    ['markdown', 'notes.md', '# Notes\n', 'text/markdown; charset=utf-8'],
+    ['json', 'data.json', '{"ok":true}', 'application/json; charset=utf-8'],
+    ['csv', 'data.csv', 'name,value\nalpha,1\n', 'text/csv; charset=utf-8'],
+    ['text', 'notes.txt', 'plain text', 'text/plain; charset=utf-8'],
+  ] as const) {
+    it(`preserves ${contentType} artifact text delivery`, async () => {
+      const created = await request(app)
+        .post('/api/artifacts')
+        .send({ rootType: 'chat', rootId: `text-${contentType}`, filename, content, contentType });
+      const served = await request(app)
+        .get(`/api/artifacts/${created.body.artifactId}/content`);
+
+      expect(served.status).toBe(200);
+      expect(served.headers['content-type']).toBe(mime);
+      expect(served.text).toBe(content);
+      expect(created.body.sizeBytes).toBe(Buffer.byteLength(content));
+      expect(created.body.sha256).toBe(createHash('sha256').update(content).digest('hex'));
+    });
+  }
 });

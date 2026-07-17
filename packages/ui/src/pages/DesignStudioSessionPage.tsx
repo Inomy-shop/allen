@@ -14,8 +14,6 @@ import WorkspaceFilesPanel from '../components/design-studio/WorkspaceFilesPanel
 import { chat as chatApi } from '../services/api';
 import { designStudio } from '../services/designStudioService';
 
-const DESIGN_STUDIO_DEFAULT_MODEL = { provider: 'claude', model: 'claude-opus-4-8' };
-
 export default function DesignStudioSessionPage() {
   const { sessionId } = useParams<{ sessionId?: string }>();
   const [searchParams] = useSearchParams();
@@ -37,7 +35,6 @@ export default function DesignStudioSessionPage() {
             routeBase: 'studio/sessions',
             designMode: true,
             placeholder: 'Describe the screen or change you want…',
-            initialProviderModel: DESIGN_STUDIO_DEFAULT_MODEL,
             hidePlanMode: true,
             hideRepoSelector: true,
             defaultReasoningEffort: 'high',

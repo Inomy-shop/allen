@@ -8,7 +8,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { checkIsStreaming, sleep, MAX_RECONNECT_ATTEMPTS } from '../useChat';
+import {
+  checkIsStreaming,
+  consumeSessionEventStream,
+  sessionReconnectDelay,
+  sleep,
+  MAX_RECONNECT_ATTEMPTS,
+} from '../useChat';
 
 // ─── checkIsStreaming ──────────────────────────────────────────────────────
 
@@ -88,6 +94,25 @@ describe('sleep', () => {
 describe('MAX_RECONNECT_ATTEMPTS', () => {
   it('is 3', () => {
     expect(MAX_RECONNECT_ATTEMPTS).toBe(3);
+  });
+});
+
+describe('always-on session stream', () => {
+  it('parses events and treats a clean reader close as reconnectable completion', async () => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      { done: false, value: encoder.encode('event: watcher_update\ndata: {"executionId":"exec-1"}\n\n') },
+      { done: true, value: undefined },
+    ];
+    const reader = { read: vi.fn().mockImplementation(async () => chunks.shift()) } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+    const events: Array<[string, unknown]> = [];
+    await consumeSessionEventStream(reader, (event, data) => events.push([event, data]));
+    expect(events).toEqual([['watcher_update', { executionId: 'exec-1' }]]);
+    expect(reader.read).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses bounded exponential delay for repeated reconnects', () => {
+    expect([1, 2, 3, 4, 20].map(sessionReconnectDelay)).toEqual([500, 1000, 2000, 4000, 5000]);
   });
 });
 

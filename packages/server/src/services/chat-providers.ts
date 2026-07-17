@@ -222,7 +222,7 @@ export const PROVIDERS: ProviderConfig[] = [
   {
     provider: 'codex',
     label: 'Codex',
-    models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini', 'o3', 'o4-mini', 'codex-mini'],
+    models: ['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini', 'o3', 'o4-mini', 'codex-mini'],
     defaultModel: 'gpt-5.5',
     requiresKey: null,
     supportsMcp: true,

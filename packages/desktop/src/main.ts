@@ -35,12 +35,14 @@ import type { AllenServerHandle } from '@allen/server/server';
 import { defaultUiDistDir, setupDesktopRuntime } from './runtime-config.js';
 import { startManagedMongo, type ManagedMongoRuntime } from './managed-mongo.js';
 import { isAllowedExternalUrl } from './url-policy.js';
+import { DesktopRealtimeBroker } from './realtime-broker.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const windows = new Set<BrowserWindow>();
 let latestFocusedWindow: BrowserWindow | null = null;
 const trustedPopupWindows = new Set<BrowserWindow>();
 let serverHandle: AllenServerHandle | null = null;
+let realtimeBroker: DesktopRealtimeBroker | null = null;
 let mongoHandle: ManagedMongoRuntime | null = null;
 let isQuitting = false;
 let logsDir: string | null = null;
@@ -940,9 +942,29 @@ ipcMain.handle('allen:runtime-info', () => ({
 
 ipcMain.handle('allen:auth-get', () => readDesktopAuthSession());
 
-ipcMain.handle('allen:auth-set', (_event, sessionData: unknown) => writeDesktopAuthSession(sessionData));
+ipcMain.handle('allen:auth-set', (_event, sessionData: unknown) => {
+  const saved = writeDesktopAuthSession(sessionData);
+  const token = sessionData && typeof sessionData === 'object' && typeof (sessionData as Record<string, unknown>).accessToken === 'string'
+    ? (sessionData as Record<string, unknown>).accessToken as string
+    : null;
+  realtimeBroker?.setAuthToken(token);
+  return saved;
+});
 
-ipcMain.handle('allen:auth-clear', () => clearDesktopAuthSession());
+ipcMain.handle('allen:auth-clear', () => {
+  realtimeBroker?.setAuthToken(null);
+  return clearDesktopAuthSession();
+});
+
+ipcMain.handle('allen:realtime-auth', (_event, token: unknown) => {
+  realtimeBroker?.setAuthToken(typeof token === 'string' && token.length > 0 ? token : null);
+  return true;
+});
+
+ipcMain.handle('allen:realtime-subscribe', (event, executionIds: unknown) => {
+  const ids = Array.isArray(executionIds) ? executionIds.filter((id): id is string => typeof id === 'string') : [];
+  return realtimeBroker?.subscribe(event.sender, ids) ?? [];
+});
 
 ipcMain.handle('allen:select-directory', async () => {
   const options: OpenDialogOptions = { properties: ['openDirectory', 'createDirectory'] };
@@ -1512,6 +1534,8 @@ async function stopRuntime(): Promise<void> {
   if (!serverHandle && !mongoHandle) return;
   const handle = serverHandle;
   serverHandle = null;
+  realtimeBroker?.stop();
+  realtimeBroker = null;
   const mongo = mongoHandle;
   mongoHandle = null;
   await handle?.stop();
@@ -1521,6 +1545,11 @@ async function stopRuntime(): Promise<void> {
 async function boot(): Promise<void> {
   try {
     serverHandle = await startRuntime();
+    realtimeBroker = new DesktopRealtimeBroker(serverHandle.baseUrl);
+    const storedSession = readDesktopAuthSession();
+    if (storedSession && typeof storedSession === 'object' && typeof (storedSession as Record<string, unknown>).accessToken === 'string') {
+      realtimeBroker.setAuthToken((storedSession as Record<string, unknown>).accessToken as string);
+    }
     if (isSmokeMode()) {
       const res = await fetch(`${serverHandle.baseUrl}/api/health`);
       if (!res.ok) throw new Error(`Smoke health check failed: ${res.status}`);

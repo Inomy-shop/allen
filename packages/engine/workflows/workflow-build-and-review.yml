@@ -45,8 +45,8 @@ nodes:
     type: agent
     agent: requirements-analyst
     agentOverrides:
-      provider: claude
-      model: sonnet
+      provider: codex
+      model: gpt-5.6-sol
       reasoningEffort: high
       planMode: false
     prompt: |
@@ -78,8 +78,8 @@ nodes:
     type: agent
     agent: workflow-builder-agent
     agentOverrides:
-      provider: claude
-      model: opus
+      provider: codex
+      model: gpt-5.6-sol
       reasoningEffort: high
       planMode: false
     prompt: |
@@ -129,8 +129,8 @@ nodes:
     type: agent
     agent: allen-workflow-diagnostician
     agentOverrides:
-      provider: claude
-      model: sonnet
+      provider: codex
+      model: gpt-5.6-sol
       reasoningEffort: high
       planMode: false
     prompt: |
@@ -234,8 +234,8 @@ nodes:
     type: agent
     agent: workflow-builder-agent
     agentOverrides:
-      provider: claude
-      model: opus
+      provider: codex
+      model: gpt-5.6-sol
       reasoningEffort: high
       planMode: false
     prompt: |

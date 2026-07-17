@@ -66,14 +66,12 @@ export default function Timeline({
   onLoadOlderLogs,
   traces = [],
 }: TimelineProps) {
-  const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
   const [showSpawnLogs, setShowSpawnLogs] = useState(true);
   const [openRows, setOpenRows] = useState<Set<string>>(() => new Set());
-  const [scrollTop, setScrollTop] = useState(0);
-  const [viewportHeight, setViewportHeight] = useState(0);
+  const autoScrollRef = useRef(true);
   const isUserScrolling = useRef(false);
   const loadOlderInFlight = useRef(false);
   const prependAnchor = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
@@ -123,10 +121,10 @@ export default function Timeline({
 
   // Auto-scroll to bottom when new logs arrive — only if user hasn't scrolled up
   useEffect(() => {
-    if (autoScroll && !isUserScrolling.current && containerRef.current) {
+    if (autoScrollRef.current && !isUserScrolling.current && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [logs.length, autoScroll]);
+  }, [logs.length]);
 
   useLayoutEffect(() => {
     const anchor = prependAnchor.current;
@@ -134,28 +132,16 @@ export default function Timeline({
     if (!anchor || !el) return;
     const delta = el.scrollHeight - anchor.scrollHeight;
     el.scrollTop = anchor.scrollTop + Math.max(0, delta);
-    setScrollTop(el.scrollTop);
     prependAnchor.current = null;
   }, [logs.length]);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const syncSize = () => setViewportHeight(el.clientHeight);
-    syncSize();
-    const resizeObserver = new ResizeObserver(syncSize);
-    resizeObserver.observe(el);
-    return () => resizeObserver.disconnect();
-  }, []);
 
   // Detect if user scrolled away from bottom
   const handleScroll = () => {
     const el = containerRef.current;
     if (!el) return;
-    setScrollTop(el.scrollTop);
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    if (!atBottom) isUserScrolling.current = true;
-    else isUserScrolling.current = false;
+    isUserScrolling.current = !atBottom;
+    autoScrollRef.current = atBottom;
     setAutoScroll(atBottom);
 
     if (
@@ -189,14 +175,17 @@ export default function Timeline({
   });
 
   const spawnLogCount = logs.filter(isChildLog).length;
-  const rowHeight = 28;
-  const overscan = 16;
-  const virtualStart = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-  const visibleCount = Math.ceil((viewportHeight || 480) / rowHeight) + overscan * 2;
-  const virtualEnd = Math.min(filtered.length, virtualStart + visibleCount);
-  const virtualRows = filtered.slice(virtualStart, virtualEnd);
-  const topSpacer = virtualStart * rowHeight;
-  const bottomSpacer = Math.max(0, (filtered.length - virtualEnd) * rowHeight);
+
+  const logKey = (log: ExecutionLog): string => {
+    if (log._id) return log._id;
+    const timestamp = log.timestamp instanceof Date
+      ? log.timestamp.getTime()
+      : new Date(log.timestamp).getTime();
+    const data = log.data && typeof log.data === 'object'
+      ? log.data as Record<string, unknown>
+      : {};
+    return `${log.executionId}|${timestamp}|${log.category}|${log.node ?? ''}|${data.tool ?? ''}|${data.toolUseId ?? ''}|${log.message}`;
+  };
 
   return (
     <div className="flex flex-col h-full relative">
@@ -243,8 +232,18 @@ export default function Timeline({
       {/* Log entries */}
       <div
         ref={containerRef}
+        data-testid="execution-log-scroll"
         className="flex-1 overflow-auto"
         onScroll={handleScroll}
+        onWheel={(event) => {
+          if (event.deltaY >= 0) return;
+          // Disable follow mode before the next log-render effect can run.
+          // Waiting for the scroll event leaves a race where a live refresh
+          // can move the viewport while the user is actively scrolling.
+          isUserScrolling.current = true;
+          autoScrollRef.current = false;
+          setAutoScroll(false);
+        }}
       >
         {filtered.length === 0 ? (
           <div className="p-4 text-sm text-theme-muted font-mono">
@@ -257,9 +256,11 @@ export default function Timeline({
               {loadingOlderLogs ? 'Loading older logs...' : 'Scroll up for older logs'}
             </div>
           )}
-          <div style={{ height: topSpacer }} />
-          {virtualRows.map((log, virtualIndex) => {
-            const i = virtualStart + virtualIndex;
+          {/* Rows can wrap and tool details can expand, so their heights are
+              intentionally left to normal layout. The log API pages history
+              in 250-row chunks; fixed-height virtualization made its spacer
+              estimates diverge from the DOM and caused the viewport to jump. */}
+          {filtered.map((log) => {
             const isError = log.level === 'error';
             const catClass = isError ? 'text-accent-red bg-accent-red/10' : (categoryColors[log.category] ?? 'text-theme-secondary bg-app-muted');
             const child = isChildLog(log) ? (log.data as {
@@ -270,7 +271,7 @@ export default function Timeline({
             }) : null;
             // Tool rows: expandable with full input/output panel.
             const isToolRow = log.category === 'tool';
-            const rowKey = `${log.executionId}-${i}`;
+            const rowKey = logKey(log);
             const isOpen = openRows.has(rowKey);
             const toolCall = isToolRow ? resolveTool(log) : undefined;
             const logData = (log.data as Record<string, unknown> | undefined) ?? {};
@@ -379,10 +380,8 @@ export default function Timeline({
               </div>
             );
           })}
-          <div style={{ height: bottomSpacer }} />
           </>
         )}
-        <div ref={bottomRef} />
       </div>
 
       {/* Scroll to bottom button — shown when user scrolled up */}
@@ -391,6 +390,7 @@ export default function Timeline({
           title="Scroll to latest"
           onClick={() => {
             isUserScrolling.current = false;
+            autoScrollRef.current = true;
             setAutoScroll(true);
             if (containerRef.current) {
               containerRef.current.scrollTop = containerRef.current.scrollHeight;

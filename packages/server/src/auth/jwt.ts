@@ -3,11 +3,11 @@ import { randomBytes, createHash } from 'node:crypto';
 import { getRuntimeConfigProvider } from '../runtime/config.js';
 
 function accessTtl(): string {
-  return getRuntimeConfigProvider().get('ACCESS_TOKEN_TTL') ?? '1d';
+  return getRuntimeConfigProvider().get('ACCESS_TOKEN_TTL') ?? '7d';
 }
 
 function refreshTtl(): string {
-  return getRuntimeConfigProvider().get('REFRESH_TOKEN_TTL') ?? '7d';
+  return getRuntimeConfigProvider().get('REFRESH_TOKEN_TTL') ?? '30d';
 }
 
 function accessSecret(): string {

@@ -160,7 +160,7 @@ const TOOLS = [
   // ── Workflows ──
   { name: 'list_workflows', description: 'List all workflows with name, description, node count, validation status.', params: {} },
   { name: 'get_workflow', description: 'Get full details of a specific workflow: YAML source, parsed nodes, edges, input schema, version.', params: { name: 'string — workflow name', id: 'string — workflow MongoDB _id (use name OR id)' } },
-  { name: 'run_workflow', description: 'Start executing a workflow. Returns execution ID. Before calling this, call get_workflow for the chosen workflow and pass input using the exact parsed.input field names for that workflow. Do not invent aliases or nested shapes.', params: { workflow_name: 'string (required)', input: 'object — workflow input parameters matching get_workflow.parsed.input exactly' } },
+  { name: 'run_workflow', description: 'Start executing a workflow. Returns execution ID. Before calling this, call get_workflow for the chosen workflow and pass input using the exact parsed.input field names for that workflow. Do not invent aliases or nested shapes. If overriding models at runtime, present the workflow/model plan to the user first and pass runtime_model; runtime overrides never mutate workflow or agent definitions.', params: { workflow_name: 'string (required)', input: 'object — workflow input parameters matching get_workflow.parsed.input exactly', runtime_model: 'object — optional execution-scoped model overrides. Top-level {provider, model} applies to all agent nodes; nodes maps workflow node names to {provider, model}; agents maps agent names to {provider, model}' } },
   { name: 'validate_workflow', description: 'Validate a workflow YAML or parsed object against the live agent registry. Returns { valid, errors, warnings }. Read-only.', params: { yaml: 'string — YAML source', parsed: 'object — parsed workflow object (alternative to yaml)' } },
   { name: 'create_workflow', description: 'Create a new workflow. Validates before persisting. Usable immediately after creation.', params: { yaml: 'string — YAML source (preferred)', parsed: 'object — parsed workflow object (alternative)', tags: 'object — optional tags array' } },
   { name: 'update_workflow', description: 'Update an existing workflow by name or id. Bumps version. Refuses system-seeded workflows.', params: { id: 'string — MongoDB ObjectId', name: 'string — workflow name (used when id omitted)', yaml: 'string — new YAML source', parsed: 'object — new parsed workflow object' } },
@@ -187,7 +187,7 @@ const TOOLS = [
   { name: 'update_agent', description: 'Update an agent: system prompt, model, provider, tools, capabilities, spawnTargets, personality, displayName, description.', params: { name: 'string (required)', displayName: 'string', description: 'string', system: 'string', tools: 'object', capabilities: 'object', spawnTargets: 'object — array of agent names this agent can spawn', personality: 'string', model: 'string', provider: 'string' } },
   { name: 'delete_agent', description: 'Delete an agent. Refuses built-in agents and team leads. Requires confirm=true.', params: { name: 'string (required)', confirm: 'boolean (required) — must be true' } },
   { name: 'move_agent_to_team', description: 'Move one or more agents to a different team. Works for any cross-team move including unassigned → team.', params: { agent_names: 'object — array of agent name strings (required)', team_name: 'string (required) — target team slug' } },
-  { name: 'spawn_agent', description: 'Spawn an agent in the background. Returns immediately with execution_id. Pass context_query as structured retrieval-only metadata; do not embed context query XML/JSON in prompt.', params: { agent_name: 'string (required)', prompt: 'string (required)', context_query: 'object — optional structured retrieval query, not sent to the agent prompt', repo_path: 'string — optional repo path', session_id: 'string — session ID from previous spawn to resume' } },
+  { name: 'spawn_agent', description: 'Spawn an agent in the background. Returns immediately with execution_id. Pass context_query as structured retrieval-only metadata; do not embed context query XML/JSON in prompt. If overriding the model at runtime, present the agent/model plan to the user first and pass runtime_model; runtime overrides never mutate the agent definition.', params: { agent_name: 'string (required)', prompt: 'string (required)', context_query: 'object — optional structured retrieval query, not sent to the agent prompt', repo_path: 'string — optional repo path', session_id: 'string — session ID from previous spawn to resume', runtime_model: 'object — optional execution-scoped {provider, model} override for this agent run' } },
 
   // ── Teams ──
   { name: 'list_teams', description: 'List all teams: name, displayName, mission, lead, parent, isBuiltIn.', params: {} },
@@ -444,6 +444,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       if (!wf) return { error: `Workflow "${args.workflow_name}" not found` };
       const wfDetails = await callAPI(`/api/workflows/${wf._id}`) as any;
       const input = (args.input ?? {}) as Record<string, unknown>;
+      const runtimeModel = args.runtime_model ?? args.runtimeModel;
       const inputDef = wfDetails?.parsed?.input as Record<string, { required?: boolean; type?: string; label?: string }> | undefined;
       if (inputDef) {
         const missingFields = Object.entries(inputDef)
@@ -471,7 +472,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workflow_name: args.workflow_name, input }),
+        body: JSON.stringify({ workflow_name: args.workflow_name, input, ...(runtimeModel ? { runtime_model: runtimeModel } : {}) }),
       });
       return res.json();
     }
@@ -945,6 +946,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
           context_query: args.context_query,
           repo_path: args.repo_path,
           session_id: args.session_id,
+          runtime_model: args.runtime_model ?? args.runtimeModel,
           // Spawn-tree linkage — lets the execution row carry its caller
           // label, parent pointer, and root pointer so the parent workflow's
           // execution page can find and track its spawned children.

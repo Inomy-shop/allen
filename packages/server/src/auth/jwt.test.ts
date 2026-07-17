@@ -1,9 +1,18 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import jwt from 'jsonwebtoken';
+import {
+  resetRuntimeProvidersForTests,
+  setRuntimeConfigProvider,
+  type ConfigProvider,
+} from '../runtime/config.js';
 
 beforeAll(() => {
   process.env.JWT_ACCESS_SECRET = 'test-access-secret-do-not-use-in-prod';
   process.env.JWT_REFRESH_SECRET = 'test-refresh-secret-do-not-use-in-prod';
+});
+
+afterEach(() => {
+  resetRuntimeProvidersForTests();
 });
 
 async function freshImport() {
@@ -49,6 +58,21 @@ describe('jwt: signAccessToken + verifyAccessToken', () => {
     );
     expect(() => verifyAccessToken(expired)).toThrow(/jwt expired/i);
   });
+
+  it('defaults access tokens to seven days when no TTL override is configured', async () => {
+    const { signAccessToken } = await freshImport();
+    setRuntimeConfigProvider(configProviderWithoutTtls());
+
+    const token = signAccessToken({
+      sub: 'user-1',
+      email: 'a@b.co',
+      role: 'user',
+      mustResetPassword: false,
+    });
+    const decoded = jwt.decode(token) as { iat: number; exp: number };
+
+    expect(decoded.exp - decoded.iat).toBe(7 * 24 * 60 * 60);
+  });
 });
 
 describe('jwt: createRefreshToken + verifyRefreshToken', () => {
@@ -73,6 +97,17 @@ describe('jwt: createRefreshToken + verifyRefreshToken', () => {
     expect(a.tokenHash).not.toBe(b.tokenHash);
     expect(a.token).not.toBe(b.token);
   });
+
+  it('defaults refresh tokens to thirty days when no TTL override is configured', async () => {
+    const { createRefreshToken } = await freshImport();
+    setRuntimeConfigProvider(configProviderWithoutTtls());
+
+    const { token, expiresAt } = createRefreshToken('user-42');
+    const decoded = jwt.decode(token) as { iat: number; exp: number };
+
+    expect(decoded.exp - decoded.iat).toBe(30 * 24 * 60 * 60);
+    expect(expiresAt.getTime()).toBe(decoded.exp * 1000);
+  });
 });
 
 describe('jwt: hashToken', () => {
@@ -85,3 +120,17 @@ describe('jwt: hashToken', () => {
     expect(hashToken('hello')).not.toBe(hashToken('world'));
   });
 });
+
+function configProviderWithoutTtls(): ConfigProvider {
+  return {
+    get: (key) => ({
+      JWT_ACCESS_SECRET: 'test-access-secret-do-not-use-in-prod',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-do-not-use-in-prod',
+    } as Record<string, string | undefined>)[key],
+    require(key) {
+      const value = this.get(key);
+      if (!value) throw new Error(`${key} is not set`);
+      return value;
+    },
+  };
+}

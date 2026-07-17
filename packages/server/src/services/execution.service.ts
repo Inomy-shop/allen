@@ -451,6 +451,86 @@ function executionDisplayTitle(input: Record<string, unknown>, meta: Record<stri
     ?? fallback;
 }
 
+type RuntimeReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
+type RuntimeModelField = 'provider' | 'model' | 'reasoningEffort' | 'planMode';
+
+export interface RuntimeModelChoice {
+  provider?: string;
+  model?: string;
+  reasoningEffort?: RuntimeReasoningEffort;
+  planMode?: boolean;
+}
+
+export interface RuntimeModelOverrides extends RuntimeModelChoice {
+  /** Default runtime choice for every agent node in the workflow. */
+  default?: RuntimeModelChoice;
+  /** Runtime choices keyed by workflow node name. Highest precedence. */
+  nodes?: Record<string, RuntimeModelChoice>;
+  /** Runtime choices keyed by agent name. Applied after default, before node. */
+  agents?: Record<string, RuntimeModelChoice>;
+  /** Reserved for descendants spawned from inside a workflow node. Default behavior is agent defaults. */
+  descendants?: 'agent_defaults' | 'inherit_parent' | 'explicit_only';
+}
+
+const RUNTIME_REASONING_EFFORTS = new Set<RuntimeReasoningEffort>(['off', 'low', 'medium', 'high', 'max']);
+
+function cleanRuntimeModelChoice(value: unknown): RuntimeModelChoice | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const choice: RuntimeModelChoice = {};
+  if (typeof record.provider === 'string' && record.provider.trim()) choice.provider = record.provider.trim();
+  if (typeof record.model === 'string' && record.model.trim()) choice.model = record.model.trim();
+  if (typeof record.reasoningEffort === 'string' && RUNTIME_REASONING_EFFORTS.has(record.reasoningEffort as RuntimeReasoningEffort)) {
+    choice.reasoningEffort = record.reasoningEffort as RuntimeReasoningEffort;
+  }
+  if (typeof record.planMode === 'boolean') choice.planMode = record.planMode;
+  return Object.keys(choice).length > 0 ? choice : undefined;
+}
+
+function cleanRuntimeModelChoiceMap(value: unknown): Record<string, RuntimeModelChoice> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const result: Record<string, RuntimeModelChoice> = {};
+  for (const [key, rawChoice] of Object.entries(value as Record<string, unknown>)) {
+    const cleanKey = key.trim();
+    const choice = cleanRuntimeModelChoice(rawChoice);
+    if (cleanKey && choice) result[cleanKey] = choice;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+export function normalizeRuntimeModelOverrides(value: unknown): RuntimeModelOverrides | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const topLevel = cleanRuntimeModelChoice(record) ?? {};
+  const normalized: RuntimeModelOverrides = { ...topLevel };
+  const defaultChoice = cleanRuntimeModelChoice(record.default);
+  if (defaultChoice) normalized.default = defaultChoice;
+  const nodes = cleanRuntimeModelChoiceMap(record.nodes);
+  if (nodes) normalized.nodes = nodes;
+  const agents = cleanRuntimeModelChoiceMap(record.agents);
+  if (agents) normalized.agents = agents;
+  if (
+    record.descendants === 'agent_defaults'
+    || record.descendants === 'inherit_parent'
+    || record.descendants === 'explicit_only'
+  ) {
+    normalized.descendants = record.descendants;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function mergeRuntimeModelChoice(...choices: Array<RuntimeModelChoice | undefined>): RuntimeModelChoice | undefined {
+  const merged: RuntimeModelChoice = {};
+  for (const choice of choices) {
+    if (!choice) continue;
+    if (choice.provider !== undefined) merged.provider = choice.provider;
+    if (choice.model !== undefined) merged.model = choice.model;
+    if (choice.reasoningEffort !== undefined) merged.reasoningEffort = choice.reasoningEffort;
+    if (choice.planMode !== undefined) merged.planMode = choice.planMode;
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 function applyWorkflowAgentProvider(workflow: WorkflowDef, provider?: WorkflowAgentProvider): WorkflowDef {
   if (!provider) return workflow;
 
@@ -476,6 +556,52 @@ function applyWorkflowAgentProvider(workflow: WorkflowDef, provider?: WorkflowAg
       delete next.model;
     }
 
+    node.agentOverrides = next;
+  }
+
+  return copy;
+}
+
+export function applyWorkflowRuntimeModelOverrides(workflow: WorkflowDef, runtimeModel?: RuntimeModelOverrides): WorkflowDef {
+  if (!runtimeModel) return workflow;
+
+  const copy = JSON.parse(JSON.stringify(workflow)) as WorkflowDef;
+  const nodes = (copy.nodes ?? {}) as Record<string, Record<string, unknown>>;
+  const topLevelDefault = cleanRuntimeModelChoice(runtimeModel);
+
+  for (const [nodeName, node] of Object.entries(nodes)) {
+    const agentName = typeof node.agent === 'string' ? node.agent : '';
+    if (!agentName) continue;
+
+    const choice = mergeRuntimeModelChoice(
+      topLevelDefault,
+      runtimeModel.default,
+      runtimeModel.agents?.[agentName],
+      runtimeModel.nodes?.[nodeName],
+    );
+    if (!choice) continue;
+
+    const existing = (
+      node.agentOverrides
+      && typeof node.agentOverrides === 'object'
+      && !Array.isArray(node.agentOverrides)
+    )
+      ? node.agentOverrides as Record<string, unknown>
+      : {};
+    const next: Record<string, unknown> = { ...existing };
+    const sources: Partial<Record<RuntimeModelField, 'runtime'>> = {
+      ...(existing.runtimeModelOverrideSources && typeof existing.runtimeModelOverrideSources === 'object' && !Array.isArray(existing.runtimeModelOverrideSources)
+        ? existing.runtimeModelOverrideSources as Partial<Record<RuntimeModelField, 'runtime'>>
+        : {}),
+    };
+
+    for (const key of ['provider', 'model', 'reasoningEffort', 'planMode'] as RuntimeModelField[]) {
+      const value = choice[key];
+      if (value === undefined) continue;
+      next[key] = value;
+      sources[key] = 'runtime';
+    }
+    next.runtimeModelOverrideSources = sources;
     node.agentOverrides = next;
   }
 
@@ -558,13 +684,14 @@ export class ExecutionService {
   async start(
     workflowId: string,
     input: Record<string, unknown>,
-    options: { agentProvider?: WorkflowAgentProvider } = {},
+    options: { agentProvider?: WorkflowAgentProvider; runtimeModel?: RuntimeModelOverrides } = {},
   ): Promise<Record<string, unknown>> {
     const { ObjectId } = await import('mongodb');
     const workflowDoc = await this.db.collection('workflows').findOne({ _id: new ObjectId(workflowId) });
     if (!workflowDoc) throw new Error('Workflow not found');
 
-    const workflow = applyWorkflowAgentProvider(workflowDoc.parsed as WorkflowDef, options.agentProvider);
+    let workflow = applyWorkflowAgentProvider(workflowDoc.parsed as WorkflowDef, options.agentProvider);
+    workflow = applyWorkflowRuntimeModelOverrides(workflow, options.runtimeModel);
     this.validateWorkflowInput(workflow, input);
     if (isSelfHealingWorkflowName(workflow.name)) {
       const config = assertSelfHealingLinearConfig();
@@ -618,7 +745,9 @@ export class ExecutionService {
     await this.trackRepoUsage(input);
 
     // Start immediately
-    return this.launchExecution(executionId, workflowId, workflow, input);
+    return this.launchExecution(executionId, workflowId, workflow, input, {
+      runtimeModel: options.runtimeModel,
+    });
   }
 
   private validateWorkflowInput(workflow: WorkflowDef, input: Record<string, unknown>): void {
@@ -651,6 +780,7 @@ export class ExecutionService {
     workflowId: string,
     workflow: WorkflowDef,
     input: Record<string, unknown>,
+    options: { runtimeModel?: RuntimeModelOverrides } = {},
   ): Promise<Record<string, unknown>> {
     // Base SSE emitter for live event streaming to the UI.
     const sseEmitter = createSSEEmitter(executionId);
@@ -701,8 +831,9 @@ export class ExecutionService {
 
     const engine = new AllenEngine(config);
     runningEngines.set(executionId, engine);
+    const watcherRegistration = this.registerWorkflowWatcher(executionId, input);
 
-    engine.run(workflow, input, 0, { executionId, workflowId })
+    engine.run(workflow, input, 0, { executionId, workflowId, runtimeModelPlan: options.runtimeModel })
       .catch(() => {})
       .finally(() => {
         runningEngines.delete(executionId);
@@ -711,31 +842,10 @@ export class ExecutionService {
         });
         // Auto-dequeue next waiting execution for this workflow
         this.dequeueNext(workflow.name).catch(() => {});
+        watcherRegistration
+          .finally(() => this.pollWorkflowWatcherByExecutionId(executionId, 'workflow terminal'))
+          .catch(() => {});
       });
-
-    // ── Watcher registration ─────────────────────────────────────────────
-    // Fire-and-forget: register a watcher if the execution carries a chatSessionId.
-    setImmediate(async () => {
-      const chatSessionId = (input.meta as Record<string, unknown> | undefined)?.chatSessionId as string | undefined
-        ?? (input.chatSessionId as string | undefined);
-      if (chatSessionId) {
-        try {
-          const { WatcherService } = await import('./watcher.service.js');
-          const { ChatService } = await import('./chat.service.js');
-          await new WatcherService(this.db, new ChatService(this.db)).register({
-            executionId,
-            chatSessionId,
-            executionType: 'workflow',
-          });
-        } catch (err) {
-          logger.warn('[execution] Watcher auto-registration failed', {
-            component: 'execution',
-            executionId,
-            error: (err as Error).message,
-          });
-        }
-      }
-    });
 
     return {
       id: executionId,
@@ -786,6 +896,71 @@ export class ExecutionService {
       );
     } catch {
       // Non-critical — don't block execution
+    }
+  }
+
+  private getWorkflowChatSessionId(input: Record<string, unknown>): string | undefined {
+    return (input.meta as Record<string, unknown> | undefined)?.chatSessionId as string | undefined
+      ?? (input.chatSessionId as string | undefined);
+  }
+
+  private async registerWorkflowWatcher(
+    executionId: string,
+    input: Record<string, unknown>,
+  ): Promise<void> {
+    const chatSessionId = this.getWorkflowChatSessionId(input);
+    if (!chatSessionId) return;
+
+    try {
+      const { WatcherService } = await import('./watcher.service.js');
+      const { ChatService } = await import('./chat.service.js');
+      await new WatcherService(this.db, new ChatService(this.db)).register({
+        executionId,
+        chatSessionId,
+        executionType: 'workflow',
+      });
+    } catch (err) {
+      logger.warn('[execution] Watcher auto-registration failed', {
+        component: 'execution',
+        executionId,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  private async reactivateWorkflowWatcher(
+    executionId: string,
+    resumePath: 'checkpoint' | 'agent' | 'engine',
+  ): Promise<void> {
+    try {
+      const { WatcherService } = await import('./watcher.service.js');
+      const { ChatService } = await import('./chat.service.js');
+      await new WatcherService(this.db, new ChatService(this.db)).reactivate(executionId, resumePath);
+    } catch (err) {
+      logger.warn('[execution] Watcher reactivation failed', {
+        component: 'execution',
+        executionId,
+        resumePath,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  private async pollWorkflowWatcherByExecutionId(
+    executionId: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      const { WatcherService } = await import('./watcher.service.js');
+      const { ChatService } = await import('./chat.service.js');
+      await new WatcherService(this.db, new ChatService(this.db)).pollWatcherByExecutionId(executionId);
+    } catch (err) {
+      logger.warn('[execution] Watcher immediate poll failed', {
+        component: 'execution',
+        executionId,
+        reason,
+        error: (err as Error).message,
+      });
     }
   }
 
@@ -1189,6 +1364,9 @@ export class ExecutionService {
         workflowId: exec.workflowId,
         workflowName,
         status: exec.status,
+        revision: exec.revision ?? 0,
+        runGeneration: exec.runGeneration ?? 1,
+        updatedAt: exec.updatedAt ?? exec.completedAt ?? exec.startedAt,
         source: row.source ?? null,
         startedAt: exec.startedAt,
         completedAt: exec.completedAt ?? null,
@@ -1495,18 +1673,8 @@ export class ExecutionService {
     await this.stateManager.updateExecution(id, { status: 'running' as never });
 
     // ── Watcher reactivation ─────────────────────────────────────────────
-    setImmediate(async () => {
-      try {
-        const { WatcherService } = await import('./watcher.service.js');
-        const { ChatService } = await import('./chat.service.js');
-        await new WatcherService(this.db, new ChatService(this.db)).reactivate(id, 'engine');
-      } catch (err) {
-        logger.warn('[execution] Watcher reactivation failed after engine resume', {
-          component: 'execution',
-          executionId: id,
-          error: (err as Error).message,
-        });
-      }
+    setImmediate(() => {
+      this.reactivateWorkflowWatcher(id, 'engine').catch(() => {});
     });
   }
 
@@ -1653,25 +1821,16 @@ export class ExecutionService {
 
     const engine = new AllenEngine(config);
     runningEngines.set(executionId, engine);
+    const watcherReactivation = this.reactivateWorkflowWatcher(executionId, 'checkpoint');
 
     engine.runFromCheckpoint(workflow, executionId, checkpointId)
       .catch(() => {})
-      .finally(() => runningEngines.delete(executionId));
-
-    // ── Watcher reactivation ─────────────────────────────────────────────
-    setImmediate(async () => {
-      try {
-        const { WatcherService } = await import('./watcher.service.js');
-        const { ChatService } = await import('./chat.service.js');
-        await new WatcherService(this.db, new ChatService(this.db)).reactivate(executionId, 'checkpoint');
-      } catch (err) {
-        logger.warn('[execution] Watcher reactivation failed after checkpoint resume', {
-          component: 'execution',
-          executionId,
-          error: (err as Error).message,
-        });
-      }
-    });
+      .finally(() => {
+        runningEngines.delete(executionId);
+        watcherReactivation
+          .finally(() => this.pollWorkflowWatcherByExecutionId(executionId, 'checkpoint terminal'))
+          .catch(() => {});
+      });
 
     return { id: executionId, status: 'running', resumingFromCheckpoint: checkpointId };
   }
@@ -1817,6 +1976,7 @@ export class ExecutionService {
         this.enqueueWorkflowContextEvaluation(executionId, 'retry_terminal', true).catch((err) => {
           logger.warn('workflow context semantic evaluation enqueue after retry failed', { executionId, error: (err as Error).message });
         });
+        this.pollWorkflowWatcherByExecutionId(executionId, 'retry terminal').catch(() => {});
       });
 
     return { id: executionId, status: 'running', retryingFrom: nodeName };

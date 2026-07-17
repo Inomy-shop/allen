@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { ExecutionService } from '../services/execution.service.js';
+import { ExecutionService, normalizeRuntimeModelOverrides } from '../services/execution.service.js';
 import { InterventionService } from '../services/intervention.service.js';
 import { RepoContextPacketService } from '../services/context/core/repo-context-packet.service.js';
 import { isContextEngineEnabled } from '../services/context/config/context-provider-config.js';
@@ -9,7 +9,7 @@ import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { PROVIDERS, type ChatProvider } from '../services/chat-providers.js';
 import { ModelRegistryService } from '../services/model-registry.service.js';
-import { sanitizeErrorSummary } from '@allen/engine';
+import { sanitizeErrorSummary, StateManager, toExecutionSnapshot } from '@allen/engine';
 
 /**
  * Guard: reject resume/retry on imported (read-only replay) executions.
@@ -71,12 +71,15 @@ export function executionRoutes(db: Db): Router {
   // POST /api/executions
   router.post('/', async (req: AuthedRequest, res: Response) => {
     try {
-      const { workflowId, input, agentProvider } = req.body;
+      const { workflowId, input, agentProvider, runtimeModel, runtime_model } = req.body;
       if (!workflowId) return res.status(400).json({ error: 'workflowId is required' });
       const provider = typeof agentProvider === 'string' && PROVIDERS.some((item) => item.provider === agentProvider)
         ? agentProvider as ChatProvider
         : undefined;
-      const execution = await service.start(workflowId, input ?? {}, { agentProvider: provider });
+      const execution = await service.start(workflowId, input ?? {}, {
+        agentProvider: provider,
+        runtimeModel: normalizeRuntimeModelOverrides(runtimeModel ?? runtime_model),
+      });
       const chatSessionId = req.header('x-allen-chat-session-id');
       const parentMessageId = req.header('x-allen-parent-message-id');
       const authUser = req.user;
@@ -98,15 +101,9 @@ export function executionRoutes(db: Db): Router {
         if (typeof input?.workspace_id === 'string') chatMeta['meta.workspaceId'] = input.workspace_id;
         if (typeof input?.repo_path === 'string') chatMeta['meta.workspacePath'] = input.repo_path;
         if (typeof input?.worktree_path === 'string') chatMeta['meta.workspacePath'] = input.worktree_path;
-        await db.collection('executions').updateOne(
-          { id: execution.id },
-          { $set: chatMeta },
-        ).catch(() => {});
+        await new StateManager(db).updateExecution(String(execution.id), chatMeta as any).catch(() => {});
       } else if (Object.keys(userMeta).length > 0) {
-        await db.collection('executions').updateOne(
-          { id: execution.id },
-          { $set: userMeta },
-        ).catch(() => {});
+        await new StateManager(db).updateExecution(String(execution.id), userMeta as any).catch(() => {});
       }
       res.status(201).json(execution);
     } catch (err: unknown) {
@@ -193,6 +190,17 @@ export function executionRoutes(db: Db): Router {
     try {
       const rows = await service.listForChatSession(param(req, 'sessionId'));
       res.json(rows);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Lightweight authoritative state used for reconnect/late-open recovery.
+  router.get('/:id/snapshot', async (req: Request, res: Response) => {
+    try {
+      const execution = await db.collection('executions').findOne({ id: param(req, 'id') });
+      if (!execution) return res.status(404).json({ error: 'Not found' });
+      res.json(toExecutionSnapshot(execution as Record<string, unknown>));
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

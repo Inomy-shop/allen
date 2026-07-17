@@ -17,7 +17,7 @@ type ResolveContextLlmOptions = {
 };
 
 const DEFAULT_CONTEXT_LLM_PROVIDER: ChatProvider = 'codex';
-const DEFAULT_CONTEXT_LLM_MODEL = 'gpt-5.5';
+const DEFAULT_CONTEXT_LLM_MODEL = 'gpt-5.6-sol';
 
 export function resolveContextLlmConfig(options: ResolveContextLlmOptions): ContextLlmConfig {
   return {
@@ -81,11 +81,11 @@ function defaultCwd(purpose: ContextLlmPurpose): string {
  *
  * Resolution order (same env vars as the broader context engine LLM config):
  *   1. ALLEN_CONTEXT_LLM_PROVIDER / ALLEN_CONTEXT_LLM_MODEL — operator-configured values
- *   2. 'codex' / 'gpt-5.5' — hard-coded defaults
+ *   2. 'codex' / 'gpt-5.6-sol' — hard-coded defaults
  *
  * Env vars:
  *   ALLEN_CONTEXT_LLM_PROVIDER — provider slug (e.g. 'codex', 'claude')
- *   ALLEN_CONTEXT_LLM_MODEL    — model string (e.g. 'gpt-5.5', 'sonnet')
+ *   ALLEN_CONTEXT_LLM_MODEL    — model string (e.g. 'gpt-5.6-sol', 'sonnet')
  *
  * This is intentionally lightweight (no cwd/secret resolution) since it is
  * used only for agent seed definitions, not for spawning LLM workers directly.

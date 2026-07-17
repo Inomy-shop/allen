@@ -6,6 +6,31 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-07-16
+
+### Added
+
+- **Runtime model overrides** (`packages/server`, `packages/engine`): models can be overridden at runtime for an execution.
+- **Cascading team deletion** (`packages/server`): deleting a team now cascades to its dependent records.
+- **Binary artifact serving** (`packages/server`): binary artifacts are persisted and served as their original bytes, with MIME detection, HTTP range requests, byte-accurate size, and SHA-256 metadata.
+
+### Changed
+
+- **Default model switched to `codex/gpt-5.6-sol`** (`packages/server`, `packages/engine`): seeded agents (`org-seed.ts`), several workflow node model overrides (`multi-repo-change-orchestration`, `requirement-to-prd-ensemble`, `workflow-build-and-review`), and the context-engine default model (`DEFAULT_CONTEXT_LLM_MODEL`) were switched from their prior models (`sonnet` / `gpt-5.5` / `opus` / `deepseek-v4-pro`) to `codex/gpt-5.6-sol`.
+- **Extended default auth token lifetimes** (`packages/server`).
+
+### Fixed
+
+- **In-chat model switching** (`packages/server`, `packages/ui`): switching models mid-chat is now allowed.
+- **Execution state synchronization across clients** (`packages/server`, `packages/ui`): execution state stays in sync across multiple connected clients.
+- **Stale chat streaming turns** (`packages/server`): stale streaming turns no longer linger.
+- **Chat resume cwd handling** (`packages/server`): resuming a chat now resolves the working directory correctly.
+- **Workflow node model overrides preserved** (`packages/server`): node-level model overrides are no longer lost.
+- **Latest human approval decision projected** (`packages/engine`): the latest canonical approval decision is projected onto flattened decision aliases, so a stale `pending_human_review` no longer aborts downstream mutation nodes after an approval.
+- **Workflow watcher wakeup** (`packages/server`): the workflow watcher is woken on terminal states.
+- **Design Studio session model derives from the configured default** (`packages/server`, `packages/ui`): Design Studio duplicated a Studio-specific hardcoded model default in both the frontend and the server, each reaching past the already correctly-ordered enabled-provider list. A blank composer showed that hardcoded model even when Allen's configured default was different; both now derive from the configured default.
+- **Execution status and log scrolling stabilized** (`packages/server`, `packages/ui`): chat state is reconciled from execution snapshots and chat cards recover from lifecycle snapshots, steadying execution status and timeline log scrolling.
+
 ## [0.1.19] - 2026-07-07
 
 ### Added

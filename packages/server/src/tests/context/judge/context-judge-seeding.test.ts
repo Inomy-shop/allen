@@ -539,9 +539,9 @@ describe('Context Judge Agent Seeding', () => {
     expect(mcpIdx).toBeLessThan(restIdx);
   });
 
-  // ── Test 25 — Default runtime config: codex / gpt-5.5 when env absent ────────
+  // ── Test 25 — Default runtime config: codex / gpt-5.6-sol when env absent ────
 
-  it('all 9 context judge agents use codex / gpt-5.5 when ALLEN_CONTEXT_LLM_PROVIDER and ALLEN_CONTEXT_LLM_MODEL are unset', async () => {
+  it('all 9 context judge agents use codex / gpt-5.6-sol when ALLEN_CONTEXT_LLM_PROVIDER and ALLEN_CONTEXT_LLM_MODEL are unset', async () => {
     // Env vars already deleted in beforeEach
     const db = makeDb();
     await new OrgSeedService(db).seed();
@@ -550,7 +550,7 @@ describe('Context Judge Agent Seeding', () => {
       const agent = db.store.agents.find((a: any) => a.name === agentName);
       expect(agent, `${agentName} must be seeded`).toBeDefined();
       expect(agent.provider, `${agentName}.provider must be 'codex' by default`).toBe('codex');
-      expect(agent.model, `${agentName}.model must be 'gpt-5.5' by default`).toBe('gpt-5.5');
+      expect(agent.model, `${agentName}.model must be 'gpt-5.6-sol' by default`).toBe('gpt-5.6-sol');
     }
   });
 
@@ -598,7 +598,7 @@ describe('Context Judge Agent Seeding', () => {
 
   it('all 9 context judge agents ignore ALLEN_DEFAULT_AGENT_PROVIDER (use context engine LLM, not general agent default)', async () => {
     // General agent default says claude-cli, but context engine has no override
-    // → context judge agents should still default to codex/gpt-5.5
+    // → context judge agents should still default to codex/gpt-5.6-sol
     const originalAgentProvider = process.env.ALLEN_DEFAULT_AGENT_PROVIDER;
     process.env.ALLEN_DEFAULT_AGENT_PROVIDER = 'claude';
 
@@ -615,8 +615,8 @@ describe('Context Judge Agent Seeding', () => {
         ).toBe('codex');
         expect(
           agent.model,
-          `${agentName}.model must be 'gpt-5.5' (context engine default)`,
-        ).toBe('gpt-5.5');
+          `${agentName}.model must be 'gpt-5.6-sol' (context engine default)`,
+        ).toBe('gpt-5.6-sol');
       }
     } finally {
       if (originalAgentProvider === undefined) delete process.env.ALLEN_DEFAULT_AGENT_PROVIDER;
