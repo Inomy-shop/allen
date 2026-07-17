@@ -49,6 +49,13 @@ function steerClaudeState(state: ClaudeSteerState, text: string): boolean {
   }
 }
 
+// Mirrors the terminal result branch in handleClaudeEvent().
+function terminalResultAction(subtype: string | undefined, steerPending: boolean): 'swallow-steer-interrupt' | 'reject' | 'resolve' {
+  if (steerPending && subtype === 'error_during_execution') return 'swallow-steer-interrupt';
+  if (subtype && subtype !== 'success') return 'reject';
+  return 'resolve';
+}
+
 // ── Tests ──
 
 describe('ClaudePersistentRuntime.steer logic', () => {
@@ -123,5 +130,19 @@ describe('ClaudePersistentRuntime.steer logic', () => {
 
     const result = steerClaudeState(state, 'hello');
     expect(result).toBe(false);
+  });
+});
+
+describe('ClaudePersistentRuntime terminal result handling', () => {
+  it('rejects non-steer error results instead of resolving an empty assistant response', () => {
+    expect(terminalResultAction('error_during_execution', false)).toBe('reject');
+  });
+
+  it('still swallows the expected steer interrupt result', () => {
+    expect(terminalResultAction('error_during_execution', true)).toBe('swallow-steer-interrupt');
+  });
+
+  it('resolves successful results', () => {
+    expect(terminalResultAction('success', false)).toBe('resolve');
   });
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Collection, Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
+import { StateManager } from '@allen/engine';
 import { sha256, stringValue } from '../common/context-utils.js';
 import {
   REPO_CONTEXT_CURATOR_PROMPT_VERSION,
@@ -815,19 +816,14 @@ export class RepoContextCurationService {
       updatedAt: now,
     };
     await this.profiles.insertOne(profile);
-    await this.db.collection('executions').updateOne(
-      { id: executionId },
-      {
-        $set: {
+    await new StateManager(this.db).updateExecution(executionId, {
           status: 'running',
           currentNodes: ['repo-context-curator'],
           'meta.curationProfile': true,
           'meta.cwd': input.repoPath,
           'input.repo_id': input.repoId,
           'input.repo_path': input.repoPath,
-        },
-      },
-    );
+    } as any);
     await this.repos.updateOne(
       { _id: new ObjectId(input.repoId) },
       { $set: { contextCuration: { status: 'running', profileId: profile.profileId, executionId, startedAt: now } } },
@@ -853,7 +849,7 @@ export class RepoContextCurationService {
 
   private async createCurationExecution(input: CurationRunInput, options: ScheduleRefreshOptions, now: Date): Promise<string> {
     const executionId = randomUUID();
-    await this.db.collection('executions').insertOne({
+    await new StateManager(this.db).createExecution({
       id: executionId,
       workflowName: `${options.parentCaller ?? 'chat'}:spawn_agent/repo-context-curator`,
       workflowId: null,
@@ -886,7 +882,8 @@ export class RepoContextCurationService {
       cost: { actual: null, estimated: 0 },
       durationMs: 0,
       startedAt: now,
-    });
+      nodeAttempts: {},
+    } as any);
     return executionId;
   }
 
@@ -899,19 +896,16 @@ export class RepoContextCurationService {
     codexRan: boolean;
   }): Promise<void> {
     const completedAt = new Date();
-    await this.db.collection('executions').updateOne(
-      { id: input.executionId },
+    await new StateManager(this.db).updateExecutionWithUnset(
+      input.executionId,
       {
-        $set: {
           status: 'completed',
           completedNodes: ['repo-context-curator'],
           currentNodes: [],
-          cost: { actual: 0, estimated: 0 },
           durationMs: input.durationMs,
           completedAt,
-        },
-        $unset: { errorMessage: '' },
       },
+      ['errorMessage'],
     );
     if (!input.codexRan) {
       await this.db.collection('execution_traces').insertOne({

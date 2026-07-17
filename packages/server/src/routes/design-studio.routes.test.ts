@@ -20,7 +20,7 @@ import express from 'express';
 import request from 'supertest';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { MongoClient, ObjectId, type Db } from 'mongodb';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const TMP = join(tmpdir(), `dstudio-routes-${Date.now()}`);
 vi.mock('@allen/engine', async (orig) => {
@@ -99,6 +99,10 @@ describe('design-studio routes', () => {
     await client?.close();
     await mongo?.stop();
     await fs.rm(TMP, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   beforeEach(async () => {
@@ -208,7 +212,9 @@ describe('design-studio routes', () => {
     expect(sharedStyles).toContain('@import url("./system/components.css");');
   });
 
-  it('falls back to an active Opus model when the preferred Studio model is unavailable', async () => {
+  it('keeps the active Opus model fallback for repo analysis when selection is omitted', async () => {
+    vi.stubEnv('ALLEN_DEFAULT_CHAT_PROVIDER', 'codex');
+    vi.stubEnv('ALLEN_DEFAULT_CHAT_MODEL', 'gpt-5.6-sol');
     await db.collection('model_registry').insertOne({
       _id: new ObjectId(),
       provider: 'claude',
@@ -232,7 +238,7 @@ describe('design-studio routes', () => {
 
     const analyzed = (await request(app)
       .post(`/api/design-studio/workspaces/${ws._id}/analyze`)
-      .send({ provider: 'claude-cli', model: 'opus' })
+      .send({})
       .expect(200)).body;
 
     expect(analyzed.analysisProvider).toBe('claude');
@@ -296,30 +302,32 @@ describe('design-studio routes', () => {
     expect(session?.systemPromptOverride).toContain('MANDATORY PLAN-FIRST WORKFLOW');
   });
 
-  it('defaults design chat sessions to Claude Opus 4.8 when no model is provided', async () => {
-    const ws = (await request(app).post('/api/design-studio/workspaces').send({ kind: 'greenfield', name: 'Idea' }).expect(201)).body;
-    await request(app).post(`/api/design-studio/workspaces/${ws._id}/greenfield`).send({ answers: {} }).expect(200);
-
-    const started = (await request(app).post(`/api/design-studio/workspaces/${ws._id}/start`).send({}).expect(201)).body;
-    const session = await db.collection('chat_sessions').findOne({ _id: new ObjectId(started.chatSessionId) });
-
-    expect(session?.provider).toBe('claude');
-    expect(session?.model).toBe('claude-opus-4-8');
-  });
-
-  it('defaults design chat sessions to the active Opus model when Opus 4.8 is unavailable', async () => {
-    await db.collection('model_registry').insertOne({
+  it.each([
+    { provider: 'codex', model: 'gpt-5.6-sol', alsoActive: [] as string[] },
+    // The Claude case registers Opus 4.8 as an ACTIVE model on purpose. Without it, the old
+    // hardcoded Opus default would coincidentally resolve back to the configured model via
+    // chooseAvailableStudioModel's unavailable-model fallback, so the test would pass against
+    // the bug it is meant to catch. With Opus genuinely available, only the fixed
+    // configured-default resolution can return the configured Sonnet model.
+    { provider: 'claude', model: 'claude-sonnet-4-6', alsoActive: ['claude-opus-4-8'] },
+  ])('defaults design chat sessions to the configured $provider model when selection is omitted', async ({ provider, model, alsoActive }) => {
+    vi.stubEnv('ALLEN_DEFAULT_CHAT_PROVIDER', provider);
+    vi.stubEnv('ALLEN_DEFAULT_CHAT_MODEL', model);
+    await db.collection('model_registry').insertMany([
+      { fullId: model, tier: 'default' },
+      ...alsoActive.map((fullId) => ({ fullId, tier: 'opus' })),
+    ].map((entry, index) => ({
       _id: new ObjectId(),
-      provider: 'claude',
-      fullId: 'claude-opus-4-7',
-      displayName: 'Opus 4.7',
-      providerDisplayName: 'Claude',
-      tier: 'opus',
+      provider,
+      fullId: entry.fullId,
+      displayName: entry.fullId,
+      providerDisplayName: provider === 'claude' ? 'Claude' : 'Codex',
+      tier: entry.tier,
       isActive: true,
-      sortOrder: 10,
+      sortOrder: 10 + index,
       createdAt: new Date(),
       updatedAt: new Date(),
-    });
+    })));
 
     const ws = (await request(app).post('/api/design-studio/workspaces').send({ kind: 'greenfield', name: 'Idea' }).expect(201)).body;
     await request(app).post(`/api/design-studio/workspaces/${ws._id}/greenfield`).send({ answers: {} }).expect(200);
@@ -327,8 +335,49 @@ describe('design-studio routes', () => {
     const started = (await request(app).post(`/api/design-studio/workspaces/${ws._id}/start`).send({}).expect(201)).body;
     const session = await db.collection('chat_sessions').findOne({ _id: new ObjectId(started.chatSessionId) });
 
-    expect(session?.provider).toBe('claude');
-    expect(session?.model).toBe('claude-opus-4-7');
+    expect(session?.provider).toBe(provider);
+    expect(session?.model).toBe(model);
+  });
+
+  it.each([
+    { provider: 'claude', model: 'claude-sonnet-4-6', requiredKey: undefined },
+    { provider: 'zai', model: 'glm-5.2[1m]', requiredKey: 'ALLEN_ZAI_API_KEY' },
+  ])('defaults an explicit $provider selection to that provider\'s own model', async ({ provider, model, requiredKey }) => {
+    vi.stubEnv('ALLEN_DEFAULT_CHAT_PROVIDER', 'codex');
+    vi.stubEnv('ALLEN_DEFAULT_CHAT_MODEL', 'gpt-5.6-sol');
+    if (requiredKey) vi.stubEnv(requiredKey, 'test-key');
+
+    const ws = (await request(app).post('/api/design-studio/workspaces').send({ kind: 'greenfield', name: 'Idea' }).expect(201)).body;
+    await request(app).post(`/api/design-studio/workspaces/${ws._id}/greenfield`).send({ answers: {} }).expect(200);
+
+    const started = (await request(app)
+      .post(`/api/design-studio/workspaces/${ws._id}/start`)
+      .send({ provider })
+      .expect(201)).body;
+    const session = await db.collection('chat_sessions').findOne({ _id: new ObjectId(started.chatSessionId) });
+
+    expect(session?.provider).toBe(provider);
+    expect(session?.model).toBe(model);
+  });
+
+  it('keeps Claude Opus 4.8 as the repo analysis default when selection is omitted', async () => {
+    vi.stubEnv('ALLEN_DEFAULT_CHAT_PROVIDER', 'codex');
+    vi.stubEnv('ALLEN_DEFAULT_CHAT_MODEL', 'gpt-5.6-sol');
+    const repoRoot = join(TMP, 'repo-analysis-default');
+    await fs.mkdir(repoRoot, { recursive: true });
+    await fs.writeFile(join(repoRoot, 'package.json'), JSON.stringify({ dependencies: {} }), 'utf8');
+
+    const repoId = '64b2f0000000000000000aac';
+    await db.collection('repos').insertOne({ _id: new ObjectId(repoId), name: 'Default Analysis App', path: repoRoot } as any);
+    const ws = (await request(app).post('/api/design-studio/workspaces').send({ kind: 'repo', repoId }).expect(201)).body;
+
+    const analyzed = (await request(app)
+      .post(`/api/design-studio/workspaces/${ws._id}/analyze`)
+      .send({})
+      .expect(200)).body;
+
+    expect(analyzed.analysisProvider).toBe('claude');
+    expect(analyzed.analysisModel).toBe('claude-opus-4-8');
   });
 
   describe('POST /workspaces/:id/refresh (REQ-005)', () => {

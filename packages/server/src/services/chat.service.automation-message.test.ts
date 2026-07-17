@@ -29,6 +29,7 @@ vi.mock('./chat-llm.js', () => ({
 }));
 
 vi.mock('./chat-providers.js', () => ({
+  AGENT_FALLBACK_CWD: '/tmp/allen',
   getDefaultChatProvider: vi.fn().mockReturnValue('claude'),
   getDefaultChatModel: vi.fn().mockReturnValue('test-model'),
   getTitleGenProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'test-model' }),

@@ -1,23 +1,12 @@
 import { useEffect, useState } from 'react';
 import { executions as executionsApi, type RunStatus } from '../services/api';
-
-function isLiveRun(context: RunStatus | null): boolean {
-  if (!context) return false;
-  const status = (context.execution.status || context.status || '').toLowerCase();
-  return (
-    status === 'pending'
-    || status === 'queued'
-    || status === 'running'
-    || status === 'waiting_for_input'
-    || status === 'paused'
-    || context.humanInput.required
-  );
-}
+import { useExecutionStore } from '../stores/executionStore';
 
 export function useRunContext(executionId?: string | null) {
   const [runContext, setRunContext] = useState<RunStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const snapshot = useExecutionStore((state) => executionId ? state.entities[executionId] : undefined);
 
   useEffect(() => {
     if (!executionId) {
@@ -28,34 +17,51 @@ export function useRunContext(executionId?: string | null) {
     }
 
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    async function load(initial: boolean) {
-      if (initial) setLoading(true);
+    async function load() {
+      setLoading(true);
       try {
         const context = await executionsApi.context(executionId!);
         if (cancelled) return;
+        useExecutionStore.getState().ingestExecution(context.execution as unknown as Record<string, unknown>);
         setRunContext(context);
         setError(null);
-        if (isLiveRun(context)) {
-          timer = setTimeout(() => { void load(false); }, 3000);
-        }
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : 'Failed to load run context');
-        timer = setTimeout(() => { void load(false); }, 5000);
       } finally {
-        if (!cancelled && initial) setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
-    void load(true);
+    void load();
 
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
     };
-  }, [executionId]);
+  }, [executionId, snapshot?.revision, snapshot?.runGeneration]);
 
-  return { runContext, loading, error };
+  const effectiveContext = runContext && snapshot
+    ? {
+        ...runContext,
+        status: snapshot.status,
+        execution: {
+          ...runContext.execution,
+          status: snapshot.status,
+          revision: snapshot.revision,
+          runGeneration: snapshot.runGeneration,
+          updatedAt: snapshot.updatedAt,
+          currentNodes: snapshot.currentNodes,
+          completedNodes: snapshot.completedNodes,
+          failedNode: snapshot.failedNode,
+          errorMessage: snapshot.errorMessage,
+          completedAt: snapshot.completedAt,
+        },
+        humanInput: {
+          ...runContext.humanInput,
+          required: snapshot.status === 'waiting_for_input',
+        },
+      }
+    : runContext;
+
+  return { runContext: effectiveContext, loading, error };
 }

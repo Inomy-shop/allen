@@ -107,6 +107,7 @@ const SEED_MODELS: SeedEntry[] = [
   // Pricing: https://openai.com/api/pricing/ (verified 2026-06-12; cached input = 90% off).
   // Codex CLI variants (gpt-5.x-codex, codex-mini) have no authoritative published
   // per-MTok API price (Codex CLI typically bills via ChatGPT subscription) → null.
+  { provider: 'codex', fullId: 'gpt-5.6-sol', displayName: 'GPT-5.6 SOL', providerDisplayName: 'Codex', tier: 'default' },
   // GPT-5.5: $5/M input, $30/M output, $0.50/M cached input
   { provider: 'codex', fullId: 'gpt-5.5', displayName: 'GPT-5.5', providerDisplayName: 'Codex', tier: 'default', costInputPerMTok: 5, costOutputPerMTok: 30, costCacheReadPerMTok: 0.50 },
   // GPT-5.4: $2.50/M input, $15/M output, $0.25/M cached input

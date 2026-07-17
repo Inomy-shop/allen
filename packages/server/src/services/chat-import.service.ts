@@ -521,6 +521,9 @@ export class ChatImportService {
         const meta = (exec.meta as Record<string, unknown>) ?? {};
         meta.chatSessionId = sessionIdStr;
         exec.meta = meta;
+        exec.revision = typeof exec.revision === 'number' ? exec.revision : 1;
+        exec.runGeneration = typeof exec.runGeneration === 'number' ? exec.runGeneration : 1;
+        exec.updatedAt = exec.updatedAt ?? now;
         await this.db.collection('executions').insertOne(exec);
       }
       if (flatExecs.length > 0) insertedCollections.push('executions');

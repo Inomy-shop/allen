@@ -140,8 +140,8 @@ JWT settings:
 
 - `JWT_ACCESS_SECRET`
 - `JWT_REFRESH_SECRET`
-- Optional `ACCESS_TOKEN_TTL`
-- Optional `REFRESH_TOKEN_TTL`
+- Optional `ACCESS_TOKEN_TTL` (default `7d`)
+- Optional `REFRESH_TOKEN_TTL` (default `30d`)
 
 Rotate JWT secrets if they are exposed.
 

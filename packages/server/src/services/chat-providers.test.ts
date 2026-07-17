@@ -829,6 +829,7 @@ describe('getEnabledProvidersFromRegistry (REQ-014)', () => {
     expect(codex).toBeDefined();
     // Static fallback mirrors the model-registry seed list (SEED_MODELS).
     expect(codex!.models).toEqual([
+      'gpt-5.6-sol',
       'gpt-5.5',
       'gpt-5.4',
       'gpt-5.3-codex',

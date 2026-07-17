@@ -312,11 +312,12 @@ describe('CronService.ensureLinkedSession', () => {
     }
   });
 
-  it('AUTOMATION_API_TOKEN is short-lived (≤5 min) — not the 24h default', async () => {
+  it('AUTOMATION_API_TOKEN is short-lived (≤5 min) — not the global access-token default', async () => {
     // Security regression guard: the embedded token is stored in MongoDB as part
-    // of the chat_messages prompt text. A long-lived token (ACCESS_TOKEN_TTL = 24h)
-    // would be exploitable for up to 24 hours. This test verifies the call site
-    // explicitly requests a 5-minute TTL regardless of the global ACCESS_TOKEN_TTL.
+    // of the chat_messages prompt text. A long-lived token using the global
+    // ACCESS_TOKEN_TTL default would be exploitable beyond the execution window.
+    // This test verifies the call site explicitly requests a 5-minute TTL
+    // regardless of the global ACCESS_TOKEN_TTL.
     const db = makeDb();
     const service = new TestableCronService(db as any);
     const job = makeJob();
@@ -350,7 +351,7 @@ describe('CronService.ensureLinkedSession', () => {
       };
 
       const ttlSeconds = decoded.exp - decoded.iat;
-      // Must be ≤ 5 minutes (300 s), NOT the 24h (86 400 s) default
+      // Must be ≤ 5 minutes (300 s), NOT the global access-token default
       expect(ttlSeconds).toBeGreaterThan(0);
       expect(ttlSeconds).toBeLessThanOrEqual(300);
       // Role should be admin (required for the automation-message endpoint)

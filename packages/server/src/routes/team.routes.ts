@@ -2,7 +2,8 @@
  * Team API routes — phase 3 of the teams architecture.
  *
  * Manual CRUD over the `teams` collection. Built-in teams cannot be modified
- * or deleted (the service enforces this). Teams with members cannot be deleted.
+ * or deleted (the service enforces this). Teams with members require an
+ * explicit cascading delete request so the UI can show a guarded confirmation.
  */
 
 import { Router, type Request, type Response } from 'express';
@@ -281,11 +282,16 @@ export function teamRoutes(db: Db): Router {
     }
   });
 
-  // DELETE /api/teams/:name — delete a team (only if empty + not built-in)
+  // DELETE /api/teams/:name — delete a team (not built-in). Pass
+  // { deleteAgents: true } after user confirmation to also soft-delete all
+  // active non-built-in agents in the team.
   router.delete('/:name', async (req: Request, res: Response) => {
     try {
-      await service.delete(param(req, 'name'));
-      res.status(204).send();
+      const result = await service.delete(param(req, 'name'), {
+        deleteAgents: req.body?.deleteAgents === true,
+        deletedBy: req.body?.userId?.toString?.() ?? null,
+      });
+      res.json(result);
     } catch (err: unknown) {
       const msg = (err as Error).message;
       if (msg.includes('built-in')) return res.status(403).json({ error: msg });

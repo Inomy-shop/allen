@@ -320,7 +320,7 @@ export class CronService {
       const sessionId = await this.ensureLinkedSession(job);
       // Short-lived (5 min) token — sufficient for the agent execution window.
       // This token is embedded in the agent prompt which is stored in MongoDB,
-      // so using ACCESS_TTL (24 h) would leave a long-lived credential at rest.
+      // so using the global ACCESS_TOKEN_TTL default would leave a long-lived credential at rest.
       const token = signAccessToken({
         sub: 'cron-system',
         email: 'cron@internal.local',

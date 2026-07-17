@@ -20,6 +20,7 @@ import { agents as agentsApi, chat as chatApi, executions, interventions, linear
 import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import { chatCodeDiffs, pullRequests } from '../services/workspaceService';
 import { useAuthStore } from '../stores/authStore';
+import { useExecutionStore } from '../stores/executionStore';
 import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
 import { useSkillSlashCommands } from '../hooks/useSkillSlashCommands';
 import { useFileDropZone, FileDropOverlay } from '../hooks/useFileDropZone';
@@ -705,6 +706,7 @@ export default function DashboardPage() {
   const [reviewPrs, setReviewPrs] = useState<PullRequestReviewItem[]>([]);
   const [allPullRequests, setAllPullRequests] = useState<PullRequestReviewItem[]>([]);
   const [runs, setRuns] = useState<ExecutionItem[]>([]);
+  const executionRevisionClock = useExecutionStore(state => state.changeVersion);
   const [chatSessions, setChatSessions] = useState<ChatSessionItem[]>([]);
   const [chatDiffSummaries, setChatDiffSummaries] = useState<Record<string, DiffSummary>>({});
   const [initialLoading, setInitialLoading] = useState(true);
@@ -736,6 +738,9 @@ export default function DashboardPage() {
       setPendingInterventions(pending ?? []);
       setReviewPrs((openPrs ?? []).filter((pr) => isReviewNeededPr(pr) && Boolean(pr.chatSessionId)));
       setAllPullRequests(prs ?? []);
+      for (const execution of execs.items ?? []) {
+        useExecutionStore.getState().ingestExecution(execution as unknown as Record<string, unknown>);
+      }
       const assignedRuns = collapseTaskRuns((execs.items ?? []).filter((run) => isAssignedTask(run) && hasChatReference(run)));
       setRuns(assignedRuns);
       setChatSessions(sessions ?? []);
@@ -764,9 +769,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     void load();
-    const interval = setInterval(load, 10000);
-    return () => clearInterval(interval);
-  }, [user?.id]);
+  }, [user?.id, executionRevisionClock]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {

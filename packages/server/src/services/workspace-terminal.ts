@@ -221,7 +221,10 @@ export function startTerminalWebSocketServer(
       return;
     }
 
-    socket.destroy();
+    // On the desktop runtime this HTTP server also owns the application
+    // realtime channel. Leave unknown upgrades untouched so its handler can
+    // claim them. A dedicated terminal server may still reject unknown paths.
+    if (ownsServer) socket.destroy();
   };
   httpServer.on('upgrade', upgradeHandler);
 

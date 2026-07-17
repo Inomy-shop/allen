@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { notDeletedFilter } from './soft-delete.js';
 import { logger } from '../logger.js';
-import { ExecutionService } from './execution.service.js';
+import { ExecutionService, normalizeRuntimeModelOverrides, type RuntimeModelChoice } from './execution.service.js';
 import { WatcherService } from './watcher.service.js';
 import { InterventionService } from './intervention.service.js';
 import { embedAndSave, invalidateCache } from './embedding.service.js';
@@ -32,7 +32,7 @@ import {
   inputRequestToWaitMessage,
   logToWaitMessage,
 } from './execution-wait-messages.js';
-import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, type HumanInterventionPayload, type MaterializedAgentFileMetadata, normalizeClaudeUsage, normalizeCodexUsage, aggregateTokenUsage, type TokenUsageInfo } from '@allen/engine';
+import { MCP_SERVER_NAME, normalizeModelAlias, ARTIFACTS_GUIDANCE, NON_INTERACTIVE_GUIDANCE, hasRepoContextLoadingGuidance, withMandatoryRepoContext, withRepoContextLoadingGuidance, getAllenMcpConfig, buildHumanResumeInput, StateManager, type HumanInterventionPayload, type MaterializedAgentFileMetadata, normalizeClaudeUsage, normalizeCodexUsage, aggregateTokenUsage, type TokenUsageInfo } from '@allen/engine';
 import {
   getRuntimeApiBaseUrl,
   getRuntimeJwtAccessSecret,
@@ -58,6 +58,22 @@ interactive Claude Code harness. Therefore:
 - If a configured MCP tool is not visible in your initial tool list, use \`ToolSearch\`
   to discover it before using shell commands to inspect local Claude/MCP config files.
 `.trim();
+
+function runtimeModelChoiceFromArgs(value: unknown): RuntimeModelChoice | undefined {
+  const normalized = normalizeRuntimeModelOverrides(value);
+  if (!normalized) return undefined;
+  const choice: RuntimeModelChoice = {};
+  const defaultChoice = normalized.default ?? {};
+  const provider = normalized.provider ?? defaultChoice.provider;
+  const model = normalized.model ?? defaultChoice.model;
+  const reasoningEffort = normalized.reasoningEffort ?? defaultChoice.reasoningEffort;
+  if (provider) choice.provider = provider;
+  if (model) choice.model = model;
+  if (reasoningEffort) choice.reasoningEffort = reasoningEffort;
+  const planMode = normalized.planMode ?? defaultChoice.planMode;
+  if (planMode !== undefined) choice.planMode = planMode;
+  return Object.keys(choice).length > 0 ? choice : undefined;
+}
 
 function toHumanInterventionPayload(doc: {
   stage: string;
@@ -666,12 +682,18 @@ const runWorkflow: ChatTool = {
         description: 'Input parameters for the workflow, matching get_workflow.parsed.input exactly. Do not use aliases such as task when the workflow requires user_request.',
         additionalProperties: true,
       },
+      runtime_model: {
+        type: 'object',
+        description: 'Optional execution-scoped model overrides. Top-level provider/model applies to every agent node; nodes maps workflow node names to provider/model; agents maps agent names to provider/model. Never mutates the workflow or agent definitions.',
+        additionalProperties: true,
+      },
     },
     required: ['workflow_name'],
   },
   async execute(args, db, context) {
     const name = args.workflow_name as string;
     const input = (args.input as Record<string, unknown>) ?? {};
+    const runtimeModel = normalizeRuntimeModelOverrides(args.runtime_model ?? args.runtimeModel);
 
     // Find workflow by name
     const workflow = await db.collection('workflows').findOne({ name, archived: { $ne: true }, ...notDeletedFilter });
@@ -703,7 +725,7 @@ const runWorkflow: ChatTool = {
     }
 
     const executionService = new ExecutionService(db);
-    const result = await executionService.start((workflow._id as ObjectId).toString(), input);
+    const result = await executionService.start((workflow._id as ObjectId).toString(), input, { runtimeModel });
     const executionId = String(result.id ?? '');
     const activeCtx = resolveActiveSession(context);
     const chatSessionId = activeCtx?.chatSessionId ?? context?.chatSessionId;
@@ -723,10 +745,8 @@ const runWorkflow: ChatTool = {
       if (typeof input.workspace_id === 'string') chatMeta['meta.workspaceId'] = input.workspace_id;
       if (typeof input.repo_path === 'string') chatMeta['meta.workspacePath'] = input.repo_path;
       if (typeof input.worktree_path === 'string') chatMeta['meta.workspacePath'] = input.worktree_path;
-      await db.collection('executions').updateOne(
-        { id: executionId },
-        { $set: chatMeta },
-      ).catch((err) => logger.warn('[chat-tools] failed to attach chat metadata to workflow execution', {
+      if (runtimeModel) chatMeta['meta.runtimeModelPlan'] = runtimeModel;
+      await new StateManager(db).updateExecution(executionId, chatMeta as any).catch((err) => logger.warn('[chat-tools] failed to attach chat metadata to workflow execution', {
         component: 'chat-tools',
         executionId,
         chatSessionId,
@@ -1019,6 +1039,11 @@ const spawnAgent: ChatTool = {
       },
       repo_path: { type: 'string', description: 'Optional repo path for the agent to work in' },
       session_id: { type: 'string', description: 'Session ID from a previous spawn to resume with context. The agent picks up where it left off.' },
+      runtime_model: {
+        type: 'object',
+        description: 'Optional execution-scoped provider/model override for this agent run, e.g. { provider: "claude", model: "claude-opus-4-7" }. Does not mutate the agent definition.',
+        additionalProperties: true,
+      },
     },
     required: ['agent_name', 'prompt'],
   },
@@ -1028,6 +1053,7 @@ const spawnAgent: ChatTool = {
     const promptSanitization = stripUnsupportedInlineContextQuery(rawPrompt);
     const prompt = promptSanitization.prompt;
     const resumeSession = args.session_id as string | undefined;
+    const runtimeModel = runtimeModelChoiceFromArgs(args.runtime_model ?? args.runtimeModel);
 
     const role = await db.collection('agents').findOne({ name: agentName, ...notDeletedFilter });
     if (!role) {
@@ -1084,6 +1110,9 @@ const spawnAgent: ChatTool = {
     const providedRepoKnowledgeFreshness = (args.repo_knowledge_freshness as string | undefined) || null;
     const callerLabel = parentCaller || 'chat';
     const workflowName = `${callerLabel}:spawn_agent/${agentName}`;
+    const effectiveProvider = runtimeModel?.provider ?? (role.provider as string | undefined) ?? 'claude';
+    const rawEffectiveModel = runtimeModel?.model ?? (role.model as string | undefined) ?? 'sonnet';
+    const effectiveModel = normalizeModelAlias(rawEffectiveModel) ?? rawEffectiveModel;
     // Root defaults to this new execution if no upstream root was passed.
     // Used by Phase 3 log fan-out to broadcast the entire spawn subtree up
     // to the top-of-tree execution page in one indexed lookup.
@@ -1105,7 +1134,7 @@ const spawnAgent: ChatTool = {
       }
     }
 
-    await db.collection('executions').insertOne({
+    await new StateManager(db).createExecution({
       id: executionId,
       workflowName,
       workflowId: null,
@@ -1118,12 +1147,19 @@ const spawnAgent: ChatTool = {
         agent_name: agentName,
         repo_path: repoPath,
         session_id: resumeSession,
+        ...(runtimeModel ? { runtime_model: runtimeModel } : {}),
       },
       // Execution metadata for tracing
       meta: {
         cwd: repoPath || AGENT_FALLBACK_CWD,
-        provider: (role.provider as string) ?? 'claude',
-        model: (role.model as string) ?? 'sonnet',
+        provider: effectiveProvider,
+        model: effectiveModel,
+        ...(runtimeModel ? {
+          runtimeModelPlan: runtimeModel,
+          modelSource: 'runtime_override',
+          agentDefaultProvider: (role.provider as string) ?? 'claude',
+          agentDefaultModel: (role.model as string) ?? 'sonnet',
+        } : {}),
         spawnedBy: activeCtxForMeta?.currentAgent ?? parentCaller ?? 'user',
         chatSessionId: chatSessionIdForMeta,
         parentMessageId: activeCtxForMeta?.parentMessageId,
@@ -1147,13 +1183,14 @@ const spawnAgent: ChatTool = {
       state: {},
       sessions: {},
       retryCounts: {},
+      nodeAttempts: {},
       currentNodes: [agentName],
       completedNodes: [],
       // No cost field — per-attempt spend lives on execution_traces rows
       // only; totals are rolled up on demand from the spawn tree.
       durationMs: 0,
       startedAt: new Date(),
-    });
+    } as any);
 
     // Run in background — return immediately so MCP doesn't timeout.
     // Pass the spawn-tree context so runSpawnInBackground can propagate the
@@ -1199,6 +1236,7 @@ const spawnAgent: ChatTool = {
       repoKnowledgeFreshness: providedRepoKnowledgeFreshness,
       contextQuery,
       inlineContextQueryStripped: promptSanitization.stripped,
+      runtimeModel,
     }, 1, context).catch(() => {});
 
     // ── Watcher registration for spawned agents ───────────────────────
@@ -1258,6 +1296,7 @@ interface SpawnTreeContext {
   repoKnowledgeFreshness?: string | null;
   contextQuery?: Record<string, unknown>;
   inlineContextQueryStripped?: boolean;
+  runtimeModel?: RuntimeModelChoice;
 }
 
 async function markSpawnCompletedUnlessTerminal(
@@ -1266,6 +1305,7 @@ async function markSpawnCompletedUnlessTerminal(
   agentName: string,
   durationMs: number,
   sessionId?: string,
+  expectedGeneration?: number,
 ): Promise<boolean> {
   // Cost/usage are NOT written to the execution row — each attempt's spend
   // is on its own execution_traces row (resumed runs reuse the executionId
@@ -1279,18 +1319,20 @@ async function markSpawnCompletedUnlessTerminal(
   };
   if (sessionId) completionFields[`sessions.${agentName}`] = sessionId;
 
-  const result = await db.collection('executions').updateOne(
+  const result = await new StateManager(db).updateExecutionWhere(
     { id: executionId, status: { $nin: ['completed', 'cancelled', 'canceled', 'failed'] } },
-    { $set: completionFields },
+    completionFields,
+    [],
+    { expectedGeneration },
   );
 
-  if (result.matchedCount > 0) return true;
+  if (result) return true;
 
   if (sessionId) {
-    await db.collection('executions').updateOne(
-      { id: executionId },
-      { $set: { [`sessions.${agentName}`]: sessionId, durationMs } },
-    );
+    await new StateManager(db).updateExecution(executionId, {
+      [`sessions.${agentName}`]: sessionId,
+      durationMs,
+    } as any);
   }
   return false;
 }
@@ -1310,16 +1352,26 @@ async function runSpawnInBackground(
    *  chat. */
   context?: ChatToolContext,
 ): Promise<void> {
+  const generationRow = await db.collection('executions').findOne(
+    { id: executionId },
+    { projection: { runGeneration: 1 } },
+  );
+  const expectedRunGeneration = typeof generationRow?.runGeneration === 'number' ? generationRow.runGeneration : 1;
+  const updateSpawnExecution = (set: Record<string, unknown>) => new StateManager(db).updateExecution(
+    executionId,
+    { ...set, runGeneration: expectedRunGeneration } as any,
+  );
   const activeCtx = resolveActiveSession(context);
   const contextChatSessionId = activeCtx?.chatSessionId ?? context?.chatSessionId;
   if (activeCtx) activeCtx.pendingBackgroundTasks++;
   const onEvent = activeCtx?.broadcastEvent;
   const startMs = Date.now();
-  const provider = role.provider ?? 'claude';
+  const provider = spawnTree?.runtimeModel?.provider ?? role.provider ?? 'claude';
   // Normalize alias → full model ID. The bundled Claude Code CLI (used in SDK
   // mode) has stale alias tables that resolve `haiku` → claude-3-5-haiku-20241022
   // which returns 404. We pin current IDs in packages/engine/src/model-alias.ts.
-  const model = normalizeModelAlias((role.model as string) ?? 'sonnet') ?? 'sonnet';
+  const rawModel = spawnTree?.runtimeModel?.model ?? (role.model as string) ?? 'sonnet';
+  const model = normalizeModelAlias(rawModel) ?? rawModel;
   const activity: { type: string; tool?: string; timestamp: Date }[] = [];
 
   // Persist spawn activity to agent_activity so the wait tools can return
@@ -1576,8 +1628,19 @@ async function runSpawnInBackground(
       claudeInitMcpServerCount: capturedClaudeInitMcpServers?.count,
       claudeInitMcpServerNames: capturedClaudeInitMcpServers?.names,
       claudeInitMcpServers: capturedClaudeInitMcpServers?.raw,
+      resolvedModel: model,
+      modelSource: spawnTree?.runtimeModel?.model ? 'runtime_override' : 'agent-default',
+      providerSource: spawnTree?.runtimeModel?.provider ? 'runtime_override' : 'agent-default',
     };
   };
+  const buildSpawnAgentOverrides = () => ({
+    provider: String(provider),
+    model,
+    sources: {
+      provider: spawnTree?.runtimeModel?.provider ? 'runtime' : 'agent-default',
+      model: spawnTree?.runtimeModel?.model ? 'runtime' : 'agent-default',
+    },
+  });
 
   for (let attempt = 0; attempt <= MAX_SPAWN_RETRIES; attempt++) {
     let toolCalls: { tool: string; args: Record<string, unknown>; result?: Record<string, unknown> }[] = [];
@@ -1703,7 +1766,7 @@ async function runSpawnInBackground(
         // Register PID for cancel support
         if (proc.pid) {
           registerExecutionProcess(executionId, proc.pid, () => { try { proc.kill('SIGTERM'); } catch {} });
-          db.collection('executions').updateOne({ id: executionId }, { $set: { 'meta.pid': proc.pid } }).catch(() => {});
+          updateSpawnExecution({ 'meta.pid': proc.pid }).catch(() => {});
         }
         logger.info('[codex] start', { executionId, agentName, pid: proc.pid ?? '?', resume: currentResumeSession ? currentResumeSession.slice(0, 12) : 'new' });
 
@@ -1738,10 +1801,9 @@ async function runSpawnInBackground(
                 currentResumeSession = evt.thread_id;
                 // Eagerly persist to executions.sessions so a SIGTERM/crash
                 // after this point still leaves a resumable session id.
-                db.collection('executions').updateOne(
-                  { id: executionId },
-                  { $set: { [`sessions.${agentName}`]: evt.thread_id } },
-                ).catch((err) => logger.warn('[codex] session.eager_persist_failed', { executionId, agentName, error: (err as Error).message }));
+                updateSpawnExecution({
+                  [`sessions.${agentName}`]: evt.thread_id,
+                }).catch((err) => logger.warn('[codex] session.eager_persist_failed', { executionId, agentName, error: (err as Error).message }));
                 logger.info('[codex] thread.started', { executionId, agentName, pid: proc.pid ?? '?', thread: String(evt.thread_id).slice(0, 12) });
               }
               if (evt.type === 'item.completed' && evt.item?.type === 'agent_message') {
@@ -2020,10 +2082,7 @@ async function runSpawnInBackground(
               ...metadata,
               ...materializedToolCounts,
             };
-            db.collection('executions').updateOne(
-              { id: executionId },
-              {
-                $set: {
+            updateSpawnExecution({
                   'meta.materializedAgentFile': {
                     subagentName: metadata.subagentName,
                     path: metadata.path,
@@ -2034,9 +2093,7 @@ async function runSpawnInBackground(
                     ...materializedToolCounts,
                     createdAt: metadata.createdAt,
                   },
-                },
-              },
-            ).catch(() => { /* non-fatal */ });
+            }).catch(() => { /* non-fatal */ });
             logger.info('[spawn] materialized claude agent file', {
               executionId,
               agentName,
@@ -2067,10 +2124,7 @@ async function runSpawnInBackground(
           // died and transition them to failed. Mirrors the codex path's
           // meta.pid update.
           onPid: (pid: number) => {
-            db.collection('executions').updateOne(
-              { id: executionId },
-              { $set: { 'meta.pid': pid } },
-            ).catch(() => { /* non-fatal */ });
+            updateSpawnExecution({ 'meta.pid': pid }).catch(() => { /* non-fatal */ });
           },
         });
       } else {
@@ -2167,10 +2221,9 @@ async function runSpawnInBackground(
           // session id on executions.sessions[agentName]. Fire-and-forget;
           // failures here must not stall the stream.
           if (sessionId !== incoming) {
-            db.collection('executions').updateOne(
-              { id: executionId },
-              { $set: { [`sessions.${agentName}`]: incoming } },
-            ).catch((err) => logger.warn('[spawn] session.eager_persist_failed', { executionId, agentName, error: (err as Error).message }));
+            updateSpawnExecution({
+              [`sessions.${agentName}`]: incoming,
+            }).catch((err) => logger.warn('[spawn] session.eager_persist_failed', { executionId, agentName, error: (err as Error).message }));
           }
           sessionId = incoming;
           currentResumeSession = sessionId;
@@ -2253,6 +2306,7 @@ async function runSpawnInBackground(
       agentName,
       durationMs,
       sessionId,
+      expectedRunGeneration,
     );
     if (!markedCompleted) {
       logger.info('[spawn] completion skipped because execution is already terminal', { executionId, agentName });
@@ -2342,6 +2396,7 @@ async function runSpawnInBackground(
       contextUsageTraceId: contextUsageTrace?.traceId,
       contextEvaluationId,
       runtimeContext: buildSpawnRuntimeContext(),
+      agentOverrides: buildSpawnAgentOverrides(),
       provider,
       cost: { actual: costUsd, estimated: 0, model, method: resolvedSpawnCost.method },
       tokenUsage: spawnTokenUsage ?? null,
@@ -2433,6 +2488,7 @@ async function runSpawnInBackground(
             contextUsageTraceId: contextUsageTrace?.traceId,
             contextEvaluationId,
             runtimeContext: buildSpawnRuntimeContext(),
+            agentOverrides: buildSpawnAgentOverrides(),
             provider,
             cost: { actual: failureCost.amount, estimated: 0, model, method: failureCost.method },
             tokenUsage: spawnTokenUsage ?? null,
@@ -2490,13 +2546,10 @@ async function runSpawnInBackground(
         logger.warn('[spawn] failed to record repo knowledge usage for failed run', { executionId, agentName, error: (usageErr as Error).message });
       }
     }
-    await db.collection('executions').updateOne(
-      { id: executionId },
-      { $set: {
+    await updateSpawnExecution({
         status: 'failed', errorMessage: errorMsg, durationMs, completedAt: new Date(),
         ...(failedSessionId ? { [`sessions.${agentName}`]: failedSessionId } : {}),
-      } },
-    );
+    });
     await db.collection('execution_traces').insertOne({
       executionId, executionTraceId, node: agentName, attempt: baseAttempt + attempt, status: 'failed', type: 'agent', agent: agentName,
       inputState: { prompt: initialRenderedPrompt, ...(spawnTree?.contextQuery ? { context_query: spawnTree.contextQuery } : {}) }, renderedPrompt: initialRenderedPrompt, rawResponse: '',
@@ -2509,6 +2562,7 @@ async function runSpawnInBackground(
       contextUsageTraceId: contextUsageTrace?.traceId,
       contextEvaluationId,
       runtimeContext: buildSpawnRuntimeContext(),
+      agentOverrides: buildSpawnAgentOverrides(),
       provider,
       cost: { actual: failureCost.amount, estimated: 0, model, method: failureCost.method },
       tokenUsage: spawnTokenUsage ?? null,
@@ -2605,10 +2659,9 @@ export async function resumeAgentExecution(
   let backfilled = false;
   if (sessionId && (resolvedVia === 'trace' || resolvedVia === 'input')) {
     try {
-      await db.collection('executions').updateOne(
-        { id: executionId },
-        { $set: { [`sessions.${agentName}`]: sessionId } },
-      );
+      await new StateManager(db).updateExecution(executionId, {
+        [`sessions.${agentName}`]: sessionId,
+      } as any);
       backfilled = true;
     } catch (err) {
       logger.warn('resume.agent.backfill_failed', { executionId, agentName });
@@ -2631,18 +2684,16 @@ export async function resumeAgentExecution(
     ?? ((exec.input as Record<string, unknown> | undefined)?.repo_path as string | undefined);
 
   // Re-open the execution for a new attempt.
-  await db.collection('executions').updateOne(
-    { id: executionId },
+  await new StateManager(db).updateExecutionWithUnset(
+    executionId,
     {
-      $set: {
         status: 'running',
         completedNodes: [],
         currentNodes: [agentName],
-        errorMessage: null,
         completedAt: null,
-      },
-      $unset: { durationMs: '' },
-    },
+    } as any,
+    ['errorMessage', 'failedNode', 'durationMs'],
+    { incrementGeneration: true },
   );
 
   // ── Watcher reactivation after agent resume ──────────────────────────
@@ -3051,10 +3102,7 @@ const submitExecutionInput: ChatTool = {
         } catch (err) {
           return { error: `submitInput failed: ${(err as Error).message}` };
         }
-        await db.collection('executions').updateOne(
-          { id: intervention.workflow_run_id },
-          { $set: { status: 'running' } },
-        );
+        await new StateManager(db).updateExecution(intervention.workflow_run_id, { status: 'running' });
       } else if (decision === 'request_changes') {
         const nodeName = intervention.stage;
         const originalFields = (intervention as unknown as { fields?: Array<{ name: string }> }).fields ?? [];
@@ -3094,16 +3142,10 @@ const submitExecutionInput: ChatTool = {
           };
           const delivered = await executionService.submitInput(intervention.workflow_run_id, nodeName, payload);
           if (delivered) {
-            await db.collection('executions').updateOne(
-              { id: intervention.workflow_run_id },
-              { $set: { status: 'running' } },
-            );
+            await new StateManager(db).updateExecution(intervention.workflow_run_id, { status: 'running' });
           } else {
             const targetNode = retryTargetForStage(intervention.stage, scope);
-            await db.collection('executions').updateOne(
-              { id: intervention.workflow_run_id },
-              {
-	                $set: {
+            await new StateManager(db).updateExecution(intervention.workflow_run_id, {
 	                  'state.__retry_target': [targetNode],
 	                  'state.__retry_source': 'human_feedback',
 	                  'state.__retry_attempt': 1,
@@ -3115,17 +3157,12 @@ const submitExecutionInput: ChatTool = {
                         feedback: feedback ?? String(values.feedback ?? values.approval_feedback ?? values.escalation_feedback ?? ''),
                       },
 	                  }),
-	                },
-              },
-            );
+	            } as any);
             await executionService.retryFromNode(intervention.workflow_run_id, targetNode);
           }
         } else {
         const targetNode = retryTargetForStage(intervention.stage, scope);
-	        await db.collection('executions').updateOne(
-	          { id: intervention.workflow_run_id },
-	          {
-	            $set: {
+	        await new StateManager(db).updateExecution(intervention.workflow_run_id, {
 	              'state.__retry_target': [targetNode],
 	              'state.__retry_source': 'human_feedback',
 	              'state.__retry_attempt': 1,
@@ -3137,9 +3174,7 @@ const submitExecutionInput: ChatTool = {
                     feedback: feedback ?? String(values.feedback ?? values.approval_feedback ?? values.escalation_feedback ?? ''),
                   },
 	              }),
-	            },
-          },
-        );
+	        } as any);
         try {
           await executionService.retryFromNode(intervention.workflow_run_id, targetNode);
         } catch (err) {
@@ -3181,10 +3216,9 @@ const submitExecutionInput: ChatTool = {
           };
           delivered = await executionService.submitInput(intervention.workflow_run_id, nodeName, payload);
         }
-        await db.collection('executions').updateOne(
-          { id: intervention.workflow_run_id },
-          { $set: { status: delivered ? 'running' : 'cancelled' } },
-        );
+        await new StateManager(db).updateExecution(intervention.workflow_run_id, {
+          status: delivered ? 'running' : 'cancelled',
+        });
       }
 
       await interventionService.recordResponse(interventionId, {

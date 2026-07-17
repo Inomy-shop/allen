@@ -159,7 +159,7 @@ interface Trace {
     repoContextLoadingGuidancePresent?: boolean; repoContextLoadingGuidanceInjected?: boolean;
     mandatoryRepoContextInjected?: boolean; mandatoryRepoContextInjectedCount?: number;
     mandatoryRepoContextSkippedProviderNativeCount?: number; mandatoryRepoContextTargetLayer?: string;
-    resolvedModel?: string; reasoningEffort?: string; planMode?: boolean;
+    resolvedModel?: string; modelSource?: string; providerSource?: string; reasoningEffort?: string; planMode?: boolean;
     mcpServerNames?: string[]; envKeys?: string[];
   };
   repoKnowledgeInjected?: {
@@ -280,6 +280,8 @@ export default function NodeInspector({
               ['provider-native skipped', trace.runtimeContext.mandatoryRepoContextSkippedProviderNativeCount],
               ['mandatory context layer', trace.runtimeContext.mandatoryRepoContextTargetLayer],
               ['resolved model', trace.runtimeContext.resolvedModel],
+              ['model source', trace.runtimeContext.modelSource],
+              ['provider source', trace.runtimeContext.providerSource],
               ['reasoning effort', trace.runtimeContext.reasoningEffort],
               ['plan mode', trace.runtimeContext.planMode ? 'on' : 'off'],
               ['MCP servers', (trace.runtimeContext.mcpServerNames ?? []).join(', ') || '(none)'],

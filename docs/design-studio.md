@@ -79,8 +79,9 @@ gallery page.
   workspace design-system folder. `chat.service.sendMessage` uses the override
   when no team agent is selected.
 - Model selection: the Studio composer opens before a chat session exists, so the
-  user can change model just like normal chat. If unchanged, Design Studio starts
-  on `claude / claude-opus-4-8`.
+  user can change model just like normal chat. If unchanged, a new Studio session
+  starts on the configured default chat provider/model. Repo analysis and refresh
+  deliberately continue to use Claude/Opus for design-analysis quality.
 - Repo identity: repo-backed workspaces keep the source repo id/name on the chat
   session while file tools run inside the Studio folder. The seeded root
   dashboard includes the repository name so multiple repo dashboards are easy to

@@ -18,7 +18,7 @@
  */
 
 import type { Collection, Db, ObjectId } from 'mongodb';
-import { MCP_SERVER_NAME, withArtifactsGuidance, withNonInteractiveGuidance, normalizeClaudeUsage, type TokenUsageInfo } from '@allen/engine';
+import { MCP_SERVER_NAME, StateManager, withArtifactsGuidance, withNonInteractiveGuidance, normalizeClaudeUsage, type TokenUsageInfo } from '@allen/engine';
 import { resolveCostUsd } from '../../model-cost.service.js';
 import {
   getRuntimeApiBaseUrl,
@@ -175,7 +175,7 @@ export class RepoContextScannerService {
 
       // Trace the scan as an agent execution — same shape as chat:spawn_agent
       // so the UI renders the agent execution view with tool calls and logs.
-      await this.db.collection('executions').insertOne({
+      await new StateManager(this.db).createExecution({
         id: executionId,
         workflowName: `chat:spawn_agent/repo-scanner`,
         workflowId: null,
@@ -192,7 +192,8 @@ export class RepoContextScannerService {
         cost: { actual: null, estimated: 0 },
         durationMs: 0,
         startedAt: new Date(),
-      });
+        nodeAttempts: {},
+      } as any);
 
       /** Log helper — persists to execution_logs for the live streaming UI. */
       const liveLog = (entry: { type: string; tool?: string; command?: string; content?: string }) => {
@@ -331,20 +332,14 @@ export class RepoContextScannerService {
     costUsd = resolvedScanCost.amount;
 
     // Persist execution result
-    await this.db.collection('executions').updateOne(
-      { id: executionId },
-      {
-        $set: {
+    await new StateManager(this.db).updateExecution(executionId, {
           status: error ? 'failed' : 'completed',
           completedNodes: error ? [] : ['repo-scanner'],
           currentNodes: [],
-          cost: { actual: costUsd, estimated: 0 },
           durationMs: scanDurationMs,
           completedAt: new Date(),
           ...(error ? { errorMessage: error } : {}),
-        },
-      },
-    );
+    } as any);
 
     // Save trace with tool calls + response — matches the spawn_agent trace shape
     await this.db.collection('execution_traces').insertOne({

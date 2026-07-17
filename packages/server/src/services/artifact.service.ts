@@ -32,7 +32,7 @@
  *     session id.
  *   - A standalone agent run files under its own exec id.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync, mkdirSync, unlinkSync,
 } from 'node:fs';
@@ -75,6 +75,8 @@ export interface ArtifactDoc {
   absolutePath: string;
   contentType: ArtifactContentType;
   sizeBytes: number;
+  /** SHA-256 digest of the original bytes stored for this artifact. */
+  sha256?: string;
   description?: string;
   language?: string;        // hint for code content — e.g. "python", "sql"
   createdAt: Date;
@@ -116,6 +118,7 @@ export interface SaveArtifactResult {
   filename: string;
   absolutePath: string;
   sizeBytes: number;
+  sha256: string;
   overwritten: boolean;
   storageProvider: StorageProvider;
   s3Key?: string;
@@ -183,6 +186,24 @@ function inferLanguage(filename: string): string | undefined {
   return map[ext];
 }
 
+/** Decode the MCP/API binary wire format without silently accepting corrupt base64. */
+export function decodeArtifactContent(content: string, contentType: ArtifactContentType): Buffer {
+  if (contentType !== 'binary') return Buffer.from(content, 'utf8');
+
+  const normalized = content.replace(/\s/g, '');
+  if (
+    normalized.length % 4 !== 0
+    || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)
+  ) {
+    throw Object.assign(new Error('binary artifact content must be valid base64'), { statusCode: 400 });
+  }
+  const decoded = Buffer.from(normalized, 'base64');
+  if (decoded.toString('base64') !== normalized) {
+    throw Object.assign(new Error('binary artifact content must be valid base64'), { statusCode: 400 });
+  }
+  return decoded;
+}
+
 export class ArtifactService {
   private col: Collection<ArtifactDoc>;
 
@@ -203,6 +224,7 @@ export class ArtifactService {
     const relativePath = sanitizeRelativePath(input.filename);
     const contentType = input.contentType ?? inferContentType(relativePath);
     const language = input.language ?? inferLanguage(relativePath);
+    const contentBytes = decodeArtifactContent(input.content, contentType);
     const dir = rootDir(input.rootType, input.rootId);
     const absolutePath = join(dir, relativePath);
 
@@ -235,11 +257,11 @@ export class ArtifactService {
     const location = await storeContent({
       localPath: absolutePath,
       s3Key,
-      content: input.content,
+      content: contentBytes,
     });
 
-    // Compute size from content buffer (works for both local and S3 paths).
-    const sizeBytes = Buffer.byteLength(input.content, 'utf8');
+    const sizeBytes = contentBytes.length;
+    const sha256 = createHash('sha256').update(contentBytes).digest('hex');
 
     const artifactId = existing?.artifactId ?? randomUUID();
     const now = new Date();
@@ -261,6 +283,7 @@ export class ArtifactService {
       absolutePath: location.provider === 'local' ? (location.localPath ?? absolutePath) : absolutePath,
       contentType,
       sizeBytes,
+      sha256,
       description: input.description,
       language,
       createdAt: existing?.createdAt ?? now,
@@ -293,6 +316,7 @@ export class ArtifactService {
       filename: doc.filename,
       absolutePath: doc.absolutePath,
       sizeBytes,
+      sha256,
       overwritten,
       storageProvider: location.provider,
       s3Key: location.s3Key,

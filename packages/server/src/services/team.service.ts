@@ -101,22 +101,70 @@ export class TeamService {
   }
 
   /**
-   * Delete a team. Refuses if the team has any agents (must move/delete them first).
-   * Refuses to delete built-in teams.
+   * Delete a team. By default, refuses if the team has active agents (must
+   * move/delete them first). When deleteAgents is true, soft-deletes the
+   * non-built-in agents in the team first, then soft-deletes the team.
+   * Refuses to delete built-in teams or built-in member agents.
    */
-  async delete(name: string): Promise<void> {
+  async delete(
+    name: string,
+    opts: { deleteAgents?: boolean; deletedBy?: string | null } = {},
+  ): Promise<{ deletedAgents: string[] }> {
     const team = await this.getByName(name);
     if (!team) throw new Error(`Team "${name}" not found`);
     if (team.isBuiltIn) {
       throw new Error(`Team "${name}" is built-in and cannot be deleted`);
     }
-    const memberCount = await this.db.collection('agents').countDocuments({ teamName: name });
-    if (memberCount > 0) {
+
+    const agents = this.db.collection<Record<string, unknown>>('agents');
+    const members = await agents
+      .find({ teamName: name, ...notDeletedFilter })
+      .project<{ name: string; isBuiltIn?: boolean }>({ name: 1, isBuiltIn: 1 })
+      .toArray();
+
+    if (members.length > 0 && !opts.deleteAgents) {
       throw new Error(
-        `Team "${name}" still has ${memberCount} agent(s). Delete or move them first.`,
+        `Team "${name}" still has ${members.length} agent(s). Delete or move them first.`,
       );
     }
+
+    if (opts.deleteAgents && members.length > 0) {
+      const builtInMembers = members.filter((member) => member.isBuiltIn).map((member) => member.name);
+      if (builtInMembers.length > 0) {
+        throw new Error(
+          `Team "${name}" has built-in agent(s) that cannot be deleted: ${builtInMembers.join(', ')}`,
+        );
+      }
+
+      const memberNames = members.map((member) => member.name);
+      await agents.updateMany(
+        { name: { $in: memberNames }, ...notDeletedFilter },
+        softDeleteSet(opts.deletedBy ?? null),
+      );
+
+      // Remove references from remaining agents so the deleted team members do
+      // not linger as spawn/trigger targets in the org graph.
+      const cleanupUpdate: Record<string, unknown> = {
+        $pull: {
+          spawnTargets: { $in: memberNames },
+          canTrigger: { $in: memberNames },
+        },
+        $set: { updatedAt: new Date() },
+      };
+      await agents.updateMany(
+        {
+          ...notDeletedFilter,
+          $or: [
+            { spawnTargets: { $in: memberNames } },
+            { canTrigger: { $in: memberNames } },
+          ],
+        },
+        cleanupUpdate,
+      );
+    }
+
     await this.collection.updateOne({ name }, softDeleteSet());
+    return { deletedAgents: members.map((member) => member.name) };
   }
 
   /**

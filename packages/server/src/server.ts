@@ -33,6 +33,7 @@ import { startFileWatchServer, stopFileWatchServer } from './services/workspace-
 import { WorkspaceManager } from './services/workspace.service.js';
 import { seedDefaultSkills, seedDefaultWorkflows, listDefaultWorkflowNames } from './seed.js';
 import { setStreamDb } from './services/stream.service.js';
+import { RealtimeExecutionService } from './services/realtime-execution.service.js';
 import { startMcpHealthMonitor, stopMcpHealthMonitor } from './services/mcp-health.service.js';
 import { startMcpOrphanSweeper, type McpOrphanSweeperHandle } from './services/mcp-orphan-sweeper.service.js';
 import { OrgSeedService } from './services/org-seed.js';
@@ -379,6 +380,7 @@ export async function startAllenServer(options: StartAllenServerOptions = {}): P
   httpServer.on('upgrade', (req, socket, head) => {
     void wsUpgradeHandler(req, socket, head);
   });
+  const realtimeService = new RealtimeExecutionService(db, httpServer);
 
   let orphanSweeperHandle: McpOrphanSweeperHandle | null = null;
   let watcherServiceHandle: WatcherService | null = null;
@@ -387,6 +389,7 @@ export async function startAllenServer(options: StartAllenServerOptions = {}): P
     orphanSweeperHandle = startMcpOrphanSweeper();
     watcherServiceHandle = new WatcherService(db, new ChatService(db));
     watcherServiceHandle.startPoller();
+    realtimeService.setWatcherNotifier((executionId) => watcherServiceHandle?.pollWatcherByExecutionId(executionId));
   }
 
   startFileWatchServer();
@@ -431,6 +434,7 @@ export async function startAllenServer(options: StartAllenServerOptions = {}): P
           errors.push(err instanceof Error ? err : new Error(String(err)));
         }
       };
+      await collect(() => realtimeService.stop());
 
       await collect(() => terminalHandle?.stop());
       await collect(() => stopFileWatchServer());

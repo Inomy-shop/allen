@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { executions as api, workflows as wfApi, type SpawnedChild } from '../services/api';
 import { useSSE, type SSEEvent } from './useSSE';
 import { applyCurrentNodesBackfill } from '../utils/executionState';
+import { mergeExecutionSnapshot, useExecutionStore } from '../stores/executionStore';
 
 export interface TimelineEvent {
   id: string;
@@ -12,6 +13,7 @@ export interface TimelineEvent {
 }
 
 export interface ExecutionLog {
+  _id?: string;
   executionId: string;
   timestamp: Date;
   level: 'info' | 'debug' | 'warn' | 'error';
@@ -74,6 +76,7 @@ export function useExecution(id: string | undefined) {
    *  while the node is still running (before the trace is persisted). */
   const [liveToolCallsByNode, setLiveToolCallsByNode] = useState<Map<string, any[]>>(new Map());
   const eventCounter = useRef(0);
+  const snapshot = useExecutionStore((state) => id ? state.entities[id] : undefined);
 
   const computeCurrentNodeStarts = useCallback((exec: any, tr: any[]) => {
     const starts = new Map<string, Date | string>();
@@ -112,7 +115,8 @@ export function useExecution(id: string | undefined) {
     api.children(id, 'descendants').then(setSpawnSubtree).catch(() => setSpawnSubtree([]));
     Promise.all([api.get(id), api.traces(id)])
       .then(async ([exec, tr]) => {
-        setExecution(exec);
+        useExecutionStore.getState().ingestExecution(exec);
+        setExecution(mergeExecutionSnapshot(exec, useExecutionStore.getState().entities[id]));
         setTraces(tr);
 
         // Fetch the workflow definition for the graph
@@ -653,27 +657,21 @@ export function useExecution(id: string | undefined) {
 
     // Update execution status on terminal events
     if (e.event === 'execution_completed') {
-      setExecution((prev: any) => ({
-        ...prev,
-        status: 'completed',
-        durationMs: e.data.durationMs,
-        cost: e.data.cost,
-      }));
+      setExecution((prev: any) => mergeExecutionSnapshot({
+        ...prev, status: 'completed', durationMs: e.data.durationMs, cost: e.data.cost,
+      }, id ? useExecutionStore.getState().entities[id] : undefined));
     } else if (e.event === 'execution_failed') {
-      setExecution((prev: any) => ({
-        ...prev,
-        status: 'failed',
-        failedNode: e.data.failedNode,
-        errorMessage: e.data.error,
-      }));
+      setExecution((prev: any) => mergeExecutionSnapshot({
+        ...prev, status: 'failed', failedNode: e.data.failedNode, errorMessage: e.data.error,
+      }, id ? useExecutionStore.getState().entities[id] : undefined));
     } else if (e.event === 'input_required') {
-      setExecution((prev: any) => ({ ...prev, status: 'waiting_for_input' }));
+      setExecution((prev: any) => mergeExecutionSnapshot({ ...prev, status: 'waiting_for_input' }, id ? useExecutionStore.getState().entities[id] : undefined));
     } else if (e.event === 'input_received') {
-      setExecution((prev: any) => ({ ...prev, status: 'running' }));
+      setExecution((prev: any) => mergeExecutionSnapshot({ ...prev, status: 'running' }, id ? useExecutionStore.getState().entities[id] : undefined));
     } else if (e.event === 'parallel_branch_recovery_paused' || e.event === 'node_recovery_override_applied') {
       // Model recovery events update execution to waiting/input if paused for recovery
       if (e.event === 'parallel_branch_recovery_paused') {
-        setExecution((prev: any) => ({ ...prev, status: 'waiting_for_input' }));
+        setExecution((prev: any) => mergeExecutionSnapshot({ ...prev, status: 'waiting_for_input' }, id ? useExecutionStore.getState().entities[id] : undefined));
       }
     }
   }, [id, descendantsMode]);
@@ -683,7 +681,9 @@ export function useExecution(id: string | undefined) {
   const refresh = useCallback(async () => {
     if (!id) return;
     const [exec, tr] = await Promise.all([api.get(id), api.traces(id)]);
-    setExecution(exec);
+    useExecutionStore.getState().ingestExecution(exec);
+    const effectiveExec = mergeExecutionSnapshot(exec, useExecutionStore.getState().entities[id]);
+    setExecution(effectiveExec);
     setTraces(tr);
 
     // Rebuild nodeStates from traces to fix any missed SSE events
@@ -708,12 +708,12 @@ export function useExecution(id: string | undefined) {
     // the case where retryFrom() is followed immediately by refresh() before
     // the SSE node_started event fires — without this the rerun node stays
     // 'failed' in nodeStates because no running trace exists yet.
-    applyCurrentNodesBackfill(map, exec.currentNodes, exec.completedNodes, exec.status, computeCurrentNodeStarts(exec, tr));
+    applyCurrentNodesBackfill(map, effectiveExec.currentNodes, effectiveExec.completedNodes, effectiveExec.status, computeCurrentNodeStarts(effectiveExec, tr));
     // Merge: keep SSE-provided running states, but fill in any missing nodes from traces
     setNodeStates(prev => {
       const merged = new Map(map);
       // If a node is currently running via SSE but trace shows completed, trust SSE (more recent)
-      const serverStillActive = exec.status === 'running' || exec.status === 'waiting_for_input' || exec.status === 'queued';
+      const serverStillActive = effectiveExec.status === 'running' || effectiveExec.status === 'waiting_for_input' || effectiveExec.status === 'queued';
       for (const [name, state] of prev) {
         if (serverStillActive && (state.status === 'running' || state.status === 'waiting_for_input') && (!merged.has(name) || merged.get(name)?.status !== 'completed')) {
           merged.set(name, state);
@@ -774,18 +774,21 @@ export function useExecution(id: string | undefined) {
     });
   }, []);
 
-  // Auto-refresh every 5 seconds when execution is active
+  // Lifecycle/progress is driven by the revisioned realtime snapshot. Keep
+  // traces/logs on their existing stream and manual refresh paths.
   useEffect(() => {
-    if (!id) return;
-    const status = execution?.status;
-    if (status !== 'running' && status !== 'waiting_for_input' && status !== 'queued') return;
-
-    const interval = setInterval(() => {
-      refresh().catch(() => {});
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [id, execution?.status, refresh]);
+    if (!snapshot) return;
+    setExecution((previous: any) => previous ? mergeExecutionSnapshot(previous, snapshot) : previous);
+    setNodeStates((previous) => {
+      const next = new Map(previous);
+      applyCurrentNodesBackfill(next, snapshot.currentNodes, snapshot.completedNodes, snapshot.status, computeCurrentNodeStarts(snapshot, traces));
+      for (const [name, state] of next) {
+        if (snapshot.completedNodes.includes(name) && state.status !== 'completed') next.set(name, { ...state, status: 'completed' });
+        if (snapshot.failedNode === name && snapshot.status === 'failed') next.set(name, { ...state, status: 'failed' });
+      }
+      return next;
+    });
+  }, [snapshot, computeCurrentNodeStarts, traces]);
 
   useEffect(() => {
     const hasLiveTimedNode = Array.from(nodeStates.values()).some(state =>

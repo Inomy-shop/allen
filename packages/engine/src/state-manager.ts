@@ -1,11 +1,63 @@
 import type { Collection, Db, Filter } from 'mongodb';
 import { ObjectId } from 'mongodb';
-import type { Checkpoint, ExecutionState, WorkflowFeedbackEntry } from './types.js';
+import type { Checkpoint, ExecutionSnapshot, ExecutionState, WorkflowFeedbackEntry } from './types.js';
+
+export type ExecutionStateChangeListener = (snapshot: ExecutionSnapshot) => void | Promise<void>;
+
+const stateChangeListeners = new WeakMap<Db, ExecutionStateChangeListener>();
+
+/** Bind the server's realtime publisher to every StateManager using this Db.
+ * The engine remains usable standalone because the listener is optional. */
+export function setExecutionStateChangeListener(db: Db, listener: ExecutionStateChangeListener | null): void {
+  if (listener) stateChangeListeners.set(db, listener);
+  else stateChangeListeners.delete(db);
+}
+
+function dateString(value: unknown): string | null {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string' || typeof value === 'number') {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+  }
+  return null;
+}
+
+export function toExecutionSnapshot(exec: ExecutionState | Record<string, unknown>): ExecutionSnapshot {
+  const row = exec as Record<string, unknown>;
+  const meta = row.meta && typeof row.meta === 'object' ? row.meta as Record<string, unknown> : {};
+  const input = row.input && typeof row.input === 'object' ? row.input as Record<string, unknown> : {};
+  const updatedAt = dateString(row.updatedAt) ?? dateString(row.completedAt) ?? dateString(row.startedAt) ?? new Date().toISOString();
+  return {
+    executionId: String(row.id ?? ''),
+    workflowId: typeof row.workflowId === 'string' ? row.workflowId : null,
+    workflowName: typeof row.workflowName === 'string' ? row.workflowName : '',
+    status: row.status as ExecutionState['status'],
+    revision: typeof row.revision === 'number' ? row.revision : 0,
+    runGeneration: typeof row.runGeneration === 'number' ? row.runGeneration : 1,
+    updatedAt,
+    startedAt: dateString(row.startedAt),
+    completedAt: dateString(row.completedAt),
+    currentNodes: Array.isArray(row.currentNodes) ? row.currentNodes.filter((v): v is string => typeof v === 'string') : [],
+    completedNodes: Array.isArray(row.completedNodes) ? row.completedNodes.filter((v): v is string => typeof v === 'string') : [],
+    failedNode: typeof row.failedNode === 'string' ? row.failedNode : null,
+    errorMessage: typeof row.errorMessage === 'string' ? row.errorMessage : null,
+    parentExecutionId: typeof row.parentExecutionId === 'string' ? row.parentExecutionId : null,
+    rootExecutionId: typeof row.rootExecutionId === 'string' ? row.rootExecutionId : null,
+    chatSessionId: typeof meta.chatSessionId === 'string' ? meta.chatSessionId : null,
+    workspaceId: typeof meta.workspaceId === 'string'
+      ? meta.workspaceId
+      : typeof input.workspace_id === 'string'
+        ? input.workspace_id
+        : null,
+    source: typeof row.source === 'string' ? row.source : null,
+  };
+}
 
 export class StateManager {
   private executionsCol: Collection;
   private checkpointsCol: Collection;
   private tracesCol: Collection;
+  private readonly boundGenerations = new Map<string, number>();
 
   private failureReportsCol: Collection;
 
@@ -89,26 +141,114 @@ export class StateManager {
   }
 
   async createExecution(exec: ExecutionState): Promise<string> {
-    const doc = StateManager.stripAggregates(exec as unknown as Record<string, unknown>);
+    const now = new Date();
+    const doc = StateManager.stripAggregates({
+      ...(exec as unknown as Record<string, unknown>),
+      revision: typeof exec.revision === 'number' ? exec.revision : 1,
+      runGeneration: typeof exec.runGeneration === 'number' ? exec.runGeneration : 1,
+      updatedAt: exec.updatedAt ?? now,
+    });
     const result = await this.executionsCol.insertOne(doc);
+    this.boundGenerations.set(exec.id, Number(doc.runGeneration ?? 1));
+    await this.notify(doc as unknown as ExecutionState);
     return result.insertedId.toString();
   }
 
   async getExecution(id: string): Promise<ExecutionState | null> {
-    return this.executionsCol.findOne({ id }) as Promise<ExecutionState | null>;
+    const execution = await this.executionsCol.findOne({ id }) as unknown as ExecutionState | null;
+    if (execution) this.boundGenerations.set(id, execution.runGeneration ?? 1);
+    return execution;
   }
 
-  async updateExecution(id: string, update: Partial<ExecutionState>): Promise<void> {
+  async updateExecution(id: string, update: Partial<ExecutionState>): Promise<ExecutionSnapshot | null> {
     const setUpdate = StateManager.stripAggregates(update as Record<string, unknown>);
-    if (Object.keys(setUpdate).length === 0) return;
-    await this.executionsCol.updateOne({ id }, { $set: setUpdate });
+    if (Object.keys(setUpdate).length === 0) return null;
+    const expectedGeneration = typeof update.runGeneration === 'number' ? update.runGeneration : undefined;
+    delete (setUpdate as Record<string, unknown>).revision;
+    delete (setUpdate as Record<string, unknown>).updatedAt;
+    delete (setUpdate as Record<string, unknown>).runGeneration;
+    return this.updateExecutionWhere({ id }, setUpdate, [], { expectedGeneration });
+  }
+
+  /**
+   * Canonical atomic execution mutation. Server-side execution producers use
+   * this for conditional transitions as well as ordinary state updates so a
+   * persisted revision and its realtime notification always describe the
+   * same committed row.
+   */
+  async updateExecutionWhere(
+    filter: Filter<Record<string, unknown>>,
+    setUpdate: Record<string, unknown>,
+    unsetFields: string[] = [],
+    options: { incrementGeneration?: boolean; expectedGeneration?: number } = {},
+  ): Promise<ExecutionSnapshot | null> {
+    const cleanSet = StateManager.stripAggregates(setUpdate);
+    delete (cleanSet as Record<string, unknown>).revision;
+    delete (cleanSet as Record<string, unknown>).updatedAt;
+    delete (cleanSet as Record<string, unknown>).runGeneration;
+    if (Object.keys(cleanSet).length === 0 && unsetFields.length === 0 && !options.incrementGeneration) return null;
+
+    const guardedFilter: Record<string, unknown> = { ...filter };
+    const filterId = typeof guardedFilter.id === 'string' ? guardedFilter.id : undefined;
+    const expectedGeneration = options.expectedGeneration
+      ?? (filterId ? this.boundGenerations.get(filterId) : undefined);
+    if (expectedGeneration !== undefined) {
+      guardedFilter.$and = [
+        ...((guardedFilter.$and as unknown[] | undefined) ?? []),
+        {
+          $or: [
+            { runGeneration: expectedGeneration },
+            ...(expectedGeneration === 1 ? [{ runGeneration: { $exists: false } }] : []),
+          ],
+        },
+      ];
+    }
+
+    // Pipeline updates let legacy rows be backfilled and incremented in the
+    // same atomic write. `$literal` prevents user/state strings beginning in
+    // "$" from being interpreted as aggregation expressions.
+    const literalSet = Object.fromEntries(
+      Object.entries(cleanSet).map(([key, value]) => [key, { $literal: value }]),
+    );
+    const pipeline: Record<string, unknown>[] = [{
+      $set: {
+        ...literalSet,
+        revision: { $add: [{ $ifNull: ['$revision', 0] }, 1] },
+        runGeneration: options.incrementGeneration
+          ? { $add: [{ $ifNull: ['$runGeneration', 1] }, 1] }
+          : { $ifNull: ['$runGeneration', 1] },
+        updatedAt: '$$NOW',
+      },
+    }];
+    if (unsetFields.length > 0) pipeline.push({ $unset: unsetFields });
+
+    const updated = await this.executionsCol.findOneAndUpdate(
+      guardedFilter,
+      pipeline,
+      { returnDocument: 'after' },
+    );
+    if (!updated) return null;
+    const snapshot = await this.notify(updated as unknown as ExecutionState);
+    if (filterId) this.boundGenerations.set(filterId, snapshot.runGeneration);
+    return snapshot;
   }
 
   async appendFeedback(executionId: string, entry: WorkflowFeedbackEntry): Promise<void> {
-    await this.executionsCol.updateOne(
+    const updated = await this.executionsCol.findOneAndUpdate(
       { id: executionId },
-      { $push: { feedbackEntries: entry as never } },
+      [{
+        $set: {
+          feedbackEntries: {
+            $concatArrays: [{ $ifNull: ['$feedbackEntries', []] }, [{ $literal: entry }]],
+          },
+          revision: { $add: [{ $ifNull: ['$revision', 0] }, 1] },
+          runGeneration: { $ifNull: ['$runGeneration', 1] },
+          updatedAt: '$$NOW',
+        },
+      }],
+      { returnDocument: 'after' },
     );
+    if (updated) await this.notify(updated as unknown as ExecutionState);
   }
 
   async listFeedback(executionId: string): Promise<WorkflowFeedbackEntry[]> {
@@ -129,15 +269,29 @@ export class StateManager {
     id: string,
     setUpdate: Partial<ExecutionState>,
     unsetFields: string[],
-  ): Promise<void> {
-    const op: Record<string, unknown> = {};
-    const cleanSet = StateManager.stripAggregates(setUpdate as Record<string, unknown>);
-    if (Object.keys(cleanSet).length > 0) op.$set = cleanSet;
-    if (unsetFields.length > 0) {
-      op.$unset = Object.fromEntries(unsetFields.map((f) => [f, '']));
+    options: { incrementGeneration?: boolean; expectedGeneration?: number } = {},
+  ): Promise<ExecutionSnapshot | null> {
+    return this.updateExecutionWhere(
+      { id },
+      setUpdate as Record<string, unknown>,
+      unsetFields,
+      options,
+    );
+  }
+
+  private async notify(exec: ExecutionState): Promise<ExecutionSnapshot> {
+    const snapshot = toExecutionSnapshot(exec);
+    const listener = stateChangeListeners.get(this.db);
+    if (listener) {
+      try {
+        await listener(snapshot);
+      } catch (err) {
+        // Persistence is authoritative. A reconnect snapshot repairs a lost
+        // notification, so publisher failure must not roll back execution.
+        console.error('[state-manager] execution state notification failed:', (err as Error).message);
+      }
     }
-    if (Object.keys(op).length === 0) return;
-    await this.executionsCol.updateOne({ id }, op);
+    return snapshot;
   }
 
   async saveCheckpoint(checkpoint: Checkpoint): Promise<void> {

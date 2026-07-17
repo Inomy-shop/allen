@@ -14,6 +14,7 @@ import {
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
 import { useAuthStore } from './stores/authStore';
+import { useExecutionStore } from './stores/executionStore';
 import { BRAND_NAME } from './lib/brand';
 import {
   chat as chatApi,
@@ -768,6 +769,7 @@ export default function App() {
   const [commandOpen, setCommandOpen] = useState(false);
   const [updatePrompt, setUpdatePrompt] = useState<UpdatePromptState | null>(null);
   const [liveCount, setLiveCount] = useState(0);
+  const executionRevisionClock = useExecutionStore(state => state.changeVersion);
   const [approvalCount, setApprovalCount] = useState(0);
   const [canGoBack, setCanGoBack] = useState(false);
   const [sidebarPanel, setSidebarPanel] = useState<SidebarPanelId>('navigation');
@@ -942,12 +944,10 @@ export default function App() {
       }
     }
     void loadLiveCount();
-    const interval = setInterval(loadLiveCount, 10000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
     };
-  }, []);
+  }, [executionRevisionClock]);
 
   useEffect(() => {
     function onActiveChatConversation(event: Event) {

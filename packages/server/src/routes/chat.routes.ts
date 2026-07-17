@@ -12,7 +12,7 @@ import { UserService } from '../services/user.service.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { listSlashCommands, type SlashCommandProvider } from '../services/slash-commands.js';
 import { isClaudeFamilyProvider } from '../services/chat-providers.js';
-import { buildHumanResumeInput, type HumanInterventionPayload } from '@allen/engine';
+import { buildHumanResumeInput, StateManager, type HumanInterventionPayload } from '@allen/engine';
 import { ChatContextPacketService } from '../services/context/core/chat-context-packet.service.js';
 
 /**
@@ -169,10 +169,7 @@ export function chatRoutes(db: Db): Router {
         answer: JSON.stringify(fieldValues),
         answered_by_user_id: answeredBy,
       });
-      await db.collection('executions').updateOne(
-        { id: executionId },
-        { $set: { status: 'running' } },
-      );
+      await new StateManager(db).updateExecution(executionId, { status: 'running' });
 
       return {
         forwarded: true,
@@ -247,7 +244,7 @@ export function chatRoutes(db: Db): Router {
   router.post('/spawn-agent', async (req: Request, res: Response) => {
     try {
       const {
-        agent_name, prompt, context_query, repo_path, session_id,
+        agent_name, prompt, context_query, repo_path, session_id, runtime_model, runtimeModel,
         // Spawn-tree linkage forwarded from the Allen MCP server's env.
         // The MCP server reads ALLEN_PARENT_EXECUTION_ID / _CALLER /
         // _ROOT_EXECUTION_ID from its subprocess env and puts them here so
@@ -260,7 +257,7 @@ export function chatRoutes(db: Db): Router {
       } = req.body;
       if (!agent_name || !prompt) return res.status(400).json({ error: 'agent_name and prompt are required' });
       const result = await executeChatTool('spawn_agent', {
-        agent_name, prompt, context_query, repo_path, session_id,
+        agent_name, prompt, context_query, repo_path, session_id, runtime_model, runtimeModel,
         parent_execution_id, parent_caller, root_execution_id,
         artifact_root_type, artifact_root_id,
         repo_knowledge_packet_id, repo_knowledge_repo_id, repo_knowledge_index_id,
@@ -640,11 +637,15 @@ export function chatRoutes(db: Db): Router {
   });
 
   // GET /api/chat/sessions/:id/streaming — Check if session is streaming
-  router.get('/sessions/:id/streaming', (req: Request, res: Response) => {
-    const sessionId = param(req, 'id');
-    const streaming = chatService.isStreaming(sessionId);
-    console.log('[chat/isStreaming]', sessionId, '→', streaming);
-    res.json({ streaming });
+  router.get('/sessions/:id/streaming', async (req: Request, res: Response) => {
+    try {
+      const sessionId = param(req, 'id');
+      const { streaming } = await chatService.getStreamingState(sessionId);
+      console.log('[chat/isStreaming]', sessionId, '→', streaming);
+      res.json({ streaming });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // POST /api/chat/sessions/:id/generate-title — (Re)generate a title for an
@@ -671,7 +672,13 @@ export function chatRoutes(db: Db): Router {
       if (!session) return res.status(404).json({ error: 'Session not found' });
       res.json(session);
     } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
+      const status = typeof (err as { status?: unknown }).status === 'number'
+        ? (err as { status: number }).status
+        : 500;
+      const code = typeof (err as { code?: unknown }).code === 'string'
+        ? (err as { code: string }).code
+        : undefined;
+      res.status(status).json({ error: (err as Error).message, ...(code ? { code } : {}) });
     }
   });
 

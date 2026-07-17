@@ -61,6 +61,12 @@ export interface AgentOverrides {
   reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
   planMode?: boolean | null;
   /**
+   * Internal execution-scoped source markers. Set when a workflow run applies
+   * runtime model choices to a cloned workflow definition; never persisted back
+   * to workflow YAML or agent documents.
+   */
+  runtimeModelOverrideSources?: Partial<Record<'provider' | 'model' | 'reasoningEffort' | 'planMode', 'runtime'>>;
+  /**
    * External MCP server allowlist for this node. Allen's built-in MCP is
    * selected by default. undefined = inherit from agent, [] = no external
    * MCPs, [name] = only those external MCP servers.
@@ -617,7 +623,7 @@ export interface NodeTrace {
     model?: string;
     reasoningEffort?: string;
     planMode?: boolean;
-    sources: Partial<Record<'provider' | 'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>>;
+    sources: Partial<Record<'provider' | 'model' | 'reasoningEffort' | 'planMode', 'runtime' | 'node' | 'agent-default'>>;
   };
 
   /** Per-tool-call token usage + estimated cost. Estimated because the
@@ -758,6 +764,38 @@ export interface ExecutionState {
   worktreePath?: string;
   startedAt: Date;
   completedAt?: Date;
+  /** Monotonic version of the persisted lifecycle/progress state. Older
+   *  execution rows omit this field and are treated as revision 0. */
+  revision?: number;
+  /** Increments when an existing execution is resumed/rerun. Events from an
+   *  older generation must never overwrite the resumed run. */
+  runGeneration?: number;
+  /** Server commit time for the latest lifecycle/progress mutation. */
+  updatedAt?: Date;
+}
+
+/** Small, safe state projection used by every live UI surface. Rich inputs,
+ * outputs, prompts, logs, traces, and artifacts intentionally stay out of the
+ * realtime channel. */
+export interface ExecutionSnapshot {
+  executionId: string;
+  workflowId?: string | null;
+  workflowName: string;
+  status: ExecutionStatus;
+  revision: number;
+  runGeneration: number;
+  updatedAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  currentNodes: string[];
+  completedNodes: string[];
+  failedNode?: string | null;
+  errorMessage?: string | null;
+  parentExecutionId?: string | null;
+  rootExecutionId?: string | null;
+  chatSessionId?: string | null;
+  workspaceId?: string | null;
+  source?: string | null;
 }
 
 // ── SSE Events ──────────────────────────────────────────────────────────────

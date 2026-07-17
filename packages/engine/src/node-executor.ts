@@ -360,7 +360,7 @@ export interface NodeResult {
     model?: string;
     reasoningEffort?: string;
     planMode?: boolean;
-    sources: Partial<Record<'provider' | 'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>>;
+    sources: Partial<Record<'provider' | 'model' | 'reasoningEffort' | 'planMode', 'runtime' | 'node' | 'agent-default'>>;
   };
 
   /** When a recovery override causes the old session to be discarded, record which session was dropped. */
@@ -1569,14 +1569,19 @@ Use auto-gate only if the original prompt's workflow context explicitly allowed 
     explicitMode === 'sdk' ? 'sdk' :
     'cli';
 
-  const overrideSources: Partial<Record<'provider' | 'model' | 'reasoningEffort' | 'planMode', 'node' | 'agent-default'>> = {};
-  if (latestRecoveryOverride2?.provider !== undefined || override2.provider !== undefined || (override2.model !== undefined && resolvedProvider2 !== role?.provider)) overrideSources.provider = 'node';
+  const runtimeSources = override2.runtimeModelOverrideSources ?? {};
+  const overrideSources: Partial<Record<'provider' | 'model' | 'reasoningEffort' | 'planMode', 'runtime' | 'node' | 'agent-default'>> = {};
+  if (runtimeSources.provider === 'runtime' || (runtimeSources.model === 'runtime' && resolvedProvider2 !== role?.provider)) overrideSources.provider = 'runtime';
+  else if (latestRecoveryOverride2?.provider !== undefined || override2.provider !== undefined || (override2.model !== undefined && resolvedProvider2 !== role?.provider)) overrideSources.provider = 'node';
   else if (role?.provider !== undefined) overrideSources.provider = 'agent-default';
-  if (latestRecoveryOverride2?.model !== undefined || override2.model !== undefined) overrideSources.model = 'node';
+  if (runtimeSources.model === 'runtime') overrideSources.model = 'runtime';
+  else if (latestRecoveryOverride2?.model !== undefined || override2.model !== undefined) overrideSources.model = 'node';
   else if (role?.model !== undefined) overrideSources.model = 'agent-default';
-  if (latestRecoveryOverride2?.reasoningEffort !== undefined || override2.reasoningEffort !== undefined) overrideSources.reasoningEffort = 'node';
+  if (runtimeSources.reasoningEffort === 'runtime') overrideSources.reasoningEffort = 'runtime';
+  else if (latestRecoveryOverride2?.reasoningEffort !== undefined || override2.reasoningEffort !== undefined) overrideSources.reasoningEffort = 'node';
   else if (role?.reasoningEffort !== undefined) overrideSources.reasoningEffort = 'agent-default';
-  if (override2.planMode !== undefined) overrideSources.planMode = 'node';
+  if (runtimeSources.planMode === 'runtime') overrideSources.planMode = 'runtime';
+  else if (override2.planMode !== undefined) overrideSources.planMode = 'node';
   else if (role?.planMode !== undefined) overrideSources.planMode = 'agent-default';
 
   const runtimeContext: NodeResult['runtimeContext'] = {

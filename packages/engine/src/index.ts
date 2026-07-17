@@ -1,5 +1,10 @@
 export { AllenEngine, type EngineConfig, type RunOptions } from './engine.js';
-export { StateManager } from './state-manager.js';
+export {
+  StateManager,
+  setExecutionStateChangeListener,
+  toExecutionSnapshot,
+  type ExecutionStateChangeListener,
+} from './state-manager.js';
 export { renderTemplate, renderTemplateWithBindings, collectPlaceholders, type TemplateBinding } from './template.js';
 export { evaluateCondition, evaluateConditionVerbose, validateCondition } from './condition-parser.js';
 export { extractOutputs, extractOutputsSync, buildOutputInstruction, buildNodeContext } from './output-extractor.js';

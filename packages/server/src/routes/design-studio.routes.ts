@@ -33,10 +33,10 @@ function err(res: Response, status: number, message: string, code: string): void
   res.status(status).json({ error: message, code });
 }
 
-function normalizeStudioSelectionInput(input: { provider?: unknown; model?: unknown }): { provider: string; model: string } {
-  const rawProvider = typeof input.provider === 'string' && input.provider.trim() ? input.provider.trim() : DESIGN_STUDIO_DEFAULT_PROVIDER;
+function normalizeStudioSelectionInput(input: { provider?: unknown; model?: unknown }): { provider?: string; model?: string } {
+  const rawProvider = typeof input.provider === 'string' && input.provider.trim() ? input.provider.trim() : undefined;
   const provider = rawProvider === 'claude-cli' ? 'claude' : rawProvider;
-  const rawModel = typeof input.model === 'string' && input.model.trim() ? input.model.trim() : DESIGN_STUDIO_DEFAULT_MODEL;
+  const rawModel = typeof input.model === 'string' && input.model.trim() ? input.model.trim() : undefined;
   const model = provider === 'claude' && rawModel === 'opus' ? DESIGN_STUDIO_DEFAULT_MODEL : rawModel;
   return { provider, model };
 }
@@ -86,25 +86,42 @@ export function designStudioRoutes(db: Db, opts: DesignStudioRoutesOptions = {})
 
   async function resolveStudioModelSelection(
     input: { provider?: unknown; model?: unknown },
+    policy: { fallback: 'configured-default' | 'studio-opus' },
     requestId?: string,
   ): Promise<{ provider: string; model: string }> {
-    const requested = normalizeStudioSelectionInput(input);
+    const normalized = normalizeStudioSelectionInput(input);
     const providers = await getEnabledProvidersFromRegistry(db);
-    const providerConfig = providers.find((p) => p.provider === requested.provider)
-      ?? providers.find((p) => p.provider === DESIGN_STUDIO_DEFAULT_PROVIDER)
-      ?? providers[0];
+    // Repo analysis deliberately keeps the Studio Claude/Opus quality default;
+    // new chat sessions instead follow Allen's configured, default-ordered provider.
+    const fallbackProvider = policy.fallback === 'studio-opus'
+      ? providers.find((p) => p.provider === DESIGN_STUDIO_DEFAULT_PROVIDER) ?? providers[0]
+      : providers[0];
+    const requestedProvider = normalized.provider
+      ?? (policy.fallback === 'studio-opus' ? DESIGN_STUDIO_DEFAULT_PROVIDER : fallbackProvider?.provider);
+    const providerConfig = providers.find((p) => p.provider === requestedProvider) ?? fallbackProvider;
 
-    if (!providerConfig) return requested;
+    if (!providerConfig) {
+      return {
+        provider: requestedProvider ?? DESIGN_STUDIO_DEFAULT_PROVIDER,
+        model: normalized.model ?? DESIGN_STUDIO_DEFAULT_MODEL,
+      };
+    }
 
-    const model = chooseAvailableStudioModel(providerConfig, requested.model);
+    // Default the model from the provider we actually resolved — never from a different one.
+    const requestedModel = normalized.model
+      ?? (policy.fallback === 'studio-opus' && providerConfig.provider === DESIGN_STUDIO_DEFAULT_PROVIDER
+        ? DESIGN_STUDIO_DEFAULT_MODEL
+        : providerConfig.defaultModel);
+
+    const model = chooseAvailableStudioModel(providerConfig, requestedModel);
     const resolved = { provider: String(providerConfig.provider), model };
 
-    if (resolved.provider !== requested.provider || resolved.model !== requested.model) {
+    if (resolved.provider !== requestedProvider || resolved.model !== requestedModel) {
       logger.warn('[design-studio] resolved unavailable Studio model', {
         component: 'design-studio',
         requestId,
-        requestedProvider: requested.provider,
-        requestedModel: requested.model,
+        requestedProvider,
+        requestedModel,
         provider: resolved.provider,
         model: resolved.model,
       });
@@ -237,7 +254,7 @@ export function designStudioRoutes(db: Db, opts: DesignStudioRoutesOptions = {})
       let { provider, model } = await resolveStudioModelSelection({
         provider: req.body?.provider ?? ws.analysisProvider,
         model: req.body?.model ?? ws.analysisModel,
-      }, (req as any).requestId);
+      }, { fallback: 'studio-opus' }, (req as any).requestId);
 
       await store.updateWorkspace(req.params.id, { profileStatus: 'analyzing', analysisProvider: provider, analysisModel: model });
       const scan = await scanRepoForStyle(ws.sourceRepoPath);
@@ -373,7 +390,7 @@ export function designStudioRoutes(db: Db, opts: DesignStudioRoutesOptions = {})
       const { provider, model } = await resolveStudioModelSelection({
         provider: req.body?.provider ?? ws.analysisProvider,
         model: req.body?.model ?? ws.analysisModel,
-      }, (req as any).requestId);
+      }, { fallback: 'studio-opus' }, (req as any).requestId);
 
       // Re-run full style analysis to refresh design system kit.
       const scan = await scanRepoForStyle(ws.sourceRepoPath);
@@ -624,7 +641,7 @@ export function designStudioRoutes(db: Db, opts: DesignStudioRoutesOptions = {})
       const { provider, model } = await resolveStudioModelSelection({
         provider: req.body?.provider,
         model: req.body?.model,
-      }, (req as any).requestId);
+      }, { fallback: 'configured-default' }, (req as any).requestId);
       const agentOverrides = req.body?.agentOverrides && typeof req.body.agentOverrides === 'object' && !Array.isArray(req.body.agentOverrides)
         ? req.body.agentOverrides
         : undefined;

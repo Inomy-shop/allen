@@ -8,6 +8,7 @@ import type { AuthUser } from '../stores/authStore';
 import StatusBadge from '../components/common/StatusBadge';
 import Select from '../components/common/Select';
 import IconTooltipButton from '../components/common/IconTooltipButton';
+import { mergeExecutionSnapshot, snapshotFromExecution, useExecutionStore } from '../stores/executionStore';
 import WorkflowRunDialog from '../components/workflow/WorkflowRunDialog';
 import WorkflowBuilderPage from './WorkflowBuilderPage';
 import {
@@ -95,6 +96,7 @@ export default function WorkflowDetailPage() {
   const [allUsers, setAllUsers] = useState<AuthUser[]>([]);
   const [selectedUserId, setSelectedUserId] = useState('all');
   const [chatFilter, setChatFilter] = useState<ChatFilter>('all');
+  const snapshots = useExecutionStore((state) => state.entities);
 
   const loadWorkflow = useCallback(async () => {
     if (!id) return;
@@ -120,6 +122,9 @@ export default function WorkflowDetailPage() {
       });
 
       setRuns(result.items);
+      useExecutionStore.getState().ingestMany(
+        result.items.map((item) => snapshotFromExecution(item)).filter((item): item is NonNullable<typeof item> => Boolean(item)),
+      );
       setRunsTotal(result.total ?? result.items.length);
     } finally {
       setRunsLoading(false);
@@ -142,8 +147,12 @@ export default function WorkflowDetailPage() {
   const description = workflow ? workflowDescription(workflow) : '';
   const isValid = Boolean(workflow?.validation?.valid);
   const isEditing = tab === 'edit';
+  const liveRuns = useMemo(
+    () => runs.map((run) => mergeExecutionSnapshot(run, snapshots[runId(run)])),
+    [runs, snapshots],
+  );
   const filteredRuns = useMemo(() => {
-    return runs.filter((run) => {
+    return liveRuns.filter((run) => {
       const userId = runUserId(run);
       const matchesUser = selectedUserId === 'all'
         || !userId
@@ -154,7 +163,7 @@ export default function WorkflowDetailPage() {
         || (chatFilter === 'unlinked' && !linkedToChat);
       return matchesUser && matchesChat;
     });
-  }, [runs, selectedUserId, chatFilter]);
+  }, [liveRuns, selectedUserId, chatFilter]);
   const hasRunFilters = selectedUserId !== 'all' || chatFilter !== 'all';
 
   function setTab(next: WorkflowTab) {

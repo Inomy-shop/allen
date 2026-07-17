@@ -38,8 +38,6 @@ export interface ChatPageConfig {
   disabledReason?: string;
   /** Override new-session creation while preserving the normal composer/send flow. */
   createSessionOverride?: (args: { provider?: string; model?: string; agentOverrides?: Record<string, unknown>; repoId?: string; workspaceId?: string }) => Promise<ChatSession>;
-  /** Preferred provider/model for the empty composer before a session exists. */
-  initialProviderModel?: { provider: string; model: string };
   /** Hide the Planner toggle in the composer. */
   hidePlanMode?: boolean;
   /** Hide repository selection in the composer. */
@@ -95,6 +93,13 @@ const IDE_OPTIONS: IdeOption[] = [
 function humanLabel(value?: string | null): string {
   if (!value) return '';
   return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function providerFamily(provider?: string | null): 'codex' | 'claude' | 'unknown' {
+  if (provider === 'codex') return 'codex';
+  if (provider === 'claude' || provider === 'claude-cli') return 'claude';
+  if (provider) return 'claude';
+  return 'unknown';
 }
 
 function timeAgo(dateStr?: string | null): string {
@@ -342,20 +347,8 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     chatApi.providers().then(p => {
       setProviders(p);
       if (p.length > 0) {
-        const initialProviderModel = config?.initialProviderModel;
-        const preferred = initialProviderModel
-          ? p.find((provider: any) => provider.provider === initialProviderModel.provider)
-          : null;
-        const preferredModels = preferred
-          ? [...(preferred.models ?? []), ...(preferred.modelSuggestions ?? [])]
-          : [];
-        if (preferred && initialProviderModel && preferredModels.includes(initialProviderModel.model)) {
-          setSelectedProvider(initialProviderModel.provider);
-          setSelectedModel(initialProviderModel.model);
-        } else {
-          setSelectedProvider(p[0].provider);
-          setSelectedModel(p[0].defaultModel);
-        }
+        setSelectedProvider(p[0].provider);
+        setSelectedModel(p[0].defaultModel);
       }
     }).catch(() => {});
     mcpApi.list().then(servers => {
@@ -405,6 +398,45 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
 
   // Effective overrides: session-persisted if session exists, else in-memory pending.
   const effectiveOverrides = activeSession?.agentOverrides ?? pendingOverrides;
+
+  const activeProviderFamily = activeSessionId
+    ? providerFamily(activeSession?.provider ?? selectedProvider)
+    : 'unknown';
+  const composerProviders = activeProviderFamily === 'unknown'
+    ? providers
+    : providers.filter((provider) => providerFamily(provider.provider) === activeProviderFamily);
+  const modelLocked = streaming
+    || Boolean(activeSession?.source === 'slack')
+    || Boolean(activeSession?.isImported)
+    || Boolean(config?.disabled);
+  const modelLockReason = streaming
+    ? 'Stop the current turn before changing model'
+    : activeSession?.source === 'slack'
+    ? 'This Slack-managed conversation cannot change model here'
+    : activeSession?.isImported
+    ? 'Imported replays are read-only'
+    : config?.disabledReason;
+
+  async function handleProviderChange(provider: string, model: string) {
+    if (!activeSessionId) {
+      setSelectedProvider(provider);
+      setSelectedModel(model);
+      return;
+    }
+    if (streaming) return;
+    const previousProvider = activeSession?.provider ?? selectedProvider;
+    const previousModel = activeSession?.model ?? selectedModel;
+    setSelectedProvider(provider);
+    setSelectedModel(model);
+    try {
+      await chatApi.updateSession(activeSessionId, { provider, model });
+      await refreshSessions();
+    } catch (err) {
+      setSelectedProvider(previousProvider);
+      setSelectedModel(previousModel);
+      console.error('updateSession model failed:', err);
+    }
+  }
 
   // Called from ChatInput when the user changes effort or plan mode.
   // Before a session exists, mutate local state. After, PATCH the session doc.
@@ -1700,12 +1732,13 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
               ? (activeSession.replayLabel || 'Imported replay (read-only)')
               : undefined
           }
-          providers={providers}
+          providers={composerProviders}
           selectedProvider={activeSession?.provider ?? selectedProvider}
           selectedAgent={activeSession?.activeAgent ?? selectedAgent}
           selectedModel={activeSession?.model ?? selectedModel}
-          modelLocked={!!activeSessionId}
-          onProviderChange={(p, m) => { setSelectedProvider(p); setSelectedModel(m); }}
+          modelLocked={modelLocked}
+          modelLockReason={modelLockReason}
+          onProviderChange={handleProviderChange}
           repos={repos}
           selectedRepoName={archivedWorkspace ? `${archivedWorkspace.name ?? 'Workspace'} deleted` : activeSession?.repoName ?? selectedRepo?.name ?? null}
           repoLocked={!!activeSessionId}

@@ -1,6 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { chat as api, executions as executionsApi, interventions as interventionsApi, executionWatchers as executionWatchersApi, authHeaders, type RunStatus, type TokenUsageInfo, type WatcherUIDoc } from '../services/api';
 import { useAuthStore, type AuthUser } from '../stores/authStore';
+import { useExecutionStore } from '../stores/executionStore';
+import {
+  reconcileChildAgentsWithSnapshots,
+  reconcileRunContextWithSnapshot,
+  runSeedFromSnapshot,
+} from './chatExecutionState';
+import { mergeWatcherDocuments } from './watcherState';
 
 /** Maximum number of automatic reconnect attempts on a transient stream error. */
 export const MAX_RECONNECT_ATTEMPTS = 3;
@@ -54,6 +61,37 @@ export async function checkIsStreaming(sessionId: string): Promise<boolean> {
 /** Tiny sleep helper used for reconnect back-off. */
 export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export function sessionReconnectDelay(attempt: number): number {
+  return Math.min(5_000, 500 * (2 ** Math.min(Math.max(attempt - 1, 0), 4)));
+}
+
+/** Consume one chat SSE response. Resolving means the server closed the
+ * response, which the caller treats as a reconnect signal rather than a
+ * terminal chat state. */
+export async function consumeSessionEventStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  onEvent: (event: string, data: unknown) => void,
+  shouldStop: () => boolean = () => false,
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let currentEvent = '';
+  while (!shouldStop()) {
+    const { done, value } = await reader.read();
+    if (done || shouldStop()) return;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.startsWith('event: ')) currentEvent = line.slice(7).trim();
+      else if (line.startsWith('data: ') && currentEvent) {
+        try { onEvent(currentEvent, JSON.parse(line.slice(6))); } catch { /* ignore malformed event */ }
+        currentEvent = '';
+      }
+    }
+  }
 }
 
 export interface ChatSession {
@@ -125,7 +163,7 @@ export interface ChatMessage {
   sessionId: string;
   role: 'user' | 'assistant';
   content: string;
-  status: 'completed' | 'streaming' | 'failed' | 'cancelled';
+  status: 'completed' | 'streaming' | 'failed' | 'interrupted' | 'cancelled';
   senderUserId?: string;
   senderName?: string;
   senderEmail?: string;
@@ -395,53 +433,63 @@ export function useChat() {
   const sessionStreamAbortRef = useRef<AbortController | null>(null);
   const sessionsRef = useRef<ChatSession[]>([]);
   const clearRestoredDraft = useCallback(() => setRestoredDraft(null), []);
+  const executionSnapshots = useExecutionStore(state => state.entities);
 
-  const spawnedRunSignature = spawnedAgents
-    .map(s => `${s.executionId}:${s.status}:${s.runContext?.progress?.phase ?? ''}:${s.runContext?.progress?.percent ?? ''}`)
+  const spawnedRunIds = spawnedAgents
+    .map(s => s.executionId)
+    .filter(Boolean)
+    .sort()
     .join('|');
 
   useEffect(() => {
-    if (spawnedAgents.length === 0) return;
-    let cancelled = false;
-    const terminal = new Set(['completed', 'failed', 'cancelled']);
-    const refreshContexts = async () => {
-      const ids = [...new Set(spawnedAgents.map(s => s.executionId).filter(Boolean))];
-      const updates = await Promise.all(ids.map(async (id) => {
-        try {
-          return { id, context: await executionsApi.context(id) };
-        } catch {
-          return null;
-        }
-      }));
-      if (cancelled) return;
-      setSpawnedAgents(prev => {
-        let changed = false;
-        const next = prev.map(run => {
-          const update = updates.find(u => u?.id === run.executionId);
-          if (!update?.context) return run;
+    setSpawnedAgents(prev => {
+      let changed = false;
+      let next = prev.map(run => {
+        const snapshot = executionSnapshots[run.executionId];
+        const contextWithChildren = run.runContext
+          ? reconcileChildAgentsWithSnapshots(run.runContext, executionSnapshots)
+          : run.runContext;
+        if (!snapshot) {
+          if (contextWithChildren === run.runContext) return run;
           changed = true;
-          return {
-            ...run,
-            status: update.context.status as SpawnedAgent['status'],
-            runContext: update.context,
-            sourceMessageId: update.context.chat?.parentMessageId ?? run.sourceMessageId,
-            parentExecutionId: update.context.execution?.parentExecutionId ?? run.parentExecutionId,
-            spawnDepth: update.context.execution?.spawnDepth ?? run.spawnDepth,
-          };
-        });
-        return changed ? next : prev;
-      });
-    };
+          return { ...run, runContext: contextWithChildren };
+        }
+        const currentRevision = Number(run.runContext?.execution?.revision ?? -1);
+        const currentGeneration = Number(run.runContext?.execution?.runGeneration ?? -1);
+        if (
+          run.status === snapshot.status
+          && currentRevision === snapshot.revision
+          && currentGeneration === snapshot.runGeneration
+        ) {
+          if (contextWithChildren === run.runContext) return run;
+          changed = true;
+          return { ...run, runContext: contextWithChildren };
+        }
 
-    refreshContexts();
-    const hasActive = spawnedAgents.some(s => !terminal.has(s.runContext?.status ?? s.status));
-    if (!hasActive) return () => { cancelled = true; };
-    const timer = window.setInterval(refreshContexts, 10000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [spawnedRunSignature]);
+        changed = true;
+        return {
+          ...run,
+          status: snapshot.status as SpawnedAgent['status'],
+          parentExecutionId: snapshot.parentExecutionId ?? run.parentExecutionId,
+          runContext: contextWithChildren
+            ? reconcileRunContextWithSnapshot(contextWithChildren, snapshot)
+            : contextWithChildren,
+        };
+      });
+
+      // A start event can be lost while a session stream reconnects. The
+      // global lifecycle stream is snapshot-first, so use it to recover a
+      // minimal card immediately instead of waiting for a page refresh.
+      const knownIds = new Set(next.map(run => run.executionId));
+      for (const snapshot of Object.values(executionSnapshots)) {
+        if (snapshot.chatSessionId !== activeSessionId || knownIds.has(snapshot.executionId)) continue;
+        next = [...next, runSeedFromSnapshot(snapshot) as SpawnedAgent];
+        knownIds.add(snapshot.executionId);
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [activeSessionId, spawnedRunIds, executionSnapshots]);
 
   // Load sessions on mount
   const loadSessions = useCallback(async () => {
@@ -490,7 +538,9 @@ export function useChat() {
         ]);
         if (cancelled) return;
         // Load execution watchers for this session
-        executionWatchersApi.list(activeSessionId).then(setWatchers).catch(() => {/* best-effort */});
+        executionWatchersApi.list(activeSessionId)
+          .then(incoming => setWatchers(prev => mergeWatcherDocuments(prev, incoming)))
+          .catch(() => {/* best-effort */});
         const loadedMessages = (session.messages || []) as ChatMessage[];
         const { messages: _messages, ...sessionMeta } = session as ChatSession & { messages?: ChatMessage[] };
         void _messages;
@@ -500,6 +550,11 @@ export function useChat() {
             : [sessionMeta, ...prev],
         );
         setMessages(loadedMessages);
+        for (const run of persistedRuns) {
+          if (run.runContext?.execution) {
+            useExecutionStore.getState().ingestExecution(run.runContext.execution as unknown as Record<string, unknown>);
+          }
+        }
         setSpawnedAgents(mergeSpawnedRuns(runsFromMessages(loadedMessages), runsFromPersistedExecutions(persistedRuns)));
 
         // Re-surface a pending ask_user question on refresh. The tool
@@ -532,66 +587,56 @@ export function useChat() {
           }
         }
 
-        // Attach the always-on session stream with up to
-        // MAX_RECONNECT_ATTEMPTS retries. It remains open even when there is
-        // no active assistant turn so watcher_update/session_update events
-        // arrive live.
+        // Initial data is ready before entering the intentionally long-lived
+        // stream loop. A closed response is transient; reconnect and
+        // reconcile persisted state because the session SSE is non-replay.
+        setLoadingMessages(false);
         console.log('[useChat:refresh] connecting live session stream for', activeSessionId);
-        let sessionReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-        for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
-          if (cancelled) break;
+        let reconnectAttempt = 0;
+        let connectedOnce = false;
+        while (!cancelled) {
           try {
             const response = await fetch(api.streamUrl(activeSessionId), {
               headers: authHeaders(),
               signal: streamAbortController.signal,
             });
-            if (response.body) {
-              sessionReader = response.body.getReader();
-              streamReader = sessionReader;
-              console.log('[useChat:refresh] SSE reader attached (attempt', attempt, ')');
-              break;
+            if (!response.ok || !response.body) throw new Error(`Session stream unavailable (${response.status})`);
+
+            const sessionReader = response.body.getReader();
+            streamReader = sessionReader;
+            reconnectAttempt = 0;
+
+            if (connectedOnce) {
+              const [latestRuns, latestWatchers, latestStreaming] = await Promise.all([
+                executionsApi.forChat(activeSessionId).catch(() => []),
+                executionWatchersApi.list(activeSessionId).catch(() => []),
+                api.isStreaming(activeSessionId).then(result => result.streaming).catch(() => false),
+              ]);
+              if (cancelled) break;
+              for (const run of latestRuns) {
+                if (run.runContext?.execution) {
+                  useExecutionStore.getState().ingestExecution(run.runContext.execution as unknown as Record<string, unknown>);
+                }
+              }
+              setSpawnedAgents(prev => mergeSpawnedRuns(prev, runsFromPersistedExecutions(latestRuns)));
+              setWatchers(prev => mergeWatcherDocuments(prev, latestWatchers));
+              setStreaming(latestStreaming);
             }
+
+            connectedOnce = true;
+            console.log('[useChat:refresh] SSE reader attached');
+            await consumeSessionEventStream(
+              sessionReader,
+              (event, data) => handleSSEEvent(event, data, activeSessionId),
+              () => cancelled,
+            );
           } catch (fetchErr) {
             if ((fetchErr as Error).name === 'AbortError') break;
-            console.warn('[useChat:refresh] SSE fetch attempt', attempt, 'failed:', fetchErr);
+            console.warn('[useChat:refresh] SSE connection ended:', fetchErr);
           }
-          if (attempt < MAX_RECONNECT_ATTEMPTS) {
-            await sleep(attempt === 1 ? 1000 : 2000);
-          }
+          streamReader = null;
+          if (!cancelled) await sleep(sessionReconnectDelay(++reconnectAttempt));
         }
-
-        if (cancelled || !sessionReader) {
-          if (!cancelled) {
-            console.warn('[useChat:refresh] SSE stream fetch returned no body after retries');
-          }
-          return;
-        }
-
-        const reader = sessionReader;
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let currentEvent = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done || cancelled) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-
-          for (const line of lines) {
-            if (line.startsWith('event: ')) { currentEvent = line.slice(7).trim(); }
-            else if (line.startsWith('data: ') && currentEvent) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                handleSSEEvent(currentEvent, data, activeSessionId);
-              } catch {}
-              currentEvent = '';
-            }
-          }
-        }
-        if (!cancelled) setStreaming(false);
       } catch (e) {
         if ((e as Error).name !== 'AbortError') {
           console.error('Failed to load messages:', e);
@@ -784,20 +829,7 @@ export function useChat() {
         break;
 
       case 'watcher_update':
-        setWatchers(prev => {
-          const idx = prev.findIndex(w => w.executionId === data.executionId);
-          const incoming = data as WatcherUIDoc;
-          if (idx >= 0) {
-            // Only replace if the incoming updateSeq is greater (avoid out-of-order downgrades)
-            if (incoming.updateSeq > prev[idx].updateSeq) {
-              const next = [...prev];
-              next[idx] = incoming;
-              return next;
-            }
-            return prev;
-          }
-          return [...prev, incoming];
-        });
+        setWatchers(prev => mergeWatcherDocuments(prev, [data as WatcherUIDoc]));
         break;
     }
   }, [streamText, thinkingText]);
@@ -1038,6 +1070,10 @@ export function useChat() {
                   setStreamText('');
                   setThinkingText('');
                   setActiveToolCalls([]);
+                  // The assistant turn is complete as soon as message_complete arrives.
+                  // The HTTP stream may stay open briefly for cleanup/title updates, but
+                  // model changes should be available for the next turn immediately.
+                  setStreaming(false);
 
                   setAgentReports([]);
 

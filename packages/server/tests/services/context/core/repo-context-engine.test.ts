@@ -782,6 +782,8 @@ describe('CogneeMemoryProvider', () => {
   let previousScript: string | undefined;
   let previousPythonPath: string | undefined;
   let previousLlmProvider: string | undefined;
+  let previousContextLlmProvider: string | undefined;
+  let previousContextLlmModel: string | undefined;
   let previousHome: string | undefined;
   let previousFakeEnvOut: string | undefined;
   let previousGraphExpansion: string | undefined;
@@ -796,6 +798,10 @@ describe('CogneeMemoryProvider', () => {
     else process.env.PYTHONPATH = previousPythonPath;
     if (previousLlmProvider === undefined) delete process.env.LLM_PROVIDER;
     else process.env.LLM_PROVIDER = previousLlmProvider;
+    if (previousContextLlmProvider === undefined) delete process.env.ALLEN_CONTEXT_LLM_PROVIDER;
+    else process.env.ALLEN_CONTEXT_LLM_PROVIDER = previousContextLlmProvider;
+    if (previousContextLlmModel === undefined) delete process.env.ALLEN_CONTEXT_LLM_MODEL;
+    else process.env.ALLEN_CONTEXT_LLM_MODEL = previousContextLlmModel;
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
     if (previousFakeEnvOut === undefined) delete process.env.ALLEN_FAKE_COGNEE_ENV_OUT;
@@ -804,6 +810,8 @@ describe('CogneeMemoryProvider', () => {
     else process.env.ALLEN_COGNEE_GRAPH_EXPANSION = previousGraphExpansion;
     previousPythonPath = undefined;
     previousLlmProvider = undefined;
+    previousContextLlmProvider = undefined;
+    previousContextLlmModel = undefined;
     previousHome = undefined;
     previousFakeEnvOut = undefined;
     previousGraphExpansion = undefined;
@@ -1197,6 +1205,8 @@ Follow the frontend coding guidelines and test the state transition.`;
     previousScript = process.env.ALLEN_COGNEE_SIDECAR_SCRIPT;
     previousPythonPath = process.env.PYTHONPATH;
     previousLlmProvider = process.env.LLM_PROVIDER;
+    previousContextLlmProvider = process.env.ALLEN_CONTEXT_LLM_PROVIDER;
+    previousContextLlmModel = process.env.ALLEN_CONTEXT_LLM_MODEL;
     previousHome = process.env.HOME;
     previousFakeEnvOut = process.env.ALLEN_FAKE_COGNEE_ENV_OUT;
     scriptDir = mkdtempSync(join(tmpdir(), 'allen-cognee-import-env-'));
@@ -1253,6 +1263,8 @@ async def search(query_text=None, query_type=None, datasets=None):
     process.env.PYTHONPATH = fakeModuleDir;
     process.env.HOME = homeDir;
     process.env.LLM_PROVIDER = 'openai';
+    delete process.env.ALLEN_CONTEXT_LLM_PROVIDER;
+    delete process.env.ALLEN_CONTEXT_LLM_MODEL;
     process.env.ALLEN_FAKE_COGNEE_ENV_OUT = envOut;
 
     const output = await runCogneeSidecar('ingest', {
@@ -1283,7 +1295,7 @@ async def search(query_text=None, query_type=None, datasets=None):
       embeddingProvider: 'fastembed',
       embeddingModel: 'BAAI/bge-small-en-v1.5',
       llmProvider: 'custom',
-      llmModel: 'gpt-5.5',
+      llmModel: 'gpt-5.6-sol',
       llmEndpoint: 'http://127.0.0.1:4023/api/internal/context-evaluation/cognee-llm/v1',
       llmApiKey: 'test-secret',
     }));

@@ -9,6 +9,30 @@ import { notDeletedFilter, softDeleteSet, restoreSet } from './soft-delete.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+const MODEL_OVERRIDE_FIELDS = ['provider', 'model', 'reasoningEffort', 'planMode'] as const;
+const INSTRUCTION_LIKE_NODE_FIELDS = ['prompt', 'instructions', 'system', 'outputs'] as const;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function stableStringify(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (isPlainRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? String(value);
+}
+
+function stableEqual(a: unknown, b: unknown): boolean {
+  return stableStringify(a) === stableStringify(b);
+}
+
 export class WorkflowService {
   private col: Collection;
   private db: Db;
@@ -243,6 +267,66 @@ export class WorkflowService {
     return changed;
   }
 
+  private preserveExistingNodeModelOverrides(existing: unknown, next: WorkflowDef): boolean {
+    const existingNodes = isPlainRecord(existing)
+      && isPlainRecord(existing.nodes)
+      ? existing.nodes as Record<string, unknown>
+      : undefined;
+    const nextNodes = next.nodes as Record<string, Record<string, unknown>> | undefined;
+    if (!existingNodes || !nextNodes) return false;
+
+    let changed = false;
+    for (const [nodeName, nextNode] of Object.entries(nextNodes)) {
+      const existingNode = existingNodes[nodeName];
+      if (!isPlainRecord(existingNode) || !isPlainRecord(nextNode)) continue;
+
+      if (
+        typeof existingNode.type === 'string'
+        && typeof nextNode.type === 'string'
+        && existingNode.type !== nextNode.type
+      ) {
+        continue;
+      }
+
+      const existingAgent = typeof existingNode.agent === 'string'
+        ? existingNode.agent
+        : typeof existingNode.role === 'string'
+          ? existingNode.role
+          : undefined;
+      const nextAgent = typeof nextNode.agent === 'string'
+        ? nextNode.agent
+        : typeof nextNode.role === 'string'
+          ? nextNode.role
+          : undefined;
+      if (existingAgent && nextAgent && existingAgent !== nextAgent) continue;
+
+      if (!isPlainRecord(existingNode.agentOverrides)) continue;
+      const existingOverrides = existingNode.agentOverrides;
+      const nextOverrides = isPlainRecord(nextNode.agentOverrides)
+        ? { ...nextNode.agentOverrides }
+        : {};
+      const instructionsChanged = INSTRUCTION_LIKE_NODE_FIELDS.some((field) => (
+        !stableEqual(existingNode[field], nextNode[field])
+      ));
+
+      let nodeChanged = false;
+      for (const field of MODEL_OVERRIDE_FIELDS) {
+        if (!hasOwn(existingOverrides, field)) continue;
+        const nextHasExplicitValue = hasOwn(nextOverrides, field);
+        if (nextHasExplicitValue && !instructionsChanged) continue;
+        if (stableEqual(nextOverrides[field], existingOverrides[field])) continue;
+        nextOverrides[field] = existingOverrides[field];
+        nodeChanged = true;
+      }
+
+      if (nodeChanged) {
+        nextNode.agentOverrides = nextOverrides;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   async create(body: { yaml?: string; parsed?: WorkflowDef; createdBy?: string; tags?: string[] }): Promise<Record<string, unknown>> {
     let parsed: WorkflowDef;
     let rawYaml: string;
@@ -317,14 +401,16 @@ export class WorkflowService {
 
     if (body.yaml) {
       const parsed = yaml.load(body.yaml) as WorkflowDef;
+      const preserved = this.preserveExistingNodeModelOverrides(existing.parsed, parsed);
       const changed = await this.addMissingNodeOverrideProviders(parsed);
-      updates.yaml = changed ? yaml.dump(parsed, { lineWidth: 120, noRefs: true, sortKeys: false }) : body.yaml;
+      updates.yaml = preserved || changed ? yaml.dump(parsed, { lineWidth: 120, noRefs: true, sortKeys: false }) : body.yaml;
       updates.parsed = parsed;
       updates.name = parsed.name;
       updates.description = parsed.description ?? '';
       updates.validation = await this.validate(parsed);
       updates.version = (existing.version as number ?? 0) + 1;
     } else if (body.parsed) {
+      this.preserveExistingNodeModelOverrides(existing.parsed, body.parsed);
       await this.addMissingNodeOverrideProviders(body.parsed);
       updates.parsed = body.parsed;
       updates.yaml = yaml.dump(body.parsed, { lineWidth: 120, noRefs: true, sortKeys: false });

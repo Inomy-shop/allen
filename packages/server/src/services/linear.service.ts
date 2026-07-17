@@ -15,6 +15,7 @@ import { WorkspaceManager } from './workspace.service.js';
 import { executeChatTool } from './chat-tools.js';
 import { ExecutionService } from './execution.service.js';
 import { getRuntimeSecretsProvider } from '../runtime/config.js';
+import { StateManager } from '@allen/engine';
 
 // TTL caches — Linear's rate limit is 4500 req/hr. Without caching a naive
 // page refresh can easily hit hundreds of requests because every `issue.state`,
@@ -587,19 +588,14 @@ export class LinearService {
     };
     await this.assignmentSvc.upsertDispatch(assignment);
     if (executionId) {
-      await this.db.collection('executions').updateOne(
-        { id: executionId },
-        {
-          $set: {
+      await new StateManager(this.db).updateExecution(executionId, {
             'meta.origin': 'linear',
             'meta.linearIssueId': issue.id,
             'meta.linearIdentifier': issue.identifier,
             'meta.linearTitle': issue.title,
             'meta.linearUrl': issue.url,
             'meta.requestText': input.task ?? input.request ?? issue.title,
-          },
-        },
-      ).catch(() => {});
+      } as any).catch(() => {});
     }
     LinearService.issuesCache.clear();
     return assignment;
@@ -759,10 +755,7 @@ export class LinearService {
       const spawnError = result.error as string | undefined;
 
       if (executionId) {
-        await this.db.collection('executions').updateOne(
-          { id: executionId },
-          {
-            $set: {
+        await new StateManager(this.db).updateExecution(executionId, {
               'meta.origin': 'linear',
               'meta.linearIssueId': issue.id,
               'meta.linearIdentifier': issue.identifier,
@@ -774,9 +767,7 @@ export class LinearService {
               'meta.branch': initial.branch,
               'meta.requestText': `${issue.identifier}: ${issue.title}`,
               'meta.requiresCodeChanges': true,
-            },
-          },
-        ).catch(() => {});
+        } as any).catch(() => {});
       }
 
       await this.assignmentSvc.patch(initial.linearIssueId, {
