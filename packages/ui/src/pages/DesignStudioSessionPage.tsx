@@ -18,6 +18,7 @@ export default function DesignStudioSessionPage() {
   const { sessionId } = useParams<{ sessionId?: string }>();
   const [searchParams] = useSearchParams();
   const [workspaceId, setWorkspaceId] = useState<string | null>(searchParams.get('ws'));
+  const [workspaceName, setWorkspaceName] = useState<string>('Allen Design workspace');
 
   // Fall back to resolving the workspace from the chat session if not in the URL.
   useEffect(() => {
@@ -27,9 +28,16 @@ export default function DesignStudioSessionPage() {
       .catch(() => {});
   }, [sessionId, workspaceId]);
 
+  useEffect(() => {
+    if (!workspaceId) return;
+    designStudio.getWorkspace(workspaceId)
+      .then((workspace) => setWorkspaceName(workspace.name))
+      .catch(() => {});
+  }, [workspaceId]);
+
   return (
-    <div className="flex h-full min-h-0 overflow-hidden">
-      <div className="flex min-w-0 flex-1 flex-col">
+    <div className="v8-design-session">
+      <div className="v8-design-session__thread">
         <ChatPage
           config={{
             routeBase: 'studio/sessions',
@@ -48,7 +56,7 @@ export default function DesignStudioSessionPage() {
           }}
         />
       </div>
-      <WorkspaceFilesPanel workspaceId={workspaceId} />
+      <WorkspaceFilesPanel workspaceId={workspaceId} workspaceName={workspaceName} />
     </div>
   );
 }

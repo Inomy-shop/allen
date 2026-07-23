@@ -1,0 +1,286 @@
+---
+title: 'Workflows Reference'
+description: 'Reference for Allen workflow inputs, nodes, edges, validation, and execution controls.'
+---
+
+:::info Media placeholders
+Before publishing, capture the workflow list, detail page, Visual and YAML builder modes, validation panel, **Run Workflow** form, a human-input pause, and **Rerun from Saved State**. Redact repository paths and external identifiers.
+:::
+
+Workflows are repeatable execution graphs. Use them when a task needs explicit inputs, multiple steps, branching, review points, retries, child workflows, or durable outputs.
+
+## User-visible workflow surfaces
+
+| Surface | Purpose |
+| --- | --- |
+| **Workflows** | Browse saved workflows and start a valid workflow. |
+| Workflow detail | Review description, validity, versions, nodes, edges, and previous runs. |
+| **Edit → Visual** | Build the graph with nodes, edges, and property panels. |
+| **Edit → YAML** | Edit the complete workflow definition and preview its graph. |
+| **Run Workflow** | Complete the generated input form and create an execution. |
+| Execution detail | Follow nodes, logs, traces, input requests, costs, artifacts, children, and saved states. |
+
+The builder synchronizes Visual and YAML representations when you switch modes. Save and validate after changing either representation.
+
+## Minimal definition
+
+```yaml
+name: investigate-and-review
+description: Investigate a request, then ask a human to review the result.
+version: 1
+context:
+  requires: [repo]
+input:
+  request:
+    type: string
+    required: true
+    widget: textarea
+    label: Request
+  repo_path:
+    type: string
+    required: true
+    widget: repo_picker
+    label: Repository
+nodes:
+  investigate:
+    type: agent
+    agent: bug-investigator
+    prompt: |
+      Investigate this request in {{repo_path}}:
+      {{request}}
+    outputs:
+      findings: Evidence-backed findings and recommended next step.
+  review:
+    type: human
+    human:
+      kind: review
+      widget: approval_gate
+      title: Review findings
+      question: Approve the recommended next step?
+edges:
+  - from: START
+    to: investigate
+  - from: investigate
+    to: review
+  - from: review
+    to: END
+```
+
+Top-level fields:
+
+| Field | Required | Purpose |
+| --- | --- | --- |
+| `name` | Yes | Unique workflow name used for discovery and routing. |
+| `description` | No | User-facing summary shown in workflow surfaces. |
+| `version` | No | Definition version. New workflows default to version 1; saved definition updates increment the stored version. |
+| `context` | No | Declares requirements, tools, secrets, or concurrency metadata. |
+| `input` | No | Schema used by the run form and required-input validation. |
+| `nodes` | Yes | Named workflow steps. |
+| `edges` | Yes | Routes between `START`, nodes, and `END`. |
+
+## Input schema
+
+`input` is a map from the exact input key to its definition. Use these same keys when calling a workflow through chat or API.
+
+| Field | Purpose |
+| --- | --- |
+| `type` | Value type such as `string`, `boolean`, `number`, `object`, or `array`. |
+| `required` | Rejects a missing, `null`, or empty-string value when true. |
+| `default` | Prefills the run form where supported. |
+| `label` | Human-readable form label. |
+| `description` | Help or fallback placeholder text. |
+| `placeholder` | Explicit placeholder text. |
+| `enum` | Allowed values; renders a select control. |
+| `widget` | `text`, `textarea`, `checkbox`, `select`, `repo_picker`, or `number`. |
+| `min` / `max` | Inclusive bounds for number inputs. |
+
+The run form casts booleans and numbers before starting the execution. A repository picker can list registered repositories and accept a manual path. Use it only when the workflow actually declares a repository requirement.
+
+If Allen reports `WORKFLOW_INPUT_VALIDATION_FAILED`, reload the workflow and rebuild the input from the exact saved `parsed.input` keys rather than guessing a field name.
+
+## Node types
+
+If `type` is omitted, Allen treats the node as an agent node.
+
+| Type | Key fields | Behavior |
+| --- | --- | --- |
+| `agent` | `agent`, `prompt`, `outputs`, `agentOverrides` | Runs a configured agent and records its session, tools, usage, context, and declared outputs. |
+| `code` | `function`, `config`, retry fields | Runs a registered Allen built-in function. Validation rejects unknown function names. |
+| `human` | `human` or legacy `prompt`/`fields` | Pauses with **waiting for input** until a human submits a decision or form values. |
+| `workflow` | `workflow`, `input_map`, `output_map` | Starts a child workflow and maps selected inputs and outputs. |
+| `condition` | `conditions` | Evaluates named expressions and writes boolean results into workflow state. |
+
+### Agent nodes
+
+Common agent-node fields:
+
+| Field | Purpose |
+| --- | --- |
+| `agent` | Name of the configured Allen agent to run. |
+| `prompt` | Template rendered from workflow input and upstream state. |
+| `outputs` | Named outputs with descriptions. Describe each value clearly for downstream routing. |
+| `output_format` | `json` for structured downstream use or `freeform` for prose. |
+| `agentOverrides` | Per-node provider, model, reasoning, plan mode, external MCP, or tool exclusions. Does not edit the agent record. |
+| `resume_on_retry` | Defaults to true. Set false when a retry should start a fresh model session. |
+| `session_key` | Separates agent sessions across loop iterations when each item needs independent context. |
+| `timeout` | Node timeout in seconds. |
+
+At spawn time, node overrides take priority over chat-session overrides, which take priority over the agent's defaults.
+
+### Code nodes
+
+Code nodes reference a registered `function` and may pass `config`. Retry controls include:
+
+| Field | Purpose |
+| --- | --- |
+| `retries` | Node retry count. High values produce validation warnings. |
+| `backoff` | `exponential`, `linear`, or `fixed`. |
+| `backoff_base_ms` | Base delay for the backoff calculation. |
+| `retry_on` | Error labels eligible for retry. |
+| `on_failure` | `fail`, `skip`, or `fallback`. |
+| `fallback_value` | Output used by the fallback path. |
+
+Review code-node side effects and retry idempotency. A retry can duplicate an external action if the function does not guard it.
+
+### Human nodes
+
+Use a human node before irreversible or externally visible work. The richer `human` block supports:
+
+- `kind`: `clarify`, `review`, or `recover`;
+- `widget`: dynamic form, approval gate, retry-exhausted gate, or escalation gate;
+- title, summary, question, highlights, and evidence;
+- typed fields, including text, boolean, number, and select;
+- actions that continue, retry a target node, or end the run;
+- required feedback on request-changes or rejection paths.
+
+Allen validates action targets, field names, and select options before the workflow is considered valid.
+
+### Child workflow nodes
+
+```yaml
+run_design:
+  type: workflow
+  workflow: tdd-design-by-severity
+  input_map:
+    requirement: "{{request}}"
+    repo_path: "{{repo_path}}"
+  output_map:
+    design_summary: implementation_plan
+```
+
+The child is a separate execution linked to its parent. Inspect the execution tree when reviewing status and cost.
+
+## Edges and routing
+
+`START` and `END` are reserved graph boundaries.
+
+| Field | Purpose |
+| --- | --- |
+| `from` / `to` | Node name, boundary name, or an array used for a fork or join. |
+| `condition` | Expression evaluated against current state before routing. |
+| `parallel` | Runs an array of targets as a parallel fork. |
+| `join` | `wait-all`, `wait-any`, or `fail-fast`; defaults to `wait-all`. |
+| `merge` | Per-key merge strategy: `last`, `concat`, `min`, `max`, `all`, or `any`. |
+| `max_retries` | Budget for a backward or retry edge. |
+| `retry_context` | Feedback rendered for the retry target. |
+| `allow_revisit` | Allows a completed node to be visited again. |
+
+Example retry route:
+
+```yaml
+- from: qa
+  to: implement
+  condition: "qa_verdict == 'fail'"
+  max_retries: 2
+  retry_context: "Fix these findings: {{qa_findings}}"
+```
+
+## Validation
+
+Validation checks structure and known references. Errors can include:
+
+- missing `name`, `nodes`, `edges`, or a `START` route;
+- unknown edge sources or targets;
+- orphan nodes;
+- unsafe backward edges without a condition or retry budget;
+- unknown agents, built-in functions, or child workflows;
+- invalid human presentation fields or action targets;
+- invalid condition syntax.
+
+Warnings can include unresolved template variables, unknown condition sources, high retry budgets, or parallel forks without a matching join.
+
+A valid result means the graph satisfies these checks. It does not prove that prompts are sufficient, credentials work, repository state is safe, or external side effects are idempotent. The workflow detail page disables **Run** when validation has errors.
+
+## Built-in catalog
+
+Allen currently seeds these workflow definitions. The live **Workflows** list can also contain user-created or imported workflows.
+
+| Workflow | Purpose |
+| --- | --- |
+| `agent-build-with-review` | Design, validate, review, and create an agent. |
+| `workflow-build-and-review` | Draft, validate, review, and persist a workflow. |
+| `requirement-to-prd-ensemble` | Produce and review a PRD from a product requirement. |
+| `tdd-design-by-severity` | Produce severity-aware technical design and implementation-readiness evidence. |
+| `feature-plan-and-implement` | Plan, implement, validate, document, review, and prepare a feature change. |
+| `bug-fix-by-severity` | Investigate and route a bug through size-aware implementation and review. |
+| `milestone-implementation-from-prd-tdd` | Implement milestones from approved PRD and TDD artifacts. |
+| `multi-repo-change-orchestration` | Plan and coordinate related work across repositories. |
+| `allen-self-healing-monitor-hourly` | Scan runtime evidence, deduplicate incidents, ticket findings, and optionally dispatch repair. |
+| `self-healing-incident-triage` | Analyze and route one recorded incident. |
+
+Always inspect a workflow's current input schema before starting it. Built-in definitions can evolve between releases.
+
+## Execution state and saved states
+
+Workflow executions record the input, current state, completed nodes, attempts, sessions, cost, logs, traces, context usage, child execution links, and a snapshot of the workflow definition that actually ran.
+
+User-visible statuses include queued, running, waiting for input, completed, failed, and cancelled. Allen saves a checkpoint after a node completes successfully.
+
+From execution detail, operators can:
+
+- submit human input;
+- cancel, pause, or resume current progress;
+- retry from a node;
+- inspect and edit eligible saved state;
+- run from a checkpoint using the same execution lineage;
+- fork a checkpoint into a new execution lineage;
+- inspect children, logs, activity, traces, artifacts, and failure reports.
+
+Imported replay executions are read-only for resume and retry operations.
+
+## API summary
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /api/workflows` | List workflows; `summary=true` returns a smaller list shape. |
+| `POST /api/workflows` | Create from YAML or parsed JSON. |
+| `GET /api/workflows/:id` | Get one saved workflow. |
+| `PUT /api/workflows/:id` | Update its definition or visual layout. |
+| `DELETE /api/workflows/:id` | Soft-delete it. |
+| `POST /api/workflows/:id/validate` | Revalidate and save the result. |
+| `GET /api/workflows/:id/mermaid` | Generate a Mermaid representation. |
+| `GET /api/workflows/:id/export` | Export one workflow as YAML. |
+| `POST /api/workflows/import` | Import one YAML workflow. |
+| `POST /api/workflows/export` / `import/json` | Move portable JSON bundles. |
+| `POST /api/executions` | Start a workflow with `workflowId` and `input`. |
+
+## Review before running side effects
+
+Before publishing or running a workflow that can change state:
+
+1. Confirm the generated form matches every required input key.
+2. Fix validation errors and review warnings.
+3. Create or select an isolated workspace before repo-writing agents run.
+4. Review model, system-tool, external MCP, and credential access.
+5. Place human approval before commits, pull requests, tickets, messages, deployments, or destructive actions.
+6. Set bounded retry and escalation paths.
+7. Check that retries cannot duplicate external side effects.
+8. Save reviewable deliverables as artifacts without secrets.
+9. Confirm the final execution output with independent validation evidence.
+
+## Related pages
+
+- [Create a Workflow](/guides/create-a-workflow)
+- [Run a Workflow](/guides/run-a-workflow)
+- [Monitor an execution](/guides/monitor-execution)
+- [Agents reference](/reference/agents)

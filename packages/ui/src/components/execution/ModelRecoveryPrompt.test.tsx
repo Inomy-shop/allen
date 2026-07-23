@@ -58,6 +58,11 @@ vi.mock('../../lib/model-catalog', () => ({
   },
 }));
 
+function selectRecoveryModel(label = 'Opus 4.7') {
+  fireEvent.click(screen.getByLabelText(/select model/i));
+  fireEvent.click(screen.getByRole('option', { name: label }));
+}
+
 // ── Test data ──────────────────────────────────────────────────────────
 
 const BASE_PROPS = {
@@ -100,7 +105,8 @@ describe('ModelRecoveryPrompt', () => {
 
   it('renders failed provider and model chips', () => {
     render(<ModelRecoveryPrompt {...BASE_PROPS} />);
-    expect(screen.getByText('Claude')).toBeTruthy();
+    expect(screen.getAllByText('Claude').length).toBeGreaterThan(0);
+    expect(document.querySelector('[data-provider-icon="claude"]')).toBeTruthy();
   });
 
   it('renders sequential topology context by default', () => {
@@ -133,8 +139,7 @@ describe('ModelRecoveryPrompt', () => {
     expect(submitBtn).toBeDisabled();
 
     // Select a model should enable it
-    const modelSelect = screen.getByLabelText(/select model/i);
-    fireEvent.change(modelSelect, { target: { value: 'claude-opus-4-7' } });
+    selectRecoveryModel();
     expect(submitBtn).not.toBeDisabled();
   });
 
@@ -150,8 +155,7 @@ describe('ModelRecoveryPrompt', () => {
     );
 
     // Select a model first
-    const modelSelect = screen.getByLabelText(/select model/i);
-    fireEvent.change(modelSelect, { target: { value: 'claude-opus-4-7' } });
+    selectRecoveryModel();
 
     // Click submit
     const submitBtn = screen.getByRole('button', { name: /retry with selected model/i });
@@ -204,8 +208,7 @@ describe('ModelRecoveryPrompt', () => {
     );
 
     // Select a model
-    const modelSelect = screen.getByLabelText(/select model/i);
-    fireEvent.change(modelSelect, { target: { value: 'claude-opus-4-7' } });
+    selectRecoveryModel();
 
     // Click submit
     const submitBtn = screen.getByRole('button', { name: /retry with selected model/i });
@@ -228,12 +231,11 @@ describe('ModelRecoveryPrompt', () => {
     render(<ModelRecoveryPrompt {...BASE_PROPS} />);
 
     // Select a model
-    const modelSelect = screen.getByLabelText(/select model/i);
-    fireEvent.change(modelSelect, { target: { value: 'claude-opus-4-7' } });
+    selectRecoveryModel();
 
     // Select reasoning effort
-    const effortSelect = screen.getByLabelText(/reasoning effort/i);
-    fireEvent.change(effortSelect, { target: { value: 'high' } });
+    fireEvent.click(screen.getByLabelText(/reasoning effort/i));
+    fireEvent.click(screen.getByRole('option', { name: /^High Deeper reasoning$/ }));
 
     // Click submit
     const submitBtn = screen.getByRole('button', { name: /retry with selected model/i });

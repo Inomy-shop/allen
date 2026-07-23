@@ -167,6 +167,7 @@ function runtimeKey(input: RuntimeTurnInput): string {
     `model=${input.model}`,
     `cwd=${input.cwd ?? AGENT_FALLBACK_CWD}`,
     `plan=${input.resolvedSettings?.planMode ?? false}`,
+    `effort=${input.resolvedSettings?.reasoningEffort ?? ''}`,
   ].join('|');
 }
 

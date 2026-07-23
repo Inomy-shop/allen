@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useLayoutEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useChat, type ChatSession, type SpawnedAgent } from '../hooks/useChat';
+import { useChat, type ChatSession } from '../hooks/useChat';
 import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
 import { useFileDropZone, FileDropOverlay } from '../hooks/useFileDropZone';
 import { buildSkillSlashCommands } from '../hooks/useSkillSlashCommands';
@@ -8,16 +8,27 @@ import ChatMessageList from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
-import ChatRunSidebar, { type ChatRunPanelTab } from '../components/chat/ChatRunSidebar';
+import ChatRunSidebar, { FileChangesPanel, type ChatRunPanelTab } from '../components/chat/ChatRunSidebar';
 import { ToolCallLog } from '../components/common/ToolCallLog';
-import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, skills as skillsApi, type ChatQueueItem, type SkillRecord } from '../services/api';
-import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../services/workspaceService';
-import WorkspaceChatTabs, { type WorkspaceChatTab, getTabKey } from '../components/chat/WorkspaceChatTabs';
+import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, skills as skillsApi, artifacts as artifactsApi, type ChatQueueItem, type SkillRecord } from '../services/api';
+import { workspaces as workspacesApi } from '../services/workspaceService';
+import { type WorkspaceChatTab, type WorkspaceResourceTab, getTabKey } from '../components/chat/WorkspaceChatTabs';
+import ChatDetailHeader from '../components/chat/ChatDetailHeader';
+import TeamClassificationSelect from '../components/common/TeamClassificationSelect';
 import ChatExportDialog from '../components/chat/ChatExportDialog';
 import ImportedChatBanner from '../components/chat/ImportedChatBanner';
-import { AppWindow, BookOpen, Code2, ExternalLink, FileText, GitPullRequest, ListTree, PanelRightOpen, Server, Terminal, X, Check, Navigation2, Pencil, Trash2, Upload } from 'lucide-react';
-import { XTerminal } from '../components/workspace/XTerminal';
+import { Activity, AppWindow, ArrowLeft, BookOpen, Code2, FileText, ListTree, MoreHorizontal, PanelRightOpen, Server, Terminal, X, Check, Navigation2, Pencil, Trash2, Upload } from 'lucide-react';
+import { XTerminal, type TerminalSourceType } from '../components/workspace/XTerminal';
 import WorkspaceServersTab from '../components/workspace/WorkspaceServersTab';
+import DocumentTabHost from '../components/artifacts/DocumentTabHost';
+import { resourceScopeKey, useDocumentTabStore } from '../stores/documentTabStore';
+import { useMediaViewerStore } from '../stores/mediaViewerStore';
+import { mediaKindForPath, mimeTypeForMediaPath } from '../lib/resource-navigation';
+import { resolveChatTerminalSource } from '../lib/chat-terminal-source';
+import { resolveChatResourceScope } from '../lib/chat-resource-scope';
+import { insertSiblingTab } from '../lib/tab-order';
+import { chatSessionPath, shouldSwitchChatSession, workspaceChatPath } from '../lib/workspace-routes';
+import type { TeamClassification } from '../types/teamClassification';
 
 export interface ChatPageConfig {
   /** Override base path for session navigation. Default: 'chat'. */
@@ -26,7 +37,7 @@ export interface ChatPageConfig {
   forcedAgent?: string | null;
   /** Custom placeholder for ChatInput. */
   placeholder?: string;
-  /** When true, hides the diff summary pill, resource rail, and run sidebar. */
+  /** When true, hides the resource rail and run sidebar. */
   designMode?: boolean;
   /** Called when activeSessionId changes (e.g., after creating a new session). */
   onActiveSessionIdChange?: (sessionId: string | null) => void;
@@ -64,7 +75,29 @@ type IdeOption = {
   icon: () => JSX.Element;
 };
 
-type ChatPullRequest = NonNullable<NonNullable<SpawnedAgent['runContext']>['pullRequest']>;
+type ChatTerminalTab = {
+  id: string;
+  title: string;
+  sourceType: TerminalSourceType;
+  sourceId: string;
+  sourceLabel: string;
+};
+
+type ChatSessionTab = {
+  id: string;
+  title: string;
+  isTemp?: boolean;
+};
+
+type ChatUtilityTab = {
+  id: string;
+  title: string;
+  kind: 'code-diff' | 'file-explorer';
+};
+
+const chatSessionTabKey = (id: string) => `chat:${id}`;
+const chatTerminalTabKey = (id: string) => `terminal:${id}`;
+const chatUtilityTabKey = (id: string) => `utility:${id}`;
 
 function VsCodeIcon() {
   return (
@@ -90,113 +123,11 @@ const IDE_OPTIONS: IdeOption[] = [
   { id: 'cursor', label: 'Cursor', icon: CursorIcon },
 ];
 
-function humanLabel(value?: string | null): string {
-  if (!value) return '';
-  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
-
 function providerFamily(provider?: string | null): 'codex' | 'claude' | 'unknown' {
   if (provider === 'codex') return 'codex';
   if (provider === 'claude' || provider === 'claude-cli') return 'claude';
   if (provider) return 'claude';
   return 'unknown';
-}
-
-function timeAgo(dateStr?: string | null): string {
-  if (!dateStr) return 'recently';
-  const ms = Date.now() - new Date(dateStr).getTime();
-  const min = Math.floor(ms / 60_000);
-  if (min < 1) return 'just now';
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.floor(hr / 24)}d ago`;
-}
-
-function collectPullRequests(runs: SpawnedAgent[]): ChatPullRequest[] {
-  const prs = new Map<string, ChatPullRequest>();
-  for (const run of runs) {
-    const pr = run.runContext?.pullRequest;
-    const key = pr?.id ?? pr?.url ?? (pr?.number != null ? String(pr.number) : '');
-    if (pr && key) prs.set(key, pr);
-  }
-  return [...prs.values()].sort((a, b) => {
-    const at = new Date(a.updatedAt ?? a.createdAt ?? 0).getTime();
-    const bt = new Date(b.updatedAt ?? b.createdAt ?? 0).getTime();
-    return bt - at;
-  });
-}
-
-function FloatingPullRequestCard({ pullRequest }: { pullRequest: ChatPullRequest }) {
-  const status = humanLabel(pullRequest.status ?? 'open');
-  const age = timeAgo(pullRequest.mergedAt ?? pullRequest.updatedAt ?? pullRequest.createdAt);
-  return (
-    <aside className="chat-pr-float" aria-label="Pull request ready" title={pullRequest.title ?? 'Pull request ready'}>
-      <div className="chat-pr-float-main">
-        <span className="chat-pr-float-tag">
-          <GitPullRequest className="h-3.5 w-3.5" />
-          PR
-        </span>
-        <span className="chat-pr-float-title">#{pullRequest.number ?? ''} {status}</span>
-        <span className="chat-pr-float-age">{age}</span>
-        <div className="chat-pr-float-actions">
-          {pullRequest.url && (
-            <a href={pullRequest.url} target="_blank" rel="noopener noreferrer" title="Review on GitHub" aria-label="Review on GitHub">
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-          )}
-          <a href="/pull-requests" title="Open pull requests" aria-label="Open pull requests">
-            <GitPullRequest className="h-3.5 w-3.5" />
-          </a>
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-function diffLineCounts(diff?: string): { additions: number; deletions: number } {
-  if (!diff) return { additions: 0, deletions: 0 };
-  return diff.split('\n').reduce((acc, line) => {
-    if (line.startsWith('+++') || line.startsWith('---')) return acc;
-    if (line.startsWith('+')) acc.additions += 1;
-    else if (line.startsWith('-')) acc.deletions += 1;
-    return acc;
-  }, { additions: 0, deletions: 0 });
-}
-
-type DiffSummaryFile = {
-  path?: string;
-  status?: string;
-  diff?: string;
-  modifiedContent?: string;
-  additions?: number;
-  deletions?: number;
-};
-
-function hasChangedDiffMetadata(file: DiffSummaryFile): boolean {
-  return Boolean(file.path) && (
-    Number(file.additions ?? 0) > 0 ||
-    Number(file.deletions ?? 0) > 0 ||
-    Boolean(file.status) ||
-    Boolean(file.diff?.trim() || file.modifiedContent?.trim())
-  );
-}
-
-function summarizeDiffFiles(files: DiffSummaryFile[]): { files: number; additions: number; deletions: number } {
-  const byKey = new Map<string, { additions: number; deletions: number }>();
-  for (const file of files) {
-    if (!hasChangedDiffMetadata(file)) continue;
-    const counts = file.additions != null || file.deletions != null
-      ? { additions: file.additions ?? 0, deletions: file.deletions ?? 0 }
-      : diffLineCounts(file.diff);
-    const key = file.path ?? file.diff?.trim() ?? file.modifiedContent?.trim() ?? `${byKey.size}`;
-    byKey.set(key, counts);
-  }
-  return [...byKey.values()].reduce<{ files: number; additions: number; deletions: number }>((acc, item) => ({
-    files: acc.files + 1,
-    additions: acc.additions + item.additions,
-    deletions: acc.deletions + item.deletions,
-  }), { files: 0, additions: 0, deletions: 0 });
 }
 
 function workspaceChatToTab(chat: any): WorkspaceChatTab {
@@ -230,7 +161,8 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const [logsOpen, setLogsOpen] = useState(false);
   const [toolLogOpen, setToolLogOpen] = useState(false);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
-  const [sidePanelTab, setSidePanelTab] = useState<ChatRunPanelTab>('tasks');
+  const [sidePanelTab, setSidePanelTab] = useState<ChatRunPanelTab>('documents');
+  const [documentCount, setDocumentCount] = useState(0);
   const [filesViewRequest, setFilesViewRequest] = useState<{ view: 'files' | 'changes'; nonce: number } | undefined>();
   const [mcpCount, setMcpCount] = useState<{ enabled: number; connected: number }>({ enabled: 0, connected: 0 });
   const [providers, setProviders] = useState<any[]>([]);
@@ -246,23 +178,21 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const [queuedMessages, setQueuedMessages] = useState<ChatQueueItem[]>([]);
   const [editingQueuedId, setEditingQueuedId] = useState<string | null>(null);
   const [editingQueuedValue, setEditingQueuedValue] = useState('');
-  const [chatDiffSummary, setChatDiffSummary] = useState<{ files: number; additions: number; deletions: number } | null>(null);
-  const [hiddenDiffSignature, setHiddenDiffSignature] = useState<string | null>(null);
   // Pending override state for chats that don't have a session yet. Once the
   // first message creates the session, this is merged into createSession().
   const [pendingOverrides, setPendingOverrides] = useState<{
-    reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
+    reasoningEffort?: ReasoningEffortValue | null;
     planMode?: boolean | null;
   }>(config?.defaultReasoningEffort ? { reasoningEffort: config.defaultReasoningEffort } : {});
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const processedDeepLinkRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<ChatQueueItem[]>([]);
   const editingQueuedIdRef = useRef<string | null>(null);
-  const chatDiffSignatureRef = useRef('');
   const wsLoadedForSessionRef = useRef<string | null>(null);
   const pendingWorkspaceTempTabRef = useRef<{ workspaceId: string; tab: WorkspaceChatTab } | null>(null);
   const workspaceTabsWorkspaceIdRef = useRef<string | null>(null);
   const ideMenuRef = useRef<HTMLDivElement | null>(null);
+  const documentsSidebarAutoHiddenRef = useRef(false);
 
   // Workspace mode state
   const [activeWorkspace, setActiveWorkspace] = useState<any | null>(null);
@@ -270,12 +200,40 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const [workspaceChats, setWorkspaceChats] = useState<any[]>([]);
   const [openWorkspaceTabs, setOpenWorkspaceTabs] = useState<WorkspaceChatTab[]>([]);
   const [activeWorkspaceTabKey, setActiveWorkspaceTabKey] = useState<string | null>(null);
+  const [workspaceResourceScopeKey, setWorkspaceResourceScopeKey] = useState<string | null>(null);
+  const [activeWorkspaceResourceTabKey, setActiveWorkspaceResourceTabKey] = useState<string | null>(null);
+  const [workspaceResourceScopeRegistry, setWorkspaceResourceScopeRegistry] = useState<{
+    workspaceId: string | null;
+    scopeKeys: string[];
+  }>({ workspaceId: null, scopeKeys: [] });
   const [tempTabCounter, setTempTabCounter] = useState(0);
   const [workspaceTerminalCounter, setWorkspaceTerminalCounter] = useState(0);
   const workspaceTerminalCounterRef = useRef(0);
   const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null);
   const [ideMenuOpen, setIdeMenuOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [openChatTabs, setOpenChatTabs] = useState<ChatSessionTab[]>([]);
+  const [activeChatTabId, setActiveChatTabId] = useState<string | null>(null);
+  const [openChatTerminalTabs, setOpenChatTerminalTabs] = useState<ChatTerminalTab[]>([]);
+  const [activeChatTerminalId, setActiveChatTerminalId] = useState<string | null>(null);
+  const [openChatUtilityTabs, setOpenChatUtilityTabs] = useState<ChatUtilityTab[]>([]);
+  const [activeChatUtilityId, setActiveChatUtilityId] = useState<string | null>(null);
+  const [chatTabOrder, setChatTabOrder] = useState<string[]>([]);
+  const [teamClassificationOverride, setTeamClassificationOverride] = useState<TeamClassification | null>(null);
+  const [teamClassificationError, setTeamClassificationError] = useState<string | null>(null);
+  const chatTerminalCounterRef = useRef(0);
+  const pendingChatTempTabRef = useRef<string | null>(null);
+  const openFile = useDocumentTabStore(state => state.openFile);
+  const documentTabs = useDocumentTabStore(state => state.tabs);
+  const fileTabs = useDocumentTabStore(state => state.fileTabs);
+  const resourceSelections = useDocumentTabStore(state => state.selections);
+  const selectDocument = useDocumentTabStore(state => state.selectDocument);
+  const selectFile = useDocumentTabStore(state => state.selectFile);
+  const closeDocument = useDocumentTabStore(state => state.closeDocument);
+  const closeFile = useDocumentTabStore(state => state.closeFile);
+  const selectBaseResourceTab = useDocumentTabStore(state => state.selectBaseTab);
+  const setActiveResourceScope = useDocumentTabStore(state => state.setActiveScope);
+  const openMedia = useMediaViewerStore(state => state.openMedia);
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
@@ -288,6 +246,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   } = useChat();
 
   const activeSession = sessions.find(s => s._id === activeSessionId);
+  const displayedTeamClassification = teamClassificationOverride;
   const latestMessage = messages[messages.length - 1];
   const artifactRefreshKey = [
     activeSessionId ?? '',
@@ -296,8 +255,70 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     activeToolCalls.length,
   ].join(':');
   const activeProvider = activeSession?.provider ?? selectedProvider;
-  const pullRequests = collectPullRequests(spawnedAgents);
-  const floatingPullRequest = !sidePanelOpen ? pullRequests[0] ?? null : null;
+  const activeWorkflowName = spawnedAgents.find(run => run.runContext?.runType === 'workflow')?.runContext?.execution.workflowName ?? null;
+
+  useEffect(() => {
+    setTeamClassificationOverride(activeSession?.teamClassification ?? null);
+    setTeamClassificationError(null);
+  }, [activeSession?._id, activeSession?.teamClassification]);
+
+  async function handleTeamClassificationChange(value: TeamClassification | null) {
+    if (!activeSessionId || composerDisabled) return;
+    const previous = displayedTeamClassification;
+    setTeamClassificationOverride(value);
+    setTeamClassificationError(null);
+    try {
+      await chatApi.updateSession(activeSessionId, { teamClassification: value });
+      if (!activeSession?.studioWorkspaceId) refreshSessions();
+    } catch (error) {
+      setTeamClassificationOverride(previous);
+      setTeamClassificationError(error instanceof Error ? error.message : 'Could not update the conversation team.');
+    }
+  }
+
+  useEffect(() => {
+    if (!activeSessionId || activeWorkspaceId || activeSession?.workspaceId) return;
+    const title = activeSession?.title || 'Untitled conversation';
+    const pendingTempTabId = pendingChatTempTabRef.current;
+    setOpenChatTabs(current => {
+      const existing = current.find(tab => tab.id === activeSessionId);
+      if (existing) return current.map(tab => tab.id === activeSessionId ? { ...tab, title } : tab);
+      const activeTempIndex = current.findIndex(tab => tab.id === pendingTempTabId && tab.isTemp);
+      if (activeTempIndex >= 0) {
+        const next = [...current];
+        next[activeTempIndex] = { id: activeSessionId, title };
+        return next;
+      }
+      return [...current, { id: activeSessionId, title }];
+    });
+    setChatTabOrder(current => {
+      const nextKey = chatSessionTabKey(activeSessionId);
+      if (pendingTempTabId) {
+        const pendingKey = chatSessionTabKey(pendingTempTabId);
+        const pendingIndex = current.indexOf(pendingKey);
+        if (pendingIndex >= 0) {
+          const next = [...current];
+          next[pendingIndex] = nextKey;
+          return next;
+        }
+      }
+      return current.includes(nextKey) ? current : [...current, nextKey];
+    });
+    pendingChatTempTabRef.current = null;
+    setActiveChatTabId(activeSessionId);
+  }, [activeSessionId, activeSession?.title, activeSession?.workspaceId, activeWorkspaceId]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      setDocumentCount(0);
+      return;
+    }
+    let cancelled = false;
+    artifactsApi.list({ rootType: 'chat', rootId: activeSessionId, limit: 500 })
+      .then(items => { if (!cancelled) setDocumentCount(items.length); })
+      .catch(() => { if (!cancelled) setDocumentCount(0); });
+    return () => { cancelled = true; };
+  }, [activeSessionId, artifactRefreshKey]);
 
   function syncWorkspaceTerminalCounter(terminalIds: string[]) {
     const maxId = maxTerminalSequence(terminalIds);
@@ -387,8 +408,10 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     setQueuedMessages([]);
     setEditingQueuedId(null);
     setEditingQueuedValue('');
+    // Resource panels are opt-in. In particular, entering or switching a
+    // workspace chat must not cover the conversation with the Docs drawer.
     setSidePanelOpen(false);
-    setSidePanelTab('tasks');
+    setSidePanelTab('documents');
   }, [activeSessionId]);
 
   // The agent doc whose defaults we display as the fallback in the popover.
@@ -441,7 +464,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   // Called from ChatInput when the user changes effort or plan mode.
   // Before a session exists, mutate local state. After, PATCH the session doc.
   async function handleOverridesChange(next: {
-    reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
+    reasoningEffort?: ReasoningEffortValue | null;
     planMode?: boolean | null;
   }) {
     if (activeSessionId) {
@@ -492,18 +515,19 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     if (urlSessionId && urlSessionId !== activeSessionId) {
       // URL has a session ID that's different from active — load it
       switchSession(urlSessionId);
-    } else if (!urlSessionId && activeSessionId) {
+    } else if (!urlSessionId && !urlWorkspaceId && activeSessionId) {
       // URL cleared (new chat button) — clear active session
       switchSession('');
     }
-  }, [urlSessionId]);
+  }, [urlSessionId, urlWorkspaceId]);
 
   useEffect(() => {
+    if (activeWorkspaceId || urlWorkspaceId) return;
     if (activeSessionId && activeSessionId !== urlSessionId) {
       // Active session changed (e.g., after creating a new session) — update URL
       navigate(`/${routeBase}/${activeSessionId}`, { replace: true });
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, activeWorkspaceId, urlWorkspaceId, urlSessionId, navigate, routeBase]);
 
   // Notify parent when activeSessionId changes (e.g., for DesignPage's preview panel)
   useEffect(() => {
@@ -537,6 +561,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         let restoredActiveTabKey: string | null = null;
         let restoredTerminalIds: string[] = [];
         let restoredServersOpen = false;
+        let restoredUtilityKinds: Array<'code-diff' | 'file-explorer'> = [];
         try {
           const stored = localStorage.getItem(`allen-ws-chat-tabs:${urlWorkspaceId}`);
           if (stored) {
@@ -553,6 +578,9 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
               restoredTerminalIds = ['term-1'];
             }
             restoredServersOpen = parsed.openServers === true && parsed.serversWorkspaceId === urlWorkspaceId && (ws.services?.length ?? 0) > 0;
+            if (Array.isArray(parsed.openUtilityTabs)) {
+              restoredUtilityKinds = parsed.openUtilityTabs.filter((kind: unknown): kind is 'code-diff' | 'file-explorer' => kind === 'code-diff' || kind === 'file-explorer');
+            }
           }
         } catch {}
 
@@ -569,7 +597,12 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         const restoredServersTab: WorkspaceChatTab | null = restoredServersOpen
           ? { id: { kind: 'servers' }, title: 'Servers', isTemp: false }
           : null;
-        const restoredUtilityTabs = [...restoredTerminalTabs, ...(restoredServersTab ? [restoredServersTab] : [])];
+        const restoredResourceTabs: WorkspaceChatTab[] = restoredUtilityKinds.map(kind => ({
+          id: { kind },
+          title: kind === 'code-diff' ? 'Code diff' : 'File explorer',
+          isTemp: false,
+        }));
+        const restoredUtilityTabs = [...restoredTerminalTabs, ...restoredResourceTabs, ...(restoredServersTab ? [restoredServersTab] : [])];
 
         if (chats.length === 0) {
           const tempTab: WorkspaceChatTab = pendingTemp ?? {
@@ -603,10 +636,14 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           });
 
           const finalTabs = tabs.length > 0 ? tabs : [workspaceChatToTab(chats[0])];
+          const requestedChat = urlSessionId ? chats.find((chat: any) => chat._id === urlSessionId) : null;
+          const tabsWithRequested = requestedChat && !finalTabs.some(tab => getTabKey(tab) === urlSessionId)
+            ? [...finalTabs, workspaceChatToTab(requestedChat)]
+            : finalTabs;
 
           const tabsWithUtility = restoredUtilityTabs.reduce<WorkspaceChatTab[]>((acc, tab) => (
             acc.some(item => getTabKey(item) === getTabKey(tab)) ? acc : [...acc, tab]
-          ), finalTabs);
+          ), tabsWithRequested);
 
           const tabsWithPending = pendingTemp && !tabsWithUtility.some(t => getTabKey(t) === getTabKey(pendingTemp))
             ? [...tabsWithUtility, pendingTemp]
@@ -630,6 +667,8 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           const restoredActiveTabStillOpen = restoredActiveTabKey && tabsWithPending.some(t => getTabKey(t) === restoredActiveTabKey);
           const activeKey = pendingTemp
             ? getTabKey(pendingTemp)
+            : requestedChat
+              ? requestedChat._id
             : restoredActiveTabStillOpen
               ? restoredActiveTabKey
               : restoredActiveStillOpen
@@ -661,7 +700,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
 
     void loadWorkspace();
     return () => { cancelled = true; };
-  }, [urlWorkspaceId]);
+  }, [urlWorkspaceId, urlSessionId]);
 
   // ── Workspace mode: Path B — /chat/:sessionId where session has workspaceId ──
   useEffect(() => {
@@ -690,6 +729,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
       // Same-workspace links still need to restore a closed tab and force it active.
       if (wsLoadedForSessionRef.current === loadKey && activeWorkspaceId === wsId && routeSessionAlreadyOpen) {
         setActiveWorkspaceTabKey(routeSessionId);
+        if (shouldSwitchChatSession(activeSessionId, routeSessionId)) switchSession(routeSessionId);
         return;
       }
 
@@ -709,6 +749,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         let restoredOpenIds: string[] = [];
         let restoredTerminalIds: string[] = [];
         let restoredServersOpen = false;
+        let restoredUtilityKinds: Array<'code-diff' | 'file-explorer'> = [];
         try {
           const stored = localStorage.getItem(`allen-ws-chat-tabs:${wsId}`);
           if (stored) {
@@ -723,6 +764,9 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
               restoredTerminalIds = ['term-1'];
             }
             restoredServersOpen = parsed.openServers === true && parsed.serversWorkspaceId === wsId && (ws.services?.length ?? 0) > 0;
+            if (Array.isArray(parsed.openUtilityTabs)) {
+              restoredUtilityKinds = parsed.openUtilityTabs.filter((kind: unknown): kind is 'code-diff' | 'file-explorer' => kind === 'code-diff' || kind === 'file-explorer');
+            }
           }
         } catch {}
 
@@ -752,10 +796,16 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         if (restoredServersOpen && !tabs.some(t => getTabKey(t) === 'servers')) {
           tabs.push({ id: { kind: 'servers' as const }, title: 'Servers', isTemp: false });
         }
+        restoredUtilityKinds.forEach(kind => {
+          if (!tabs.some(t => getTabKey(t) === kind)) {
+            tabs.push({ id: { kind }, title: kind === 'code-diff' ? 'Code diff' : 'File explorer', isTemp: false });
+          }
+        });
 
         workspaceTabsWorkspaceIdRef.current = wsId;
         setOpenWorkspaceTabs(tabs);
         setActiveWorkspaceTabKey(routeSessionId); // EC-06: force clicked session active
+        if (shouldSwitchChatSession(activeSessionId, routeSessionId)) switchSession(routeSessionId);
       } catch {
         // Silently fail — workspace may be deleted/archived
       }
@@ -763,7 +813,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
 
     void loadWorkspaceForSession();
     return () => { cancelled = true; };
-  }, [urlSessionId, urlWorkspaceId, sessions, activeWorkspaceId, openWorkspaceTabs]);
+  }, [urlSessionId, urlWorkspaceId, sessions, activeSessionId, activeWorkspaceId, openWorkspaceTabs]);
 
   // ── Workspace mode: clear when navigating to a non-workspace session ──
   useEffect(() => {
@@ -813,6 +863,9 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
       .map(t => (t.id as { kind: 'terminal'; terminalId: string }).terminalId);
     const openTerminal = openTerminalIds.length > 0;
     const openServers = openWorkspaceTabs.some(t => t.id.kind === 'servers');
+    const openUtilityTabs = openWorkspaceTabs
+      .filter(t => t.id.kind === 'code-diff' || t.id.kind === 'file-explorer')
+      .map(t => t.id.kind);
     try {
       localStorage.setItem(`allen-ws-chat-tabs:${activeWorkspaceId}`, JSON.stringify({
         openSessionIds,
@@ -823,6 +876,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         terminalWorkspaceId: openTerminal ? activeWorkspaceId : null,
         openServers,
         serversWorkspaceId: openServers ? activeWorkspaceId : null,
+        openUtilityTabs,
       }));
     } catch {}
   }, [activeWorkspaceId, openWorkspaceTabs, activeWorkspaceTabKey]);
@@ -1065,7 +1119,8 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   }
 
   function openSidePanel(tab: ChatRunPanelTab, filesView?: 'files' | 'changes') {
-    const nextTab = tab === 'executions' ? 'tasks' : tab;
+    documentsSidebarAutoHiddenRef.current = false;
+    const nextTab = tab;
     if ((tab === 'files' || tab === 'changes') && filesView) {
       setFilesViewRequest(prev => ({ view: filesView, nonce: (prev?.nonce ?? 0) + 1 }));
     }
@@ -1085,15 +1140,37 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     openSidePanel(tab);
   }
 
+  function handleDocumentOpenedFromSidebar() {
+    if (!sidePanelOpen || sidePanelTab !== 'documents') return;
+    documentsSidebarAutoHiddenRef.current = true;
+    setSidePanelOpen(false);
+  }
+
+  function handleAllResourceTabsClosed() {
+    documentsSidebarAutoHiddenRef.current = false;
+  }
+
   // ── Workspace tab event handlers ──
 
   function handleWorkspaceTabSelect(key: string) {
-    setActiveWorkspaceTabKey(key);
     const tab = openWorkspaceTabs.find(t => getTabKey(t) === key);
     if (!tab) return;
+    setActiveWorkspaceResourceTabKey(null);
+    const conversationScope = tab.id.kind === 'session'
+      ? resourceScopeKey('chat', tab.id.sessionId)
+      : tab.id.kind === 'temp'
+        ? resourceScopeKey('chat', tab.id.tempId)
+        : workspaceResourceScopeKey;
+    if (conversationScope) {
+      selectBaseResourceTab(conversationScope);
+      if (tab.id.kind === 'session' || tab.id.kind === 'temp') {
+        setWorkspaceResourceScopeKey(conversationScope);
+      }
+    }
+    setActiveWorkspaceTabKey(key);
     if (tab.id.kind === 'session') {
       switchSession(tab.id.sessionId);
-      navigate(`/chat/${tab.id.sessionId}`, { replace: true });
+      navigate(chatSessionPath(tab.id.sessionId, activeWorkspaceId), { replace: true });
     } else if (tab.id.kind === 'terminal') {
       if (activeWorkspaceId) {
         pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab };
@@ -1106,6 +1183,8 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
       }
       switchSession('');
       navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+    } else if (tab.id.kind === 'code-diff' || tab.id.kind === 'file-explorer') {
+      setSidePanelOpen(false);
     } else {
       // Temp tab: clear active session (blank chat)
       switchSession('');
@@ -1125,8 +1204,11 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         const recentSessionId = recentTab.id.kind === 'session' ? recentTab.id.sessionId : '';
         setOpenWorkspaceTabs([recentTab]);
         setActiveWorkspaceTabKey(getTabKey(recentTab));
+        const recentScope = resourceScopeKey('chat', recentSessionId);
+        setWorkspaceResourceScopeKey(recentScope);
+        selectBaseResourceTab(recentScope);
         switchSession(recentSessionId);
-        navigate(`/chat/${recentSessionId}`, { replace: true });
+        navigate(chatSessionPath(recentSessionId, activeWorkspaceId), { replace: true });
         return;
       }
 
@@ -1139,6 +1221,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
       };
       setOpenWorkspaceTabs([tempTab]);
       setActiveWorkspaceTabKey(getTabKey(tempTab));
+      setWorkspaceResourceScopeKey(resourceScopeKey('chat', getTabKey(tempTab)));
       switchSession('');
       return;
     }
@@ -1148,28 +1231,26 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
       const closedIdx = openWorkspaceTabs.findIndex(t => getTabKey(t) === key);
       const nextTab = next[Math.max(0, closedIdx - 1)] ?? next[0];
       setActiveWorkspaceTabKey(getTabKey(nextTab));
-      if (nextTab.id.kind === 'session') switchSession(nextTab.id.sessionId);
-      else {
+      if (nextTab.id.kind === 'session') {
+        const nextScope = resourceScopeKey('chat', nextTab.id.sessionId);
+        setWorkspaceResourceScopeKey(nextScope);
+        selectBaseResourceTab(nextScope);
+        switchSession(nextTab.id.sessionId);
+        navigate(chatSessionPath(nextTab.id.sessionId, activeWorkspaceId), { replace: true });
+      }
+      else if (nextTab.id.kind === 'temp') {
+        const nextScope = resourceScopeKey('chat', nextTab.id.tempId);
+        setWorkspaceResourceScopeKey(nextScope);
+        selectBaseResourceTab(nextScope);
+        switchSession('');
+      }
+      else if (nextTab.id.kind === 'code-diff' || nextTab.id.kind === 'file-explorer') {
+        setSidePanelOpen(false);
+      } else {
         switchSession('');
         navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
       }
     }
-  }
-
-  function handleWorkspaceTabReorder(dragKey: string, targetKey: string, position: 'before' | 'after') {
-    if (dragKey === targetKey) return;
-    setOpenWorkspaceTabs(prev => {
-      const fromIndex = prev.findIndex(tab => getTabKey(tab) === dragKey);
-      const targetIndex = prev.findIndex(tab => getTabKey(tab) === targetKey);
-      if (fromIndex < 0 || targetIndex < 0) return prev;
-
-      const next = [...prev];
-      const [dragged] = next.splice(fromIndex, 1);
-      let insertIndex = targetIndex + (position === 'after' ? 1 : 0);
-      if (fromIndex < insertIndex) insertIndex -= 1;
-      next.splice(insertIndex, 0, dragged);
-      return next;
-    });
   }
 
   function handleWorkspaceNewTab() {
@@ -1184,33 +1265,190 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     if (activeWorkspaceId) {
       pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab: tempTab };
     }
-    setOpenWorkspaceTabs(prev => [...prev, tempTab]);
+    setOpenWorkspaceTabs(prev => {
+      return insertSiblingTab(prev, activeWorkspaceTabKey, getTabKey, tempTab);
+    });
+    setWorkspaceResourceScopeKey(resourceScopeKey('chat', getTabKey(tempTab)));
     setActiveWorkspaceTabKey(getTabKey(tempTab));
     switchSession('');
     if (activeWorkspaceId) navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
   }
 
-  function handleWorkspaceTabRestore(sessionId: string) {
-    const chat = workspaceChats.find((c: any) => c._id === sessionId);
-    if (!chat) return;
-    const newTab: WorkspaceChatTab = {
-      id: { kind: 'session', sessionId },
-      title: chat.title || 'chat',
-      isTemp: false,
-      titleSource: chat.titleSource,
-      lastMessageAt: chat.lastMessageAt,
-    };
-    const alreadyOpen = openWorkspaceTabs.some(t => getTabKey(t) === sessionId);
-    if (!alreadyOpen) {
-      setOpenWorkspaceTabs(prev => [...prev, newTab]);
+  async function handleOpenChatReference(sessionId: string) {
+    let target = sessions.find(session => session._id === sessionId);
+    if (!target) {
+      try {
+        target = await chatApi.getSession(sessionId) as ChatSession;
+      } catch {
+        return;
+      }
     }
-    setActiveWorkspaceTabKey(sessionId);
+
+    const opensInActiveWorkspace = Boolean(activeWorkspaceId && target.workspaceId === activeWorkspaceId);
+    if (opensInActiveWorkspace) {
+      const newTab = workspaceChatToTab(target);
+      setOpenWorkspaceTabs(current => current.some(tab => getTabKey(tab) === sessionId) ? current : [...current, newTab]);
+      setActiveWorkspaceTabKey(sessionId);
+    } else {
+      setOpenChatTabs(current => current.some(tab => tab.id === sessionId)
+        ? current.map(tab => tab.id === sessionId ? { ...tab, title: target?.title || tab.title } : tab)
+        : [...current, { id: sessionId, title: target.title || 'Untitled conversation' }]);
+      setActiveChatTabId(sessionId);
+    }
+    setActiveChatTerminalId(null);
+    setActiveChatUtilityId(null);
     switchSession(sessionId);
-    navigate(`/chat/${sessionId}`, { replace: true });
+    navigate(chatSessionPath(sessionId, opensInActiveWorkspace ? activeWorkspaceId : null), { replace: true });
   }
 
-  function handleWorkspaceTerminalTab() {
-    if (!activeWorkspaceId) return;
+  function handleChatTabSelect(tabId: string) {
+    const tab = openChatTabs.find(item => item.id === tabId);
+    if (!tab) return;
+    pendingChatTempTabRef.current = tab.isTemp ? tab.id : null;
+    setActiveChatTabId(tabId);
+    setActiveChatTerminalId(null);
+    setActiveChatUtilityId(null);
+    if (tab.isTemp) {
+      switchSession('');
+      return;
+    }
+    switchSession(tabId);
+    navigate(`/chat/${tabId}`, { replace: true });
+  }
+
+  function activeChatViewKey(): string | null {
+    if (activeChatTerminalId) return chatTerminalTabKey(activeChatTerminalId);
+    if (activeChatUtilityId) return chatUtilityTabKey(activeChatUtilityId);
+    if (activeChatTabId) return chatSessionTabKey(activeChatTabId);
+    return activeSessionId ? chatSessionTabKey(activeSessionId) : null;
+  }
+
+  function handleChatTabClose(tabId: string) {
+    const index = openChatTabs.findIndex(tab => tab.id === tabId);
+    if (index < 0) return;
+    const next = openChatTabs.filter(tab => tab.id !== tabId);
+    if (pendingChatTempTabRef.current === tabId) pendingChatTempTabRef.current = null;
+    setOpenChatTabs(next);
+    setChatTabOrder(current => current.filter(key => key !== chatSessionTabKey(tabId)));
+    if (activeChatTabId === tabId) {
+      const fallback = next[Math.min(index, next.length - 1)] ?? next[next.length - 1];
+      if (fallback) {
+        setActiveChatTabId(fallback.id);
+        if (fallback.isTemp) {
+          switchSession('');
+        } else {
+          switchSession(fallback.id);
+          navigate(`/chat/${fallback.id}`, { replace: true });
+        }
+      } else {
+        setActiveChatTabId(null);
+        switchSession('');
+      }
+    }
+  }
+
+  function handleNewChatTab() {
+    const id = `temp-chat-${Date.now()}`;
+    const tab: ChatSessionTab = { id, title: 'New chat', isTemp: true };
+    pendingChatTempTabRef.current = id;
+    setOpenChatTabs(current => {
+      return [...current, tab];
+    });
+    setChatTabOrder(current => insertSiblingTab(current, activeChatViewKey(), key => key, chatSessionTabKey(id)));
+    setActiveChatTabId(id);
+    setActiveChatTerminalId(null);
+    setActiveChatUtilityId(null);
+    switchSession('');
+  }
+
+  function handleChatTerminalSelect(terminalId: string) {
+    setActiveChatTerminalId(terminalId);
+    setActiveChatUtilityId(null);
+  }
+
+  function handleChatTerminalClose(terminalId: string) {
+    const index = openChatTerminalTabs.findIndex(tab => tab.id === terminalId);
+    if (index < 0) return;
+    const next = openChatTerminalTabs.filter(tab => tab.id !== terminalId);
+    setOpenChatTerminalTabs(next);
+    setChatTabOrder(current => current.filter(key => key !== chatTerminalTabKey(terminalId)));
+    if (activeChatTerminalId === terminalId) {
+      setActiveChatTerminalId(next[Math.min(index, next.length - 1)]?.id ?? null);
+    }
+  }
+
+  function handleNewTerminalTab() {
+    const source = resolveChatTerminalSource({
+      workspaceId: effectiveLinkedWorkspaceId,
+      workspaceLabel: activeWorkspace?.branch ?? activeWorkspace?.name ?? activeSession?.repoName,
+      repoId: activeSession?.repoId ?? selectedRepo?._id,
+      repoLabel: activeSession?.repoName ?? selectedRepo?.name,
+    });
+
+    if (source.type === 'workspace') {
+      setActiveChatTerminalId(null);
+      setActiveChatUtilityId(null);
+      openWorkspaceTerminalTab(source.id);
+      return;
+    }
+
+    chatTerminalCounterRef.current += 1;
+    const sequence = chatTerminalCounterRef.current;
+    const tab: ChatTerminalTab = {
+      id: `terminal-${sequence}`,
+      title: `Terminal ${sequence}`,
+      sourceType: source.type,
+      sourceId: source.id,
+      sourceLabel: source.label,
+    };
+    setOpenChatTerminalTabs(current => [...current, tab]);
+    setChatTabOrder(current => insertSiblingTab(current, activeChatViewKey(), key => key, chatTerminalTabKey(tab.id)));
+    setActiveChatTerminalId(tab.id);
+    setActiveChatUtilityId(null);
+  }
+
+  function handleChatUtilitySelect(tabId: string) {
+    setActiveChatUtilityId(tabId);
+    setActiveChatTerminalId(null);
+  }
+
+  function handleChatUtilityClose(tabId: string) {
+    const index = openChatUtilityTabs.findIndex(tab => tab.id === tabId);
+    if (index < 0) return;
+    const next = openChatUtilityTabs.filter(tab => tab.id !== tabId);
+    setOpenChatUtilityTabs(next);
+    setChatTabOrder(current => current.filter(key => key !== chatUtilityTabKey(tabId)));
+    if (activeChatUtilityId === tabId) {
+      setActiveChatUtilityId(next[Math.min(index, next.length - 1)]?.id ?? null);
+    }
+  }
+
+  function handleNewUtilityTab(kind: ChatUtilityTab['kind']) {
+    if (activeWorkspaceId) {
+      handleWorkspaceUtilityTab(kind);
+      return;
+    }
+    const existing = openChatUtilityTabs.find(tab => tab.kind === kind);
+    if (existing) {
+      handleChatUtilitySelect(existing.id);
+      return;
+    }
+    const tab: ChatUtilityTab = {
+      id: kind,
+      kind,
+      title: kind === 'code-diff' ? 'Code diff' : 'File explorer',
+    };
+    setOpenChatUtilityTabs(current => [...current, tab]);
+    setChatTabOrder(current => insertSiblingTab(current, activeChatViewKey(), key => key, chatUtilityTabKey(tab.id)));
+    setActiveChatUtilityId(tab.id);
+    setActiveChatTerminalId(null);
+    setSidePanelOpen(false);
+  }
+
+  function openWorkspaceTerminalTab(workspaceId: string) {
+    setActiveChatTerminalId(null);
+    setActiveWorkspaceResourceTabKey(null);
+    selectBaseResourceTab();
     const existingTerminalIds = openWorkspaceTabs
       .filter(tab => tab.id.kind === 'terminal')
       .map(tab => (tab.id as { kind: 'terminal'; terminalId: string }).terminalId);
@@ -1223,15 +1461,44 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
       title: 'Terminal ' + nextN,
       isTemp: false,
     };
-    pendingWorkspaceTempTabRef.current = { workspaceId: activeWorkspaceId, tab: terminalTab };
-    setOpenWorkspaceTabs(prev => [...prev, terminalTab]);
+    pendingWorkspaceTempTabRef.current = { workspaceId, tab: terminalTab };
+    setOpenWorkspaceTabs(prev => {
+      return insertSiblingTab(prev, activeWorkspaceTabKey, getTabKey, terminalTab);
+    });
     setActiveWorkspaceTabKey(getTabKey(terminalTab));
     switchSession('');
-    navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+    navigate(`/chat?workspaceId=${workspaceId}`, { replace: true });
+  }
+
+  function handleWorkspaceTerminalTab() {
+    if (!activeWorkspaceId) return;
+    openWorkspaceTerminalTab(activeWorkspaceId);
+  }
+
+  function handleWorkspaceUtilityTab(kind: 'code-diff' | 'file-explorer') {
+    if (!activeWorkspaceId) return;
+    setActiveWorkspaceResourceTabKey(null);
+    selectBaseResourceTab();
+    const key = kind;
+    const existing = openWorkspaceTabs.find(tab => getTabKey(tab) === key);
+    if (!existing) {
+      const tab: WorkspaceChatTab = {
+        id: { kind },
+        title: kind === 'code-diff' ? 'Code diff' : 'File explorer',
+        isTemp: false,
+      };
+      setOpenWorkspaceTabs(prev => {
+        return insertSiblingTab(prev, activeWorkspaceTabKey, getTabKey, tab);
+      });
+    }
+    setActiveWorkspaceTabKey(key);
+    setSidePanelOpen(false);
   }
 
   function handleWorkspaceServersTab() {
     if (!activeWorkspaceId || (activeWorkspace?.services?.length ?? 0) === 0) return;
+    setActiveWorkspaceResourceTabKey(null);
+    selectBaseResourceTab();
     const serversTab: WorkspaceChatTab = {
       id: { kind: 'servers' },
       title: 'Servers',
@@ -1242,6 +1509,34 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     setActiveWorkspaceTabKey('servers');
     switchSession('');
     navigate(`/chat?workspaceId=${activeWorkspaceId}`, { replace: true });
+  }
+
+  useEffect(() => {
+    function handleDocumentTabCreate(event: Event) {
+      const detail = (event as CustomEvent<{ kind?: 'chat' | 'terminal' | 'code-diff' | 'file-explorer'; workspaceId?: string }>).detail;
+      if (!activeWorkspaceId || detail?.workspaceId !== activeWorkspaceId) return;
+      if (detail.kind === 'terminal') handleWorkspaceTerminalTab();
+      else if (detail.kind === 'code-diff') handleWorkspaceUtilityTab('code-diff');
+      else if (detail.kind === 'file-explorer') handleWorkspaceUtilityTab('file-explorer');
+      else if (detail.kind === 'chat') handleWorkspaceNewTab();
+    }
+
+    window.addEventListener('allen:workspace-tab-create', handleDocumentTabCreate);
+    return () => window.removeEventListener('allen:workspace-tab-create', handleDocumentTabCreate);
+  });
+
+  function handleCreateSiblingTab(kind: 'chat' | 'terminal' | 'code-diff' | 'file-explorer') {
+    if (kind === 'chat') {
+      if (activeWorkspaceId) handleWorkspaceNewTab();
+      else handleNewChatTab();
+      return;
+    }
+    if (kind === 'terminal') {
+      if (activeWorkspaceId) handleWorkspaceTerminalTab();
+      else handleNewTerminalTab();
+      return;
+    }
+    handleNewUtilityTab(kind);
   }
 
   async function handleOpenWorkspaceIde(ide: ExternalIdeId) {
@@ -1273,107 +1568,9 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
       repoId: activeWorkspace?.repoId ?? activeSession?.repoId ?? null,
     }
     : null;
-  const workspaceDiffRefs = spawnedAgents.reduce<Array<{ id: string; mode: 'workspace' }>>((acc, run) => {
-    const id = run.runContext?.workspace?.id;
-    if (!id) return acc;
-    const existing = acc.find(item => item.id === id);
-    if (!existing) acc.push({ id, mode: 'workspace' });
-    return acc;
-  }, linkedWorkspaceId ? [{ id: linkedWorkspaceId, mode: 'workspace' as const }] : []);
-  const pullRequestDiffRefs = spawnedAgents.reduce<Array<{ id: string }>>((acc, run) => {
-    const id = run.runContext?.pullRequest?.id;
-    if (id && !acc.some(item => item.id === id)) acc.push({ id });
-    return acc;
-  }, []);
-  const workspaceSignature = workspaceDiffRefs.map(ref => `${ref.id}:${ref.mode}`).join('|');
-  const pullRequestSignature = pullRequestDiffRefs.map(ref => ref.id).join('|');
-  const diffSourceSignature = [activeSessionId ?? '', workspaceSignature, pullRequestSignature].filter(Boolean).join('::');
-  const diffRefreshSignature = spawnedAgents
-    .map(run => [
-      run.executionId,
-      run.sourceMessageId ?? '',
-      run.status,
-      run.runContext?.status ?? '',
-      run.runContext?.workspace?.id ?? '',
-    ].join(':'))
-    .join('|');
-
-  useEffect(() => {
-    if (!diffSourceSignature) {
-      chatDiffSignatureRef.current = '';
-      setChatDiffSummary(null);
-      setHiddenDiffSignature(null);
-      return;
-    }
-    let cancelled = false;
-    const workspaceRefs = workspaceDiffRefs;
-    const pullRequestRefs = pullRequestDiffRefs;
-    const refreshDiffSummary = async () => {
-      const parts = await Promise.all(workspaceRefs.map(async ref => {
-        try {
-          const result = await workspacesApi.getDiff(ref.id, { mode: ref.mode, anchor: 'creation' });
-          const files = ((result.files ?? []) as DiffSummaryFile[])
-            .filter(hasChangedDiffMetadata);
-          return files;
-        } catch {
-          return [];
-        }
-      }));
-      const prParts = await Promise.all(pullRequestRefs.map(async ref => {
-        try {
-          const result = await pullRequestsApi.getDiff(ref.id);
-          const files = ((result.files ?? []) as DiffSummaryFile[])
-            .filter(hasChangedDiffMetadata);
-          return files;
-        } catch {
-          return [];
-        }
-      }));
-      const liveSummary = summarizeDiffFiles([...parts.flat(), ...prParts.flat()]);
-      if (cancelled) return;
-      if (liveSummary.files > 0) {
-        const nextSignature = `${liveSummary.files}:${liveSummary.additions}:${liveSummary.deletions}`;
-        if (chatDiffSignatureRef.current !== nextSignature) {
-          chatDiffSignatureRef.current = nextSignature;
-          setHiddenDiffSignature(null);
-        }
-        setChatDiffSummary(liveSummary);
-        return;
-      }
-
-      const snapshotPart = activeSessionId
-        ? await chatCodeDiffs.listAll(activeSessionId)
-          .then(result => {
-            const files = (result.snapshots ?? []).flatMap((snapshot: any) => snapshot.files ?? [])
-              .filter(hasChangedDiffMetadata);
-            return summarizeDiffFiles(files);
-          })
-          .catch(() => ({ files: 0, additions: 0, deletions: 0 }))
-        : { files: 0, additions: 0, deletions: 0 };
-      if (cancelled) return;
-      const summary = snapshotPart;
-      const next = summary.files > 0 ? summary : null;
-      const nextSignature = next ? `${next.files}:${next.additions}:${next.deletions}` : '';
-      if (chatDiffSignatureRef.current !== nextSignature) {
-        chatDiffSignatureRef.current = nextSignature;
-        setHiddenDiffSignature(null);
-      }
-      setChatDiffSummary(next);
-    };
-
-    void refreshDiffSummary();
-    return () => { cancelled = true; };
-  }, [diffSourceSignature, diffRefreshSignature, activeSessionId]);
 
   const showResourceRail = Boolean(activeSessionId) || spawnedAgents.length > 0 || Boolean(activeWorkspaceId);
 
-  // Workspace mode: chats not currently open in tabs (for the restore dropdown)
-  const openTabSessionIds = new Set(
-    openWorkspaceTabs
-      .filter(t => t.id.kind === 'session')
-      .map(t => (t.id as { kind: 'session'; sessionId: string }).sessionId)
-  );
-  const availablePreviousChats = workspaceChats.filter((c: any) => !openTabSessionIds.has(c._id));
   const displayWorkspaceTabs = openWorkspaceTabs.map(tab => {
     if (tab.id.kind !== 'session') return tab;
     const tabSessionId = tab.id.sessionId;
@@ -1382,12 +1579,168 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     return { ...tab, title: session.title, titleSource: (session as any).titleSource ?? tab.titleSource };
   });
   const activeWorkspaceTab = openWorkspaceTabs.find(tab => getTabKey(tab) === activeWorkspaceTabKey) ?? null;
-  const workspaceTerminalActive = activeWorkspaceTab?.id.kind === 'terminal';
+  const workspaceBaseTabActive = !activeWorkspaceResourceTabKey;
+  const workspaceTerminalActive = workspaceBaseTabActive && activeWorkspaceTab?.id.kind === 'terminal';
   const workspaceTerminalTabs = openWorkspaceTabs.filter((tab): tab is WorkspaceChatTab & { id: { kind: 'terminal'; terminalId: string } } => tab.id.kind === 'terminal');
   const workspaceTerminalTabsOpen = workspaceTerminalTabs.length > 0;
-  const workspaceServersActive = activeWorkspaceTab?.id.kind === 'servers';
+  const workspaceServersActive = workspaceBaseTabActive && activeWorkspaceTab?.id.kind === 'servers';
   const workspaceServersTabOpen = openWorkspaceTabs.some(tab => tab.id.kind === 'servers');
-  const workspaceUtilityTabActive = workspaceTerminalActive || workspaceServersActive;
+  const workspaceCodeDiffActive = workspaceBaseTabActive && activeWorkspaceTab?.id.kind === 'code-diff';
+  const workspaceFileExplorerActive = workspaceBaseTabActive && activeWorkspaceTab?.id.kind === 'file-explorer';
+  const workspaceUtilityTabActive = workspaceTerminalActive || workspaceServersActive || workspaceCodeDiffActive || workspaceFileExplorerActive;
+  const workspaceHeaderChatTabs = displayWorkspaceTabs.flatMap(tab => (
+    tab.id.kind === 'session' || tab.id.kind === 'temp'
+      ? [{ id: getTabKey(tab), title: tab.title, isTemp: tab.isTemp }]
+      : []
+  ));
+  const workspaceHeaderTerminalTabs = displayWorkspaceTabs.flatMap(tab => (
+    tab.id.kind === 'terminal'
+      ? [{ id: getTabKey(tab), title: tab.title, sourceLabel: activeWorkspace?.branch ?? activeWorkspace?.name ?? 'Workspace' }]
+      : []
+  ));
+  const workspaceHeaderUtilityTabs = displayWorkspaceTabs.flatMap(tab => (
+    tab.id.kind === 'code-diff' || tab.id.kind === 'file-explorer' || tab.id.kind === 'servers'
+      ? [{ id: getTabKey(tab), title: tab.title, kind: tab.id.kind }]
+      : []
+  ));
+  const workspaceHeaderTabOrder = displayWorkspaceTabs.map(tab => {
+    const key = getTabKey(tab);
+    if (tab.id.kind === 'terminal') return `terminal:${key}`;
+    if (tab.id.kind === 'code-diff' || tab.id.kind === 'file-explorer' || tab.id.kind === 'servers') return `utility:${key}`;
+    return `chat:${key}`;
+  });
+  const activeWorkspaceChatId = activeWorkspaceTab?.id.kind === 'session' || activeWorkspaceTab?.id.kind === 'temp'
+    ? getTabKey(activeWorkspaceTab)
+    : null;
+  const activeWorkspaceTerminalId = workspaceTerminalActive && activeWorkspaceTab ? getTabKey(activeWorkspaceTab) : null;
+  const activeWorkspaceUtilityId = (workspaceServersActive || workspaceCodeDiffActive || workspaceFileExplorerActive) && activeWorkspaceTab
+    ? getTabKey(activeWorkspaceTab)
+    : null;
+  const activeChatTerminalTab = openChatTerminalTabs.find(tab => tab.id === activeChatTerminalId) ?? null;
+  const chatTerminalActive = Boolean(activeChatTerminalTab && !activeWorkspace);
+  const chatTerminalTabsOpen = openChatTerminalTabs.length > 0;
+  const activeChatUtilityTab = openChatUtilityTabs.find(tab => tab.id === activeChatUtilityId) ?? null;
+  const chatUtilityActive = Boolean(activeChatUtilityTab && !activeWorkspace);
+  const chatAlternateTabActive = chatTerminalActive || chatUtilityActive;
+  const activeConversationTab = openChatTabs.find(tab => tab.id === activeChatTabId) ?? null;
+  const activeWorkspaceConversationScope = activeWorkspaceId && activeWorkspaceTab?.id.kind === 'session'
+    ? resourceScopeKey('chat', activeWorkspaceTab.id.sessionId)
+    : activeWorkspaceId && activeWorkspaceTab?.id.kind === 'temp'
+      ? resourceScopeKey('chat', activeWorkspaceTab.id.tempId)
+      : null;
+  const registeredWorkspaceResourceScopes = workspaceResourceScopeRegistry.workspaceId === activeWorkspaceId
+    ? workspaceResourceScopeRegistry.scopeKeys
+    : [];
+  const visibleWorkspaceResourceScopes = new Set([
+    ...registeredWorkspaceResourceScopes,
+    ...(activeWorkspaceConversationScope ? [activeWorkspaceConversationScope] : []),
+    ...(workspaceResourceScopeKey ? [workspaceResourceScopeKey] : []),
+  ]);
+  const workspaceResourceTabs: WorkspaceResourceTab[] = activeWorkspaceId ? [
+    ...documentTabs
+      .filter(tab => visibleWorkspaceResourceScopes.has(tab.scopeKey))
+      .map(tab => ({
+        key: `document:${tab.scopeKey}:${tab.artifact.artifactId}`,
+        kind: 'document' as const,
+        title: tab.artifact.filename,
+        tooltip: `${tab.artifact.filename} · ${tab.sourceLabel}`,
+        scopeKey: tab.scopeKey,
+        resourceId: tab.artifact.artifactId,
+      })),
+    ...fileTabs
+      .filter(tab => visibleWorkspaceResourceScopes.has(tab.scopeKey))
+      .map(tab => ({
+        key: `file:${tab.key}`,
+        kind: 'file' as const,
+        title: tab.path.split('/').pop() || tab.path,
+        tooltip: `${tab.path} · ${tab.sourceLabel}`,
+        scopeKey: tab.scopeKey,
+        resourceId: tab.key,
+      })),
+  ] : [];
+  const activeWorkspaceResourceTab = workspaceResourceTabs.find(tab => tab.key === activeWorkspaceResourceTabKey) ?? null;
+  const activeResourceScopeKey = activeWorkspaceId
+    ? activeWorkspaceResourceTab?.scopeKey
+      ?? activeWorkspaceConversationScope
+      ?? workspaceResourceScopeKey
+      ?? resolveChatResourceScope({ workspaceId: activeWorkspaceId, workspaceTab: activeWorkspaceTab?.id ?? null })
+    : resolveChatResourceScope({
+      chatTabId: activeConversationTab?.id ?? null,
+      terminalTabId: activeChatTerminalTab?.id ?? null,
+      utilityTabId: activeChatUtilityTab?.id ?? null,
+      sessionId: activeSessionId,
+    });
+
+  useLayoutEffect(() => {
+    if (activeWorkspaceConversationScope) {
+      setWorkspaceResourceScopeKey(activeWorkspaceConversationScope);
+      setWorkspaceResourceScopeRegistry(current => {
+        const scopeKeys = current.workspaceId === activeWorkspaceId ? current.scopeKeys : [];
+        if (scopeKeys.includes(activeWorkspaceConversationScope)) {
+          return current.workspaceId === activeWorkspaceId ? current : { workspaceId: activeWorkspaceId, scopeKeys };
+        }
+        return { workspaceId: activeWorkspaceId, scopeKeys: [...scopeKeys, activeWorkspaceConversationScope] };
+      });
+    } else if (!activeWorkspaceId) {
+      setWorkspaceResourceScopeKey(null);
+      setActiveWorkspaceResourceTabKey(null);
+      setWorkspaceResourceScopeRegistry({ workspaceId: null, scopeKeys: [] });
+    }
+  }, [activeWorkspaceConversationScope, activeWorkspaceId]);
+
+  // Scope resource tabs before the browser paints a newly selected sibling.
+  // This prevents a document or file from the previous conversation appearing
+  // even for a single frame in a new, unsent chat.
+  useLayoutEffect(() => {
+    setActiveResourceScope(activeResourceScopeKey);
+  }, [activeResourceScopeKey, setActiveResourceScope]);
+
+  const workspaceSelection = resourceSelections[activeResourceScopeKey];
+  useLayoutEffect(() => {
+    if (!activeWorkspaceId || activeWorkspaceResourceTabKey) return;
+    const selectedResource = workspaceResourceTabs.find(tab => (
+      tab.scopeKey === activeResourceScopeKey
+      && (tab.kind === 'document'
+        ? tab.resourceId === workspaceSelection?.activeArtifactId
+        : tab.resourceId === workspaceSelection?.activeFileKey)
+    ));
+    if (selectedResource) setActiveWorkspaceResourceTabKey(selectedResource.key);
+  }, [
+    activeResourceScopeKey,
+    activeWorkspaceId,
+    activeWorkspaceResourceTabKey,
+    workspaceResourceTabs,
+    workspaceSelection?.activeArtifactId,
+    workspaceSelection?.activeFileKey,
+  ]);
+  const activeWorkspaceResourceKey = activeWorkspaceResourceTab?.key ?? null;
+
+  function handleWorkspaceResourceSelect(key: string) {
+    const tab = workspaceResourceTabs.find(item => item.key === key);
+    if (!tab) return;
+    setActiveWorkspaceResourceTabKey(tab.key);
+    setWorkspaceResourceScopeKey(tab.scopeKey);
+    if (tab.kind === 'document') selectDocument(tab.resourceId, tab.scopeKey);
+    else selectFile(tab.resourceId, tab.scopeKey);
+  }
+
+  function handleWorkspaceResourceClose(key: string) {
+    const tab = workspaceResourceTabs.find(item => item.key === key);
+    if (!tab) return;
+    const closingIndex = workspaceResourceTabs.findIndex(item => item.key === key);
+    const remaining = workspaceResourceTabs.filter(item => item.key !== key);
+    if (tab.kind === 'document') closeDocument(tab.resourceId, tab.scopeKey);
+    else closeFile(tab.resourceId, tab.scopeKey);
+    if (activeWorkspaceResourceTabKey !== key) return;
+    const fallback = remaining[Math.min(closingIndex, remaining.length - 1)] ?? remaining[remaining.length - 1];
+    if (fallback) handleWorkspaceResourceSelect(fallback.key);
+    else {
+      setActiveWorkspaceResourceTabKey(null);
+      if (activeWorkspaceConversationScope) selectBaseResourceTab(activeWorkspaceConversationScope);
+      handleAllResourceTabsClosed();
+    }
+  }
+
   const canOpenWorkspaceIde = Boolean(activeWorkspaceId && window.allenDesktop?.openWorkspaceIde);
   const archivedWorkspace = activeSession?.archivedWorkspace;
   const repoBrowseSource = archivedWorkspace?.repoId
@@ -1398,6 +1751,70 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         ? { id: selectedRepo._id, name: selectedRepo.name, path: selectedRepo.path }
         : null;
 
+  async function handleOpenFileReference(path: string) {
+    const scopeKey = activeResourceScopeKey;
+    let result: any | null = null;
+    let sourceKind: 'workspace' | 'repo' = 'repo';
+    let sourceId = repoBrowseSource?.id ?? 'unavailable';
+    let sourceLabel = repoBrowseSource?.name || 'Repository unavailable';
+
+    if (activeWorkspaceId) {
+      try {
+        result = await workspacesApi.getFile(activeWorkspaceId, path);
+        sourceKind = 'workspace';
+        sourceId = activeWorkspaceId;
+        sourceLabel = activeWorkspace?.name || activeWorkspace?.branch || 'Current workspace';
+      } catch {
+        // A chat may reference a file that exists only on the registered repo.
+      }
+    }
+
+    if (!result && repoBrowseSource?.id) {
+      try {
+        result = await reposApi.getFile(repoBrowseSource.id, path);
+        sourceKind = 'repo';
+        sourceId = repoBrowseSource.id;
+        sourceLabel = repoBrowseSource.name || 'Selected repository';
+      } catch {
+        // Open a clear unavailable state below instead of silently doing nothing.
+      }
+    }
+
+    if (!result) {
+      openFile({
+        path,
+        content: `Unable to open ${path}.\n\nThe file was not found in the active workspace or selected repository.`,
+        sourceKind,
+        sourceId,
+        sourceLabel,
+        language: 'plaintext',
+        scopeKey,
+      });
+      return;
+    }
+
+    const kind = result.isVideo ? 'video' : result.isImage ? 'image' : mediaKindForPath(path);
+    if (kind && (result.isImage || result.isVideo)) {
+      const mimeType = result.mimeType || mimeTypeForMediaPath(path, kind);
+      openMedia({
+        kind,
+        title: path.split('/').pop() || path,
+        src: `data:${mimeType};base64,${result.content}`,
+        mimeType: mimeType ?? undefined,
+      });
+      return;
+    }
+
+    openFile({
+      path,
+      content: String(result.content ?? ''),
+      sourceKind,
+      sourceId,
+      sourceLabel,
+      scopeKey,
+    });
+  }
+
   const composerDisabled = activeSession?.source === 'slack' || Boolean(config?.disabled) || Boolean(activeSession?.isImported);
   const { dragActive, dropProps } = useFileDropZone(
     (files) => chatInputRef.current?.uploadFiles(files),
@@ -1405,20 +1822,48 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   );
 
   return (
-    <div className={`chat-page-shell ${sidePanelOpen ? 'with-run-sidebar' : ''}`} {...dropProps}>
+    <div className={`chat-page-shell v8-chat-detail ${sidePanelOpen ? 'with-run-sidebar' : ''} ${activeWorkspace ? 'v8-workspace-detail' : ''}`} {...dropProps}>
       {dragActive && <FileDropOverlay />}
       <div className="chat-main-shell">
-      {/* Workspace tab strip (only in workspace mode) */}
-      {activeWorkspace && openWorkspaceTabs.length > 0 && (
-        <WorkspaceChatTabs
-          tabs={displayWorkspaceTabs}
-          activeTabKey={activeWorkspaceTabKey}
-          onSelect={handleWorkspaceTabSelect}
-          onClose={handleWorkspaceTabClose}
-          onReorder={handleWorkspaceTabReorder}
-          onNewTab={handleWorkspaceNewTab}
-          availablePreviousChats={availablePreviousChats}
-          onRestore={handleWorkspaceTabRestore}
+      {!isDesignMode && (
+        <ChatDetailHeader
+          title={activeSession?.title || 'Untitled conversation'}
+          onExport={activeSessionId ? () => setExportDialogOpen(true) : undefined}
+          teamClassification={displayedTeamClassification}
+          onTeamClassificationChange={activeSessionId ? handleTeamClassificationChange : undefined}
+          classificationDisabled={composerDisabled}
+          chatTabs={activeWorkspace ? workspaceHeaderChatTabs : openChatTabs}
+          activeChatId={activeWorkspace ? activeWorkspaceChatId : activeChatTabId ?? activeSessionId}
+          onChatSelect={activeWorkspace ? handleWorkspaceTabSelect : handleChatTabSelect}
+          onChatClose={activeWorkspace ? handleWorkspaceTabClose : handleChatTabClose}
+          terminalTabs={activeWorkspace
+            ? workspaceHeaderTerminalTabs
+            : openChatTerminalTabs.map(tab => ({ id: tab.id, title: tab.title, sourceLabel: tab.sourceLabel }))}
+          activeTerminalId={activeWorkspace ? activeWorkspaceTerminalId : activeChatTerminalId}
+          onTerminalSelect={activeWorkspace ? handleWorkspaceTabSelect : handleChatTerminalSelect}
+          onTerminalClose={activeWorkspace ? handleWorkspaceTabClose : handleChatTerminalClose}
+          utilityTabs={activeWorkspace ? workspaceHeaderUtilityTabs : openChatUtilityTabs}
+          tabOrder={activeWorkspace ? workspaceHeaderTabOrder : chatTabOrder}
+          activeUtilityId={activeWorkspace ? activeWorkspaceUtilityId : activeChatUtilityId}
+          onUtilitySelect={activeWorkspace ? handleWorkspaceTabSelect : handleChatUtilitySelect}
+          onUtilityClose={activeWorkspace ? handleWorkspaceTabClose : handleChatUtilityClose}
+          onBaseChatSelect={() => {
+            if (activeWorkspace) {
+              setActiveWorkspaceResourceTabKey(null);
+              if (activeWorkspaceConversationScope) selectBaseResourceTab(activeWorkspaceConversationScope);
+              return;
+            }
+            setActiveChatTerminalId(null);
+            setActiveChatUtilityId(null);
+          }}
+          resourceTabs={activeWorkspace ? workspaceResourceTabs : undefined}
+          activeResourceKey={activeWorkspace ? activeWorkspaceResourceKey : undefined}
+          onResourceSelect={activeWorkspace ? handleWorkspaceResourceSelect : undefined}
+          onResourceClose={activeWorkspace ? handleWorkspaceResourceClose : undefined}
+          onNewChat={activeWorkspace ? handleWorkspaceNewTab : handleNewChatTab}
+          onNewTerminal={activeWorkspace ? handleWorkspaceTerminalTab : handleNewTerminalTab}
+          onOpenCodeDiff={() => handleNewUtilityTab('code-diff')}
+          onOpenFileExplorer={() => handleNewUtilityTab('file-explorer')}
         />
       )}
 
@@ -1456,45 +1901,102 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         </div>
       )}
 
+      {(workspaceCodeDiffActive || workspaceFileExplorerActive) && activeWorkspaceId && (
+        <div className="flex-1 min-h-0 overflow-hidden bg-app-muted p-3">
+          <FileChangesPanel
+            runs={spawnedAgents}
+            rootType="chat"
+            rootId={activeSessionId}
+            workspaceBrowseSource={linkedWorkspaceBrowseSource}
+            repoBrowseSource={repoBrowseSource}
+            activeView={workspaceCodeDiffActive ? 'changes' : 'files'}
+            presentation="tab"
+          />
+        </div>
+      )}
+
       {/* Chat content — kept alive off-screen when terminal or servers tab is active, mirroring terminal keep-alive */}
       <div className={workspaceUtilityTabActive
         ? 'fixed -left-[10000px] top-0 h-[720px] w-[1100px] pointer-events-none opacity-0'
         : 'flex-1 min-h-0 flex flex-col'
       }>
-        {activeSessionId && (
+        {isDesignMode && (
+          <header className="v8-design-threadhead">
+            <button
+              type="button"
+              onClick={() => navigate(searchParams.get('ws') ? `/studio/workspaces/${searchParams.get('ws')}` : '/studio')}
+              aria-label="Back to Allen Design workspace"
+            >
+              <ArrowLeft />
+            </button>
+            <b>{activeSession?.title || 'New design chat'}</b>
+            <span className="v8-design-mode-tag"><i /> design mode</span>
+            <span className="spacer" />
+            {activeSessionId && (
+              <TeamClassificationSelect
+                compact
+                value={displayedTeamClassification}
+                onChange={handleTeamClassificationChange}
+                disabled={composerDisabled}
+                ariaLabel="Conversation team"
+              />
+            )}
+            <button type="button" aria-label="Conversation menu" title="Conversation menu"><MoreHorizontal /></button>
+          </header>
+        )}
+        {teamClassificationError && (
+          <div className="team-classification-error" role="alert">{teamClassificationError}</div>
+        )}
+        {!isDesignMode && (
           <>
             {activeSession?.isImported && (
               <ImportedChatBanner session={activeSession} />
             )}
-            <div className="flex items-center justify-between border-b border-app px-5 py-1.5 min-h-[33px]">
-              <span className="text-[12px] font-medium text-theme-primary truncate max-w-[400px]">
-                {activeSession?.title || 'Untitled conversation'}
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setExportDialogOpen(true)}
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors"
-                  title="Export this chat"
-                  aria-label="Export chat"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  Export
-                </button>
-              </div>
-            </div>
           </>
         )}
 
+        {/* Non-workspace terminals stay mounted so shell state survives tab switches. */}
+        {chatTerminalTabsOpen && !activeWorkspace && (
+          <div className={`${chatTerminalActive ? 'relative flex-1 min-h-0' : 'fixed -left-[10000px] top-0 h-[720px] w-[1100px] pointer-events-none opacity-0'}`}>
+            {openChatTerminalTabs.map(tab => {
+              const active = tab.id === activeChatTerminalId;
+              return (
+                <div key={tab.id} className={`${active ? 'absolute inset-0' : 'absolute inset-0 invisible pointer-events-none'}`}>
+                  <XTerminal
+                    workspaceId={tab.sourceId}
+                    sourceType={tab.sourceType}
+                    terminalId={`chat-tab-${tab.sourceType}-${tab.sourceId}-${tab.id}`}
+                    className="h-full"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {chatUtilityActive && activeChatUtilityTab && (
+          <div className="flex-1 min-h-0 overflow-hidden bg-app-muted p-3">
+            <FileChangesPanel
+              runs={spawnedAgents}
+              rootType="chat"
+              rootId={activeSessionId}
+              workspaceBrowseSource={linkedWorkspaceBrowseSource}
+              repoBrowseSource={repoBrowseSource}
+              activeView={activeChatUtilityTab.kind === 'code-diff' ? 'changes' : 'files'}
+              presentation="tab"
+            />
+          </div>
+        )}
+
         {/* Loading indicator: only when loading messages for an existing session (not blank new tabs) */}
-        {loadingMessages && messages.length === 0 && !streaming && activeSessionId && (
+        {!chatAlternateTabActive && loadingMessages && messages.length === 0 && !streaming && activeSessionId && (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-xs text-theme-subtle animate-pulse">Loading...</div>
           </div>
         )}
 
         {/* Empty state: only when no session is active (new blank tab or no chats yet) */}
-        {messages.length === 0 && !activeSessionId && !streaming && !loadingMessages && (
+        {!chatAlternateTabActive && messages.length === 0 && !activeSessionId && !streaming && !loadingMessages && (
           isDesignMode ? (
             <div className="flex flex-col items-center justify-center flex-1 px-8 py-12 text-center gap-4" aria-label="Design empty state">
               <div className="flex flex-col items-center gap-2 mb-2">
@@ -1532,7 +2034,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         {/* ChatMessageList: kept mounted in DOM to preserve scroll state.
             Hidden (display:none) during initial load to avoid layout conflict with loading indicator above.
             When hidden is removed after load, instant scroll (PI-1 fix) ensures no visible animation. */}
-        {(activeSessionId || messages.length > 0 || streaming) && (
+        {!chatAlternateTabActive && (activeSessionId || messages.length > 0 || streaming) && (
           <div className={loadingMessages && messages.length === 0 && !streaming ? 'hidden' : 'flex-1 min-h-0 flex flex-col'}>
             <ChatMessageList
               messages={messages}
@@ -1551,14 +2053,22 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
               onOpenExecutionsPanel={() => openSidePanel('tasks')}
               onOpenFilesPanel={() => openSidePanel('changes', 'changes')}
               watchers={watchers}
+              conversationTitle={activeSession?.title || 'Untitled conversation'}
+              conversationTag={activeSession?.repoName}
+              conversationWorkflow={activeWorkflowName}
+              documentCount={documentCount}
+              provider={activeSession?.provider}
+              resourceScopeKey={activeResourceScopeKey}
+              model={activeSession?.model}
+              onOpenFileReference={handleOpenFileReference}
+              onOpenChatReference={handleOpenChatReference}
+              onOpenInternalReference={path => navigate(path)}
             />
           </div>
         )}
       </div>
-      {floatingPullRequest && <FloatingPullRequestCard pullRequest={floatingPullRequest} />}
-
       {/* Input */}
-      {!workspaceUtilityTabActive && <div className="chat-input-dock">
+      {!workspaceUtilityTabActive && !chatAlternateTabActive && <div className="chat-input-dock">
         {archivedWorkspace && (
           <div className="chat-archived-workspace-note">
             <div>
@@ -1575,29 +2085,6 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
                 open PR
               </a>
             )}
-          </div>
-        )}
-        {!isDesignMode && chatDiffSummary && hiddenDiffSignature !== diffSourceSignature && (
-          <div className="chat-code-summary-wrap">
-            <button
-              type="button"
-              className="chat-code-summary-pill"
-              onClick={() => openSidePanel('changes', 'changes')}
-              title="Open all code changes in this chat"
-            >
-              <Code2 className="h-3 w-3" />
-              <span>{chatDiffSummary.files} changed</span>
-              <span className="add">+{chatDiffSummary.additions}</span>
-              <span className="del">-{chatDiffSummary.deletions}</span>
-            </button>
-            <button
-              type="button"
-              className="chat-code-summary-close"
-              onClick={() => setHiddenDiffSignature(diffSourceSignature)}
-              title="Hide changed files summary"
-            >
-              <X className="h-3 w-3" />
-            </button>
           </div>
         )}
         {queuedMessages.length > 0 && (
@@ -1722,6 +2209,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         )}
         <ChatInput
           ref={chatInputRef} onSend={handleSend} onCancel={cancelStream} streaming={streaming}
+          controlPresentation="v8-chat"
           disabled={composerDisabled}
           disabledReason={
             config?.disabled && config?.disabledReason
@@ -1805,13 +2293,25 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           </div>
         </div>
       )}
+      {!isDesignMode && (
+        <DocumentTabHost
+          workspaceId={activeWorkspaceId}
+          onAllResourcesClosed={handleAllResourceTabsClosed}
+          onCreateTab={handleCreateSiblingTab}
+          showTabStrip={false}
+          visible={!activeWorkspace || Boolean(activeWorkspaceResourceKey)}
+        />
+      )}
       </div>
-      {!isDesignMode && showResourceRail && !sidePanelOpen && (
+      {!isDesignMode && showResourceRail && (
         <nav className="chat-resource-rail" aria-label="Chat resources">
           <button
             type="button"
             className={sidePanelOpen ? 'active' : ''}
-            onClick={() => setSidePanelOpen(value => !value)}
+            onClick={() => {
+              documentsSidebarAutoHiddenRef.current = false;
+              setSidePanelOpen(value => !value);
+            }}
             title={sidePanelOpen ? 'Close resources' : 'Open resources'}
             data-tooltip={sidePanelOpen ? 'Close resources' : 'Open resources'}
           >
@@ -1820,7 +2320,10 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           <button type="button" className={sidePanelOpen && sidePanelTab === 'tasks' ? 'active' : ''} onClick={() => openSidePanel('tasks')} title="Task sequence" data-tooltip="Task sequence">
             <ListTree className="h-4 w-4" />
           </button>
-          <button type="button" className={sidePanelOpen && sidePanelTab === 'files' ? 'active' : ''} onClick={() => openSidePanel('files', 'files')} title="Files" data-tooltip="Files">
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'executions' ? 'active' : ''} onClick={() => openSidePanel('executions')} title="Executions" data-tooltip="Executions">
+            <Activity className="h-4 w-4" />
+          </button>
+          <button type="button" className={sidePanelOpen && sidePanelTab === 'documents' ? 'active' : ''} onClick={() => openSidePanel('documents')} title="Documents" data-tooltip="Documents">
             <FileText className="h-4 w-4" />
           </button>
           <button type="button" className={sidePanelOpen && sidePanelTab === 'changes' ? 'active' : ''} onClick={() => openSidePanel('changes', 'changes')} title="Code changes" data-tooltip="Code changes">
@@ -1887,8 +2390,12 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
           onTabChange={handleSidePanelTabChange}
           filesViewRequest={filesViewRequest}
           artifactRefreshKey={artifactRefreshKey}
+          onDocumentOpened={handleDocumentOpenedFromSidebar}
           onAnswerWorkflowIntervention={answerWorkflowIntervention}
-          onClose={() => setSidePanelOpen(false)}
+          onClose={() => {
+            documentsSidebarAutoHiddenRef.current = false;
+            setSidePanelOpen(false);
+          }}
         />
       )}
       {activeSessionId && (

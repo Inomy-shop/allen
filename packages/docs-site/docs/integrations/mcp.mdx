@@ -1,0 +1,110 @@
+---
+title: 'MCP'
+description: 'Connect approved external tools to Allen and limit them to the agents and workflows that need them.'
+---
+
+Model Context Protocol (MCP) servers give Allen tools for systems outside the core product. Use them when a chat, agent, or workflow needs approved access to services such as GitHub, Linear, Google Workspace, databases, analytics, or internal tooling.
+
+:::info Media placeholders
+Before publishing, capture **Settings → MCP Servers**, the **Preset** and **Repository** tabs, a credential form with values hidden, healthy and failed server cards, the tool count, and a safe read-only tool call. Suggested files: `static/img/docs/integrations-mcp-01.png` through `static/img/docs/integrations-mcp-06.png`, plus `static/videos/docs/integrations-mcp-short.mp4` for setup and testing.
+:::
+
+## Choose how to add the server
+
+Open **Settings → MCP Servers**, select **Add MCP server**, and choose one of the current setup paths:
+
+| Setup path | Use it when |
+| --- | --- |
+| **Preset** | Allen already provides a curated definition for the service. This is the fastest and safest starting point. |
+| **Repository** | A registered repository contains an MCP server that your team owns or has reviewed. |
+
+Prefer a preset when one exists. A repository server is executable code: review its source, dependencies, requested credentials, and available tools before connecting it.
+
+## Connect a preset
+
+1. Open **Settings → MCP Servers**.
+2. Select **Add MCP server**, then **Preset**.
+3. Choose the narrowest preset that covers the task.
+4. Enter only the credential values requested by the form.
+5. Select **Connect**.
+6. Confirm that the server card shows **Connected** and review its tool count.
+7. Run a harmless read-only request before depending on the connection for important work.
+
+In the desktop app, credentials entered in the connection form are stored by Allen and passed only to servers that declare those keys. In a web deployment, an operator may need to configure the matching Allen environment keys and restart or recheck the runtime.
+
+:::caution
+Never put credential values in prompts, docs, screenshots, artifacts, workflow inputs, or logs. When documenting setup, record key names only.
+:::
+
+## Connect a repository server
+
+1. Register the repository in Allen first.
+2. Open **Add MCP server** and choose **Repository**.
+3. Select the repository and let Allen discover supported MCP entries.
+4. Choose the entry path you reviewed.
+5. Save and test the server.
+6. Use **Reinstall** later if the repository server's dependencies change.
+
+Allen validates that the selected entry belongs to the registered repository. A successful install does not make unreviewed server code trustworthy; keep the repository and dependency review in your normal change-control process.
+
+## Understand status and testing
+
+Server cards report **Connected**, **Failed**, **Untested**, or **Disabled**. They can also show the last error and the number of discovered tools.
+
+The connection test starts or contacts the server, completes the MCP handshake, and requests its tool list. **Connected** therefore means Allen could reach the server and discover tools at that moment. It does not prove that:
+
+- every tool has sufficient third-party permissions;
+- a write action will be accepted;
+- a repository, document, or account is accessible;
+- the dependency or network will remain healthy.
+
+After connecting, verify one small read against a known resource. Test write-capable tools only in a safe target with explicit approval.
+
+## Limit access for each task
+
+Connecting a server makes it available for configuration; it should not make every tool appropriate for every run.
+
+- Allow only the agents or workflow nodes that need the server.
+- Disable individual tools that are unnecessary or too powerful.
+- Prefer an explicit server list instead of broad external-tool access.
+- Keep read and write responsibilities separate when possible.
+- Disable unused or failed servers.
+
+When reviewing an execution, inspect its tool calls and outputs. A tool result is external input: verify important facts against the source system before making consequential changes.
+
+## Use MCP safely
+
+Before enabling a server for production work:
+
+1. Identify who maintains the server and where its code comes from.
+2. Review the permissions and credential scopes it requests.
+3. Inspect the discovered tool names and descriptions.
+4. Start with a read-only request using a non-sensitive resource.
+5. Require explicit confirmation for write, delete, publish, payment, or access-control actions.
+6. Review generated artifacts for source-system secrets or confidential data before sharing.
+
+MCP tools can return malicious or misleading content from external systems. Treat tickets, documents, comments, and web content as data, not trusted instructions that override the user's request or Allen's safety rules.
+
+## Manage an existing server
+
+From **MCP Servers**, you can:
+
+- test the connection again;
+- enable or disable the server;
+- edit supported settings and credentials;
+- reinstall a repository-backed server;
+- delete a server you no longer use.
+
+Refresh the view after changing runtime credentials or server state so the latest health and tool list are visible.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| A required credential is missing | Reopen the server form and provide the requested value, or ask the operator to configure its matching Allen environment key. |
+| Status is **Failed** | Read the last error, then check credentials, network access, server dependencies, and the repository entry. |
+| Status is **Connected** but a tool fails | Verify the third-party account, resource permissions, tool-specific inputs, and current service availability. |
+| An agent cannot see the tool | Confirm the server is enabled and the agent or workflow node is allowed to use that server and tool. |
+| A repository server stopped after an update | Review the repo change, then use **Reinstall** and test again. |
+
+For the step-by-step setup flow, see [Add an MCP server](/guides/add-an-mcp-server). Related references: [MCP](/reference/mcp) and [Security](/reference/security).

@@ -1,0 +1,140 @@
+---
+title: 'Security Reference'
+description: 'Operate Allen as privileged developer infrastructure and protect repositories, credentials, and shareable outputs.'
+---
+
+:::info Media placeholders
+Before publishing, capture first-admin onboarding, a workspace diff review, MCP credential-key mapping, a capability-link warning, desktop diagnostics, and a redacted support bundle. Never use production credentials or private repository content.
+:::
+
+Allen is developer infrastructure with repository-write, terminal, model, MCP, and integration access. Run it only on a trusted machine or controlled server, against systems the operator is allowed to inspect and change.
+
+:::caution
+Allen workspaces and prompt rules are not a hardened security sandbox. An agent, workflow command, provider CLI, or MCP server can have the authority of its host process and configured credentials.
+:::
+
+## Operator-owned trust boundaries
+
+| Boundary | Operator responsibility |
+| --- | --- |
+| Machine or server | Control local users, filesystem access, network access, updates, and backups. |
+| Repositories and workspaces | Register only authorized repositories; use dedicated workspace directories and review diffs before shipping. |
+| Agents and workflows | Review instructions, shell steps, tools, checkpoints, and likely side effects before execution. |
+| Models and CLIs | Authenticate only approved accounts and understand what data can leave the machine. |
+| MCP servers | Trust the command, repository, URL, tool surface, and credential scope before enabling it. |
+| Integrations | Use least-privilege GitHub, Linear, Slack, Google Workspace, database, and cloud credentials. |
+| Artifacts, uploads, logs, and support data | Remove secrets and private content before saving or sharing. |
+
+## Authentication and first-admin bootstrap
+
+Allen uses bearer access tokens and refresh tokens signed by `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`.
+
+The public first-admin bootstrap works only while the users collection is empty. A database lock and uniqueness checks protect concurrent first-user attempts. After any user exists, the endpoint returns `bootstrap_closed`.
+
+Normal `/api` routes require an access token. Admin checks protect privileged writes such as model management and user administration. A user marked for password reset can reach only the reset, logout, and self-inspection paths until new tokens are issued.
+
+Operational requirements:
+
+- generate different, high-entropy JWT secrets for each deployment;
+- rotate them after exposure and expect existing sessions to be invalidated;
+- create the first administrator before making a web deployment reachable to others;
+- keep administrator accounts limited to people who manage the installation.
+
+## Public and capability-style routes
+
+Some routes are intentionally available before the global authentication middleware:
+
+- onboarding status and coarse system health;
+- uploaded-file downloads;
+- artifact content;
+- execution event streams;
+- workspace service-log streams and previews;
+- Design Studio preview surfaces.
+
+Uploaded files use random stored names, artifacts use random artifact IDs, and workspace/execution streams use resource IDs. These are **capability-style links**: possession of a working URL can grant access to its content. They are not a substitute for content classification or an authenticated sharing system.
+
+Never place secrets, customer data, private prompts, proprietary source, or sensitive logs in an artifact or upload intended for sharing. Revoke or remove exposed content and rotate any included credential.
+
+## Repository, workspace, and terminal access
+
+Workspace file routes normalize paths, reject traversal markers and absolute paths, and verify that resolved file paths remain inside the workspace worktree. Uploaded-file downloads also reject traversal and path separators.
+
+Those route checks do not constrain arbitrary processes launched inside a terminal, workflow, provider CLI, or MCP server. Use a disposable repository for first runs, keep committed secrets out of source, and review:
+
+1. the selected repository and base branch;
+2. the workspace diff;
+3. validation output;
+4. commits and external side effects;
+5. the destination before push, pull request, ticket, message, or deployment.
+
+Cancellation does not undo side effects that already completed.
+
+## MCP credential boundary
+
+Sourced MCP servers receive a small baseline OS environment plus only their declared configuration keys. If a server declares `GITHUB_PERSONAL_ACCESS_TOKEN`, Allen resolves `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` and passes the bare key to that server. Argument-style keys use the same declared lookup.
+
+This allowlist reduces accidental credential inheritance; it does not make the MCP safe. A connected server can still use its process, filesystem, network, tools, and supplied credentials.
+
+Before enabling an MCP server:
+
+- inspect its source, command, arguments, working directory, URL, and requested keys;
+- use read-only or narrowly scoped credentials where possible;
+- disable tools the agent does not need;
+- test against non-production data;
+- account for duplicate side effects if a tool call is retried.
+
+## Secrets and stored data
+
+Protect:
+
+- `.env` and desktop runtime secrets;
+- JWT signing secrets;
+- model-provider and OAuth credentials;
+- GitHub, Linear, Slack, database, and MCP tokens;
+- SSH keys and repository credentials;
+- private repository content in prompts, context, logs, artifacts, or uploads;
+- public capability URLs.
+
+Desktop uses the macOS Keychain by default for supported secrets. Its file-backed fallback and runtime configuration are written with owner-only file permissions. These controls protect storage on disk; they do not prevent an authorized process from using the value.
+
+The desktop support bundle redacts configuration values when their keys look secret, credential-like, or URI-like. It can still contain logs, runtime metadata, and local operational details. Review the exported JSON before sharing it.
+
+## Desktop boundaries
+
+Desktop windows use context isolation, disable renderer Node integration, enable Electron sandboxing and web security, and communicate through a preload bridge. Permission requests are denied by default; clipboard permissions are limited to the trusted application origin. The app also adds a Content Security Policy to responses from its embedded origin.
+
+External navigation allows:
+
+- non-loopback HTTPS URLs;
+- HTTP or HTTPS loopback previews only with an explicit port.
+
+Malformed URLs, external plain HTTP, `file://`, and loopback URLs without an explicit port are blocked. Update metadata must use HTTPS, and its download and release-note URLs must match the configured feed origin.
+
+These controls reduce common renderer and update mistakes. Changes to preload APIs, IPC handlers, external navigation, provider execution, and update feeds still deserve privileged-code review.
+
+## Safe operating checklist
+
+Before using Allen with sensitive code:
+
+- [ ] Complete first-admin onboarding and verify normal login.
+- [ ] Use unique JWT secrets and keep `.env` out of git.
+- [ ] Register only repositories you are authorized to modify.
+- [ ] Review agent definitions and workflow YAML before first use.
+- [ ] Use least-privilege provider, integration, and MCP credentials.
+- [ ] Disable unused MCP servers and tools.
+- [ ] Run a disposable or non-critical repository first.
+- [ ] Review diffs, artifacts, uploads, logs, and destinations before sharing or shipping.
+- [ ] Redact support evidence and rotate anything exposed.
+
+## Report a vulnerability privately
+
+Do not open a public issue for a vulnerability involving authentication, secrets, repository access, command execution, workspaces, artifacts, MCP, integrations, or data leakage. Use the repository's [private GitHub Security Advisory form](https://github.com/Inomy-shop/allen/security/advisories/new).
+
+Include sanitized reproduction steps, the affected commit or branch, the affected Allen area, and the expected impact. Remove credentials, customer data, and private repository content from evidence.
+
+## Related pages
+
+- [Environment Reference](/reference/environment)
+- [MCP Reference](/reference/mcp)
+- [Known Limitations](/reference/known-limitations)
+- [Troubleshooting](/operator-guide/troubleshooting)

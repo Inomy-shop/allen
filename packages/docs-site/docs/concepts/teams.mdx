@@ -1,0 +1,126 @@
+---
+title: 'Teams'
+description: 'Organize agents by responsibility, choose leads, and keep delegation paths intentional.'
+---
+
+Teams organize Allen's agents around a durable responsibility. Each team has a mission, one lead, and member specialists. This structure helps you see who owns a request, when a lead should coordinate it, and which agent should handle a narrower task.
+
+Open **Teams & Agents** to search teams and agents, filter leads or members, and inspect a team's mission, parent, lead, members, models, and delegation graph.
+
+:::tip Choose ownership before configuration
+Use a team when several specialists share an enduring responsibility. If you only need one new capability, add an agent to the team that already owns that outcome instead of creating another team.
+:::
+
+## Leads, members, and delegation
+
+| Role | Use it for | What to review |
+| --- | --- | --- |
+| **Lead** | Broad work that needs decomposition, sequencing, or coordination across specialists | Mission, model, instructions, and **Can spawn** targets |
+| **Member** | A bounded task with a clear specialist owner | Responsibility, tools, model, and expected evidence |
+
+Team membership shows organizational ownership. It does not automatically grant delegation. An agent's **Can spawn** list controls which other agents it can start.
+
+When you assign agents to a team, leave **Also allow the team lead to spawn these agents** enabled if the lead should delegate work to them. Turn it off when you want the agents grouped under the team without giving the lead that delegation path.
+
+## Browse and review teams
+
+In **Teams & Agents**, select a team to review:
+
+- its display name, stable name, description, and mission;
+- the lead and parent team;
+- every lead and member in the team;
+- each agent's provider, model, capabilities, and recent activity;
+- the delegation relationships represented by agent spawn targets.
+
+Use the stable team name when a chat, workflow, import, or tool asks for a team identifier. Display names can be written for people; stable names are used by saved relationships.
+
+Allen includes a built-in organization with teams for executive coordination, product, engineering, quality, design, org building, and unassigned agents. The exact roster can change as Allen evolves, so use **Teams & Agents** as the source of truth for the teams and specialists available in your instance.
+
+**Unassigned** is a holding area for imported or newly created agents whose long-term owner has not been chosen. Review their instructions and access, then move them into a real team once their responsibility is clear.
+
+## Create a team
+
+The primary **Create team** flow creates a team and its lead together. You can start it with no selected agents or select existing agents first and place them under the new lead.
+
+1. In **Teams & Agents**, choose **Create team**.
+2. Enter a display name, stable name, description, and mission.
+3. Choose a parent team, or make the team top-level.
+4. Review the generated lead name.
+5. In **Advanced — lead agent settings**, review the lead's model and reasoning level.
+6. Create the team, then open it and inspect the lead and delegation graph.
+
+Selected agents become members, and the generated lead can spawn them. With no selected agents, Allen creates an empty team that you can populate later.
+
+The separate **New team** form is useful when the lead agent already exists. In that flow, choose the existing lead before creating the team. A lead already assigned to another regular team cannot be silently moved into the new team; move ownership deliberately or choose a different lead.
+
+:::caution Review generated leads before use
+Creating a team produces operational configuration, not only a visual group. Read the lead's instructions, model settings, tools, and **Can spawn** targets before routing consequential work through it.
+:::
+
+## Assign agents to a team
+
+To move existing agents:
+
+1. Select one or more agents in **Teams & Agents**.
+2. Choose **Assign to team**.
+3. Select the target team.
+4. Decide whether the team lead should be allowed to spawn the moved agents.
+5. Choose **Move**, then open the target team and verify the result.
+
+The assignment flow can move agents between teams. It places them in the target team as members and, when selected, appends them to the target lead's delegation list.
+
+After a move, check both sides of the relationship: the agent's team now shows ownership, while the lead's **Can spawn** list determines reachability. Also review any old leads or workflows that still name the moved agent directly.
+
+## Edit and protect teams
+
+For a user-created team, **Edit team** can change its display name, description, mission, and parent. The stable name and lead are locked after creation because saved routing and org relationships depend on them.
+
+Built-in teams are marked **built-in** and cannot be edited or deleted through normal team actions. Built-in agents also cannot be deleted. These protections preserve the default organization and its routing relationships.
+
+If a user-created team's ownership model no longer fits, prefer one of these options:
+
+- edit the mission or parent when the responsibility is still valid;
+- assign members to a better team and update delegation targets;
+- create a replacement team when the ownership boundary has genuinely changed;
+- delete the old team only after reviewing every assigned agent.
+
+## Delete a team
+
+**Delete team and agents** is a destructive operation. The confirmation shows how many assigned agents will be affected. Continuing soft-deletes the user-created team and all of its assigned non-built-in agents, removes them from normal agent and routing lists, and cleans up delegation references to those agents.
+
+Deletion is blocked for built-in teams and for a custom team that contains a built-in agent. Deleted user-created teams and agents can be restored by recreating resources with the same stable names, but you should not use that as a substitute for reviewing the impact first.
+
+Before deleting a team:
+
+- inventory its lead and members;
+- find workflows and agents that reference those stable names;
+- save or export any definitions you may need again;
+- move agents that should remain active;
+- confirm that no pending execution depends on the team.
+
+## A practical routing pattern
+
+```text
+Request arrives
+  -> use Assistant when the owner is unclear
+  -> choose a team lead for multi-specialist coordination
+  -> choose a member directly for one bounded specialty
+  -> use a workflow when the path should be repeatable
+  -> review executions, artifacts, and workspace changes
+```
+
+Teams make ownership understandable, but the execution is still the evidence of what ran. For repository work, review the linked workspace and diff before approving Git or deployment actions.
+
+## Team maintenance checklist
+
+Review a team periodically and after any membership change:
+
+- **Mission:** is the responsibility distinct and understandable?
+- **Lead:** are its instructions and runtime appropriate for coordination?
+- **Members:** does each specialist have a clear, non-duplicated outcome?
+- **Delegation:** does **Can spawn** include exactly the agents the lead should start?
+- **Access:** are tools and MCP servers limited to what each agent needs?
+- **References:** do workflows and other agents still point to valid stable names?
+- **Evidence:** do recent executions show the ownership and outputs you expect?
+
+Related concepts: [Agents](/concepts/agents), [Workflows](/concepts/workflows). Related guides: [Create an agent](/guides/create-an-agent), [Create a workflow](/guides/create-a-workflow).

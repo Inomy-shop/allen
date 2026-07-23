@@ -1,4 +1,5 @@
 import type { AuthUser } from '../stores/authStore';
+import type { TeamClassification, TeamClassificationSource } from '../types/teamClassification';
 import { request } from './apiCore';
 import type { JudgeRunDoc, FindingDoc, ReviewTaskDoc, WorkerAssignmentDoc, ReviewDecisionDoc, RemediationDoc, CurationRevisionDoc, LearningPromotionDoc, PagedContextQualityResponse, OrchestrationSessionDoc } from './contextQualityTypes';
 
@@ -595,6 +596,12 @@ export interface ArtifactDoc {
   createdAt: string;
   createdByAgent?: string;
   createdByUserId?: string;
+  /** Explicit per-user Documents-library state. */
+  saved?: boolean;
+  /** Independent favorite marker; saving does not enable this automatically. */
+  favorite?: boolean;
+  teamClassification?: TeamClassification | null;
+  teamClassificationSource?: TeamClassificationSource | null;
 }
 
 export const artifacts = {
@@ -623,6 +630,16 @@ export const artifacts = {
     ),
   delete: (id: string) =>
     request<{ deleted: boolean }>(`/artifacts/${id}`, { method: 'DELETE' }),
+  updateLibraryState: (id: string, patch: { saved?: boolean; favorite?: boolean }) =>
+    request<ArtifactDoc>(`/artifacts/${id}/library-state`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  updateClassification: (id: string, teamClassification: TeamClassification | null) =>
+    request<ArtifactDoc>(`/artifacts/${id}/classification`, {
+      method: 'PATCH',
+      body: JSON.stringify({ teamClassification }),
+    }),
 };
 
 // ── Context Quality (Judge / Review / Remediation) ───────────────────────────

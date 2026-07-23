@@ -48,6 +48,7 @@ export type ClarifyAction = 'retry' | 'continue';
  *     missing_items: "list of actionable file:line items when partial"
  */
 export type OutputsSpec = Record<string, string>;
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 /**
  * Non-destructive per-node override of an agent's model/reasoning/plan settings.
@@ -58,7 +59,7 @@ export type OutputsSpec = Record<string, string>;
 export interface AgentOverrides {
   provider?: 'claude' | 'codex' | (string & {}) | null;
   model?: string | null;
-  reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
+  reasoningEffort?: ReasoningEffort | null;
   planMode?: boolean | null;
   /**
    * Internal execution-scoped source markers. Set when a workflow run applies
@@ -410,7 +411,7 @@ export interface AgentDef {
   spawnTargets?: string[];
   canTrigger?: string[];
   /** Default reasoning effort for this agent. Can be overridden per node via `agentOverrides`. */
-  reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max';
+  reasoningEffort?: ReasoningEffort;
   /** Default plan-mode flag for this agent. Claude-only; silently ignored for Codex. */
   planMode?: boolean;
   /**

@@ -1,8 +1,13 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { AlertTriangle, RefreshCw, X, Layers, Cpu, Activity } from 'lucide-react';
 import { executions as executionsApi } from '../../services/api';
 import { useModelRegistry, getModelDisplay } from '../../hooks/useModelRegistry';
-import { PROVIDER_COLORS } from '../../lib/model-catalog';
+import Select from '../common/Select';
+import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
+import {
+  reasoningEffortOptionsFor,
+  type ReasoningEffortValue,
+} from '../../lib/reasoning-effort';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -68,21 +73,14 @@ export default function ModelRecoveryPrompt({
   onCancelled,
 }: ModelRecoveryPromptProps) {
   const { models } = useModelRegistry();
-  const providerSelectRef = useRef<HTMLSelectElement>(null);
-
   // Form state
   const [selectedProvider, setSelectedProvider] = useState(failedProvider);
   const [selectedModel, setSelectedModel] = useState('');
-  const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(undefined);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortValue | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-
-  // Focus provider select on mount
-  useEffect(() => {
-    providerSelectRef.current?.focus();
-  }, []);
 
   // Reset model when provider changes
   useEffect(() => {
@@ -94,12 +92,17 @@ export default function ModelRecoveryPrompt({
   // Unique providers from the model registry, with the failed provider first
   const providerOptions = useMemo(() => {
     const seen = new Set<string>();
-    const options: Array<{ value: string; label: string }> = [];
+    const options: Array<{ value: string; label: string; sublabel?: string; icon: React.ReactNode }> = [];
     for (const m of models) {
       if (!seen.has(m.provider)) {
         seen.add(m.provider);
         const display = getModelDisplay(m.provider);
-        options.push({ value: m.provider, label: display.providerLabel });
+        options.push({
+          value: m.provider,
+          label: display.providerLabel,
+          sublabel: m.provider === failedProvider ? 'Current provider · failed' : undefined,
+          icon: <ProviderIcon provider={m.provider} className={`h-4 w-4 ${providerIconColor(m.provider)}`} />,
+        });
       }
     }
     // Sort: failed provider first, then alphabetical
@@ -118,8 +121,19 @@ export default function ModelRecoveryPrompt({
       .map((m) => ({
         label: m.displayName?.trim() || m.fullId,
         value: m.fullId,
+        icon: <ProviderIcon provider={selectedProvider} className={`h-4 w-4 ${providerIconColor(selectedProvider)}`} />,
       }));
   }, [models, selectedProvider]);
+  const effortOptions = useMemo(
+    () => reasoningEffortOptionsFor(selectedProvider, selectedModel),
+    [selectedProvider, selectedModel],
+  );
+
+  useEffect(() => {
+    if (reasoningEffort && !effortOptions.some((option) => option.value === reasoningEffort)) {
+      setReasoningEffort(undefined);
+    }
+  }, [effortOptions, reasoningEffort]);
 
   // Derived: can submit
   const canSubmit = selectedProvider.trim() && selectedModel.trim() && !submitting && !cancelling;
@@ -186,7 +200,7 @@ export default function ModelRecoveryPrompt({
   const failedDisplay = getModelDisplay(failedProvider, failedModel);
 
   return (
-    <div className="flex flex-col gap-4" role="region" aria-label={`Model recovery for node ${node}`}>
+    <div className="v8-model-recovery flex flex-col gap-4" role="region" aria-label={`Model recovery for node ${node}`}>
       {/* Header */}
       <div className="flex items-center gap-2">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-accent-orange/30 bg-accent-orange/10">
@@ -219,7 +233,7 @@ export default function ModelRecoveryPrompt({
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] font-mono text-theme-muted">Failed provider:</span>
           <span className="inline-flex items-center gap-1 rounded-full border border-app bg-app-card px-2 py-0.5 text-[10px] font-mono text-theme-secondary">
-            <span className={`h-1.5 w-1.5 rounded-full ${PROVIDER_COLORS[failedProvider]?.dotBg ?? 'bg-theme-muted'}`} />
+            <ProviderIcon provider={failedProvider} className={`h-3.5 w-3.5 ${providerIconColor(failedProvider)}`} />
             {failedDisplay.providerLabel}
           </span>
           <span className="text-[10px] font-mono text-theme-muted">model:</span>
@@ -258,41 +272,29 @@ export default function ModelRecoveryPrompt({
       {/* Form */}
       <div className="space-y-3">
         {/* Provider select */}
-        <label className="block">
+        <div className="block">
           <span className="text-[11px] font-semibold text-theme-primary block mb-1">Provider</span>
-          <select
-            ref={providerSelectRef}
+          <Select
             value={selectedProvider}
-            onChange={(e) => setSelectedProvider(e.target.value)}
-            className="w-full rounded-md border border-app bg-app-card px-3 py-2 text-[12px] font-mono text-theme-primary outline-none transition-colors focus:border-accent focus:shadow-[var(--focus-ring)]"
-            aria-label="Select provider"
-          >
-            {providerOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}{opt.value === failedProvider ? ' (current, failed)' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
+            onChange={setSelectedProvider}
+            options={providerOptions}
+            searchable={false}
+            ariaLabel="Select provider"
+          />
+        </div>
 
         {/* Model select */}
-        <label className="block">
+        <div className="block">
           <span className="text-[11px] font-semibold text-theme-primary block mb-1">Model</span>
-          <select
+          <Select
             value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
+            onChange={setSelectedModel}
             disabled={modelOptions.length === 0}
-            className="w-full rounded-md border border-app bg-app-card px-3 py-2 text-[12px] font-mono text-theme-primary outline-none transition-colors focus:border-accent focus:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label="Select model"
-          >
-            <option value="">Select a model</option>
-            {modelOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            placeholder="Select a model"
+            options={modelOptions}
+            ariaLabel="Select model"
+          />
+        </div>
 
         {/* Reasoning effort select */}
         <label className="block">
@@ -300,19 +302,20 @@ export default function ModelRecoveryPrompt({
             Reasoning effort{' '}
             <span className="text-theme-muted font-normal">(optional)</span>
           </span>
-          <select
+          <Select
             value={reasoningEffort ?? ''}
-            onChange={(e) => setReasoningEffort(e.target.value || undefined)}
-            className="w-full rounded-md border border-app bg-app-card px-3 py-2 text-[12px] font-mono text-theme-primary outline-none transition-colors focus:border-accent focus:shadow-[var(--focus-ring)]"
-            aria-label="Select reasoning effort"
-          >
-            <option value="">No selection</option>
-            <option value="off">off</option>
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-            <option value="max">max</option>
-          </select>
+            onChange={(value) => setReasoningEffort((value || undefined) as ReasoningEffortValue | undefined)}
+            searchable={false}
+            ariaLabel="Select reasoning effort"
+            options={[
+              { value: '', label: 'No selection' },
+              ...effortOptions.map((option) => ({
+                value: option.value,
+                label: option.label,
+                sublabel: option.description,
+              })),
+            ]}
+          />
         </label>
       </div>
 

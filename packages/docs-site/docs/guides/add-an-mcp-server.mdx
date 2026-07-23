@@ -1,0 +1,106 @@
+---
+title: 'Add an MCP Server'
+description: 'Connect a curated or repository-hosted MCP server, test it, and grant the smallest useful tool scope.'
+---
+
+## What you will accomplish
+
+Add an external Model Context Protocol (MCP) server to Allen, verify that Allen can discover its tools, and make it available only to the agents or workflow nodes that need it.
+
+:::info Media placeholders
+Before publishing, capture the **Add MCP server** modal, both **Preset** and **Repository** tabs, a connected preset, repository discovery, a failed health result, and an agent or workflow-node allowlist. Suggested files: `static/img/docs/guides-add-an-mcp-server-01.png` through `static/img/docs/guides-add-an-mcp-server-06.png`, plus `static/videos/docs/guides-add-an-mcp-server-short.mp4` for the connect-and-test flow.
+:::
+
+## Before you start
+
+- Decide which exact tools the agent or workflow needs.
+- Prefer a curated preset when one exists.
+- For a repository server, register the repository in Allen first and identify its entry file.
+- Obtain the required credentials from the service owner without placing them in the repository or docs.
+- Start with read-only access and a low-risk validation task.
+
+## Add a preset
+
+1. Open **Settings → MCP Servers**.
+2. Select **Add MCP server**.
+3. Keep the **Preset** tab selected.
+4. Search for the service and select **Connect**.
+5. Review the preset description, launch preview, documentation, and requested variables.
+6. Enter a distinct **MCP name** and the requested credential values. Enter values only; Allen supplies the matching variable names to the server.
+7. Select **Connect**. Allen saves the server and immediately checks its MCP handshake and tool list.
+8. Confirm the result says **Connected** and that the reported tool count is plausible.
+9. Select **Done**.
+
+If the result fails, correct the credential or runtime issue before giving the server to an agent. Connecting the same service with a different account is safer when each connection has a clear, unique name.
+
+## Add a server from a repository
+
+Use this path for an MCP server whose source is in a repository already registered with Allen.
+
+1. Open **Settings → MCP Servers** and select **Add MCP server**.
+2. Select **Repository**.
+3. Choose the registered repository. Allen scans it for likely MCP entry files.
+4. Choose a discovered **Entry file**, or enter a repository-relative path.
+5. Review **Install dir** and **Command**. Keep the detected values unless the project requires a different launch command.
+6. For a Python entry, leave **Command** blank to use Allen's managed environment, then review the interpreter and `requirements.txt` path.
+7. Enter a unique **Name**.
+8. Add only the credential keys the server needs. In the desktop app, enter their values in the password fields; in a web deployment, the operator supplies matching `ALLEN_<KEY>` runtime values.
+9. Save the server, then select **Test connection** from its card.
+10. Confirm the server is **Connected** and exposes the expected tools.
+
+Repository entry and install paths must remain inside the registered repository. If dependencies change, use **Reinstall dependencies** where available, then test again.
+
+## Interpret connection status
+
+| Status | Meaning | Next action |
+| --- | --- | --- |
+| **Connected** | Allen completed the MCP handshake and received a tool list | Run one safe tool call |
+| **Failed** | Startup, authentication, handshake, or tool discovery failed | Review the card's error and fix the cause |
+| **Untested** | The saved configuration has not completed a health check | Select **Test connection** |
+| **Disabled** | Allen will not load the server for runs | Enable it only when needed, then retest |
+
+A successful connection proves only that the server initialized and returned tools at that moment. Individual tool calls can still fail because of service permissions, repository state, network access, expired credentials, or tool-specific input.
+
+## Grant the smallest useful scope
+
+Saving and testing a server does not mean every agent should use it.
+
+1. Open the target agent in **Teams & Agents**, or select the target workflow node.
+2. Allow the MCP server only for that agent or node.
+3. If tool-level controls are available, allow only the needed operations.
+4. Run a read-only task with an explicit target and expected result.
+5. Review the tool calls, external result, logs, and artifacts.
+6. Require confirmation before write, delete, send, publish, deploy, or permission-changing tools.
+
+See [MCP](/integrations/mcp) for the runtime and permission model.
+
+## Manage an existing server
+
+From an MCP server card you can:
+
+- select **Test connection** after credentials, dependencies, or network state change;
+- edit allowed variables or repository launch details;
+- enable or disable loading;
+- use **Reinstall dependencies** for a repository server when install state is stale;
+- delete a connection that is no longer needed.
+
+Before disabling or deleting a server, check the agents and workflows that reference it. Existing definitions may retain the server name even though the tools are no longer available.
+
+:::caution
+Treat MCP servers as executable integrations, not passive data connections. Review their source and permissions, use least-privileged credentials, and never put secret values in prompts, screenshots, artifacts, logs, or committed files.
+:::
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| Required variable is missing | Enter the value in desktop settings or configure the matching `ALLEN_<KEY>` runtime secret. |
+| Name already exists | Edit the existing connection or choose a unique name. |
+| Preset connection fails | Verify the credential, service permissions, local runtime dependency, and network access. |
+| Repository is not listed | Register and activate it in **Repositories** first. |
+| Entry file is not discovered | Enter the correct repository-relative path and verify the file exists inside the repo. |
+| Python server fails to start | Check the bootstrap interpreter, requirements path, install result, and then reinstall dependencies. |
+| Server is connected but a tool fails | Check tool-specific permissions, input, service state, and downstream authorization. |
+| Agent cannot see the tools | Confirm the server is enabled and allowed for that agent or workflow node. |
+
+Related guides: [Repositories](/concepts/repositories), [Create an Agent](/guides/create-an-agent), and [Security](/reference/security).

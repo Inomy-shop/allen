@@ -810,7 +810,7 @@ export default function NodeDetail({
     setSearchParams(next, { replace: true });
   };
   const tabParam = searchParams.get('tab') as DataTab | null;
-  const [activeTabInternal, setActiveTabInternal] = useState<DataTab>('response');
+  const [activeTabInternal, setActiveTabInternal] = useState<DataTab>('input');
   const activeTab: DataTab = (tabParam && ['input', 'prompt', 'response', 'outputs', 'inspector'].includes(tabParam))
     ? tabParam : activeTabInternal;
   const setActiveTab = (t: DataTab) => {
@@ -827,7 +827,7 @@ export default function NodeDetail({
   // Tab-content-based auto-selection happens later in the render once
   // we know which tabs have data.
   useEffect(() => {
-    setActiveTab('response');
+    setActiveTabInternal('input');
   }, [nodeName]);
 
   const isWaitingNode = waitingInput && waitingInput.node === nodeName;
@@ -1087,7 +1087,7 @@ export default function NodeDetail({
             {/* Tab bar */}
             <div className="shrink-0 flex items-center border-b border-app bg-app-card/50">
               <TabButton
-                label="Input State"
+                label="Input"
                 active={resolvedTab === 'input'}
                 disabled={!tabHasInput}
                 onClick={() => setActiveTab('input')}
@@ -1099,17 +1099,11 @@ export default function NodeDetail({
                 onClick={() => setActiveTab('prompt')}
               />
               <TabButton
-                label={status === 'running' && tabHasResponse ? 'Live Output' : 'Response'}
-                active={resolvedTab === 'response'}
-                disabled={!tabHasResponse}
-                onClick={() => setActiveTab('response')}
+                label="Output"
+                active={resolvedTab === 'response' || resolvedTab === 'outputs'}
+                disabled={!tabHasResponse && !tabHasOutputs}
+                onClick={() => setActiveTab(tabHasResponse ? 'response' : 'outputs')}
                 live={status === 'running' && tabHasResponse}
-              />
-              <TabButton
-                label="Outputs"
-                active={resolvedTab === 'outputs'}
-                disabled={!tabHasOutputs}
-                onClick={() => setActiveTab('outputs')}
               />
               <TabButton
                 label="Inspector"

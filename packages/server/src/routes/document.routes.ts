@@ -256,6 +256,27 @@ export function documentRoutes(db: Db): Router {
   });
 
   // ── D11: POST /:documentId/comments/:commentId/resolve  ──────────────
+  router.post('/:documentId/comments/resolve-all', async (req: Request, res: Response) => {
+    try {
+      const { resolutionNote } = req.body ?? {};
+      const user = (req as unknown as { user?: { _id?: unknown; sub?: string } }).user;
+      const agentName = (req.headers['x-agent-name'] as string) || req.body?._agentName;
+      const comments = await service.resolveAllComments(
+        param(req, 'documentId'),
+        resolutionNote,
+        { userId: getUserId(user), agentName: agentName || undefined },
+      );
+      res.json({
+        resolvedCount: comments.length,
+        comments: await enrichCommentsWithActors(db, comments),
+      });
+    } catch (err: unknown) {
+      const e = err as { statusCode?: number; message: string; code?: string };
+      const code = e.statusCode ?? 500;
+      res.status(code).json({ error: e.message, code: e.code });
+    }
+  });
+
   router.post('/:documentId/comments/:commentId/resolve', async (req: Request, res: Response) => {
     try {
       const { resolutionNote } = req.body ?? {};
@@ -405,9 +426,9 @@ async function getCommentCountsForDoc(service: DocumentService, documentId: stri
   const db = (service as unknown as { db: Db }).db;
   const commentsCol = db.collection('document_comments');
   const [unresolved, resolved, stale] = await Promise.all([
-    commentsCol.countDocuments({ documentId, status: 'open' }),
-    commentsCol.countDocuments({ documentId, status: 'resolved' }),
-    commentsCol.countDocuments({ documentId, status: 'stale' }),
+    commentsCol.countDocuments({ documentId, parentCommentId: { $exists: false }, status: 'open' }),
+    commentsCol.countDocuments({ documentId, parentCommentId: { $exists: false }, status: 'resolved' }),
+    commentsCol.countDocuments({ documentId, parentCommentId: { $exists: false }, status: 'stale' }),
   ]);
   return { unresolved, resolved, stale };
 }

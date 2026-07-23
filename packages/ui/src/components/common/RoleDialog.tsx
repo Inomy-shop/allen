@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { X, Sparkles, FileText, Eye, Columns, Pencil, AlertCircle, AlertTriangle, Check, ChevronRight } from 'lucide-react';
 import Select from './Select';
 import RoleIcon from './RoleIcon';
+import ProviderIcon, { providerIconColor } from './ProviderIcon';
 import { renderMarkdown } from '../chat/ChatMessageList';
 import { mcp as mcpApi, type McpToolGroup } from '../../services/api';
 import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
@@ -12,16 +13,13 @@ import {
   isNonClaudeOpenRouterModel,
   OPENROUTER_NON_CLAUDE_WARNING,
 } from '../../lib/openrouter-warning';
+import {
+  isReasoningEffortSupported,
+  reasoningEffortOptionsFor,
+  type ReasoningEffortValue,
+} from '../../lib/reasoning-effort';
 
 const TOOLS = ['filesystem', 'terminal', 'git', 'web-search', 'web-fetch', 'database'];
-const EFFORT_LEVELS = [
-  { value: '', label: '(CLI default)' },
-  { value: 'off', label: 'Off' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-  { value: 'max', label: 'Max — Opus only' },
-];
 const PLAN_MODE_OPTIONS = [
   { value: '', label: '(CLI default: off)' },
   { value: 'off', label: 'Off — may edit files' },
@@ -205,6 +203,15 @@ export default function RoleDialog({
   }, [open, model, isOtherModel, isEdit, provider, getDefaultModelForProvider]);
 
   useEffect(() => {
+    if (
+      reasoningEffort
+      && !isReasoningEffortSupported(provider, model, reasoningEffort as ReasoningEffortValue)
+    ) {
+      setReasoningEffort('high');
+    }
+  }, [provider, model, reasoningEffort]);
+
+  useEffect(() => {
     if (!open) return;
     let cancelled = false;
     const loadGroups = (refresh?: boolean) => mcpApi.tools({ refresh })
@@ -333,13 +340,20 @@ export default function RoleDialog({
 
   if (!open) return null;
 
-  const modelOptions = buildModelOptionsForProvider(provider, enabledProviders, registryModelsForProvider, model);
+  const modelOptions = buildModelOptionsForProvider(provider, enabledProviders, registryModelsForProvider, model)
+    .map(option => ({
+      ...option,
+      icon: option.value === '__other__'
+        ? undefined
+        : <ProviderIcon provider={provider} className={`h-4 w-4 ${providerIconColor(provider)}`} />,
+    }));
   const providerOptions = selectableProviders
     .map((item) => item.provider)
     .filter((p, index, all) => all.indexOf(p) === index)
     .map(p => ({
       value: p,
       label: getModelDisplay(p).providerLabel,
+      icon: <ProviderIcon provider={p} className={`h-4 w-4 ${providerIconColor(p)}`} />,
     }));
   const iconOptions = ICONS.map(i => ({ value: i, label: i }));
   const typeOptions = AGENT_TYPES.map(t => ({ value: t.value, label: t.label }));
@@ -486,7 +500,14 @@ export default function RoleDialog({
                     <Select
                       value={reasoningEffort}
                       onChange={setReasoningEffort}
-                      options={EFFORT_LEVELS.filter(l => l.value !== 'max' || /opus/i.test(model))}
+                      options={[
+                        { value: '', label: '(CLI default)' },
+                        ...reasoningEffortOptionsFor(provider, model).map((option) => ({
+                          value: option.value,
+                          label: option.label,
+                          sublabel: option.description,
+                        })),
+                      ]}
                       searchable={false}
                     />
                   </div>

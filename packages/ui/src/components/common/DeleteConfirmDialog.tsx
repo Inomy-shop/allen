@@ -54,8 +54,8 @@ export default function DeleteConfirmDialog({
   const recoverNote = recoveryNote(resourceType);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-sm" onClick={cancel}>
-      <div className="w-full max-w-md overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+    <div className="v8-activity-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-sm" onClick={cancel}>
+      <div className="v8-activity-modal v8-activity-modal-compact w-full max-w-md overflow-hidden rounded-md border border-app bg-app-card shadow-[0_24px_80px_rgba(0,0,0,0.34)] animate-in fade-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
         <div className="flex items-start gap-3 border-b border-app px-5 py-4">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-accent-red/25 bg-accent-red/10">
             <AlertTriangle className="h-5 w-5 text-accent-red" />

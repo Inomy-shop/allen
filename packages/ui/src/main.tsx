@@ -11,6 +11,7 @@ import ExecutionListPage from './pages/ExecutionListPage';
 import ExecutionDetailPage from './pages/ExecutionDetailPage';
 import DashboardPage from './pages/DashboardPage';
 import RoleManagerPage from './pages/RoleManagerPage';
+import RepoManagerPage from './pages/RepoManagerPage';
 import RepoContextManagementPage from './pages/RepoContextManagementPage';
 import SettingsPage from './pages/SettingsPage';
 import ChatPage from './pages/ChatPage';
@@ -31,6 +32,7 @@ import ForbiddenPage from './pages/ForbiddenPage';
 import DesignStudioPage from './pages/DesignStudioPage';
 import DesignStudioWorkspacePage from './pages/DesignStudioWorkspacePage';
 import DesignStudioSessionPage from './pages/DesignStudioSessionPage';
+import DocumentsPlaceholderPage from './pages/DocumentsPlaceholderPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import { ToastProvider } from './components/common/Toast';
 import { useSettingsStore } from './stores/settingsStore';
@@ -75,7 +77,7 @@ const router = createBrowserRouter([
           { path: 'workflows/new', element: <WorkflowBuilderPage /> },
           { path: 'workflows/:id', element: <WorkflowDetailPage /> },
           { path: 'workflows/:id/edit', element: <WorkflowBuilderPage /> },
-          { path: 'repos', element: <Navigate to="/agents?section=repos" replace /> },
+          { path: 'repos', element: <RepoManagerPage /> },
           { path: 'repos/:id/context-management', element: <RepoContextManagementPage /> },
           { path: 'learnings', element: <Navigate to="/settings/learnings" replace /> },
           { path: 'executions', element: <ExecutionListPage /> },
@@ -94,6 +96,7 @@ const router = createBrowserRouter([
           { path: 'workspaces/:id', element: <WorkspaceChatRedirect /> },
           { path: 'pull-requests', element: <PullRequestListPage /> },
           { path: 'pull-requests/:id', element: <PullRequestDetailPage /> },
+          { path: 'documents', element: <DocumentsPlaceholderPage /> },
           { path: 'crons', element: <Navigate to="/settings/schedules" replace /> },
           { path: 'tickets', element: <TicketsPage /> },
           { path: 'monitoring', element: <Navigate to="/settings/runtime" replace /> },

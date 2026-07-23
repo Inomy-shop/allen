@@ -20,6 +20,7 @@ import {
   X as XIcon, Download, Copy, Trash2,
   FileText, FileJson, FileSpreadsheet, Code2, File, Database,
   MessageSquare, History, MessageSquarePlus, AlertTriangle,
+  Bookmark,
 } from 'lucide-react';
 import { artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
 import { documents as documentsApi } from '../../services/documents';
@@ -31,11 +32,20 @@ import CommentAnchorOverlay from './CommentAnchorOverlay';
 import VersionHistoryPanel from './VersionHistoryPanel';
 import VersionDiffViewer from './VersionDiffViewer';
 import CommentTimeline from './CommentTimeline';
+import DocumentReviewRail from './DocumentReviewRail';
 
 export interface ArtifactViewerProps {
   artifact: ArtifactDoc;
   onClose?: () => void;
   onDelete?: () => void;
+  presentation?: 'embedded' | 'tab';
+  baseTabLabel?: string;
+  openTabs?: ArtifactDoc[];
+  activeTabId?: string;
+  onBaseTabSelect?: () => void;
+  onTabSelect?: (artifactId: string) => void;
+  onTabClose?: (artifactId: string) => void;
+  hideTabStrip?: boolean;
 }
 
 // Text-based content types eligible for commenting.
@@ -48,11 +58,26 @@ type PanelView =
   | { kind: 'diff'; v1: number; v2: number }
   | { kind: 'timeline' };
 
-export default function ArtifactViewer({ artifact, onClose, onDelete }: ArtifactViewerProps) {
+export default function ArtifactViewer({
+  artifact,
+  onClose,
+  onDelete,
+  presentation = 'embedded',
+  baseTabLabel = 'Back',
+  openTabs = [artifact],
+  activeTabId = artifact.artifactId,
+  onBaseTabSelect,
+  onTabSelect,
+  onTabClose,
+  hideTabStrip = false,
+}: ArtifactViewerProps) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(artifact.saved ?? false);
+  const [savingDocument, setSavingDocument] = useState(false);
+  const [libraryStateError, setLibraryStateError] = useState<string | null>(null);
 
   const url = artifactsApi.contentUrl(artifact.artifactId);
 
@@ -67,6 +92,9 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
   const [selectedAnchor, setSelectedAnchor] = useState<WriteAnchor | undefined>(undefined);
   const [showCommentInput, setShowCommentInput] = useState(false);
   const [comments, setComments] = useState<DocumentCommentDoc[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [commentsError, setCommentsError] = useState<string | null>(null);
+  const [reviewRailOpen, setReviewRailOpen] = useState(true);
 
   // ── Viewing an older version ───────────────────────────────────────────
   const [viewingVersion, setViewingVersion] = useState<number | null>(null);
@@ -74,6 +102,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
   const [vintageLoading, setVintageLoading] = useState(false);
 
   const contentRef = useRef<HTMLDivElement>(null);
+  const commentsRequestIdRef = useRef(0);
 
   const isCommentable = COMMENTABLE_TYPES.has(artifact.contentType);
   const eligibleForCommenting = isCommentable && !docIdentity;
@@ -82,28 +111,48 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
     setLoading(true);
     setError(null);
-    fetch(url)
+    fetch(url, { signal: controller.signal })
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         if (artifact.contentType === 'binary') return '';
         return r.text();
       })
       .then(text => { if (!cancelled) setContent(text); })
-      .catch(err => { if (!cancelled) setError((err as Error).message); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .catch(err => {
+        if (!cancelled) setError((err as Error).name === 'AbortError' ? 'Content request timed out' : (err as Error).message);
+      })
+      .finally(() => {
+        window.clearTimeout(timeout);
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, [url, artifact.contentType]);
+
+  useEffect(() => {
+    setSaved(artifact.saved ?? false);
+    setLibraryStateError(null);
+  }, [artifact.artifactId, artifact.saved]);
 
   // ── Check for document identity ──────────────────────────────────────
 
   useEffect(() => {
     if (!isCommentable) {
+      setDocIdentity(null);
       setIdentityLoading(false);
       return;
     }
     let cancelled = false;
+    // Never render the previous artifact's document identity while the next
+    // identity is loading.
+    setDocIdentity(null);
     setIdentityLoading(true);
     setIdentityError(null);
     documentsApi.getByArtifactId(artifact.artifactId)
@@ -129,30 +178,67 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
 
   // Close panels when artifact changes
   useEffect(() => {
+    commentsRequestIdRef.current += 1;
     setPanel(null);
     setSelectedAnchor(undefined);
     setShowCommentInput(false);
     setComments([]);
+    setCommentsError(null);
     setViewingVersion(null);
     setVintageContent(null);
   }, [artifact.artifactId]);
 
   const displayContent = vintageContent ?? docIdentity?.latestContent ?? content;
   const displayedVersionNumber = viewingVersion ?? docIdentity?.latestVersionNumber ?? null;
-  const isViewingLatestDocument = Boolean(docIdentity) && !viewingVersion;
+  const unresolvedCommentCount = useMemo(
+    () => comments.filter(comment => !comment.parentCommentId && comment.status === 'open').length,
+    [comments],
+  );
+  const commentsForHighlighting = useMemo(
+    () => comments.filter(comment => comment.status !== 'resolved'),
+    [comments],
+  );
 
   const refreshComments = useCallback(async () => {
+    const requestId = ++commentsRequestIdRef.current;
     if (!docIdentity) {
       setComments([]);
+      setCommentsLoading(false);
+      setCommentsError(null);
       return;
     }
+    setCommentsLoading(true);
+    setCommentsError(null);
     try {
       const data = await documentsApi.listComments(docIdentity.documentId, 'all');
-      setComments(data);
-    } catch {
-      setComments([]);
+      if (requestId === commentsRequestIdRef.current) setComments(data);
+    } catch (err) {
+      // Preserve the last known/optimistically-added comments when a refresh
+      // fails. A successful mutation must never disappear because a follow-up
+      // list request had a transient error.
+      if (requestId === commentsRequestIdRef.current) {
+        setCommentsError(err instanceof Error ? err.message : 'Comments could not be refreshed.');
+      }
+    } finally {
+      if (requestId === commentsRequestIdRef.current) setCommentsLoading(false);
     }
   }, [docIdentity]);
+
+  const applyCommentUpdates = useCallback((updates: DocumentCommentDoc[]) => {
+    if (updates.length === 0) return;
+    commentsRequestIdRef.current += 1;
+    setComments(current => {
+      const next = new Map(current.map(comment => [comment.commentId, comment]));
+      updates.forEach(comment => next.set(comment.commentId, comment));
+      return [...next.values()].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    });
+    setCommentsError(null);
+  }, []);
+
+  const handleCommentsChanged = useCallback(async (updates: DocumentCommentDoc[] = []) => {
+    applyCommentUpdates(updates);
+    await refreshComments();
+  }, [applyCommentUpdates, refreshComments]);
 
   useEffect(() => {
     refreshComments();
@@ -304,30 +390,216 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
     };
     setSelectedAnchor(anchor);
     setShowCommentInput(true);
+    if (presentation === 'tab') setReviewRailOpen(true);
   }
 
   // Content lines for anchor overlay
   const contentLines = useMemo(() => displayContent?.split('\n') ?? [], [displayContent]);
   const renderMarkdownLineAnchors = artifact.contentType === 'markdown' && Boolean(docIdentity);
   const artifactBodyClass = renderMarkdownLineAnchors
-    ? 'py-4 pr-4 pl-10 md:py-5 md:pr-5 md:pl-12'
-    : 'p-4 md:p-5';
+    ? 'artifact-viewer__reading py-4 pr-4 pl-10 md:py-5 md:pr-5 md:pl-12'
+    : 'artifact-viewer__reading p-4 md:p-5';
 
   const Icon = iconForType(artifact.contentType);
+  const documentTitle = artifact.filename
+    .replace(/\.(md|markdown|json|csv|txt|text)$/i, '')
+    .replace(/[-_]+/g, ' ');
+
+  function handleDocumentComment() {
+    if (!docIdentity) return;
+    setSelectedAnchor({
+      type: 'text_snippet',
+      snippet: documentTitle,
+      context: `Document-level feedback for ${documentTitle}`,
+    });
+    setShowCommentInput(true);
+    if (presentation === 'tab') setReviewRailOpen(true);
+  }
+
+  function handleTabCommentSubmitted(comment: DocumentCommentDoc) {
+    setShowCommentInput(false);
+    setSelectedAnchor(undefined);
+    applyCommentUpdates([comment]);
+    setReviewRailOpen(true);
+    void refreshComments();
+  }
+
+  function handleCommentCancel() {
+    setShowCommentInput(false);
+    setSelectedAnchor(undefined);
+  }
+
+  async function handleSaveToggle() {
+    if (savingDocument) return;
+    const nextSaved = !saved;
+    setSaved(nextSaved);
+    setSavingDocument(true);
+    setLibraryStateError(null);
+    try {
+      const updated = await artifactsApi.updateLibraryState(artifact.artifactId, { saved: nextSaved });
+      setSaved(updated.saved ?? false);
+    } catch (cause) {
+      setSaved(!nextSaved);
+      setLibraryStateError(cause instanceof Error ? cause.message : 'Document library state could not be updated.');
+    } finally {
+      setSavingDocument(false);
+    }
+  }
+
+  if (presentation === 'tab') {
+    return (
+      <div className={`document-tab-workspace ${reviewRailOpen ? 'with-review' : 'without-review'}`}>
+        <main className="document-tab-main">
+          {!hideTabStrip && <nav className="document-tab-strip" aria-label="Open content tabs">
+            <button type="button" className="document-tab-strip__base" onClick={onBaseTabSelect}>{baseTabLabel}</button>
+            {openTabs.map(tabArtifact => {
+              const tabTitle = tabArtifact.filename
+                .replace(/\.(md|markdown|json|csv|txt|text)$/i, '')
+                .replace(/[-_]+/g, ' ');
+              return (
+                <button
+                  type="button"
+                  key={tabArtifact.artifactId}
+                  className={`document-tab-strip__tab ${tabArtifact.artifactId === activeTabId ? 'on' : ''}`}
+                  onClick={() => onTabSelect?.(tabArtifact.artifactId)}
+                  title={tabTitle}
+                >
+                  <span>{tabTitle}</span>
+                  <i
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Close ${tabTitle}`}
+                    onClick={event => { event.stopPropagation(); onTabClose?.(tabArtifact.artifactId); }}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onTabClose?.(tabArtifact.artifactId);
+                      }
+                    }}
+                  >×</i>
+                </button>
+              );
+            })}
+            <span />
+          </nav>}
+
+          <div ref={contentRef} className="document-tab-scroll">
+            <article className="document-tab-document">
+              <header className="document-tab-document__header">
+                <span className="document-tab-document__glyph"><Icon /></span>
+                <div className="document-tab-document__heading">
+                  <div className="document-tab-document__title">{documentTitle}</div>
+                  <div className="document-tab-document__meta">
+                    {artifact.description || (artifact.contentType === 'markdown' ? 'document' : artifact.contentType)}
+                    {docIdentity && <> · v{displayedVersionNumber ?? docIdentity.latestVersionNumber}</>}
+                    <> · updated {formatRelativeTime(artifact.createdAt)}</>
+                    {artifact.createdByAgent && <> by {artifact.createdByAgent}</>}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className={`document-tab-save ${saved ? 'on' : ''}`}
+                  onClick={handleSaveToggle}
+                  disabled={savingDocument}
+                  aria-pressed={saved}
+                >
+                  <Bookmark />{savingDocument ? 'Saving…' : saved ? 'Saved' : 'Save'}
+                </button>
+                <button type="button" className="document-tab-action" onClick={handleCopy} disabled={!displayContent || artifact.contentType === 'binary'}><Copy />{copied ? 'Copied' : 'Copy'}</button>
+                <a className="document-tab-action" href={url} download={artifact.filename}><Download />Download</a>
+                <button type="button" className="document-tab-close" onClick={onClose} aria-label="Close document"><XIcon /></button>
+              </header>
+
+              {libraryStateError && <div className="document-tab-error">{libraryStateError}</div>}
+              {identityError && <div className="document-tab-error">{identityError}</div>}
+              {eligibleForCommenting && !creatingIdentity && (
+                <button type="button" onClick={handleEnableCommenting} className="document-tab-enable-comments"><MessageSquarePlus />Enable commenting</button>
+              )}
+              {eligibleForCommenting && creatingIdentity && <div className="document-tab-loading">Enabling commenting…</div>}
+              {viewingVersion && docIdentity && (
+                <div className="artifact-viewer__version-banner">
+                  <span>Viewing v{viewingVersion} · read-only</span>
+                  <button type="button" onClick={() => { setViewingVersion(null); setVintageContent(null); }}>Back to latest</button>
+                </div>
+              )}
+
+              <div className="document-tab-body" onMouseUp={handleTextSelect}>
+                {loading && <div className="document-tab-loading">Loading…</div>}
+                {identityLoading && !content && <div className="document-tab-loading">Checking comment eligibility…</div>}
+                {error && <div className="document-tab-error">Failed to load: {error}</div>}
+                {vintageLoading && <div className="document-tab-loading">Loading version…</div>}
+                {!loading && !error && displayContent !== null && (
+                  <>
+                    {artifact.contentType === 'markdown' && (
+                      renderMarkdownLineAnchors ? (
+                        <MarkdownWithCommentAnchors
+                          text={displayContent}
+                          comments={commentsForHighlighting}
+                          currentVersion={displayedVersionNumber ?? docIdentity?.latestVersionNumber ?? 0}
+                          onJumpToComment={() => setReviewRailOpen(true)}
+                        />
+                      ) : (
+                        <div className="prose prose-sm max-w-none">{renderMarkdown(displayContent) as React.ReactNode}</div>
+                      )
+                    )}
+                    {artifact.contentType === 'json' && <JsonViewer text={displayContent} />}
+                    {artifact.contentType === 'csv' && <CsvTable text={displayContent} />}
+                    {artifact.contentType === 'code' && <pre className="document-tab-code">{displayContent}</pre>}
+                    {artifact.contentType === 'text' && <pre className="document-tab-text">{displayContent}</pre>}
+                    {artifact.contentType === 'binary' && <BinaryPreview url={url} filename={artifact.filename} size={artifact.sizeBytes} />}
+                  </>
+                )}
+                {docIdentity && commentsForHighlighting.length > 0 && !renderMarkdownLineAnchors && (
+                  <CommentAnchorOverlay
+                    contentLines={contentLines}
+                    comments={commentsForHighlighting}
+                    currentVersion={docIdentity.latestVersionNumber}
+                    onJumpToComment={() => setReviewRailOpen(true)}
+                  />
+                )}
+              </div>
+
+              {docIdentity && <div className="document-tab-hint">Select text for a line comment, or use “Comment on document” for document-level feedback.</div>}
+            </article>
+          </div>
+        </main>
+
+        {reviewRailOpen && (
+          <DocumentReviewRail
+            documentId={docIdentity?.documentId}
+            documentTitle={documentTitle}
+            currentVersion={docIdentity?.latestVersionNumber ?? 1}
+            comments={comments}
+            loading={identityLoading || commentsLoading}
+            onClose={() => setReviewRailOpen(false)}
+            onCommentDocument={handleDocumentComment}
+            onJumpToAnchor={handleJumpToAnchor}
+            onCommentsChanged={handleCommentsChanged}
+            onViewVersion={handleViewVersion}
+            commentAnchor={showCommentInput ? selectedAnchor : undefined}
+            onCommentSubmitted={handleTabCommentSubmitted}
+            onCommentCancel={handleCommentCancel}
+          />
+        )}
+
+      </div>
+    );
+  }
 
   return (
-    <div className="flex h-full">
+    <div className="artifact-viewer flex h-full">
       {/* Viewer panel */}
-      <div className="flex h-full min-w-0 flex-1 flex-col bg-surface">
+      <div className="artifact-viewer__main flex h-full min-w-0 flex-1 flex-col bg-surface">
         {/* Header */}
-        <div className="shrink-0 border-b border-app bg-app-card px-4 py-3">
-          <div className="flex items-center gap-2.5 mb-1">
-            <Icon className={`w-4 h-4 shrink-0 ${colorForType(artifact.contentType)}`} />
+        <div className="artifact-viewer__header shrink-0 border-b border-app bg-app-card px-4 py-3">
+          <div className="artifact-viewer__header-row flex items-center gap-2.5">
+            <span className="artifact-viewer__glyph"><Icon className={`w-4 h-4 shrink-0 ${colorForType(artifact.contentType)}`} /></span>
             <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-mono text-theme-primary truncate">
-                {artifact.relativePath}
+              <div className="artifact-viewer__title text-[13px] text-theme-primary truncate">
+                {documentTitle}
               </div>
-              <div className="flex items-center gap-2 mt-0.5 text-[10px] font-mono text-theme-subtle">
+              <div className="artifact-viewer__meta flex items-center gap-2 mt-0.5 text-[10px] font-mono text-theme-subtle">
                 <span className="uppercase">{artifact.contentType}</span>
                 {artifact.language && (
                   <>
@@ -335,79 +607,56 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
                     <span>{artifact.language}</span>
                   </>
                 )}
+                {docIdentity && <><span>·</span><span>v{displayedVersionNumber ?? docIdentity.latestVersionNumber}</span></>}
                 <span>·</span>
-                <span>{formatSize(artifact.sizeBytes)}</span>
+                <span>updated {formatRelativeTime(artifact.createdAt)}</span>
                 {artifact.createdByAgent && (
                   <>
                     <span>·</span>
                     <span className="truncate">by {artifact.createdByAgent}</span>
                   </>
                 )}
-                {/* Document version badge */}
-                {docIdentity && (
-                  <>
-                    <span>·</span>
-                    <span className="text-accent-blue font-semibold">
-                      {isViewingLatestDocument ? 'Latest ' : ''}v{displayedVersionNumber ?? docIdentity.latestVersionNumber}
-                    </span>
-                    {docIdentity.unresolvedCommentCount > 0 && (
-                      <span className="text-accent-orange">
-                        {docIdentity.unresolvedCommentCount} open
-                      </span>
-                    )}
-                  </>
-                )}
-                {viewingVersion && docIdentity && (
-                  <>
-                    <span>·</span>
-                    <span className="text-accent-purple">Viewing v{viewingVersion}</span>
-                    <button
-                      type="button"
-                      onClick={() => { setViewingVersion(null); setVintageContent(null); }}
-                      className="text-[9px] font-mono text-accent-blue hover:underline"
-                    >
-                      Back to latest
-                    </button>
-                  </>
-                )}
               </div>
             </div>
-            <div className="shrink-0 flex items-center gap-1">
+            <div className="artifact-viewer__actions shrink-0 flex items-center gap-1">
               {/* Comment/version controls — only when identity exists */}
               {docIdentity && (
                 <>
                   <button
                     onClick={() => setPanel(p => p?.kind === 'comments' ? null : { kind: 'comments' })}
                     title="Toggle comments"
-                    className={`rounded-md p-1.5 transition-colors ${
+                    className={`artifact-viewer__action rounded-md p-1.5 transition-colors ${
                       panel?.kind === 'comments'
                         ? 'bg-accent-blue/15 text-accent-blue'
                         : 'text-theme-muted hover:bg-app-muted hover:text-theme-primary'
                     }`}
                   >
                     <MessageSquare className="w-3.5 h-3.5" />
+                    <span>Comments{unresolvedCommentCount > 0 ? ` (${unresolvedCommentCount})` : ''}</span>
                   </button>
                   <button
                     onClick={() => setPanel(p => p?.kind === 'versionHistory' ? null : { kind: 'versionHistory' })}
                     title="Version history"
-                    className={`rounded-md p-1.5 transition-colors ${
+                    className={`artifact-viewer__action rounded-md p-1.5 transition-colors ${
                       panel?.kind === 'versionHistory'
                         ? 'bg-accent-blue/15 text-accent-blue'
                         : 'text-theme-muted hover:bg-app-muted hover:text-theme-primary'
                     }`}
                   >
                     <History className="w-3.5 h-3.5" />
+                    <span>History</span>
                   </button>
                   <button
                     onClick={() => setPanel(p => p?.kind === 'timeline' ? null : { kind: 'timeline' })}
                     title="Timeline"
-                    className={`rounded-md p-1.5 transition-colors ${
+                    className={`artifact-viewer__action artifact-viewer__action--compact rounded-md p-1.5 transition-colors ${
                       panel?.kind === 'timeline'
                         ? 'bg-accent-blue/15 text-accent-blue'
                         : 'text-theme-muted hover:bg-app-muted hover:text-theme-primary'
                     }`}
                   >
                     <FileText className="w-3.5 h-3.5" />
+                    <span>Timeline</span>
                   </button>
                 </>
               )}
@@ -415,23 +664,25 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
                 onClick={handleCopy}
                 disabled={!displayContent || artifact.contentType === 'binary'}
                 title="Copy content"
-                className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:opacity-30"
+                className="artifact-viewer__action rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:opacity-30"
               >
                 <Copy className="w-3.5 h-3.5" />
+                <span>{copied ? 'Copied' : 'Copy'}</span>
               </button>
               <a
                 href={url}
                 download={artifact.filename}
                 title="Download"
-                className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
+                className="artifact-viewer__action rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
               >
                 <Download className="w-3.5 h-3.5" />
+                <span>Download</span>
               </a>
               {onDelete && (
                 <button
                   onClick={onDelete}
                   title="Delete artifact"
-                  className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-accent-red/10 hover:text-accent-red"
+                  className="artifact-viewer__icon-action rounded-md p-1.5 text-theme-muted transition-colors hover:bg-accent-red/10 hover:text-accent-red"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
@@ -440,7 +691,7 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
                 <button
                   onClick={onClose}
                   title="Close viewer"
-                  className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
+                  className="artifact-viewer__icon-action rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary"
                 >
                   <XIcon className="w-3.5 h-3.5" />
                 </button>
@@ -452,10 +703,6 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
               {artifact.description}
             </div>
           )}
-          {copied && (
-            <div className="text-[10px] font-mono text-accent-green mt-1">Copied ✓</div>
-          )}
-
           {/* Identity error / Enable Commenting */}
           {identityError && (
             <div className="text-[10px] text-accent-red font-mono mt-1">{identityError}</div>
@@ -480,28 +727,34 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
         {/* Body */}
         <div
           ref={contentRef}
-          className="min-h-0 flex-1 overflow-auto relative"
+          className="artifact-viewer__body min-h-0 flex-1 overflow-auto relative"
           onMouseUp={handleTextSelect}
         >
-          {loading && (
+          {loading && displayContent === null && (
             <div className="p-6 text-xs text-theme-muted font-mono">Loading…</div>
           )}
           {identityLoading && !content && (
             <div className="p-6 text-xs text-theme-muted font-mono">Checking comment eligibility…</div>
           )}
-          {error && (
+          {error && displayContent === null && (
             <div className="p-6 text-xs text-accent-red font-mono">Failed to load: {error}</div>
           )}
           {vintageLoading && (
             <div className="p-6 text-xs text-theme-muted font-mono">Loading version…</div>
           )}
-          {!loading && !error && displayContent !== null && (
+          {viewingVersion && docIdentity && (
+            <div className="artifact-viewer__version-banner">
+              <span>Viewing v{viewingVersion} · read-only</span>
+              <button type="button" onClick={() => { setViewingVersion(null); setVintageContent(null); }}>Back to latest</button>
+            </div>
+          )}
+          {displayContent !== null && (
             <div className={artifactBodyClass}>
               {artifact.contentType === 'markdown' && (
                 renderMarkdownLineAnchors ? (
                   <MarkdownWithCommentAnchors
                     text={displayContent}
-                    comments={comments}
+                    comments={commentsForHighlighting}
                     currentVersion={displayedVersionNumber ?? docIdentity?.latestVersionNumber ?? 0}
                     onJumpToComment={() => setPanel({ kind: 'comments' })}
                   />
@@ -532,30 +785,33 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
               )}
             </div>
           )}
-          {docIdentity && comments.length > 0 && !renderMarkdownLineAnchors && (
+          {docIdentity && commentsForHighlighting.length > 0 && !renderMarkdownLineAnchors && (
             <CommentAnchorOverlay
               contentLines={contentLines}
-              comments={comments}
+              comments={commentsForHighlighting}
               currentVersion={docIdentity.latestVersionNumber}
               onJumpToComment={() => setPanel({ kind: 'comments' })}
             />
           )}
         </div>
 
+        {docIdentity && (
+          <div className="artifact-viewer__hint">
+            Select text for a line comment, or open Comments for document-level feedback.
+          </div>
+        )}
+
         {/* Inline comment input (text selection mode) */}
         {showCommentInput && docIdentity && selectedAnchor && (
           <CommentInput
             documentId={docIdentity.documentId}
             anchor={selectedAnchor}
-            onSubmitted={() => {
+            onSubmitted={(comment) => {
               setShowCommentInput(false);
               setSelectedAnchor(undefined);
-              refreshComments();
-              // Refresh comment list in panel if open
-              if (panel?.kind === 'comments') {
-                setPanel(null);
-                setTimeout(() => setPanel({ kind: 'comments' }), 50);
-              }
+              applyCommentUpdates([comment]);
+              setPanel({ kind: 'comments' });
+              void refreshComments();
             }}
             onCancel={() => {
               setShowCommentInput(false);
@@ -570,9 +826,12 @@ export default function ArtifactViewer({ artifact, onClose, onDelete }: Artifact
         <CommentPanel
           documentId={docIdentity.documentId}
           currentVersion={docIdentity.latestVersionNumber}
+          comments={comments}
+          loading={commentsLoading}
+          error={commentsError}
           onClose={closePanel}
           onJumpToAnchor={handleJumpToAnchor}
-          onCommentsChanged={refreshComments}
+          onCommentsChanged={handleCommentsChanged}
         />
       )}
       {panel?.kind === 'versionHistory' && docIdentity && (
@@ -995,4 +1254,16 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatRelativeTime(value: string): string {
+  const elapsed = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(elapsed) || elapsed < 60_000) return 'just now';
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }

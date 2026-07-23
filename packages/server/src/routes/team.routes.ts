@@ -221,7 +221,14 @@ export function teamRoutes(db: Db): Router {
         color: '#6366f1',
         provider: defaults.provider,
         model: leadSpec.model ?? defaults.model,
-        reasoningEffort: (leadSpec.reasoningEffort ?? 'high') as 'off' | 'low' | 'medium' | 'high' | 'max',
+        reasoningEffort: (leadSpec.reasoningEffort ?? 'high') as
+          | 'off'
+          | 'low'
+          | 'medium'
+          | 'high'
+          | 'xhigh'
+          | 'max'
+          | 'ultra',
         planMode: false,
         tools: [],
         capabilities: ['coordination', 'spawn-orchestration'],

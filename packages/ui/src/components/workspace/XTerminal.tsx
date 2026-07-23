@@ -4,12 +4,15 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import { openExternalUrl } from '../../lib/workspace-preview';
+import { terminalWebSocketUrl, type TerminalSourceType } from '../../lib/terminal-routing';
 import '@xterm/xterm/css/xterm.css';
+
+export type { TerminalSourceType } from '../../lib/terminal-routing';
 
 interface XTerminalProps {
   workspaceId: string;
   terminalId?: string;
-  sourceType?: 'workspace' | 'repo';
+  sourceType?: TerminalSourceType;
   className?: string;
   /** Command to auto-run after terminal connects */
   initialCommand?: string;
@@ -28,11 +31,11 @@ const MAX_TERMINAL_BUFFER_CHARS = 500_000;
 const terminalBuffers = new Map<string, string>();
 const activeTerminalInputs = new Map<string, (data: string) => boolean>();
 
-function terminalBufferKey(sourceType: 'workspace' | 'repo', sourceId: string, terminalId: string): string {
+function terminalBufferKey(sourceType: TerminalSourceType, sourceId: string, terminalId: string): string {
   return `allen-terminal-buffer:${sourceType}:${sourceId}:${terminalId}`;
 }
 
-export function sendTerminalInput(sourceType: 'workspace' | 'repo', sourceId: string, terminalId: string, data: string): boolean {
+export function sendTerminalInput(sourceType: TerminalSourceType, sourceId: string, terminalId: string, data: string): boolean {
   return activeTerminalInputs.get(terminalBufferKey(sourceType, sourceId, terminalId))?.(data) ?? false;
 }
 
@@ -63,20 +66,6 @@ function writeTerminalBuffer(key: string, value: string): void {
 function appendTerminalBuffer(key: string, value: string): void {
   if (!value) return;
   writeTerminalBuffer(key, `${readTerminalBuffer(key)}${value}`);
-}
-
-function terminalWebSocketUrl(sourceType: 'workspace' | 'repo', sourceId: string, terminalId: string, runtimeInfo: RuntimeInfo | null): string {
-  const sourceSegment = sourceType === 'repo' ? 'repos' : 'workspaces';
-  const path = `/ws/${sourceSegment}/${sourceId}/terminal/${terminalId}`;
-  if (runtimeInfo?.terminalWsUrl) {
-    try {
-      return new URL(path, runtimeInfo.terminalWsUrl).toString();
-    } catch {
-      // Fall through to browser-origin construction.
-    }
-  }
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.host}${path}`;
 }
 
 function writeTerminalPayload(term: XTerm, payload: unknown, bufferKey: string): void {

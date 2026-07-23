@@ -1,0 +1,163 @@
+---
+title: 'Agents Reference'
+description: 'Reference for Allen agent identity, runtime settings, tools, teams, and direct execution.'
+---
+
+:::info Media placeholders
+Before publishing, capture **Teams & Agents**, the create/edit dialog, provider and model settings, **System Tools**, **MCP Access**, team assignment, and a direct agent execution. Redact private instructions and tool arguments.
+:::
+
+Agents are configured AI workers. Each agent has a stable role, instructions, runtime defaults, and an explicit tool boundary. Teams make ownership and delegation paths visible.
+
+## User-visible surfaces
+
+| Surface | Purpose |
+| --- | --- |
+| **Teams & Agents** | Browse teams, leads, members, and agent relationships. |
+| Create/edit agent | Configure identity, runtime, appearance, tools, MCP access, and instructions. |
+| Agent assignment actions | Move agents between teams or update a team lead. |
+| Direct run | Give one agent a prompt and open its live execution. |
+| Chat | Mention or select an agent, or let Allen route to an appropriate specialist. |
+| Workflows | Reference an agent by name from an agent node. |
+| Execution detail | Inspect output, logs, traces, tools, context usage, cost, children, and artifacts. |
+
+## Identity and team fields
+
+The agent dialog exposes:
+
+| Setting | Behavior |
+| --- | --- |
+| **Agent Type** | **Team Agent** coordinates and spawns agents; **Technical Agent** executes focused tasks. |
+| **Team** | Required during normal UI creation. Team membership is managed separately from general agent updates. |
+| **Name** | Stable slug used by workflows and routing. It cannot be changed in the edit dialog. |
+| **Display Name** | Human-readable label shown in the UI. |
+| **Icon** and **Color** | Visual identity only. |
+| **Agent Instructions** | System instructions that define role, process, safety rules, and expected output. |
+
+Use a narrow role name and instructions that say what evidence to inspect, what the agent may change, what it must not change, which validation is required, and what output to save.
+
+## Runtime settings
+
+| Setting | Behavior |
+| --- | --- |
+| **Provider** | Runtime provider used when no higher-priority override applies. |
+| **Model** | Exact default model identifier for that provider. |
+| **Reasoning** | `off`, `low`, `medium`, `high`, or `max`. |
+| **Plan Mode** | Claude-only planning mode. |
+
+`max` reasoning is accepted only for a Claude Opus model. Allen validates incompatible combinations before saving or spawning.
+
+At spawn time, Allen resolves each runtime field independently in this order:
+
+1. workflow-node override;
+2. chat-session override;
+3. agent default.
+
+An override affects that execution path. It does not rewrite the agent record.
+
+## Tools and MCP access
+
+Agent capabilities come from three related controls:
+
+- **System Tools** selects host operations available to the agent runtime.
+- **MCP Access** selects external MCP servers.
+- Per-server tool checkboxes disable individual Allen or external MCP tools.
+
+Allen's built-in MCP tool group is available by default, subject to disabled-tool settings. External MCP servers are opt-in for an agent. The server must also be configured and enabled under **Settings → MCP Servers**.
+
+Treat tool access as authority, not convenience. A model can only use a tool when the runtime, agent, workflow node, and server configuration all allow it.
+
+## Teams and leads
+
+Allen currently seeds these team boundaries:
+
+| Team | Responsibility |
+| --- | --- |
+| Executive | Strategy, coordination, and cross-team decisions. |
+| Product | Requirements, acceptance criteria, and spec validation. |
+| Engineering | Backend, frontend, infrastructure, security, documentation, and shipping. |
+| Quality | Test planning, test writing, and build/lint/test validation. |
+| Design | UX direction, design-system work, prototypes, and feasibility review. |
+| Meta — Builders | Teams, agents, workflows, skills, and organization extensions. |
+| Unassigned | Holding area for imported or newly created agents awaiting assignment. |
+
+A team has one lead of record. Team actions enforce lead uniqueness and validate cross-team changes. Built-in agents cannot be deleted through the normal agent API. A user-created lead also cannot be deleted while it still leads an active non-built-in team.
+
+The live organization is the source of truth. Teams and agents can be added, renamed, moved, or retired, so inspect **Teams & Agents** before routing work by name.
+
+## Create, edit, and run behavior
+
+### Create
+
+The normal UI creation flow requires a name, team, and non-empty instructions. It stores the agent as user-created and then applies the requested team assignment.
+
+If a user-created agent with the same name was soft-deleted, creation can restore that record instead of creating a duplicate.
+
+### Edit
+
+General updates can change display name, instructions, runtime, appearance, tools, and MCP settings. Protected identity, ownership, built-in, team, timestamp, and import-source fields are not accepted through the general update route.
+
+Edits apply to future runs. An execution keeps the settings and workflow snapshot it started with.
+
+### Direct run
+
+A direct run requires a non-empty prompt. It uses the same spawned-agent execution path as delegation and returns an execution that the UI can open and monitor. Optional repository context or a previous session can be supplied by supported clients.
+
+Direct run does not automatically create an isolated workspace. For repo-writing work, establish the intended Allen workspace and change boundaries before the agent starts.
+
+## Import, resync, and export
+
+Allen supports two portability paths:
+
+- Portable JSON export/import moves selected agents and their related teams without database IDs, timestamps, or source-file metadata.
+- Repository import scans registered repositories for Claude-style agent files, previews the actions, and stores the source repository, file, and SHA for later resync.
+
+Imported agents are user-managed, not built-in. Resync rereads the recorded source file; it is available only for agents created through the repository import path.
+
+Review imported instructions and tool access before running the agent. Do not assume a trusted repository makes every imported prompt safe.
+
+## Bulk operations
+
+The agent API and UI support bulk team and model actions.
+
+- Bulk team assignment moves selected agents as members and can add them to the team lead's spawn targets.
+- Bulk model update applies provider/model settings to compatible agents. Incompatible agents are skipped unless the operator explicitly allows removable settings such as Claude-only plan mode or `max` reasoning to be cleared.
+
+Review the returned updated and skipped lists rather than assuming the entire selection changed.
+
+## API summary
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /api/agents` | List active agents. |
+| `POST /api/agents` | Create or restore a user agent. |
+| `PUT /api/agents/:name` | Update editable agent settings. |
+| `DELETE /api/agents/:name` | Soft-delete an eligible user agent. |
+| `POST /api/agents/:name/run` | Start a direct agent execution. |
+| `PATCH /api/agents/:name/team` | Change team membership or lead role. |
+| `POST /api/agents/bulk-team` | Assign multiple agents to a team. |
+| `POST /api/agents/bulk-model` | Change provider/model for multiple agents. |
+| `POST /api/agents/export` / `import/json` | Move portable agent bundles. |
+| `POST /api/agents/import/preview` / `import` | Preview and import repository agent files. |
+| `POST /api/agents/:name/resync` | Refresh an imported agent from its source file. |
+
+## Safety checklist
+
+Before allowing an agent to perform state-changing work:
+
+1. Confirm its role matches the task.
+2. Review instructions for scope, prohibitions, validation, and output.
+3. Select the least-capable system tools and MCP servers that can complete the task.
+4. Use least-privilege credentials.
+5. Provide an Allen workspace for repository writes.
+6. Put human confirmation before commits, pushes, pull requests, tickets, messages, deployments, or destructive actions.
+7. Require reviewable artifacts and independent validation evidence.
+8. Keep private prompts, secrets, customer data, and capability links out of screenshots and exported bundles.
+
+## Related pages
+
+- [Create an Agent](/guides/create-an-agent)
+- [Agents concept](/concepts/agents)
+- [Teams concept](/concepts/teams)
+- [Models reference](/reference/models)
+- [MCP reference](/reference/mcp)

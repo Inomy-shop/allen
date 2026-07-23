@@ -454,6 +454,22 @@ describe('DocumentService', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
+    await db.collection('document_comments').insertOne({
+      commentId: 'cmt-resolve-reply',
+      parentCommentId: 'cmt-resolve',
+      documentId: 'doc-resolve-ok',
+      threadId: 'thread-resolve',
+      authorType: 'human',
+      authorUserId: 'user-2',
+      body: 'Reply in the same thread',
+      status: 'open',
+      anchor: {
+        type: 'line', lineStart: 1, lineEnd: 1, context: 'content', anchoredAtVersion: 1,
+      },
+      reopenCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
     const resolved = await service.resolveComment('doc-resolve-ok', 'cmt-resolve', 'Fixed in version 2', {
       userId: 'user-1',
@@ -461,6 +477,50 @@ describe('DocumentService', () => {
     expect(resolved.status).toBe('resolved');
     expect(resolved.resolution?.resolutionNote).toBe('Fixed in version 2');
     expect(resolved.resolution?.resolvedAtVersion).toBe(1);
+    const reply = await db.collection('document_comments').findOne({ commentId: 'cmt-resolve-reply' });
+    expect(reply?.status).toBe('resolved');
+  });
+
+  it('resolveAllComments resolves every open thread and leaves stale threads unchanged', async () => {
+    await db.collection('document_identities').insertOne({
+      documentId: 'doc-resolve-all',
+      sourceArtifactId: 'art-resolve-all',
+      versions: [{
+        versionNumber: 1,
+        content: 'content',
+        contentHash: 'hash',
+        createdByOriginType: 'system',
+        createdAt: new Date(),
+      }],
+      latestVersionNumber: 1,
+      contentType: 'markdown',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const base = {
+      documentId: 'doc-resolve-all',
+      authorType: 'human',
+      body: 'Comment',
+      anchor: { type: 'line', lineStart: 1, lineEnd: 1, context: 'content', anchoredAtVersion: 1 },
+      reopenCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    await db.collection('document_comments').insertMany([
+      { ...base, commentId: 'open-1', threadId: 'thread-open-1', status: 'open' },
+      { ...base, commentId: 'reply-1', parentCommentId: 'open-1', threadId: 'thread-open-1', status: 'open' },
+      { ...base, commentId: 'open-2', threadId: 'thread-open-2', status: 'open' },
+      { ...base, commentId: 'stale-1', threadId: 'thread-stale-1', status: 'stale' },
+      { ...base, commentId: 'resolved-1', threadId: 'thread-resolved-1', status: 'resolved' },
+    ]);
+
+    const resolved = await service.resolveAllComments('doc-resolve-all', 'Handled together', { userId: 'user-1' });
+
+    expect(resolved.map(comment => comment.commentId)).toEqual(['open-1', 'open-2']);
+    expect(resolved.every(comment => comment.status === 'resolved')).toBe(true);
+    expect(resolved.every(comment => comment.resolution?.resolutionNote === 'Handled together')).toBe(true);
+    expect((await db.collection('document_comments').findOne({ commentId: 'reply-1' }))?.status).toBe('resolved');
+    expect((await db.collection('document_comments').findOne({ commentId: 'stale-1' }))?.status).toBe('stale');
   });
 
   // ── compareVersions diff ──

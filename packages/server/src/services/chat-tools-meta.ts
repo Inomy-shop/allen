@@ -526,7 +526,7 @@ const updateAgentTool: ChatTool = {
       provider: { type: 'string', enum: ['claude', 'codex'] },
       icon: { type: 'string' },
       color: { type: 'string' },
-      reasoningEffort: { type: 'string', enum: ['off', 'low', 'medium', 'high', 'max'] },
+      reasoningEffort: { type: 'string', enum: ['off', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
       planMode: { type: 'boolean' },
     },
     required: ['name'],

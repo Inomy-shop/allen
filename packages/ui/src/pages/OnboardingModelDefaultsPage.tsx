@@ -9,6 +9,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import Select from '../components/common/Select';
+import ProviderIcon, { providerIconColor } from '../components/common/ProviderIcon';
 import { OnboardingShell } from '../components/onboarding/OnboardingShell';
 import { useOnboardingGate } from '../hooks/useOnboardingGate';
 import { system } from '../services/api';
@@ -154,6 +155,7 @@ export default function OnboardingModelDefaultsPage() {
         ? 'Ready for chat and inbuilt agent defaults'
         : 'Disabled until Codex CLI and auth pass health',
       disabled: !providerState.codexReady,
+      icon: <ProviderIcon provider="codex" className={`h-4 w-4 ${providerIconColor('codex')}`} />,
     },
     {
       label: getModelDisplay('claude').providerLabel,
@@ -162,12 +164,14 @@ export default function OnboardingModelDefaultsPage() {
         ? 'Ready for chat and inbuilt agent defaults'
         : 'Disabled until Claude CLI and auth pass health',
       disabled: !providerState.claudeReady,
+      icon: <ProviderIcon provider="claude" className={`h-4 w-4 ${providerIconColor('claude')}`} />,
     },
     ...API_PROVIDER_OPTIONS.map(option => ({
       label: option.label,
       value: option.value,
       sublabel: `Requires ${option.apiKey} to be configured in Settings > Secrets`,
       disabled: false,
+      icon: <ProviderIcon provider={option.value} className={`h-4 w-4 ${providerIconColor(option.value)}`} />,
     })),
   ];
   const agentProviderOptions = [
@@ -190,15 +194,33 @@ export default function OnboardingModelDefaultsPage() {
   const hasRegistryModels = registryModelOptions.length > 0;
   // Registry only — while it loads the dropdown is empty (REQ-005).
   const modelOptions = hasRegistryModels
-    ? [...registryModelOptions.map((m) => ({ label: m.label, value: m.value, sublabel: MODEL_SUBLABELS[m.value] ?? '' })), { label: 'Other…', value: '__other__' }]
+    ? [
+        ...registryModelOptions.map((m) => ({
+          label: m.label,
+          value: m.value,
+          sublabel: MODEL_SUBLABELS[m.value] ?? '',
+          icon: <ProviderIcon provider={agentProvider} className={`h-4 w-4 ${providerIconColor(agentProvider)}`} />,
+        })),
+        { label: 'Other…', value: '__other__' },
+      ]
     : [];
   const apiSuggestions = apiAgentProviderOption
-    ? registryModelOptions.map((m) => ({ label: m.label, value: m.value, sublabel: MODEL_SUBLABELS[m.value] ?? '' }))
+    ? registryModelOptions.map((m) => ({
+        label: m.label,
+        value: m.value,
+        sublabel: MODEL_SUBLABELS[m.value] ?? '',
+        icon: <ProviderIcon provider={agentProvider} className={`h-4 w-4 ${providerIconColor(agentProvider)}`} />,
+      }))
     : [];
   const apiModelOptions = [
     ...apiSuggestions,
     ...(apiAgentProviderOption && agentModel && !apiSuggestions.some(option => option.value === agentModel)
-      ? [{ label: agentModel, value: agentModel, sublabel: 'Custom model ID' }]
+      ? [{
+          label: agentModel,
+          value: agentModel,
+          sublabel: 'Custom model ID',
+          icon: <ProviderIcon provider={agentProvider} className={`h-4 w-4 ${providerIconColor(agentProvider)}`} />,
+        }]
       : []),
   ];
   const canSave = !loading
@@ -317,8 +339,9 @@ export default function OnboardingModelDefaultsPage() {
             <div className="grid grid-cols-3 gap-2">
               <div className={`rounded-md border px-3 py-2 ${providerState.codexReady ? 'border-accent-green/25 bg-accent-green/10' : 'border-accent-yellow/25 bg-accent-yellow/10'}`}>
                 <div className="flex items-center gap-2 text-[12px] font-semibold text-theme-primary">
-                  {providerState.codexReady ? <CheckCircle2 className="h-3.5 w-3.5 text-accent-green" /> : <AlertTriangle className="h-3.5 w-3.5 text-accent-yellow" />}
+                  <ProviderIcon provider="codex" className={`h-4 w-4 ${providerIconColor('codex')}`} />
                   Codex
+                  {providerState.codexReady ? <CheckCircle2 className="ml-auto h-3.5 w-3.5 text-accent-green" /> : <AlertTriangle className="ml-auto h-3.5 w-3.5 text-accent-yellow" />}
                 </div>
                 <div className="mt-1 font-mono text-[10.5px] text-theme-muted">
                   {providerState.codexReady ? 'cli + auth ready' : 'run codex login, then recheck health'}
@@ -326,8 +349,9 @@ export default function OnboardingModelDefaultsPage() {
               </div>
               <div className={`rounded-md border px-3 py-2 ${providerState.claudeReady ? 'border-accent-green/25 bg-accent-green/10' : 'border-accent-yellow/25 bg-accent-yellow/10'}`}>
                 <div className="flex items-center gap-2 text-[12px] font-semibold text-theme-primary">
-                  {providerState.claudeReady ? <CheckCircle2 className="h-3.5 w-3.5 text-accent-green" /> : <AlertTriangle className="h-3.5 w-3.5 text-accent-yellow" />}
+                  <ProviderIcon provider="claude" className={`h-4 w-4 ${providerIconColor('claude')}`} />
                   Claude
+                  {providerState.claudeReady ? <CheckCircle2 className="ml-auto h-3.5 w-3.5 text-accent-green" /> : <AlertTriangle className="ml-auto h-3.5 w-3.5 text-accent-yellow" />}
                 </div>
                 <div className="mt-1 font-mono text-[10.5px] text-theme-muted">
                   {providerState.claudeReady ? 'cli + auth ready' : 'run claude login, then recheck health'}
@@ -336,7 +360,7 @@ export default function OnboardingModelDefaultsPage() {
               {API_PROVIDER_OPTIONS.map((option) => (
                 <div key={option.value} className="rounded-md border border-accent-blue/25 bg-accent-blue/10 px-3 py-2">
                   <div className="flex items-center gap-2 text-[12px] font-semibold text-theme-primary">
-                    <Circle className="h-3.5 w-3.5 text-accent-blue" />
+                    <ProviderIcon provider={option.value} className={`h-4 w-4 ${providerIconColor(option.value)}`} />
                     {option.label}
                   </div>
                   <div className="mt-1 font-mono text-[10.5px] text-theme-muted">

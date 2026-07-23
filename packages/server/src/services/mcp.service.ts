@@ -181,6 +181,15 @@ export const MCP_PRESETS: McpPreset[] = [
     docsUrl: 'https://github.com/modelcontextprotocol/servers-archived/tree/main/src/github',
   },
   {
+    name: 'playwright',
+    description: 'Playwright — browser automation, accessibility snapshots, screenshots, console/network inspection',
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', '@playwright/mcp@latest', '--headless', '--isolated'],
+    envKeys: [],
+    docsUrl: 'https://playwright.dev/mcp/installation',
+  },
+  {
     name: 'xapi',
     description: 'X API — search posts, look up users, bookmarks, trends, news, and Articles',
     type: 'stdio',

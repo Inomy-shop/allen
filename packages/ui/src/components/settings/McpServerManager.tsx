@@ -757,7 +757,7 @@ function EditCustomServerForm({
             <select
               value={type}
               onChange={(event) => setType(event.target.value as McpServer['type'])}
-              className="h-9 w-full rounded-md border border-app bg-app-card px-2.5 text-sm text-theme-primary outline-none transition-colors focus:border-accent-blue/60"
+              className="select-native h-9 w-full rounded-md border border-app bg-app-card px-2.5 text-sm text-theme-primary outline-none transition-colors focus:border-accent-blue/60"
             >
               <option value="stdio">stdio</option>
               <option value="http">http</option>
@@ -1023,7 +1023,7 @@ const CATEGORY_STYLES: Record<PresetCategory, string> = {
 
 function presetCategory(preset: McpPreset): PresetCategory {
   if (preset.name.startsWith('google-')) return 'Google';
-  if (['github', 'git'].includes(preset.name)) return 'Development';
+  if (['github', 'git', 'playwright'].includes(preset.name)) return 'Development';
   if (preset.name === 'figma') return 'Design';
   if (['postgres', 'mongodb', 'mysql'].includes(preset.name)) return 'Data';
   if (['filesystem', 'memory'].includes(preset.name)) return 'Local';
@@ -2139,7 +2139,7 @@ export function McpPresetConnectModal({
 
 // ── Main ────────────────────────────────────────────────────────────────────
 
-export default function McpServerManager() {
+export default function McpServerManager({ compact = false }: { compact?: boolean }) {
   const isDesktop = typeof window !== 'undefined' && Boolean(window.allenDesktop);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2156,7 +2156,7 @@ export default function McpServerManager() {
   useEffect(() => { refresh(); }, []);
 
   return (
-    <div className="mcp-settings-panel">
+    <div className={`mcp-settings-panel ${compact ? 'mcp-settings-panel--compact' : ''}`}>
       <div className="mcp-panel-head border-b border-app pb-4">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">

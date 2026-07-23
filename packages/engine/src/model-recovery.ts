@@ -62,7 +62,7 @@ export interface NodeModelOverride {
   nodeName: string;
   provider: string;
   model: string;
-  reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max';
+  reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
   /** Which recovery attempt this override corresponds to (1-based). */
   attempt: number;
   /** ISO timestamp when the override was selected. */

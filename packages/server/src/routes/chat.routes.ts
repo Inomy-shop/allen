@@ -296,7 +296,10 @@ export function chatRoutes(db: Db): Router {
       const filter = ownerParam === undefined
         ? undefined
         : { ownerUserId: ownerParam === 'none' ? null : ownerParam };
-      const sessions = await chatService.listSessions(filter);
+      const sessions = await chatService.listSessions({
+        ...(filter ?? {}),
+        includeStudio: req.query.includeStudio === 'true',
+      });
       res.json(sessions);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -663,18 +666,27 @@ export function chatRoutes(db: Db): Router {
   });
 
   // PATCH /api/chat/sessions/:id — Update session
-  // Accepts: title, status, provider, model, agentOverrides
+  // Accepts: title, status, provider, model, agentOverrides, teamClassification
   router.patch('/sessions/:id', async (req: Request, res: Response) => {
     try {
       const id = param(req, 'id');
-      const { title, status, provider, model, agentOverrides } = req.body ?? {};
-      const session = await chatService.updateSession(id, { title, status, provider, model, agentOverrides });
+      const { title, status, provider, model, agentOverrides, teamClassification } = req.body ?? {};
+      const session = await chatService.updateSession(id, {
+        title,
+        status,
+        provider,
+        model,
+        agentOverrides,
+        teamClassification,
+      });
       if (!session) return res.status(404).json({ error: 'Session not found' });
       res.json(session);
     } catch (err: unknown) {
       const status = typeof (err as { status?: unknown }).status === 'number'
         ? (err as { status: number }).status
-        : 500;
+        : typeof (err as { statusCode?: unknown }).statusCode === 'number'
+          ? (err as { statusCode: number }).statusCode
+          : 500;
       const code = typeof (err as { code?: unknown }).code === 'string'
         ? (err as { code: string }).code
         : undefined;

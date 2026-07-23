@@ -1,0 +1,190 @@
+---
+title: 'MCP Reference'
+description: 'Connect Allen to external tools with presets or repository-hosted MCP servers.'
+---
+
+:::info Media placeholders
+Before publishing, capture **Settings → MCP Servers**, the Preset and Repository setup paths, credential-key mapping, connection-test results, **Reinstall dependencies**, and an agent's **MCP Access** controls. Never show credential values or production data.
+:::
+
+Model Context Protocol (MCP) servers extend Allen with external tools. Depending on the server and its credentials, those tools may read data, change external systems, query databases, or access local files.
+
+MCP health and agent permission are separate: a server must be configured and enabled, and the agent or workflow node must also be allowed to use it.
+
+## Built-in Allen tools versus external servers
+
+Allen always presents its built-in MCP tool group to agent configuration, subject to per-tool exclusions. It also supports external MCP servers configured under **Settings → MCP Servers**.
+
+In an agent or workflow node:
+
+- external servers are selected explicitly;
+- unchecked tools are stored as disabled for that server;
+- node-level MCP settings can override the agent for that workflow step.
+
+Give access only to the servers and tools required for the task.
+
+## Guided setup paths
+
+The current **Add MCP server** dialog has two paths.
+
+### Preset
+
+A preset supplies Allen-managed connection metadata such as command, arguments, URL, and the credential keys it expects. The catalog currently includes Google Workspace variants, Linear, GitHub, X API, Jira, Figma, Postgres, MongoDB, MySQL, Slack, PostHog, and Notion.
+
+To connect a preset:
+
+1. Open **Settings → MCP Servers**.
+2. Select **Add MCP server → Preset**.
+3. Choose the service.
+4. Review its purpose, connection type, command or URL, and documentation.
+5. Enter only the requested credential values.
+6. Select **Connect** and review the test result.
+
+Preset identity and connection metadata remain tied to the preset. Editing a preset-backed record updates its allowed credential values rather than turning it into an arbitrary command.
+
+### Repository
+
+A repository-hosted MCP keeps its entry file with project code.
+
+1. Register the repository in Allen.
+2. Select **Add MCP server → Repository**.
+3. Choose the repository and a discovered entry file.
+4. Review the detected language, command or Python settings, working directory, install path, and required credential keys.
+5. Connect and test the server.
+
+Allen checks that the repository belongs to the current user before discovery or creation.
+
+The scanner recognizes Node MCP conventions such as `*.mcp.ts`, `*.mcp.js`, files under `.claude/mcp/`, and imports from `@modelcontextprotocol/sdk`. It also recognizes Python files under `.claude/mcp/` or files containing common MCP server markers. Generated and dependency directories such as `node_modules`, `.git`, `.venv`, and `__pycache__` are skipped.
+
+## Other record types
+
+The API and existing records can also represent:
+
+- local `stdio` commands;
+- remote `http` or `sse` URLs with headers;
+- legacy uploaded bundles retained for compatibility.
+
+Prefer the guided Preset or Repository flow for new user-managed connections. Legacy bundle uploads remain supported for older deployments but are not the recommended setup path.
+
+## Credential mapping
+
+Allen uses declared credential keys instead of forwarding its full runtime environment.
+
+For an MCP that declares `GITHUB_PERSONAL_ACCESS_TOKEN`:
+
+1. Allen reads `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` from runtime configuration or its secret provider.
+2. Only that mapped value is supplied to the MCP.
+3. The MCP receives the bare key `GITHUB_PERSONAL_ACCESS_TOKEN`.
+
+Argument-style keys use the same lookup and append the value to the server arguments instead of its environment.
+
+Operational rules:
+
+- declare only the keys the server requires;
+- use the credential fields in the UI when available;
+- never place a secret value in the server name, description, command, args, or artifact;
+- use read-only database credentials unless write access is explicitly required;
+- rotate a credential after it appears in logs, screenshots, shell history, or support material.
+
+In desktop mode, supported credential values are saved through the runtime secret store. In web/server mode they can be supplied through matching runtime environment configuration.
+
+## Python repository servers
+
+For a detected Python entry without a manual command override, Allen can create a dedicated virtual environment for that MCP server.
+
+- The bootstrap interpreter defaults to `python3` unless changed.
+- A requirements file can be configured explicitly or auto-detected beside the entry.
+- Dependencies are isolated per MCP server.
+- **Reinstall dependencies** removes stale install state and rebuilds the repository-sourced environment.
+
+Use reinstall after dependency pins or package metadata change. It applies only to repository-sourced MCP servers.
+
+## Enable, test, and monitor
+
+Each record has an enabled state and a connection status: untested, connected, failed, or disabled.
+
+### Explicit test
+
+**Test connection** updates the stored status, last error, server metadata, and discovered tool count.
+
+- For `stdio`, Allen starts the process, performs MCP `initialize`, requests `tools/list`, and stops the process.
+- For HTTP/SSE, Allen performs a lightweight URL reachability check.
+
+A connected result proves only that the server initialized or responded. It does not prove every tool has the required downstream permissions or that a side effect is safe.
+
+### Background monitor
+
+Allen periodically checks enabled MCP servers. It raises a notification when a previously connected server fails and records recovery when it becomes healthy again.
+
+### Codex synchronization
+
+When the Codex CLI is installed, Allen best-effort synchronizes enabled `stdio` servers into the current user's Codex MCP configuration and removes disabled or deleted entries. If Codex is absent, this synchronization is skipped without making the Allen MCP record fail.
+
+## Review a connection
+
+Before granting an agent access, review:
+
+| Area | Question |
+| --- | --- |
+| Source | Is this preset, repository entry, command, or URL trusted? |
+| Process | What command, working directory, filesystem, and network access will it have? |
+| Credentials | Are they least privilege, scoped to the right environment, and mapped only to this server? |
+| Tools | Which discovered tools can read or change data? |
+| Agent access | Which agents or workflow nodes have selected the server, and which tools are disabled? |
+| Side effects | Can retries duplicate posts, tickets, database writes, or other actions? |
+| Data handling | Could prompts, tool arguments, logs, or artifacts expose customer or repository data? |
+
+A healthy MCP server is not a sandbox. It runs with the authority of its process, network, filesystem, and supplied credentials.
+
+## Record fields
+
+| Field | Purpose |
+| --- | --- |
+| `name` / `description` | User-visible identity and purpose. |
+| `type` | `stdio`, `http`, or `sse`. |
+| `enabled` | Whether Allen may load or expose the server. |
+| `source` | Preset identity or repository ID and entry path. |
+| `command` / `args` | Local process startup for `stdio`. |
+| `url` / `headers` | Remote connection settings. |
+| `envKeys` / `argKeys` | Declared bare keys resolved from `ALLEN_<KEY>`. |
+| `python` | Interpreter and requirements settings for eligible repository entries. |
+| `status` | Untested, connected, failed, or disabled. |
+| `lastError` / `serverInfo` / `toolCount` | Most recent connection-test evidence. |
+| Owner details | Creator information displayed with shared MCP records. |
+
+Because MCP records are visible across authenticated users, confirm the owner and target record before editing, toggling, testing, reinstalling, or deleting it.
+
+## API summary
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /api/mcp/servers` | List MCP records with owner display details. |
+| `GET /api/mcp/presets` | List the current preset catalog. |
+| `GET /api/mcp/tools` | Group available Allen and external tools for access configuration. |
+| `GET /api/mcp/servers/discover/:repoId` | Scan a registered repository for candidate entries. |
+| `POST /api/mcp/servers` | Create a server record. |
+| `PUT /api/mcp/servers/:id` | Update editable configuration or allowed credential values. |
+| `PATCH /api/mcp/servers/:id/toggle` | Enable or disable a record. |
+| `POST /api/mcp/servers/:id/test` | Run the explicit connection check. |
+| `POST /api/mcp/servers/:id/reinstall` | Rebuild dependencies for a repository-sourced server. |
+| `DELETE /api/mcp/servers/:id` | Remove the record and associated cached connection/install state. |
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| A required credential is missing | Add the reported `ALLEN_<KEY>` value through Runtime/Secrets or matching environment configuration. |
+| Repository discovery finds nothing | Entry naming, SDK import or Python marker, scan depth, and skipped dependency directories. |
+| Python import fails | Interpreter, requirements path, dependency pins, then **Reinstall dependencies**. |
+| Connection test times out | Command or URL, working directory, package installation, network, and credential validity. |
+| Tools are absent from an agent | Server enabled state, successful discovery, agent external-server selection, and per-tool exclusions. |
+| Test passes but a tool fails | Downstream service permissions, resource scope, tool arguments, and external service state. |
+| Codex configuration is stale | Codex installation, then save/toggle the record so synchronization runs again. |
+
+## Related pages
+
+- [Integrations](/concepts/integrations)
+- [Agents reference](/reference/agents)
+- [Models reference](/reference/models)
+- [Security reference](/reference/security)
+- [Troubleshooting](/operator-guide/troubleshooting)

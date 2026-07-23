@@ -1,0 +1,171 @@
+---
+title: 'Models Reference'
+description: 'Configure model availability, defaults, overrides, recovery, and cost estimates in Allen.'
+---
+
+:::info Media placeholders
+Before publishing, capture **Settings → Models**, an add/edit model dialog, chat model selection, an agent runtime section, a workflow-node override, usage/cost details, and model recovery. Do not expose API keys or account details.
+:::
+
+Allen separates model availability from model selection:
+
+- the **model registry** defines which concrete models are available in normal pickers;
+- runtime, chat, agent, and workflow settings choose what should run;
+- provider authentication determines whether that choice can actually execute.
+
+## User-visible surfaces
+
+| Surface | Purpose |
+| --- | --- |
+| **Settings → Models** | Configure provider defaults and inspect the concrete model registry. |
+| Chat picker | Set provider and model for a chat session. |
+| Agent editor | Set an agent's default provider, model, reasoning, and plan mode. |
+| Workflow agent node | Apply an execution-scoped override without changing the agent. |
+| Execution detail | Inspect the actual provider/model, token usage, cost estimate, and recovery prompt. |
+| Usage | Compare aggregated provider/model usage and estimated cost. |
+
+## Provider families
+
+The current runtime registers:
+
+| Provider | Authentication path | Model source |
+| --- | --- | --- |
+| Claude | Local Claude CLI session | Seeded registry models plus compatible custom rows. |
+| Codex | Local Codex CLI session | Seeded registry models plus compatible custom rows. |
+| DeepSeek | API key and optional base URL/model runtime settings | Seeded suggestions and registry rows. |
+| Xiaomi MiMo | API key and optional base URL/model runtime settings | Seeded suggestions and registry rows. |
+| Kimi | API key and optional base URL/model runtime settings | Seeded suggestions and registry rows. |
+| GLM/Z.AI | API key and optional base URL/model runtime settings | Seeded suggestions and registry rows. |
+| OpenRouter | API key, base URL, and exact model slug | Custom registry rows; no concrete model is seeded by default. |
+
+Provider access, rate limits, quotas, and billing remain controlled by the upstream account.
+
+## Model registry fields
+
+Each concrete model row has a unique provider and full model ID.
+
+| Field | Purpose |
+| --- | --- |
+| Provider | Runtime provider identity. |
+| Full ID | Exact model identifier passed to the provider. |
+| Display name | Label shown in pickers and traces. |
+| Provider display name | Label for the provider group. |
+| Active | Controls whether the row appears in normal model choices. |
+| Tier | Optional `default`, `opus`, or `flash` routing hint. |
+| Sort order | Order within the provider group. |
+| Input/output/cache-read price | Optional per-million-token values used for estimates. |
+
+Active rows appear in normal pickers. Inactive rows stay in the registry for audit and can be shown by administrators.
+
+Provider and full ID are immutable after a row is created. To change either identity, create another row and deactivate the old one.
+
+## Seeded and custom rows
+
+At startup, Allen synchronizes its seed catalog:
+
+- missing seed rows are added;
+- an unchanged seed-managed row can receive updated seed defaults;
+- a row whose managed values were customized is preserved;
+- administrator-created rows are preserved.
+
+This allows Allen to update its default catalog without flattening local names, tiers, ordering, active state, or prices.
+
+Use custom rows for exact OpenRouter slugs, private provider deployments, or other approved provider-specific models. Prefer deactivation over manually deleting registry records.
+
+## Choose defaults and overrides
+
+There is no single global model value that overwrites every surface.
+
+- Runtime settings provide defaults for new chats or agents where configured.
+- A chat session stores its own provider/model choice.
+- An agent stores its default provider/model.
+- A workflow node can override the agent for that node.
+- Model recovery can override the retry path of one paused execution.
+
+For an agent spawn, runtime fields resolve in this order:
+
+1. workflow-node override;
+2. chat-session override;
+3. agent default.
+
+Each field resolves independently. A node can override only the model while inheriting provider, reasoning, or plan mode from the next layer.
+
+Changing a registry row or runtime default does not rewrite existing agents, workflow YAML, chat sessions, or already-paused recovery choices. Review the concrete surface that will run next.
+
+## Reasoning and plan mode compatibility
+
+Agent and workflow settings enforce these combinations:
+
+- reasoning can be `off`, `low`, `medium`, `high`, or `max`;
+- `max` requires the Claude provider and an Opus model;
+- plan mode is supported only by the Claude provider.
+
+Bulk model updates report incompatible agents as skipped unless the operator explicitly chooses to clear removable incompatible settings.
+
+## Authentication and availability
+
+A registry entry describes a candidate; it does not authenticate the provider.
+
+- For Claude or Codex, install the required CLI and complete its local login. Use **Check again** in model settings after authenticating.
+- For Claude-compatible providers, save the required API key and review the provider's base URL and model defaults.
+- For OpenRouter, enter the exact registry slug and configure its API credentials.
+
+If a model is active but execution still fails, inspect the execution trace for the effective provider/model and the provider-specific error.
+
+## OpenRouter behavior
+
+OpenRouter has no seeded concrete model list. An administrator must register the exact full ID.
+
+When an OpenRouter model does not start with `anthropic/`, Allen warns that it is experimental for the Claude Code execution path. Treat the warning as a compatibility risk, not as proof that the model will fail.
+
+## Model recovery
+
+A recoverable provider/model failure can pause an execution and show a recovery selector built from active registry rows.
+
+Before retrying:
+
+1. read the sanitized failure and failed provider/model;
+2. choose a provider/model that is configured and authenticated;
+3. consider parallel siblings and repeated side effects;
+4. submit the retry;
+5. inspect the next node attempt and trace.
+
+The recovery choice applies to that execution retry. It does not edit the registry, agent, chat session, or workflow definition.
+
+## Cost and usage
+
+Allen normalizes provider-reported token usage and combines it with registry prices when available. Missing provider data remains unavailable rather than being treated as zero.
+
+Use Allen's cost values for operational comparison and investigation. They are estimates; the upstream provider account is the source of billing truth. Review registry prices after provider pricing changes.
+
+## Admin API summary
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /api/system/models` | List active rows; filters can include provider and inactive rows. |
+| `GET /api/system/models/recovery` | Group active choices for recovery UI. |
+| `GET /api/system/models/:id` | Get one registry row. |
+| `POST /api/system/models` | Create a row; administrator required. |
+| `PATCH /api/system/models/:id` | Update editable fields; administrator required. |
+| `DELETE /api/system/models/:id` | Deactivate the row; administrator required. |
+
+Create, update, and delete actions are administrator-only. Other users can still consume registry-backed choices in supported pickers.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Model missing from a picker | Registry row exists, provider matches, and **Active** is enabled. |
+| Duplicate creation fails | Provider plus full ID must be unique. Edit or reactivate the existing row. |
+| Provider/full ID cannot be edited | Create a new identity row, then deactivate the old one. |
+| Provider login fails | Install/authenticate the CLI or save the provider API settings, then use **Check again**. |
+| Unexpected model ran | Inspect workflow-node, chat-session, and agent layers in that order. |
+| Cost is unavailable | Provider usage or one or more registry price fields were not reported. |
+| Recovery fails again | Confirm the replacement row is active, authenticated, compatible, and permitted for the execution. |
+
+## Related pages
+
+- [Agents reference](/reference/agents)
+- [Workflows reference](/reference/workflows)
+- [Environment reference](/reference/environment)
+- [Troubleshooting](/operator-guide/troubleshooting)

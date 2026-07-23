@@ -1,0 +1,118 @@
+---
+title: 'Use Artifacts'
+description: 'Save, review, comment on, version, download, and safely share durable Allen outputs.'
+---
+
+Use an artifact when Allen produces work that should remain reviewable after the conversation or execution ends. Plans, reports, specifications, query results, validation evidence, and handoff notes are better artifacts than long chat messages.
+
+:::info Media placeholders
+Before publishing, capture the chat **Artifacts** view, search and producer groups, a rendered artifact, an anchored comment, **Version History**, a comparison, and the copy/download controls. Suggested files: `static/img/docs/guides-use-artifacts-01.png` through `static/img/docs/guides-use-artifacts-07.png`, plus `static/videos/docs/guides-use-artifacts-short.mp4` for the review-and-revision flow.
+:::
+
+## What you will accomplish
+
+By the end of this guide, you will be able to:
+
+- ask Allen to save a durable deliverable;
+- find it in the chat or execution that owns it;
+- review text, structured data, code, or binary files;
+- leave precise comments and request a new version;
+- compare or restore versions without losing history;
+- download, share, or delete the file safely.
+
+## Ask Allen to save the output
+
+State the desired filename and format when they matter. For example:
+
+- “Save the approved implementation plan as `implementation-plan.md`.”
+- “Export these records as `query-results.csv` and link the artifact.”
+- “Create a Markdown validation report that I can comment on.”
+- “Revise the report using its unresolved comments, then publish a new version.”
+
+Choose a format that matches the next review step:
+
+| Need | Recommended format |
+| --- | --- |
+| Plan, specification, review, or narrative report | Markdown |
+| Structured records for another tool | JSON |
+| Rows for spreadsheet review | CSV |
+| Logs or plain notes | Text |
+| Source or configuration | Code |
+| Image, PDF, archive, audio, or video | Binary |
+
+Use a descriptive filename. If several agents contribute, ask them to use distinct paths or names. Allen rejects an accidental filename collision unless replacing the existing artifact was explicitly requested.
+
+## Find the artifact
+
+1. Return to the chat, workflow execution, or standalone agent execution that produced the file.
+2. Open **Artifacts**.
+3. Search by filename, path, description, node, or agent when the list is long.
+4. Expand the producer group if Allen grouped files by workflow node or agent.
+5. Select the filename to open the viewer.
+
+Artifacts produced by agents spawned from a chat remain attached to that chat. Workflow-node artifacts remain with the root workflow execution. If a file appears to be missing, first confirm that you opened the correct owning chat or execution, then refresh the list.
+
+## Review and reuse the content
+
+The viewer renders Markdown, JSON, CSV, code, and text in type-aware views. Binary files remain available through their file link.
+
+- Use **Copy content** for a text-backed artifact.
+- Use **Download** to keep the original file.
+- Review the filename, type, size, producer, description, and version before reusing it.
+- Keep the artifact in the original chat when requesting follow-up work so Allen can identify the correct file and its review history.
+
+If the renderer does not match the content, ask Allen to save the file again with the correct filename and type instead of copying malformed output into a new chat.
+
+## Leave review comments
+
+Markdown, text, code, JSON, and CSV artifacts are commentable. Older eligible files may first show **Enable Commenting**.
+
+1. Open the artifact and select the exact text or lines that need attention.
+2. Add a comment to that selection.
+3. Use **Comments** to review open, resolved, stale, or all threads.
+4. Reply in the thread if the requested change needs clarification.
+5. Ask Allen to revise the artifact using its unresolved comments.
+6. Review the new version and the resolution note on each addressed thread.
+
+Comments are more reliable than repeating feedback in an unrelated conversation because they stay attached to the document and selection.
+
+:::caution
+A **stale** comment no longer matches the latest content closely enough to keep its original anchor. Check whether the concern still applies and re-anchor it if needed. Do not treat stale comments as automatic revision instructions.
+:::
+
+## Compare and restore versions
+
+Open **Version History** to inspect earlier content and its producer.
+
+- **Compare to latest** shows line-level additions, removals, and modifications.
+- Restoring an older version creates a new latest version; it does not erase intervening history.
+- **Timeline** combines version and comment activity so you can reconstruct the review sequence.
+
+Before accepting a revision, compare it with the prior version and confirm that addressed comments did not introduce unrelated changes.
+
+## Share safely
+
+An artifact content link can be opened without an Allen login. Treat the link as a capability: anyone who receives it may be able to read the file.
+
+1. Review the complete file, not only Allen's summary.
+2. Remove credentials, private keys, customer data, proprietary prompts, or sensitive repository content.
+3. Share only with the intended audience.
+4. Prefer the clickable artifact link returned by Allen rather than reconstructing a URL.
+
+For external handoffs, include a short summary alongside the link so recipients understand the artifact's purpose, status, and validation state.
+
+## Delete an artifact
+
+Use **Delete** only after downloading anything that must be retained. The confirmation removes the artifact record from its chat or execution and performs best-effort cleanup for locally stored content. External storage follows the deployment's storage policy, so do not treat artifact deletion as a regulated retention or secure-erasure process.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| The artifact is missing | Open the chat or execution that owns it, expand producer groups, clear the search, and refresh. |
+| The filename already exists | Choose a new path, or explicitly request overwrite only when a new version should replace that deliverable. |
+| **Copy content** is unavailable | Binary files cannot be copied as text; use **Download**. |
+| A comment became stale | Review the latest version, then re-anchor the feedback if it still applies. |
+| The content link no longer works | The artifact may have been deleted or its backing file may be unavailable. Check the owning task's **Artifacts** list. |
+
+Learn more in [Artifacts](/concepts/artifacts). For execution follow-up, see [Monitor an execution](/guides/monitor-execution). Review [Security](/reference/security) before sharing files outside your team.

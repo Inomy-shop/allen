@@ -16,6 +16,8 @@ import { useToast } from '../components/common/Toast';
 import { yamlToReactFlow } from '../lib/yaml-to-reactflow';
 import { reactFlowToYaml } from '../lib/reactflow-to-yaml';
 import { useResizable } from '../hooks/useResizable';
+import TeamClassificationSelect from '../components/common/TeamClassificationSelect';
+import type { TeamClassification } from '../types/teamClassification';
 
 type Mode = 'visual' | 'yaml';
 
@@ -69,6 +71,7 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [workflowMeta, setWorkflowMeta] = useState<WorkflowMeta>({});
+  const [teamClassification, setTeamClassification] = useState<TeamClassification | null>(null);
   const [validation, setValidation] = useState<{ errors: string[]; warnings: string[] }>({ errors: [], warnings: [] });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(!!id);
@@ -78,6 +81,7 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const savedYamlRef = useRef('');
+  const savedTeamClassificationRef = useRef<TeamClassification | null>(null);
 
   // Block navigation when there are unsaved changes
   const blocker = useBlocker(dirty);
@@ -118,6 +122,8 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
         description: wf.description,
         version: wf.version,
       });
+      setTeamClassification(wf.teamClassification ?? null);
+      savedTeamClassificationRef.current = wf.teamClassification ?? null;
       if (wf.parsed) {
         const { nodes: n, edges: e } = yamlToReactFlow(wf.parsed);
         setNodes(n);
@@ -168,12 +174,17 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
   // YAML change handler
   const handleYamlChange = useCallback((val: string) => {
     setYamlContent(val);
-    setDirty(val !== savedYamlRef.current);
+    setDirty(val !== savedYamlRef.current || teamClassification !== savedTeamClassificationRef.current);
     try {
       const parsed = yaml.load(val) as any;
       if (parsed && typeof parsed === 'object') setWorkflowMeta(metaFromWorkflow(parsed));
     } catch { /* keep current metadata while YAML is invalid */ }
-  }, []);
+  }, [teamClassification]);
+
+  const handleTeamClassificationChange = useCallback((value: TeamClassification | null) => {
+    setTeamClassification(value);
+    setDirty(yamlContent !== savedYamlRef.current || value !== savedTeamClassificationRef.current);
+  }, [yamlContent]);
 
   const handleMetaChange = useCallback((patch: Pick<WorkflowMeta, 'name' | 'description'>) => {
     setWorkflowMeta((current) => {
@@ -205,25 +216,27 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
       }
 
       if (isNew) {
-        const result = await wfApi.create({ yaml: finalYaml });
+        const result = await wfApi.create({ yaml: finalYaml, teamClassification });
         const isRestored = result?.restored === true;
         toast.success(isRestored
           ? `Workflow "${workflowMeta.name ?? 'Untitled'}" restored.`
           : `Workflow "${workflowMeta.name ?? 'Untitled'}" created.`);
         savedYamlRef.current = finalYaml;
+        savedTeamClassificationRef.current = teamClassification;
         setDirty(false);
         navigate(`/workflows/${result._id}/edit`, { replace: true });
       } else {
-        await wfApi.update(id!, { yaml: finalYaml });
+        await wfApi.update(id!, { yaml: finalYaml, teamClassification });
         toast.success(`Workflow "${workflowMeta.name}" saved.`);
         savedYamlRef.current = finalYaml;
+        savedTeamClassificationRef.current = teamClassification;
         setDirty(false);
       }
     } catch (e: any) {
       toast.error(e?.message ?? String(e));
     }
     setSaving(false);
-  }, [yamlContent, mode, nodes, edges, workflowMeta, isNew, id, navigate]);
+  }, [yamlContent, mode, nodes, edges, workflowMeta, teamClassification, isNew, id, navigate, toast]);
 
   // Validate
   const handleValidate = useCallback(async () => {
@@ -426,7 +439,7 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
       </header>
 
       {metaEditorOpen && (
-        <section className={`grid shrink-0 grid-cols-[minmax(180px,320px)_minmax(260px,1fr)] items-end gap-3 border-b border-app bg-app-muted/20 ${embedded ? 'px-4 py-2.5' : 'px-8 py-3'}`}>
+        <section className={`grid shrink-0 grid-cols-[minmax(180px,320px)_minmax(260px,1fr)_minmax(140px,180px)] items-end gap-3 border-b border-app bg-app-muted/20 ${embedded ? 'px-4 py-2.5' : 'px-8 py-3'}`}>
           <label className="min-w-0">
             <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.12em] text-theme-muted">Name</span>
             <input
@@ -443,6 +456,14 @@ export default function WorkflowBuilderPage({ embedded = false, onBack }: Workfl
               onChange={(event) => handleMetaChange({ description: event.target.value })}
               placeholder="What this workflow does"
               className="h-8 w-full rounded border border-app bg-app px-2.5 text-[13px] text-theme-secondary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent-blue"
+            />
+          </label>
+          <label className="min-w-0">
+            <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.12em] text-theme-muted">Team</span>
+            <TeamClassificationSelect
+              value={teamClassification}
+              onChange={handleTeamClassificationChange}
+              ariaLabel="Workflow team"
             />
           </label>
         </section>

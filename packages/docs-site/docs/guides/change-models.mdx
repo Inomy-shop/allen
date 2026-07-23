@@ -1,0 +1,123 @@
+---
+title: 'Change Models'
+description: 'Change model defaults, chats, agents, workflow nodes, or a one-time recovery retry without rewriting unrelated scopes.'
+---
+
+## What you will accomplish
+
+Choose the narrowest model setting that matches your goal, apply the change, and verify which future work it affects.
+
+:::info Media placeholders
+Before publishing, capture **Model Defaults**, the chat model picker, one agent's runtime settings, the bulk model dialog and results, **Override Model & MCP servers**, and **Model Recovery**. Suggested files: `static/img/docs/guides-change-models-01.png` through `static/img/docs/guides-change-models-06.png`, plus `static/videos/docs/guides-change-models-short.mp4` for the scope-and-verify flow.
+:::
+
+## Choose the right scope
+
+| Goal | Change here | Effect |
+| --- | --- | --- |
+| Set defaults for newly created work | **Settings → Models → Model Defaults** | Future default resolution only |
+| Change one chat | Chat provider/model picker | That chat session |
+| Change one agent's normal runtime | **Teams & Agents** edit dialog | Future runs that use the agent without a node override |
+| Change several agents | Bulk model update | Selected agents that pass compatibility checks |
+| Change one workflow step | Node **Override Model & MCP servers** | That node only |
+| Unblock a recoverable failed node | **Model Recovery** | The retry in that execution |
+
+Changing one scope does not migrate the others. Existing records keep their stored provider and model until you edit them.
+
+## Change system defaults
+
+1. Open **Settings → Models** as an admin.
+2. Under **Model Defaults**, choose **Default chat provider** and **Default chat model**.
+3. If required, choose **Default workflow agent provider** and **Default workflow agent model**.
+4. Keep **Preserve seeded mix** when built-in roles should retain different configured providers.
+5. Select **Save model settings**.
+6. Restart Allen if the page marks a workflow-agent default change as requiring restart.
+7. Create a new chat or run a new defaulted task to verify the result.
+
+Defaults do not rewrite existing chats, agents, or workflow definitions.
+
+## Change a chat model
+
+1. Start or open a chat.
+2. Choose the provider and model before the first message when possible.
+3. Send a small validation request.
+4. Confirm the response metadata shows the intended model.
+
+An existing chat keeps its provider-family context. Allen rejects switching between incompatible families, such as Claude-family and Codex, inside the same conversation. Start a new chat when you need a different family.
+
+The model picker is locked while a turn is streaming. Slack-managed and imported conversations also cannot change model in chat.
+
+## Change one agent
+
+1. Open **Teams & Agents**.
+2. Edit the agent.
+3. Choose the provider and model in its runtime settings.
+4. Review plan mode and reasoning effort.
+5. Save the agent.
+6. Run a small direct test before using it in a critical workflow.
+
+Plan mode is Claude-only. `max` reasoning effort requires Claude and an Opus model. Saving fails when the merged settings are incompatible.
+
+## Change several agents
+
+1. Select the agents in **Teams & Agents**.
+2. Open the bulk model dialog.
+3. Choose the provider and model.
+4. Decide whether to enable **Clear incompatible settings when needed**.
+5. Apply the change.
+6. Review the updated and skipped results.
+
+Without the clear option, Allen skips agents whose existing plan-mode or reasoning-effort settings conflict with the requested model. Enable it only when removing those incompatible settings is acceptable.
+
+## Override one workflow node
+
+1. Open the workflow builder and select the agent node.
+2. Expand **Override Model & MCP servers**.
+3. Set only the provider, model, reasoning effort, plan mode, MCP servers, or disabled tools that differ for this node.
+4. Validate and save the workflow.
+5. Run a safe test execution and inspect the node trace.
+
+The override applies to that workflow node and does not edit the underlying agent. Remove it when the agent default should take effect again.
+
+## Recover a failed node with another model
+
+For a recoverable provider or model error, the execution can pause at **Model Recovery**.
+
+1. Review the failed provider/model, sanitized error, affected node or branch, and attempt count.
+2. Choose an active provider and model.
+3. Optionally choose reasoning effort supported by that provider/model.
+4. Select **Retry with selected model**.
+5. Watch the execution and inspect the new trace and output.
+
+You can instead select **Cancel workflow**, which requires confirmation. A recovery selection is execution-scoped: it does not edit model defaults, the agent, the workflow, or the registry. If the replacement should be permanent, update the appropriate saved scope after the run.
+
+## Verify behavior and cost
+
+After any model change:
+
+1. run a small representative task;
+2. verify the provider and full model ID in the resulting session or trace;
+3. check tool use and structured output, not just prose quality;
+4. review token usage and Allen's cost estimate;
+5. use the provider console as the authority for access and billing.
+
+Allen can estimate cost only when the runtime reports usage and the registry has current prices for the model.
+
+:::caution
+Changing to a cheaper or faster model can alter tool use, output format, context handling, and review quality. Validate the behavior that matters before broad or production rollout.
+:::
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| Provider is unavailable | Check CLI installation/login or API credentials and endpoint settings. |
+| Model is missing | Confirm its registry entry is active under the selected provider. |
+| Chat refuses a provider change | Start a new chat when crossing incompatible provider families. |
+| Agent will not save | Check plan-mode and reasoning-effort compatibility. |
+| Bulk update skips agents | Read each skipped reason; enable clearing only if losing incompatible settings is acceptable. |
+| Workflow still uses another model | Inspect the node override and the selected agent's saved default. |
+| Recovery option is absent | The failure may not be classified as recoverable, or no active alternative is registered. |
+| Cost is unavailable | Verify registry pricing, exact model ID, and reported token usage. |
+
+Related guides: [Model Providers](/integrations/model-providers), [Add a Model](/guides/add-a-model), and [Monitor an Execution](/guides/monitor-execution).

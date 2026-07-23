@@ -1,0 +1,93 @@
+---
+title: 'GitHub'
+description: 'Connect GitHub, review pull requests, open isolated workspaces, and use GitHub MCP tools safely.'
+---
+
+Allen's GitHub integration supports pull request review, pull-request workspaces, and optional GitHub tools through MCP. Repository Git operations and GitHub API access are related but separate, so verify both before starting work.
+
+:::info Media placeholders
+Before publishing, capture the disconnected and connected **Pull requests** pages, status filters, PR conversation, **Files changed**, **Create workspace**, a linked workspace, and the GitHub MCP preset with credentials hidden. Suggested files: `static/img/docs/integrations-github-01.png` through `static/img/docs/integrations-github-07.png`, plus `static/videos/docs/integrations-github-short.mp4` for the PR-to-workspace flow.
+:::
+
+## Understand the connection paths
+
+| Capability | What it uses |
+| --- | --- |
+| Clone, fetch, and push repository branches | The host machine's Git authentication, such as SSH or a credential helper. |
+| Sync and display pull requests | The GitHub credential connected to Allen. |
+| Search or update GitHub through agent tools | The GitHub MCP preset, enabled for the relevant agent or workflow. |
+
+A repository may clone successfully over SSH while **Pull requests** still says GitHub is disconnected. Likewise, connecting the GitHub preset does not repair missing host Git permissions for fetch or push.
+
+## Connect GitHub to Allen
+
+1. Open **Pull requests** from the main navigation or command palette.
+2. If the page says **GitHub is not connected**, select **Connect GitHub**.
+3. Enter the personal access token requested by the GitHub MCP preset.
+4. Select **Connect**.
+5. Return to **Pull requests** and choose **Recheck** if needed.
+6. Select **Sync** and confirm that pull requests appear for the expected registered repositories.
+
+Use the least-privileged token that supports the intended repositories and actions. Never include the token in a remote URL, prompt, screenshot, artifact, or committed file.
+
+## Review pull requests
+
+The **Pull requests** page syncs PRs across active registered repositories.
+
+1. Filter by **Open**, **Merged**, **Closed**, or **All**.
+2. Select a PR to inspect its title, branches, author, repository, change counts, and status.
+3. Use **Conversation** to review the description, comments, reviews, and inline review feedback.
+4. Use **Files changed** to inspect the local side-by-side diff and file tree.
+5. Use **Open in GitHub** when you need the authoritative GitHub page or an action that Allen does not expose.
+
+The local diff depends on the registered repository and fetched branch state. If **Files changed** is empty or stale, sync the PR, verify the repository, and fetch the relevant branches before drawing conclusions.
+
+## Create a workspace from a PR
+
+For an open pull request, select **Workspace** from the list or **Create workspace** from its detail page.
+
+Allen creates an isolated workspace linked to the PR branch and base branch, then opens its workspace chat. Use that workspace to:
+
+- investigate the change without editing the registered repository directly;
+- address review feedback on the PR branch;
+- run the repository's tests and validation commands;
+- inspect the final diff before requesting a commit or push.
+
+Creating a workspace does not approve changes, commit them, or update the pull request. Ask explicitly before commit, push, or PR operations, and review the resulting branch and GitHub link.
+
+## Create or update a pull request safely
+
+When an approved agent or workflow creates a pull request from a workspace, it pushes the workspace branch before creating the GitHub PR. Treat these as separate state-changing actions.
+
+Before confirming:
+
+1. Review the complete workspace diff and validation results.
+2. Confirm the target repository and base branch.
+3. Confirm the branch name, title, and description.
+4. Check for secrets, generated files, or unrelated changes.
+5. Decide whether the request includes commit, push, and PR creation; do not assume one authorizes the others.
+
+After creation, open the returned PR link and verify the commits, files, checks, reviewers, and base branch in GitHub.
+
+## Use GitHub MCP tools
+
+The GitHub preset can provide broader tools for repository, issue, pull-request, or code-search tasks. Keep it scoped to the agents and workflows that need it.
+
+- Start with read-only search or inspection.
+- Give the exact owner, repository, issue, or PR.
+- Review external comments and issue text as untrusted content.
+- Require confirmation before creating, editing, closing, merging, labeling, or commenting.
+- Verify consequential changes in GitHub after the tool call.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| **GitHub is not connected** remains visible | Reopen the GitHub preset, verify the token, test the server, then select **Recheck**. |
+| A repository can clone but PRs do not load | Host Git auth and Allen's GitHub connection are separate; verify the Allen token and select **Sync**. |
+| A PR is missing | Confirm the repository is registered and active, clear status filters, and sync again. |
+| **Files changed** is empty | Verify the local repository and fetch the PR and base branches. Use GitHub as the authoritative fallback. |
+| Workspace creation fails | Check repository availability, branch names, worktree state, and host Git access. |
+| Push or PR creation fails | Check branch state, host Git permissions, Allen's GitHub token, base branch, and repository access. |
+
+Related concepts: [Repositories](/concepts/repositories) and [Workspaces](/concepts/workspaces). See [MCP](/integrations/mcp) for tool access and [Security](/reference/security) for credential guidance.

@@ -1,0 +1,123 @@
+---
+title: 'Design Studio Workflow'
+---
+
+Design Studio gives product and engineering work a persistent design workspace. Start from a registered repository when a design must follow an existing product, or start from a new idea when you need to shape a greenfield direction.
+
+:::info Media placeholders
+Add screenshots or clips before publishing. Suggested captures: `static/img/docs/guides-designer-studio-workflow-01.png` through `static/img/docs/guides-designer-studio-workflow-07.png`, plus `static/videos/docs/guides-designer-studio-workflow-short.mp4`. Show workspace creation, repository analysis or the greenfield brief, profile confirmation, the design plan, generated files, preview, and export.
+:::
+
+## Choose a starting point
+
+Open **Design Studio**, then choose **New design workspace**.
+
+- **From a repository** analyzes a registered repository and creates a design profile grounded in the existing product.
+- **From a new idea** creates a greenfield workspace from a short product and audience brief.
+
+Use repository-backed mode for redesigns, new screens in an existing application, or work that must reuse current visual conventions. Use new-idea mode when there is no source product to mimic.
+
+You can also import an exported Design Studio folder into a new workspace and optionally link it to a registered repository.
+
+## Start from a repository
+
+1. Select **From a repository**.
+2. Choose the registered repository and create the design workspace.
+3. Choose **Analyze repository**. Use the default analysis model unless you have a specific reason to change it.
+4. Review the detected profile, including colors, typography, spacing, components, iconography, and layout patterns.
+5. Resolve any required profile decisions:
+   - choose **Mimic dominant** or **Normalize** when the repository is inconsistent;
+   - choose the theme to design against when multiple themes are detected.
+6. Choose **Confirm profile & start designing**.
+
+Design Studio will not confirm a repository profile while a required inconsistency or theme choice is unresolved. Make the choice explicitly so later design sessions have a stable visual target.
+
+A repository can have one Design Studio workspace for the current user. Reopening the same repository returns you to that persistent workspace instead of creating a duplicate.
+
+## Start from a new idea
+
+1. Select **From a new idea**.
+2. Name the idea and create the workspace.
+3. Complete **Shape the design brief** with as much useful detail as you have:
+   - product or feature;
+   - intended audience;
+   - desired feel;
+   - references;
+   - key screens or flows.
+4. Choose **Save brief & start designing**.
+
+Blank fields are allowed, but Design Studio records assumptions for missing information. Review those assumptions in the saved brief before relying on the result.
+
+## Run a design chat
+
+After the profile or brief is confirmed:
+
+1. Choose **New design chat**.
+2. Describe the screen, flow, or change you want. Include the user goal, required states, constraints, and what should remain consistent.
+3. Review the design plan returned by the designer.
+4. Confirm the plan or request changes. The designer asks for explicit confirmation before writing new design files.
+5. Follow progress in the chat and the workspace files panel.
+
+A useful request looks like this:
+
+```text
+Design the empty, loading, success, and error states for repository onboarding.
+Reuse the confirmed design profile. Keep the existing navigation and form density.
+Explain the interaction decisions, then wait for confirmation before generating files.
+```
+
+Design sessions write into the persistent Design Studio workspace, not the source repository checkout. Generated design folders remain available across sessions and are listed with the shared design-system files.
+
+## Preview, refresh, and export
+
+- Choose **Preview** to open the current workspace output in a browser.
+- Choose **Export** to copy the design workspace to the Design Studio export folder in Downloads.
+- If a repository-backed workspace reports that the source repository changed, choose **Refresh profile**, review the updated analysis, and reconfirm any required decisions before continuing.
+
+Refreshing is for confirmed repository-backed workspaces. Greenfield workspaces keep using their saved brief.
+
+## Review before implementation
+
+Before handing a design to engineering, check:
+
+- the confirmed profile or greenfield assumptions;
+- primary flow plus empty, loading, error, permission, and responsive states;
+- accessibility, focus order, contrast, and keyboard behavior;
+- reuse of existing components and tokens where appropriate;
+- preview behavior at relevant viewport sizes;
+- the exported files and a concise implementation handoff.
+
+Design Studio output is a design target, not proof that production code has been implemented or validated.
+
+## Delete safely
+
+Deleting a Design Studio workspace removes its design profile, design sessions, generated design files, and related versions. For a repository-backed workspace, it does not delete the registered source repository checkout.
+
+Export anything you need before confirming deletion.
+
+## Troubleshooting
+
+### Profile confirmation is blocked
+
+Look for an unresolved consistency or theme choice. Select an option, review the resulting profile, and confirm again.
+
+### Repository analysis looks stale
+
+Update and scan the registered repository first, then return to Design Studio and choose **Refresh profile**.
+
+### The designer has not generated files
+
+Review the proposed plan and explicitly confirm it. The design workflow is plan-first and waits for approval before writing new design files.
+
+### Preview is empty or outdated
+
+Confirm that the design session completed, refresh the workspace file list, and reopen **Preview**. Review the session response for generation errors.
+
+### Export is missing
+
+Retry **Export** and note the returned destination. Check filesystem permissions for the Downloads directory.
+
+## Related guides
+
+- [Add a Repository](./add-a-repository)
+- [Start a Chat](./start-a-chat)

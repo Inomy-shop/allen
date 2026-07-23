@@ -54,28 +54,28 @@ export const THEME_PRESETS: ThemePreset[] = [
     label: 'Allen',
     preferredColorMode: 'light',
     colors: {
-      surface: '#fcfdff',
+      surface: '#fbfcfe',
       surface100: '#ffffff',
-      surface200: '#f4f6fb',
-      border: '#e2e5ed',
-      accent: '#4763cf',
-      accentGreen: '#269e5f',
-      accentRed: '#de3b3d',
-      accentYellow: '#de9300',
-      accentPurple: '#9763cc',
-      accentOrange: '#de9300',
+      surface200: '#eef2f7',
+      border: '#f2f3f4',
+      accent: '#5e6ad2',
+      accentGreen: '#12a16a',
+      accentRed: '#e5484d',
+      accentYellow: '#d9930d',
+      accentPurple: '#7a5af8',
+      accentOrange: '#d9930d',
     },
     colorsDark: {
-      surface: '#0f0d0c',
-      surface100: '#171413',
-      surface200: '#201b19',
-      border: '#342c28',
-      accent: '#7d9cba',
-      accentGreen: '#43c07a',
-      accentRed: '#fa6863',
-      accentYellow: '#c86f32',
-      accentPurple: '#bc88f4',
-      accentOrange: '#c86f32',
+      surface: '#131418',
+      surface100: '#1a1c21',
+      surface200: '#1d2026',
+      border: '#232429',
+      accent: '#828be0',
+      accentGreen: '#3ccb7f',
+      accentRed: '#f2555a',
+      accentYellow: '#e8a93b',
+      accentPurple: '#9e8cfc',
+      accentOrange: '#e8a93b',
     },
   },
 ];
@@ -145,13 +145,13 @@ export const FONT_PRESETS: FontPreset[] = [
   },
   {
     name: 'clean',
-    label: 'Prototype',
-    heading: 'Inter Tight',
-    body: 'Inter Tight',
+    label: 'Allen V8',
+    heading: 'Inter',
+    body: 'Inter',
     mono: 'JetBrains Mono',
-    labelFont: 'Inter Tight',
+    labelFont: 'JetBrains Mono',
     googleFontsUrl:
-      'https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap',
+      'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap',
   },
   // ── Non-robotic / Classic / Elegant fonts ──
   {
@@ -421,7 +421,7 @@ function applyFontPreset(preset: FontPreset) {
     root.setProperty('--font-heading', "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif");
     root.setProperty('--font-body', "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif");
     root.setProperty('--font-mono', "'SF Mono', Menlo, Monaco, Consolas, monospace");
-    root.setProperty('--font-label', "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif");
+    root.setProperty('--font-label', "'SF Mono', Menlo, Monaco, Consolas, monospace");
     return;
   }
 

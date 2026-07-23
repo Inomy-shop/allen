@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import Select from '../common/Select';
+import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
 import TokenUsageDisplay from '../common/TokenUsageDisplay';
 import {
   usage as usageApi,
@@ -178,9 +179,9 @@ export default function UsageDashboard() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="usage-dashboard flex flex-col gap-4">
       {/* Range + refresh controls */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="usage-range flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1 rounded-[var(--radius)] border border-app bg-app-muted/40 p-0.5">
           {PRESET_LABELS.map(({ id, label }) => (
             <button
@@ -252,7 +253,7 @@ export default function UsageDashboard() {
       )}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="usage-summary grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div className="rounded-[var(--radius-lg)] border border-app bg-app p-4">
           <div className="text-[11px] font-medium uppercase tracking-wider text-theme-subtle">Total cost</div>
           <div className="mt-1 font-mono text-xl tabular-nums text-theme-primary">
@@ -296,24 +297,36 @@ export default function UsageDashboard() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="usage-filters flex flex-wrap items-center gap-2">
         <Select
           value={providerFilter}
           onChange={(v) => { setProviderFilter(v); setModelFilter('all'); }}
-          options={providers.map((p) => ({ value: p, label: p === 'all' ? 'All providers' : p }))}
+          options={providers.map((p) => ({
+            value: p,
+            label: p === 'all' ? 'All providers' : p,
+            icon: p === 'all'
+              ? undefined
+              : <ProviderIcon provider={p} className={`h-4 w-4 ${providerIconColor(p)}`} />,
+          }))}
           searchable={false}
           className="w-44"
         />
         <Select
           value={modelFilter}
           onChange={setModelFilter}
-          options={models.map((m) => ({ value: m, label: m === 'all' ? 'All models' : m }))}
+          options={models.map((m) => ({
+            value: m,
+            label: m === 'all' ? 'All models' : m,
+            icon: m === 'all' || providerFilter === 'all'
+              ? undefined
+              : <ProviderIcon provider={providerFilter} className={`h-4 w-4 ${providerIconColor(providerFilter)}`} />,
+          }))}
           className="w-56"
         />
       </div>
 
       {/* Provider → model table */}
-      <div className="overflow-hidden rounded-[var(--radius-lg)] border border-app">
+      <div className="usage-table overflow-hidden rounded-[var(--radius-lg)] border border-app">
         <table className="w-full text-left text-xs">
           <thead>
             <tr className="border-b border-app bg-app-muted/40 text-[11px] uppercase tracking-wider text-theme-subtle">

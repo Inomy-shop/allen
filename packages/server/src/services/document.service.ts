@@ -625,6 +625,8 @@ export class DocumentService {
     // Resolve addressed comments
     const resolvedComments: Array<{ commentId: string; status: string }> = [];
     for (const cid of addressedIds) {
+      const addressedComment = openComments.find((comment) => comment.commentId === cid);
+      if (!addressedComment) continue;
       const resolution: CommentResolution = {
         resolvedByUserId: opts?.createdByUserId,
         resolvedByAgentName: opts?.createdByAgentName,
@@ -632,15 +634,18 @@ export class DocumentService {
         resolutionNote: opts?.createdReason ?? 'Addressed in version update',
         resolvedAt: now,
       };
-      await this.comments.updateOne(
-        { commentId: cid, status: { $ne: 'resolved' } },
+      await this.comments.updateMany(
+        { documentId, threadId: addressedComment.threadId, status: { $ne: 'stale' } },
         {
           $set: {
             status: 'resolved',
-            resolution,
             updatedAt: now,
           },
         },
+      );
+      await this.comments.updateOne(
+        { documentId, commentId: cid },
+        { $set: { resolution } },
       );
       resolvedComments.push({ commentId: cid, status: 'resolved' });
     }
@@ -664,7 +669,7 @@ export class DocumentService {
 
     // Compute remaining unresolved comment IDs (open comments not addressed and not stale)
     const allComments = await this.comments
-      .find({ documentId, status: 'open' })
+      .find({ documentId, parentCommentId: { $exists: false }, status: 'open' })
       .toArray();
     const unresolvedCommentIds = allComments.map((c) => c.commentId);
 
@@ -841,9 +846,9 @@ export class DocumentService {
     stale: number;
   }> {
     const [unresolved, resolved, stale] = await Promise.all([
-      this.comments.countDocuments({ documentId, status: 'open' }),
-      this.comments.countDocuments({ documentId, status: 'resolved' }),
-      this.comments.countDocuments({ documentId, status: 'stale' }),
+      this.comments.countDocuments({ documentId, parentCommentId: { $exists: false }, status: 'open' }),
+      this.comments.countDocuments({ documentId, parentCommentId: { $exists: false }, status: 'resolved' }),
+      this.comments.countDocuments({ documentId, parentCommentId: { $exists: false }, status: 'stale' }),
     ]);
     return { unresolved, resolved, stale };
   }
@@ -991,19 +996,70 @@ export class DocumentService {
       resolvedAt: now,
     };
 
-    await this.comments.updateOne(
-      { commentId },
+    // A comment status belongs to the whole thread. Keep replies synchronized
+    // so filters, counts, and subsequent replies cannot observe split state.
+    await this.comments.updateMany(
+      { documentId, threadId: comment.threadId, status: { $ne: 'stale' } },
       {
         $set: {
           status: 'resolved',
-          resolution,
           updatedAt: now,
         },
       },
     );
 
+    await this.comments.updateOne(
+      { documentId, commentId },
+      { $set: { resolution } },
+    );
+
     const updated = await this.comments.findOne({ commentId })!;
     return updated!;
+  }
+
+  async resolveAllComments(
+    documentId: string,
+    resolutionNote: string,
+    resolver?: { userId?: string; agentName?: string },
+  ): Promise<DocumentCommentDoc[]> {
+    if (!resolutionNote || resolutionNote.trim() === '') {
+      makeError(ERROR_CODES.RESOLUTION_NOTE_REQUIRED, '"resolutionNote" is required', 400);
+    }
+
+    const doc = await this.findIdentityByDocumentId(documentId);
+    if (!doc) {
+      makeError(ERROR_CODES.DOCUMENT_NOT_FOUND, `Document "${documentId}" not found`, 404);
+    }
+
+    const openThreads = await this.comments.find({
+      documentId,
+      parentCommentId: { $exists: false },
+      status: 'open',
+    }).toArray();
+
+    if (openThreads.length === 0) return [];
+
+    const now = new Date();
+    const resolution: CommentResolution = {
+      resolvedByUserId: resolver?.userId,
+      resolvedByAgentName: resolver?.agentName,
+      resolvedAtVersion: doc.latestVersionNumber,
+      resolutionNote,
+      resolvedAt: now,
+    };
+    const threadIds = openThreads.map((comment) => comment.threadId);
+    const commentIds = openThreads.map((comment) => comment.commentId);
+
+    await this.comments.updateMany(
+      { documentId, threadId: { $in: threadIds }, status: 'open' },
+      { $set: { status: 'resolved', updatedAt: now } },
+    );
+    await this.comments.updateMany(
+      { documentId, commentId: { $in: commentIds } },
+      { $set: { resolution } },
+    );
+
+    return this.comments.find({ documentId, commentId: { $in: commentIds } }).sort({ createdAt: 1 }).toArray();
   }
 
   async reopenComment(
@@ -1034,17 +1090,21 @@ export class DocumentService {
 
     const now = new Date();
 
-    await this.comments.updateOne(
-      { commentId },
+    await this.comments.updateMany(
+      { documentId, threadId: comment.threadId, status: 'resolved' },
       {
         $set: {
           status: 'open',
           updatedAt: now,
           lastReopenAt: now,
         },
-        $inc: { reopenCount: 1 },
         $unset: { resolution: '' },
       },
+    );
+
+    await this.comments.updateOne(
+      { documentId, commentId },
+      { $inc: { reopenCount: 1 } },
     );
 
     const updated = await this.comments.findOne({ commentId })!;

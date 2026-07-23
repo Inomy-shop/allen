@@ -1,0 +1,110 @@
+---
+title: 'Skills'
+description: 'Understand how Allen Library skills guide routing, load one in chat, and manage the playbooks available to your team.'
+---
+
+Skills are Allen Library playbooks that guide how Allen handles a type of request. They help Allen decide whether to answer directly, inspect data, use an agent, or run a workflow—and which safeguards to apply before work starts.
+
+You normally do not need to choose a skill. Allen reviews the enabled skill catalog for non-trivial requests and loads the most relevant playbook. Use an explicit skill when you want a particular operating approach to guide the rest of a conversation.
+
+:::info Media placeholders
+Before publishing, capture **Settings → Skills**, the skill cards and filters, the skill editor, a `/skill` suggestion in chat, and the compact **Skill load** message after the command is sent. Suggested files: `static/img/docs/concepts-skills-01.png` through `static/img/docs/concepts-skills-05.png`, plus `static/videos/docs/concepts-skills-short.mp4` for the chat flow.
+:::
+
+## What skills change
+
+A skill can guide Allen to:
+
+- gather repository or execution evidence before making a claim;
+- choose between a direct answer, data query, specialist agent, or workflow;
+- ask for missing scope or confirmation before state-changing work;
+- apply task-specific quality, safety, or handoff expectations;
+- identify related agents and workflows to verify before routing.
+
+A skill does not perform the work itself. Agents carry out specialist tasks, while workflows coordinate repeatable multi-step processes. The skill tells Allen how to choose and operate those capabilities.
+
+## Automatic and explicit skill selection
+
+| Method | When to use it | What happens |
+| --- | --- | --- |
+| Automatic selection | Most requests | Allen reviews enabled skill metadata, chooses by intent, and loads the selected playbook without adding routing noise to the conversation. |
+| `/skill <name>` | You want a specific playbook for this conversation | Allen loads that enabled skill and keeps its guidance in the conversation history. The most recently loaded skill takes precedence where loaded skills overlap. |
+
+Search ranking is a discovery aid, not the final routing decision. Allen also considers exclusions, allowed route types, the requested outcome, and the agents, workflows, and tools currently available.
+
+## Load a skill in chat
+
+1. Open a new or existing chat.
+2. Type `/skill ` to show enabled Allen Library skills.
+3. Continue typing to filter by name, then choose the playbook you want.
+4. Send the command. The conversation shows a compact **Skill load** card and Allen acknowledges the playbook.
+5. Send the request you want handled under that guidance.
+
+The skill remains available to later turns because Allen preserves the load instruction in the conversation history. Start a new chat when you want a separate outcome without the previously loaded playbook.
+
+If the name is unknown, deleted, or disabled, Allen rejects the load before adding it to the conversation and may suggest nearby skill names. Open **Settings → Skills** to confirm the slug and enabled state.
+
+:::tip
+Loading a skill does not bypass normal confirmation, permission, or evidence checks. It changes the operating guidance, not the authority Allen has to act.
+:::
+
+## Browse and manage skills
+
+Open **Settings → Skills**. The page shows the number of playbooks and enabled skills, plus cards with each skill's display name, slug, description, category, priority, trigger count, and allowed routes.
+
+From this page you can:
+
+- search names, descriptions, categories, and triggers;
+- filter the catalog by category;
+- enable or disable a skill from its card;
+- open a skill to review or edit its full playbook;
+- create, duplicate, or delete a skill;
+- refresh the list after another operator changes the catalog.
+
+Disable a skill when you want to keep its definition but stop it from normal matching and `/skill` suggestions. Delete only when the playbook should leave the active catalog. Deleted skills are retained as soft-deleted records; creating the same slug again restores the record instead of creating a duplicate.
+
+## Read the skill editor
+
+| Area | What it controls |
+| --- | --- |
+| **Identity** | Stable slug, display name, description, category, and priority. Names are normalized to lowercase hyphenated slugs. |
+| **Matching** | Trigger phrases that indicate a match, exclusions that argue against it, and related workflow or agent hints. |
+| **Routes** | Whether the playbook may lead to a direct answer, data query, agent spawn, or workflow run. |
+| **Playbook** | Markdown guidance Allen loads after selecting the skill. Use **Edit**, **Split**, and **Preview** to review it. |
+| **Status** | Whether the skill participates in normal selection and can be loaded explicitly. |
+
+Priority helps order otherwise similar candidates; it should not be used to force an unrelated playbook to win. Make triggers specific enough to recognize real requests, add exclusions for nearby requests that need a different route, and keep related agent and workflow names current.
+
+## Create or revise a skill safely
+
+1. In **Settings → Skills**, select **new skill** or open an existing card.
+2. Write a clear description of the requests the playbook owns.
+3. Add representative triggers and explicit exclusions.
+4. Choose only the route types the playbook may recommend.
+5. Add related agents or workflows as routing hints, not assumptions that those capabilities still exist.
+6. Structure the playbook around when to use it, when not to use it, evidence, clarification and confirmation, capability discovery, routing, and expected output.
+7. Preview the Markdown, check the enabled state, and save.
+8. Test the result in a disposable chat with both a matching request and a nearby request that should not match.
+
+Saving requires a non-empty normalized name and playbook body. Unsupported route values are removed; when no supported route remains, the record falls back to `direct_answer`. Updates preserve the skill identity and increment its version.
+
+## Good playbook design
+
+- Describe observable user intent rather than a single keyword.
+- Separate similar jobs with exclusions, such as investigation versus implementation.
+- Require repository or execution evidence when claims depend on current state.
+- Tell Allen when to ask for confirmation and what must be shown first.
+- Treat related agents and workflows as candidates that must be discovered and verified at runtime.
+- Keep private prompts, credentials, customer data, and sensitive internal policy out of user-facing documentation.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| A skill does not appear in chat suggestions | Confirm that it is enabled and not deleted in **Settings → Skills**. |
+| `/skill` reports that the skill was not found | Use the saved slug, not only the display name; review any suggested names. |
+| Allen chooses an unrelated playbook | Tighten the skill's triggers and exclusions, lower overly broad priority, and test both positive and negative examples. |
+| A route never gets proposed | Confirm that the route is enabled on the skill and that a matching live agent, workflow, or tool is actually available. |
+| Saving fails | Check that the slug and body are present and that another active skill does not already use the same slug. |
+
+Related concepts: [Agents](/concepts/agents), [Teams](/concepts/teams), and [Workflows](/concepts/workflows).

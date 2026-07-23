@@ -1,0 +1,112 @@
+---
+title: 'Create an Agent'
+description: 'Create, constrain, and test an Allen agent for a focused responsibility.'
+---
+
+:::info Media placeholders
+Before publishing, capture **Teams & Agents**, the **Create agent** dialog, its Runtime and Permissions sections, and a small direct test run. Keep credentials and private repository paths out of screenshots.
+:::
+
+Use an agent when a task needs a reusable role with its own instructions, model settings, and tool boundaries. A good agent has one clear responsibility and returns evidence that another person can review.
+
+## Before you create one
+
+Write down:
+
+- the job this agent owns;
+- the evidence it must inspect before making claims;
+- the output it must return;
+- the actions it may take without approval;
+- the point at which it must stop and ask a person.
+
+Prefer a narrow agent such as “review database migrations for rollback risk” over a broad “engineering helper.” Narrow roles are easier to route, test, and trust.
+
+## Create the agent
+
+1. Open **Teams & Agents**.
+2. Select **Add agent**. If there are no agents yet, select **New agent**.
+3. Choose an **Agent Type**:
+   - **Team Agent** for a coordinator that can delegate to other agents;
+   - **Technical Agent** for a focused executor.
+4. Choose the agent's **Team**.
+5. Enter a stable **Name** and a readable **Display Name**. The name cannot be changed later through the edit dialog.
+6. In **Runtime**, choose a configured **Provider**, **Model**, **Reasoning**, and, when supported, **Plan Mode**.
+7. In **Permissions**, enable only the **System Tools** and **MCP Access** the role needs.
+8. Write the **Agent Instructions**.
+9. Optionally choose an icon and color, then select **Create agent**.
+
+The provider picker only offers providers that Allen can currently use. If the provider or model you need is missing, configure it under **Settings → Models** first.
+
+## Write useful instructions
+
+Instructions should describe an operating contract, not just a persona. Include:
+
+1. **Responsibility** — what work belongs to the agent.
+2. **Evidence** — which source, logs, tests, or external records it must inspect.
+3. **Process** — the important steps and validation gates.
+4. **Boundaries** — prohibited actions and actions that require confirmation.
+5. **Output** — the required summary, artifact, links, or structured fields.
+6. **Stop conditions** — when missing context, risk, or ambiguity requires human input.
+
+For repository work, state whether the agent is read-only, may edit an isolated workspace, may commit, or may create a pull request. These are separate permissions; do not imply one from another.
+
+## Configure runtime behavior
+
+The agent's runtime settings are its defaults. A workflow node can override them for that node without changing the agent record.
+
+- **Reasoning** controls the configured effort level. Use higher effort only when the task warrants the extra latency and cost.
+- **Plan Mode** is available for Claude agents and makes the run read-and-plan only.
+- **Max** reasoning is limited to supported Claude Opus models.
+
+If Allen rejects a combination, choose a compatible provider/model or remove the unsupported setting instead of weakening the agent's instructions.
+
+## Grant the least access possible
+
+System tools cover capabilities such as files, terminal, Git, web access, and database access. MCP access controls the built-in Allen server and any configured external servers; individual MCP tools can also be disabled.
+
+Start with the smallest permission set that can complete the job. In particular:
+
+- do not grant terminal, Git, or database access to a role that only summarizes information;
+- enable an external MCP server only when the agent must act on that system;
+- keep secret handling and externally visible actions behind explicit boundaries;
+- test again whenever you broaden permissions.
+
+## Place the agent in the right team
+
+Team membership determines ownership and helps Allen choose an appropriate specialist. The create flow adds the agent as a team member. Use the team assignment controls later to move agents or change leadership.
+
+A team can have only one active lead. Allen blocks deleting a user-created agent while it leads an active user-created team; assign another lead or remove the team first.
+
+## Test the agent
+
+1. Open the new agent and select **Run agent**.
+2. Enter a small, low-risk prompt.
+3. Select a registered repository only if the test needs one. **No repository** runs without repository context.
+4. Start the run and open its execution.
+5. Review the response, logs, tool calls, context, and saved artifacts.
+
+Test a refusal or stop condition as well as the happy path. The agent is ready only when it both completes allowed work and declines work outside its boundary.
+
+## Import and maintain agents
+
+The **Teams & Agents** surface also supports portable JSON import/export. You can import Claude agent definitions from a registered repository's `.claude/agents/*.md` files; imported repo agents can be resynced after their source file changes.
+
+Review imported instructions, model settings, team placement, and permissions before running them. An imported definition is configuration, not a trust decision.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Provider or model is unavailable | Configure and activate it under **Settings → Models**. |
+| Plan Mode or Max reasoning is rejected | Use a supported Claude model or remove the incompatible option. |
+| Agent cannot use a tool | Check both the System Tools list and the relevant MCP server/tool toggle. |
+| Agent cannot reach another specialist | Check team placement and the team's delegation/spawn configuration. |
+| Direct run has no repo context | Select a registered repository in **Run agent**. |
+| Delete is blocked | Built-in agents cannot be deleted; active team leads must be reassigned first. |
+
+## Related pages
+
+- [Agents](/concepts/agents)
+- [Teams](/concepts/teams)
+- [Model providers](/integrations/model-providers)
+- [Monitor an execution](/guides/monitor-execution)

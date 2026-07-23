@@ -454,7 +454,7 @@ human.approval.latest.decision in ("approve", "override")`}</Block>
               <p>On an agent node, <strong className="text-theme-primary">Model &amp; MCP servers</strong> overrides the agent's defaults <em>for this node only</em> (the agent doc is never modified):</p>
               <ul className="space-y-1.5">
                 <Field name="provider / model">Run on a specific model — provider and model are saved together so the engine dispatches to the matching provider.</Field>
-                <Field name="reasoningEffort">off · low · medium · high · max.</Field>
+                <Field name="reasoningEffort">off · low · medium · high · xhigh · max · ultra (model-dependent).</Field>
                 <Field name="planMode">Read-and-plan only (Claude only).</Field>
                 <Field name="MCP access">Which external MCP servers and which Allen tools this node may use.</Field>
               </ul>

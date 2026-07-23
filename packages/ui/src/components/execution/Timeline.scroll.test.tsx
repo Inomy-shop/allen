@@ -96,4 +96,18 @@ describe('Timeline scrolling', () => {
     expect(screen.getByText('Input')).toBeInTheDocument();
     expect(screen.getByText(/npm test/)).toBeInTheDocument();
   });
+
+  it('limits visible node names to 15 characters and preserves the full name', () => {
+    renderTimeline([
+      log({
+        _id: 'long-node-log',
+        node: 'implementation_approval',
+        message: 'Node log',
+      }),
+    ]);
+
+    const nodeName = screen.getByText('implementation…');
+    expect(nodeName.textContent).toHaveLength(15);
+    expect(nodeName).toHaveAttribute('title', 'implementation_approval');
+  });
 });

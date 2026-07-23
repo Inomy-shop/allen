@@ -1,0 +1,105 @@
+---
+title: 'Integrations'
+---
+
+Integrations let Allen use the systems where your team already keeps work: tickets, pull requests, documents, messages, databases, and model providers. Connect only the systems a task needs, then decide which agents and workflow steps may use them.
+
+:::info Media placeholders
+Add as many screenshots, diagrams, or clips as needed before publishing. Suggested captures: `static/img/docs/concepts-integrations-01.png` through `static/img/docs/concepts-integrations-06.png`, plus `static/videos/docs/concepts-integrations-short.mp4` if a connection flow is clearer as motion. Capture **Settings → MCP Servers**, a preset connection, a repository-hosted MCP server, connection status, agent or workflow MCP access, and an integration in use without exposing credentials.
+:::
+
+## What integrations add
+
+| Connection | What you can do in Allen |
+| --- | --- |
+| Linear | Browse and filter issues, open issue details, dispatch work, and mention assigned issues in chat. |
+| GitHub | Sync pull requests and support repository- and PR-aware review or workspace flows. |
+| MCP servers | Give approved tools to chats, agents, and workflow nodes. Presets cover common services, and Allen can discover MCP servers inside a registered repository. |
+| Model providers | Make registered models available to chat, agents, workflows, usage reporting, and model-recovery controls. |
+| Slack app mentions | Start or continue an Allen chat from a Slack thread when the Slack app webhook is configured. Slack-originated chats remain read-only in Allen; continue them in Slack. |
+
+Google Workspace, Jira, Figma, databases, Slack tools, and other services are connected through MCP presets or repository-hosted MCP servers. The exact tools available depend on the connected server, its credentials, and the access granted to the current agent or workflow node.
+
+## Choose the right connection path
+
+| Need | Start here |
+| --- | --- |
+| Connect a supported service | Open **Settings → MCP Servers**, select **Add**, then choose **Preset**. |
+| Connect tools shipped in a repository | Register the repository first, then choose **Settings → MCP Servers → Add → Repository**. Select the repository and one of the discovered MCP entry files. |
+| Connect Linear from its empty state | Open **Linear** and select **Connect Linear**. Allen opens the Linear preset credential flow. |
+| Connect GitHub from its empty state | Open **Pull requests** and select **Connect GitHub**. The Dashboard can offer the same connection action. |
+| Manage available models | An admin opens **Settings → Models** to add, edit, or deactivate registry entries. |
+| Receive Slack app mentions | Configure the Slack app, bot token, signing secret, and events endpoint described in the [Slack guide](/integrations/slack). This is separate from adding the Slack MCP preset for outbound Slack tools. |
+
+Use a preset when one matches the service. Use the repository path when your team owns the MCP implementation or needs a tool that is not in the preset list.
+
+## Connect and verify an MCP server
+
+1. Open **Settings → MCP Servers**.
+2. Select **Add**, then choose **Preset** or **Repository**.
+3. Enter only the credentials or connection values requested by that server.
+4. For a preset, select **Connect**; Allen registers it and runs a connection test. For a repository-hosted server, select **Add**, then use **Test connection** on its server card.
+5. Confirm the server shows **Connected** before relying on it in a task.
+
+Configured server cards show their connection status, last test, requested credential keys, and available actions. You can test the connection again, edit the definition, or delete it. Repository-hosted servers can also expose a dependency reinstall action when Allen manages their environment.
+
+Possible status labels are **Connected**, **Failed**, **Untested**, and **Disabled**. A saved record is not proof that its tools work: treat a successful connection test as the minimum setup check, then verify the specific tool you need with a read-only request.
+
+## Decide who can use the tools
+
+Connecting a server makes it available for configuration; it does not mean every workflow node should receive every external tool.
+
+- Agent configuration can select external MCP servers and disable individual MCP tools.
+- An agent node can inherit its agent's MCP settings or use **Configure MCP access** for that node only.
+- In a custom node override, Allen's own MCP server remains selected by default. External servers stay off until you select them.
+- Prefer the smallest tool set that completes the task, especially for write-capable ticketing, messaging, source-control, and database tools.
+
+Before a state-changing run, ask Allen to name the integration it will use and the intended write. For example: “Use Linear as the source of truth, but do not change the issue until I approve the plan.”
+
+## Credentials and shared access
+
+On the desktop app, preset credentials are saved through Allen's secret store. In web or development mode, MCP credentials are read from the runtime environment. Allen forwards only the keys declared by the MCP server, using the bare key names expected by that server.
+
+:::caution Shared configuration
+MCP server records are visible to authenticated Allen users and are grouped by creator for attribution. The owner label is not an authorization boundary: authenticated users can operate on shared server records. Treat adding, editing, testing, or deleting an MCP server as an instance-wide configuration change.
+:::
+
+Never paste tokens, signing secrets, private keys, database connection strings, or customer data into chat messages, workflow inputs, docs, or artifacts. If a connection fails because a credential is missing, update it through the connection flow or the approved runtime configuration rather than placing it in the task prompt.
+
+## Use integrations in everyday work
+
+### Linear
+
+The **Linear** page shows connection errors before loading tickets. Once connected, you can refresh issues, switch between list and board views, filter work, inspect details, and dispatch an issue to chat, an agent, or a workflow. In chat, type `@linear` to search active issues assigned to you and insert one as structured context.
+
+### GitHub and pull requests
+
+The **Pull requests** page requires the GitHub credential before sync. Register repositories separately under **Repositories** so workspace and repo-grounded tasks have a local source tree as well as GitHub metadata. A GitHub connection does not replace a registered repository.
+
+### Slack
+
+An app mention can create a new Slack-sourced chat or continue the chat already mapped to that Slack thread. Allen verifies Slack requests, ignores bot-authored mentions, and de-duplicates events before processing them. Because the conversation is controlled from Slack, the corresponding Allen chat explains that replies must continue in the Slack thread.
+
+Treat the Slack channel as part of the task's audience. Do not return repository secrets, private ticket content, or sensitive file contents to a channel that is not approved for them.
+
+### Models
+
+The model registry controls which provider/model entries appear throughout Allen. Adding or editing entries is an admin action. Deactivating a model removes it from future selection while existing references retain their stored model ID, which keeps historical runs understandable.
+
+## Troubleshooting checklist
+
+1. Open the integration's primary surface: **Linear**, **Pull requests**, **Settings → MCP Servers**, or **Settings → Models**.
+2. Read the displayed error before changing credentials or configuration.
+3. For MCP, select **Test connection** and check the latest status and error.
+4. Confirm the required external server and tool are selected for the agent or workflow node.
+5. Test with a read-only action before allowing writes.
+6. If a repository MCP is missing, confirm the repository is registered and that its entry file is discoverable, then reopen the repository connection flow.
+
+For detailed setup and service-specific limits, continue with:
+
+- [MCP](/integrations/mcp)
+- [Linear](/integrations/linear)
+- [Google Workspace](/integrations/google-workspace)
+- [GitHub](/integrations/github)
+- [Slack](/integrations/slack)
+- [Model providers](/integrations/model-providers)

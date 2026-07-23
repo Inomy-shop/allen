@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { Link } from 'react-router-dom';
 import { Bot, AlertCircle, AlertTriangle, Copy, Check, Clock, Wrench, CheckCircle, ExternalLink, Loader2, Brain,
   Sparkles, Zap, Cpu, Atom, Terminal, Code, Rocket, Shield, Hexagon, Flame,
   ChevronDown, ChevronRight, GitPullRequest, FolderGit2, FileText, PlayCircle, StopCircle, Timer,
-  Send, Bookmark,
+  Send, Bookmark, Search, PencilLine, Database, ListTodo, Globe2, Workflow,
 } from 'lucide-react';
 import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentReport, SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
 import { AgentQuestionPrompt } from './AgentQuestionPrompt';
@@ -11,8 +11,8 @@ import RoleIcon from '../common/RoleIcon';
 import TokenUsageDisplay from '../common/TokenUsageDisplay';
 import MermaidChatBlock from './MermaidChatBlock';
 import { WatcherStatusLines } from './WatcherStatusLines';
-import ArtifactViewer from '../artifacts/ArtifactViewer';
 import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc, type WatcherUIDoc } from '../../services/api';
+import { useDocumentTabStore } from '../../stores/documentTabStore';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { WorkflowInterventionAction } from '../execution/WorkflowInterventionAction';
 import { sanitizeChatAssistantResponse } from '../../lib/chat-response-sanitize';
@@ -20,6 +20,8 @@ import { workspaceChatPath } from '../../lib/workspace-routes';
 import { humanLabel } from '../../lib/model-catalog';
 import { getModelDisplay } from '../../hooks/useModelRegistry';
 import { isCancelledExecutionStatus, isTerminalExecutionStatus } from '../../lib/execution-status';
+import { chatSessionIdFromHref, filePathFromReference, mediaKindForPath, openExternalResource } from '../../lib/resource-navigation';
+import { useMediaViewerStore } from '../../stores/mediaViewerStore';
 
 const ChatExecutionsPanel = React.lazy(() =>
   import('./ChatRunSidebar').then(module => ({ default: module.ExecutionsPanel })),
@@ -51,7 +53,26 @@ interface ChatMessageListProps {
   onOpenFilesPanel?: () => void;
   /** Execution watcher status lines — non-clickable per-execution updates */
   watchers?: WatcherUIDoc[];
+  conversationTitle?: string;
+  conversationTag?: string | null;
+  conversationWorkflow?: string | null;
+  documentCount?: number;
+  provider?: string | null;
+  model?: string | null;
+  onOpenFileReference?: (path: string) => void;
+  onOpenChatReference?: (sessionId: string) => void;
+  onOpenInternalReference?: (path: string) => void;
+  resourceScopeKey?: string;
 }
+
+type MarkdownResourceContextValue = {
+  onOpenFileReference?: (path: string) => void;
+  onOpenChatReference?: (sessionId: string) => void;
+  onOpenInternalReference?: (path: string) => void;
+  resourceScopeKey?: string;
+};
+
+const MarkdownResourceContext = React.createContext<MarkdownResourceContextValue>({});
 
 type WorkflowInterventionField = {
   name: string;
@@ -178,25 +199,25 @@ function MessageCopyButton({ text }: { text: string }) {
 
 /* ── Thinking block ──────────────────────────────────────────────────────── */
 function ThinkingBlock({ text, durationMs, active }: { text: string; durationMs?: number; active?: boolean }) {
-  const [expanded, setExpanded] = useState(Boolean(active));
-  const label = active ? 'Thinking' : durationMs ? `Worked for ${formatDuration(durationMs)}` : 'Thinking';
+  const [expanded, setExpanded] = useState(true);
+  const label = active ? 'Thinking' : durationMs ? `Thought for ${formatDuration(durationMs)}` : 'Thought';
 
   return (
-    <div className="mb-5">
+    <div className="chat-activity-group thinking" data-active={Boolean(active)}>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="group flex w-full items-center gap-2 border-b border-app pb-2 text-left text-sm text-theme-subtle transition-colors hover:text-theme-secondary"
+        className="chat-activity-summary"
         title={expanded ? 'Collapse thinking' : 'Expand thinking'}
       >
         <span>{label}</span>
         {expanded ? (
-          <ChevronDown className="h-4 w-4 text-theme-subtle transition-colors group-hover:text-theme-secondary" />
+          <ChevronDown />
         ) : (
-          <ChevronRight className="h-4 w-4 text-theme-subtle transition-colors group-hover:text-theme-secondary" />
+          <ChevronRight />
         )}
       </button>
       {expanded && (
-        <div className="mt-4">
+        <div className="chat-activity-expansion chat-thinking-copy">
           {renderMarkdown(text)}
         </div>
       )}
@@ -384,14 +405,16 @@ function DiffCodeView({ text }: { text: string }) {
   const rows = diffRows(text);
   return (
     <div className="chat-diff-code">
-      {rows.map(({ line, kind, lineNumber }, index) => {
-        return (
-          <div key={`${index}-${line}`} className={`chat-diff-line ${kind}`}>
-            <span className="ln">{lineNumber}</span>
-            <code>{line || ' '}</code>
-          </div>
-        );
-      })}
+      <div className="chat-diff-lines">
+        {rows.map(({ line, kind, lineNumber }, index) => {
+          return (
+            <div key={`${index}-${line}`} className={`chat-diff-line ${kind}`}>
+              <span className="ln">{lineNumber}</span>
+              <code>{line || ' '}</code>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -537,9 +560,11 @@ function ChatCodeDiffCard({
                   <div className="cc-file-diff">
                     {loadingKeys.has(key) && !hasDiffContent(file) ? (
                       <div className="chat-diff-code">
-                        <div className="chat-diff-line meta">
-                          <span className="ln">1</span>
-                          <code>Loading diff...</code>
+                        <div className="chat-diff-lines">
+                          <div className="chat-diff-line meta">
+                            <span className="ln">1</span>
+                            <code>Loading diff...</code>
+                          </div>
                         </div>
                       </div>
                     ) : (
@@ -581,38 +606,102 @@ function isSafeChatHref(href: string): boolean {
   return ['http:', 'https:', 'mailto:', 'tel:'].includes(resolved.protocol);
 }
 
-function openNonArtifactChatLink(event: React.MouseEvent<HTMLAnchorElement>, href: string): void {
-  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-
-  if (typeof window !== 'undefined' && window.allenDesktop?.openExternal) {
-    const resolved = resolveChatHref(href);
-    if (!resolved) return;
-
-    const isHttpUrl = resolved.protocol === 'http:' || resolved.protocol === 'https:';
-    const isSameOrigin = resolved.origin === window.location.origin;
-
-    if (isHttpUrl && !isSameOrigin) {
-      event.preventDefault();
-      void window.allenDesktop.openExternal(resolved.toString());
-    }
-  }
-}
-
 function ArtifactMarkdownLink({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) {
   const artifactId = artifactIdFromUrl(href);
+  const resolvedHref = resolveChatHref(href);
+  const uploadedFileId = resolvedHref ? uploadedFileNameFromUrl(resolvedHref) : null;
+  const internalAppPath = resolvedHref ? allenAppPathFromUrl(resolvedHref) : null;
   const safeHref = isSafeChatHref(href);
+  const chatSessionId = chatSessionIdFromHref(href);
+  const linkedFilePath = filePathFromReference(href);
+  const resourceContext = React.useContext(MarkdownResourceContext);
   const [artifact, setArtifact] = useState<ArtifactDoc | null>(null);
-  const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const openDocument = useDocumentTabStore(state => state.openDocument);
+  const openFile = useDocumentTabStore(state => state.openFile);
+  const openMedia = useMediaViewerStore(state => state.openMedia);
 
   if (!safeHref) {
     return <span className={className} title="Unsafe link removed">{children}</span>;
   }
 
+  async function openUploadedFile() {
+    if (!uploadedFileId) return;
+    const childLabel = typeof children === 'string' ? children.trim() : '';
+    const displayName = childLabel || uploadedFileId;
+    const mediaKind = mediaKindForPath(displayName) ?? mediaKindForPath(uploadedFileId);
+    if (mediaKind) {
+      openMedia({ kind: mediaKind, src: href, downloadUrl: href, title: displayName });
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(href);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+      const canRenderAsText = contentType.startsWith('text/')
+        || /json|csv|javascript|typescript|xml|yaml|markdown/.test(contentType)
+        || /\.(?:md|markdown|txt|json|csv|ya?ml|js|jsx|ts|tsx|css|html|xml|py|rb|go|rs|java|sh|sql|toml|ini)$/i.test(displayName);
+      if (!canRenderAsText) throw new Error('Unsupported in-app file preview');
+      openFile({
+        path: displayName,
+        content: await response.text(),
+        sourceKind: 'upload',
+        sourceId: uploadedFileId,
+        sourceLabel: 'Chat file',
+        scopeKey: resourceContext.resourceScopeKey,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load file');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (!artifactId && uploadedFileId) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => void openUploadedFile()}
+          className={`inline border-0 bg-transparent p-0 text-left align-baseline font-inherit ${className ?? ''}`}
+        >
+          {children}{loading && <span className="ml-1 text-theme-subtle">…</span>}
+        </button>
+        {error && !loading && <span className="ml-1 text-[10px] text-accent-red" role="alert">Failed to open file</span>}
+      </>
+    );
+  }
+
+  if (!artifactId && internalAppPath && !chatSessionId && !linkedFilePath) {
+    return (
+      <button
+        type="button"
+        className={`inline border-0 bg-transparent p-0 text-left align-baseline font-inherit ${className ?? ''}`}
+        onClick={() => resourceContext.onOpenInternalReference?.(internalAppPath)}
+      >
+        {children}
+      </button>
+    );
+  }
+
   if (!artifactId) {
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer" className={className} onClick={(event) => openNonArtifactChatLink(event, href)}>
+      <a href={href} target="_blank" rel="noopener noreferrer" className={className} onClick={(event) => {
+        if (event.defaultPrevented || event.button !== 0) return;
+        event.preventDefault();
+        if (chatSessionId && resourceContext.onOpenChatReference) {
+          resourceContext.onOpenChatReference(chatSessionId);
+          return;
+        }
+        if (linkedFilePath && resourceContext.onOpenFileReference) {
+          resourceContext.onOpenFileReference(linkedFilePath);
+          return;
+        }
+        openExternalResource(href);
+      }}>
         {children}
       </a>
     );
@@ -620,12 +709,25 @@ function ArtifactMarkdownLink({ href, children, className }: { href: string; chi
   const resolvedArtifactId = artifactId;
 
   async function openArtifact() {
-    setOpen(true);
-    if (artifact) return;
+    const openLoadedArtifact = (loadedArtifact: ArtifactDoc) => {
+      const mediaKind = mediaKindForPath(loadedArtifact.filename);
+      if (mediaKind) {
+        const src = artifactsApi.contentUrl(loadedArtifact.artifactId);
+        openMedia({ kind: mediaKind, src, downloadUrl: src, title: loadedArtifact.filename });
+      } else {
+        openDocument(loadedArtifact, { sourceLabel: 'Chat', scopeKey: resourceContext.resourceScopeKey });
+      }
+    };
+    if (artifact) {
+      openLoadedArtifact(artifact);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      setArtifact(await artifactsApi.get(resolvedArtifactId));
+      const loadedArtifact = await artifactsApi.get(resolvedArtifactId);
+      setArtifact(loadedArtifact);
+      openLoadedArtifact(loadedArtifact);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load artifact');
     } finally {
@@ -640,35 +742,27 @@ function ArtifactMarkdownLink({ href, children, className }: { href: string; chi
         onClick={openArtifact}
         className={`inline border-0 bg-transparent p-0 text-left align-baseline font-inherit ${className ?? ''}`}
       >
-        {children}
+        {children}{loading && <span className="ml-1 text-theme-subtle">…</span>}
       </button>
-      {open && createPortal(
-        <div className="artifact-modal-backdrop" role="dialog" aria-modal="true" aria-label="Artifact viewer">
-          <div className="artifact-modal">
-            {loading && <div className="p-4 font-mono text-xs text-theme-muted">Loading artifact...</div>}
-            {error && !loading && (
-              <div className="flex h-full flex-col">
-                <div className="flex shrink-0 items-center justify-between border-b border-app bg-app-muted/40 px-4 py-2.5">
-                  <div className="font-mono text-[13px] text-theme-primary">Artifact</div>
-                  <button
-                    type="button"
-                    onClick={() => setOpen(false)}
-                    className="rounded-md px-2 py-1 text-xs text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-secondary"
-                  >
-                    Close
-                  </button>
-                </div>
-                <div className="p-4 font-mono text-xs text-accent-red">Failed to load artifact: {error}</div>
-              </div>
-            )}
-            {!loading && !error && artifact && (
-              <ArtifactViewer artifact={artifact} onClose={() => setOpen(false)} />
-            )}
-          </div>
-        </div>,
-        document.body,
-      )}
+      {error && !loading && <span className="ml-1 text-[10px] text-accent-red" role="alert">Failed to open document</span>}
     </>
+  );
+}
+
+function InlineCodeReference({ value }: { value: string }) {
+  const { onOpenFileReference } = React.useContext(MarkdownResourceContext);
+  const path = filePathFromReference(value);
+  const className = 'px-1.5 py-0.5 bg-surface-200/80 border border-app rounded text-[12px] font-mono text-accent-blue/90';
+  if (!path || !onOpenFileReference) return <code className={className}>{value}</code>;
+  return (
+    <button
+      type="button"
+      className={`${className} cursor-pointer hover:border-accent-blue/50 hover:bg-accent-blue/10 transition-colors`}
+      onClick={() => onOpenFileReference(path)}
+      title={`Open ${path} in the file viewer`}
+    >
+      {value}
+    </button>
   );
 }
 
@@ -1037,11 +1131,7 @@ function renderInline(text: string): React.ReactNode {
     }
     if (m[1]) {
       // inline code
-      parts.push(
-        <code key={k++} className="px-1.5 py-0.5 bg-surface-200/80 border border-app rounded text-[12px] font-mono text-accent-blue/90">
-          {m[1].slice(1, -1)}
-        </code>,
-      );
+      parts.push(<InlineCodeReference key={k++} value={m[1].slice(1, -1)} />);
     } else if (m[2]) {
       // bold **text**
       parts.push(
@@ -1106,6 +1196,20 @@ function renderInline(text: string): React.ReactNode {
 /* ── Tool Call Card ───────────────────────────────────────────────────────── */
 
 const TOOL_LABELS: Record<string, { label: string; color: string }> = {
+  // Chat-native file and shell activity
+  read: { label: 'Read File', color: 'text-accent-blue' },
+  read_file: { label: 'Read File', color: 'text-accent-blue' },
+  write: { label: 'Write File', color: 'text-accent-orange' },
+  write_file: { label: 'Write File', color: 'text-accent-orange' },
+  edit: { label: 'Edit File', color: 'text-accent-orange' },
+  edit_file: { label: 'Edit File', color: 'text-accent-orange' },
+  apply_patch: { label: 'Edit File', color: 'text-accent-orange' },
+  exec_command: { label: 'Run Command', color: 'text-accent-purple' },
+  bash: { label: 'Run Command', color: 'text-accent-purple' },
+  grep: { label: 'Search', color: 'text-accent-cyan' },
+  glob: { label: 'Find Files', color: 'text-accent-cyan' },
+  create_pull_request: { label: 'Create Pull Request', color: 'text-accent-green' },
+  linear_get_issue: { label: 'Read Linear Issue', color: 'text-accent-purple' },
   // Phase 3-4: Core
   run_workflow: { label: 'Run Workflow', color: 'text-accent-green' },
   list_workflows: { label: 'List Workflows', color: 'text-accent-blue' },
@@ -1146,8 +1250,8 @@ function toolBaseName(tool: string): string {
 
 function humanizeToolName(tool: string): string {
   const base = toolBaseName(tool);
-  return TOOL_LABELS[base]?.label
-    ?? TOOL_LABELS[tool]?.label
+  return TOOL_LABELS[base.toLowerCase()]?.label
+    ?? TOOL_LABELS[tool.toLowerCase()]?.label
     ?? base
       .replace(/[_-]+/g, ' ')
       .replace(/\b\w/g, ch => ch.toUpperCase());
@@ -1155,7 +1259,315 @@ function humanizeToolName(tool: string): string {
 
 function toolColor(tool: string): string {
   const base = toolBaseName(tool);
-  return TOOL_LABELS[base]?.color ?? TOOL_LABELS[tool]?.color ?? 'text-theme-secondary';
+  return TOOL_LABELS[base.toLowerCase()]?.color ?? TOOL_LABELS[tool.toLowerCase()]?.color ?? 'text-theme-secondary';
+}
+
+type ChatToolKind = 'read' | 'write' | 'command' | 'search' | 'linear' | 'pull-request' | 'database' | 'workflow' | 'web' | 'generic';
+
+type ChatToolResource = {
+  url: string;
+  label: string;
+  title?: string;
+  kind: 'pull-request' | 'linear' | 'artifact' | 'file' | 'internal' | 'external';
+  appPath?: string;
+};
+
+function chatToolKind(tool: string): ChatToolKind {
+  const normalized = `${tool} ${toolBaseName(tool)}`.toLowerCase();
+  if (/pull.?request|create.?pr|open.?pr|github.*pr/.test(normalized)) return 'pull-request';
+  if (/linear|issue|ticket/.test(normalized)) return 'linear';
+  if (/apply.?patch|write|edit|replace|create.?file|save.?file/.test(normalized)) return 'write';
+  if (/exec.?command|run.?command|bash|shell|terminal/.test(normalized)) return 'command';
+  if (/grep|glob|search|find/.test(normalized)) return 'search';
+  if (/database|query|mongo|postgres|sql/.test(normalized)) return 'database';
+  if (/workflow|execution|spawn.?agent/.test(normalized)) return 'workflow';
+  if (/read|open.?file|get.?file|cat.?file/.test(normalized)) return 'read';
+  if (/web|browser|fetch|http/.test(normalized)) return 'web';
+  return 'generic';
+}
+
+function ToolKindIcon({ kind }: { kind: ChatToolKind }) {
+  const Icon = kind === 'read' ? FileText
+    : kind === 'write' ? PencilLine
+      : kind === 'command' ? Terminal
+        : kind === 'search' ? Search
+          : kind === 'linear' ? ListTodo
+            : kind === 'pull-request' ? GitPullRequest
+              : kind === 'database' ? Database
+                : kind === 'workflow' ? Workflow
+                  : kind === 'web' ? Globe2
+                    : Wrench;
+  return <Icon className="h-3.5 w-3.5" />;
+}
+
+function firstString(source: unknown, keys: string[]): string | undefined {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return undefined;
+  const record = source as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number') return String(value);
+  }
+  return undefined;
+}
+
+function firstText(source: unknown, keys: string[]): string | undefined {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return undefined;
+  const record = source as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return undefined;
+}
+
+function validExternalUrl(value: string): string | null {
+  let normalized = value.trim();
+  let previous = '';
+  while (normalized !== previous) {
+    previous = normalized;
+    normalized = normalized
+      .replace(/[.,;:!?]+$/, '')
+      .replace(/(?:\*{1,3}|_{2,3}|~{2}|`{1,3})+$/, '');
+  }
+  try {
+    const url = new URL(normalized);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? normalized : null;
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+function isAllenOwnedUrl(url: URL): boolean {
+  if (typeof window === 'undefined') return isLoopbackHostname(url.hostname);
+  if (window.allenDesktop && isLoopbackHostname(url.hostname)) return true;
+  const current = new URL(window.location.href);
+  return url.hostname === current.hostname || (isLoopbackHostname(url.hostname) && isLoopbackHostname(current.hostname));
+}
+
+function allenAppPathFromUrl(url: URL): string | null {
+  if (!isAllenOwnedUrl(url)) return null;
+  const apiResource = url.pathname.match(/^\/api\/(workflows|executions)\/([^/]+)\/?$/);
+  if (apiResource) {
+    return `/${apiResource[1]}/${apiResource[2]}${url.search}${url.hash}`;
+  }
+  if (url.pathname.startsWith('/api/')) return null;
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function uploadedFileNameFromUrl(url: URL): string | null {
+  const match = url.pathname.match(/^\/api\/files\/([^/?#]+)$/);
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+function resourceLabelFromKey(key?: string): string | undefined {
+  if (!key) return undefined;
+  const normalized = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase();
+  if (['url', 'html_url', 'web_url', 'public_url', 'permalink'].includes(normalized)) return undefined;
+  const base = normalized
+    .replace(/_(?:html_|web_|public_)?url$/, '')
+    .replace(/_artifact$/, '')
+    .replace(/^resolved_/, '')
+    .replace(/^final_/, '');
+  return base ? humanLabel(base) : undefined;
+}
+
+function resourceFromUrl(url: string, context?: Record<string, unknown>, sourceKey?: string): ChatToolResource {
+  const prMatch = url.match(/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/i);
+  const contextTitle = firstString(context, ['originalName', 'filename', 'relativePath', 'title', 'name', 'summary']);
+  const contextDescription = firstString(context, ['description', 'summary', 'title']);
+  const keyTitle = resourceLabelFromKey(sourceKey);
+  if (prMatch) {
+    return { url, kind: 'pull-request', label: `PR #${prMatch[1]}`, title: contextTitle };
+  }
+  if (/linear\.app\//i.test(url)) {
+    const identifier = firstString(context, ['identifier', 'issueIdentifier', 'issue_id', 'issueId'])
+      ?? url.match(/\/issue\/([^/?#]+)/i)?.[1];
+    return { url, kind: 'linear', label: identifier || 'Linear issue', title: contextTitle };
+  }
+  const parsed = new URL(url);
+  if (artifactIdFromUrl(url)) {
+    return { url, kind: 'artifact', label: contextTitle || keyTitle || 'Untitled artifact', title: contextDescription };
+  }
+  const uploadedFilename = uploadedFileNameFromUrl(parsed);
+  if (uploadedFilename) {
+    return { url, kind: 'file', label: contextTitle || uploadedFilename, title: contextDescription };
+  }
+  const appPath = allenAppPathFromUrl(parsed);
+  if (appPath) {
+    return { url, kind: 'internal', label: contextTitle || humanLabel(parsed.pathname.split('/').filter(Boolean).pop() || 'Allen'), title: contextDescription, appPath };
+  }
+  let label = contextTitle || 'Open resource';
+  try { label = contextTitle || parsed.hostname.replace(/^www\./, ''); } catch {}
+  return { url, kind: 'external', label, title: contextTitle };
+}
+
+function extractToolResources(value: unknown): ChatToolResource[] {
+  const found = new Map<string, ChatToolResource>();
+  const addResource = (candidate: string, context?: Record<string, unknown>, sourceKey?: string) => {
+    const url = validExternalUrl(candidate);
+    if (!url || found.has(url)) return;
+    const parsed = new URL(url);
+    const resource = resourceFromUrl(url, context, sourceKey);
+    const isWorkflowResource = resource.kind === 'internal' && resource.appPath?.startsWith('/workflows/');
+    if (
+      isAllenOwnedUrl(parsed)
+      && resource.kind !== 'artifact'
+      && resource.kind !== 'file'
+      && !isWorkflowResource
+    ) return;
+    found.set(url, resource);
+  };
+  const walk = (current: unknown, depth: number, context?: Record<string, unknown>, sourceKey?: string) => {
+    if (depth > 5 || current == null) return;
+    if (typeof current === 'string') {
+      for (const match of current.matchAll(/https?:\/\/[^\s<>()\[\]{}"']+/g)) {
+        addResource(match[0], context, sourceKey);
+      }
+      return;
+    }
+    if (Array.isArray(current)) {
+      current.forEach(item => walk(item, depth + 1, context, sourceKey));
+      return;
+    }
+    if (typeof current !== 'object') return;
+    const record = current as Record<string, unknown>;
+    for (const [key, child] of Object.entries(record)) {
+      if (typeof child === 'string' && /(^|_)(html_?url|web_?url|public_?url|permalink|url)$/i.test(key)) {
+        addResource(child, record, key);
+      }
+      walk(child, depth + 1, record, key);
+    }
+  };
+  walk(value, 0);
+  return [...found.values()].slice(0, 5);
+}
+
+function toolPath(args?: Record<string, unknown>, result?: Record<string, unknown>): string | undefined {
+  return firstString(args, ['path', 'file_path', 'filePath', 'filename', 'target_file', 'targetFile'])
+    ?? firstString(result, ['path', 'file_path', 'filePath', 'filename'])
+    ?? pathFromToolReceipt(firstString(result, ['raw', 'output', 'message']));
+}
+
+function toolFileSummary(args?: Record<string, unknown>, result?: Record<string, unknown>): string | undefined {
+  const direct = toolPath(args, result);
+  if (direct) return direct;
+  const files = (Array.isArray(args?.files) ? args.files : Array.isArray(result?.files) ? result.files : [])
+    .map(file => firstString(file, ['path', 'file_path', 'filePath', 'filename']))
+    .filter((path): path is string => Boolean(path));
+  if (files.length === 0) return undefined;
+  return files.length === 1 ? files[0] : `${files[0]} + ${files.length - 1} more`;
+}
+
+function pathFromToolReceipt(text?: string): string | undefined {
+  if (!text) return undefined;
+  const match = text.match(/File\s+(?:created|written|updated|edited)\s+successfully\s+at:\s*(.+?)(?:\s+\(|\n|$)/i)
+    ?? text.match(/The\s+file\s+(.+?)\s+has\s+been\s+(?:created|written|updated|edited)\s+successfully/i)
+    ?? text.match(/^(?:Created|Wrote|Updated|Edited)\s+(?:file\s+)?[`"]?(.+?)[`"]?(?:\s+successfully)?$/im);
+  return match?.[1]?.trim();
+}
+
+function toolCommand(args?: Record<string, unknown>): string | undefined {
+  return firstString(args, ['cmd', 'command', 'script', 'shell_command', 'shellCommand']);
+}
+
+function linesAsDiff(text: string, prefix: '+' | '-'): string {
+  return text.split('\n').map(line => `${prefix}${line}`).join('\n');
+}
+
+function toolDiff(call: ToolCallRecord | ActiveToolCall): string | null {
+  const result = 'result' in call ? call.result : undefined;
+  const args = call.args ?? {};
+  const direct = firstText(args, ['diff', 'patch']) ?? firstText(result, ['diff', 'patch']);
+  if (direct) return direct;
+  const rawResult = firstText(result, ['raw']);
+  if (rawResult && (/^diff --git /m.test(rawResult) || (/^---\s+/m.test(rawResult) && /^\+\+\+\s+/m.test(rawResult)))) {
+    return rawResult;
+  }
+
+  const resultFiles = result?.files;
+  if (Array.isArray(resultFiles)) {
+    const diffs = resultFiles
+      .map(file => firstText(file, ['diff', 'patch']))
+      .filter((diff): diff is string => Boolean(diff));
+    if (diffs.length > 0) return diffs.join('\n');
+  }
+
+  const oldText = firstText(args, ['old_string', 'oldString', 'originalContent', 'before']);
+  const newText = firstText(args, ['new_string', 'newString', 'modifiedContent', 'after']);
+  const path = toolPath(args, result) ?? 'changed file';
+  if (oldText !== undefined || newText !== undefined) {
+    return [
+      `--- a/${path}`,
+      `+++ b/${path}`,
+      '@@',
+      oldText ? linesAsDiff(oldText, '-') : '',
+      newText ? linesAsDiff(newText, '+') : '',
+    ].filter(Boolean).join('\n');
+  }
+
+  const content = firstText(args, ['content', 'contents', 'text']);
+  if (content && chatToolKind(call.tool) === 'write') {
+    return [
+      '--- /dev/null',
+      `+++ b/${path}`,
+      `@@ -0,0 +1,${content.split('\n').length} @@`,
+      linesAsDiff(content, '+'),
+    ].join('\n');
+  }
+  return null;
+}
+
+function toolDiffFiles(call: ToolCallRecord | ActiveToolCall): Array<{ path: string; diff: string }> {
+  const result = 'result' in call ? call.result : undefined;
+  const candidates = Array.isArray(result?.files) ? result.files : Array.isArray(call.args?.files) ? call.args.files : [];
+  return candidates.flatMap((file, index) => {
+    const diff = firstText(file, ['diff', 'patch']);
+    if (!diff) return [];
+    return [{ path: firstString(file, ['path', 'file_path', 'filePath', 'filename']) ?? `File ${index + 1}`, diff }];
+  });
+}
+
+function toolOutputText(result?: Record<string, unknown>): string | undefined {
+  return firstText(result, ['output', 'stdout', 'content', 'text', 'message', 'stderr', 'raw']);
+}
+
+function descriptionSummary(call: ToolCallRecord | ActiveToolCall): string {
+  const description = call.description?.trim();
+  if (!description || description.toLowerCase() === call.tool.toLowerCase()) return '';
+  const base = toolBaseName(call.tool).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return description
+    .replace(new RegExp(`^${base}\\s*:?\\s*`, 'i'), '')
+    .replace(/^\((?:file|notebook)\)$/i, '')
+    .trim();
+}
+
+function actionSummary(call: ToolCallRecord | ActiveToolCall, result?: Record<string, unknown>): string {
+  const kind = chatToolKind(call.tool);
+  const described = descriptionSummary(call);
+  if (kind === 'command') return toolCommand(call.args) || described || argsSummary(call.args) || 'Command completed';
+  if (kind === 'read') return toolFileSummary(call.args, result) || described || argsSummary(call.args) || 'File contents';
+  if (kind === 'write') return toolFileSummary(call.args, result) || described || argsSummary(call.args) || 'File updated';
+  if (kind === 'search') {
+    const pattern = firstString(call.args, ['pattern', 'query', 'q']);
+    const path = toolPath(call.args, result);
+    return [pattern ? `“${pattern}”` : '', path].filter(Boolean).join(' · ') || described || argsSummary(call.args);
+  }
+  if (kind === 'linear') {
+    return firstString(result, ['identifier', 'title', 'name']) ?? firstString(call.args, ['identifier', 'issue_id', 'query']) ?? argsSummary(call.args);
+  }
+  if (kind === 'pull-request') {
+    const number = firstString(result, ['number', 'prNumber', 'pull_number']);
+    const title = firstString(result, ['title', 'name']);
+    return [number ? `PR #${number}` : '', title].filter(Boolean).join(' · ') || argsSummary(call.args);
+  }
+  return argsSummary(call.args) || described || resultSummary(result);
 }
 
 function compactValue(value: unknown): string {
@@ -1179,6 +1591,8 @@ function argsSummary(args?: Record<string, unknown>): string {
 function resultSummary(result?: Record<string, unknown>): string {
   if (!result) return '';
   if (result.error) return `Error: ${compactValue(result.error)}`;
+  const raw = firstString(result, ['raw']);
+  if (raw) return raw.split('\n').find(line => line.trim())?.trim() || 'Completed';
   const preferred = ['message', 'summary', 'status', 'title', 'name', 'execution_id'];
   for (const key of preferred) {
     if (result[key] !== undefined) return `${key.replace(/_/g, ' ')}: ${compactValue(result[key])}`;
@@ -1188,30 +1602,304 @@ function resultSummary(result?: Record<string, unknown>): string {
   return entries.slice(0, 2).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${compactValue(v)}`).join(' · ');
 }
 
-function prettyJson(value: unknown): string {
-  return JSON.stringify(value, null, 2);
+type ToolDataRow = { key: string; value: string; multiline: boolean };
+
+function flattenToolData(value: unknown, prefix = '', depth = 0): ToolDataRow[] {
+  if (value == null) return prefix ? [{ key: prefix, value: String(value), multiline: false }] : [];
+  if (typeof value === 'string') return [{ key: prefix, value, multiline: value.includes('\n') || value.length > 90 }];
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return [{ key: prefix, value: String(value), multiline: false }];
+  }
+  if (Array.isArray(value)) {
+    if (value.every(item => ['string', 'number', 'boolean'].includes(typeof item))) {
+      const text = value.map(String).join('\n');
+      return [{ key: prefix, value: text, multiline: value.length > 1 || text.length > 90 }];
+    }
+    if (depth >= 2) return [{ key: prefix, value: `${value.length} items`, multiline: false }];
+    return value.flatMap((item, index) => flattenToolData(item, `${prefix || 'item'} ${index + 1}`, depth + 1));
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return [];
+    if (depth >= 2) return [{ key: prefix, value: entries.map(([key]) => key).join(', '), multiline: false }];
+    return entries.flatMap(([key, child]) => flattenToolData(child, prefix ? `${prefix} · ${key}` : key, depth + 1));
+  }
+  return [{ key: prefix, value: String(value), multiline: false }];
+}
+
+function ToolDataBlock({ label, value }: { label: string; value: unknown }) {
+  const rows = flattenToolData(value);
+  if (rows.length === 0) return null;
+  const rawOnly = rows.length === 1 && rows[0]?.key === 'raw';
+  return (
+    <div className="chat-tool-data-block">
+      <div className="chat-tool-json-label">{label}</div>
+      <div className="chat-tool-data-rows">
+        {rows.map((row, index) => (
+          <div className="chat-tool-data-row" key={`${row.key}:${index}`}>
+            {!rawOnly && <span>{row.key.replace(/_/g, ' ')}</span>}
+            {row.multiline || rawOnly ? <pre>{row.value}</pre> : <code>{row.value}</code>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ToolResourceLink({ resource }: { resource: ChatToolResource }) {
+  const Icon = resource.kind === 'pull-request' ? GitPullRequest
+    : resource.kind === 'linear' ? ListTodo
+      : resource.kind === 'internal' ? Workflow
+        : resource.kind === 'artifact' || resource.kind === 'file' ? FileText
+          : ExternalLink;
+  const resourceContext = React.useContext(MarkdownResourceContext);
+  const openDocument = useDocumentTabStore(state => state.openDocument);
+  const openFile = useDocumentTabStore(state => state.openFile);
+  const openMedia = useMediaViewerStore(state => state.openMedia);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const [artifactDoc, setArtifactDoc] = useState<ArtifactDoc | null>(null);
+  useEffect(() => {
+    if (resource.kind !== 'artifact') return;
+    const artifactId = artifactIdFromUrl(resource.url);
+    if (!artifactId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const artifact = await artifactsApi.get(artifactId);
+        if (!cancelled && artifact) setArtifactDoc(artifact);
+      } catch {
+        // Keep the key-derived title and load again if the user opens it.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [resource.kind, resource.url]);
+  const isInternal = resource.kind === 'artifact' || resource.kind === 'file' || resource.kind === 'internal';
+  const displayLabel = artifactDoc?.filename || resource.label;
+  const content = (
+    <>
+      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+      <span className="chat-tool-resource-label">{displayLabel}</span>
+      {resource.title && resource.title !== displayLabel && <span className="chat-tool-resource-title">{resource.title}</span>}
+      {loading ? <Loader2 className="h-3 w-3 animate-spin chat-tool-resource-open" aria-hidden="true" />
+        : isInternal ? <ChevronRight className="h-3 w-3 chat-tool-resource-open" aria-hidden="true" />
+          : <ExternalLink className="h-3 w-3 chat-tool-resource-open" aria-hidden="true" />}
+    </>
+  );
+
+  async function openInternalResource() {
+    setError(false);
+    if (resource.kind === 'internal' && resource.appPath) {
+      resourceContext.onOpenInternalReference?.(resource.appPath);
+      return;
+    }
+
+    if (resource.kind === 'artifact') {
+      const artifactId = artifactIdFromUrl(resource.url);
+      if (!artifactId) return;
+      setLoading(true);
+      try {
+        const artifact = artifactDoc ?? await artifactsApi.get(artifactId);
+        const mediaKind = mediaKindForPath(artifact.filename);
+        if (mediaKind) {
+          const src = artifactsApi.contentUrl(artifact.artifactId);
+          openMedia({ kind: mediaKind, src, downloadUrl: src, title: artifact.filename });
+        } else {
+          openDocument(artifact, { sourceLabel: 'Chat', scopeKey: resourceContext.resourceScopeKey });
+        }
+      } catch {
+        setError(true);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    if (resource.kind === 'file') {
+      const parsed = new URL(resource.url, window.location.href);
+      const fileId = uploadedFileNameFromUrl(parsed);
+      if (!fileId) return;
+      const displayName = resource.label || fileId;
+      const mediaKind = mediaKindForPath(displayName) ?? mediaKindForPath(fileId);
+      if (mediaKind) {
+        openMedia({ kind: mediaKind, src: resource.url, downloadUrl: resource.url, title: displayName });
+        return;
+      }
+      setLoading(true);
+      try {
+        const response = await fetch(resource.url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+        const canRenderAsText = contentType.startsWith('text/')
+          || /json|csv|javascript|typescript|xml|yaml|markdown/.test(contentType)
+          || /\.(?:md|markdown|txt|json|csv|ya?ml|js|jsx|ts|tsx|css|html|xml|py|rb|go|rs|java|sh|sql|toml|ini)$/i.test(displayName);
+        if (!canRenderAsText) throw new Error('Unsupported in-app file preview');
+        openFile({
+          path: displayName,
+          content: await response.text(),
+          sourceKind: 'upload',
+          sourceId: fileId,
+          sourceLabel: 'Chat file',
+          scopeKey: resourceContext.resourceScopeKey,
+        });
+      } catch {
+        setError(true);
+      } finally {
+        setLoading(false);
+      }
+    }
+  }
+
+  if (isInternal) {
+    return (
+      <button
+        type="button"
+        className={`chat-tool-resource-link internal${error ? ' error' : ''}`}
+        title={error ? `Unable to preview ${displayLabel}` : resource.title ? `${displayLabel} — ${resource.title}` : `Open ${displayLabel} in Allen`}
+        onClick={() => void openInternalResource()}
+        disabled={loading}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <a
+      href={resource.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="chat-tool-resource-link"
+      title={resource.title ? `${displayLabel} — ${resource.title}` : displayLabel}
+    >
+      {content}
+    </a>
+  );
+}
+
+function ToolSpecializedDetails({
+  call,
+  kind,
+  result,
+  diff,
+}: {
+  call: ToolCallRecord | ActiveToolCall;
+  kind: ChatToolKind;
+  result?: Record<string, unknown>;
+  diff: string | null;
+}) {
+  const command = kind === 'command' ? toolCommand(call.args) : undefined;
+  const output = toolOutputText(result);
+  const path = toolFileSummary(call.args, result);
+  const diffFiles = toolDiffFiles(call);
+
+  if (diff) {
+    if (diffFiles.length > 0) {
+      return (
+        <div className="chat-tool-diff-stack">
+          {diffFiles.map((file, index) => (
+            <div className="chat-tool-diff-block" key={`${file.path}:${index}`}>
+              <div className="chat-tool-detail-head">
+                <span><PencilLine className="h-3.5 w-3.5" /> Diff</span>
+                <code>{file.path}</code>
+              </div>
+              <DiffCodeView text={file.diff} />
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return (
+      <div className="chat-tool-diff-block">
+        <div className="chat-tool-detail-head">
+          <span><PencilLine className="h-3.5 w-3.5" /> Diff</span>
+          {path && <code>{path}</code>}
+        </div>
+        <DiffCodeView text={diff} />
+      </div>
+    );
+  }
+
+  if (kind === 'command' && (command || output)) {
+    return (
+      <div className="chat-tool-terminal-block">
+        <div className="chat-tool-detail-head">
+          <span><Terminal className="h-3.5 w-3.5" /> Command</span>
+        </div>
+        {command && <pre className="chat-tool-command"><span aria-hidden="true">$</span> {command}</pre>}
+        {output && <pre className="chat-tool-command-output">{output}</pre>}
+      </div>
+    );
+  }
+
+  if (kind === 'read' && output) {
+    const lines = output.split('\n').map((line, index) => {
+      const match = line.match(/^\s*(\d+)(?:→|\t)(.*)$/);
+      return { number: match?.[1] ?? String(index + 1), content: match?.[2] ?? line };
+    });
+    return (
+      <div className="chat-tool-file-block">
+        <div className="chat-tool-detail-head">
+          <span><FileText className="h-3.5 w-3.5" /> Read</span>
+          {path && <code>{path}</code>}
+        </div>
+        <div className="chat-tool-code-lines">
+          {lines.map((line, index) => (
+            <div className="chat-tool-code-line" key={`${line.number}:${index}`}>
+              <span aria-hidden="true">{line.number}</span>
+              <code>{line.content || ' '}</code>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (kind === 'write' && output) {
+    return (
+      <div className="chat-tool-receipt-block">
+        <CheckCircle className="h-3.5 w-3.5" aria-hidden="true" />
+        <span>{output}</span>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall; active?: boolean }) {
   const isRunning = active && (call as ActiveToolCall).status === 'running';
-  const [expanded, setExpanded] = useState(false);
-  const label = humanizeToolName(call.tool);
   const result = 'result' in call ? call.result : undefined;
+  const kind = chatToolKind(call.tool);
+  const diff = toolDiff(call);
+  const [expanded, setExpanded] = useState(Boolean(diff));
+  const openedDiffRef = useRef(Boolean(diff));
+  useEffect(() => {
+    if (diff && !openedDiffRef.current) {
+      openedDiffRef.current = true;
+      setExpanded(true);
+    }
+  }, [diff]);
+  const label = humanizeToolName(call.tool);
   const duration = 'durationMs' in call ? call.durationMs : undefined;
   const hasArgs = call.args && Object.keys(call.args).length > 0;
-  const inputSummary = argsSummary(call.args);
-  const outputSummary = resultSummary(result);
   const providerPrefix = call.tool.includes('__') ? call.tool.split('__').slice(0, -1).join(' / ').replace(/^mcp \/ /, '') : '';
   const executionId = result?.execution_id as string | undefined;
   const hasError = Boolean(result?.error);
   const state = isRunning ? 'running' : hasError ? 'error' : 'complete';
-  const summary = inputSummary || outputSummary || (isRunning ? 'Running...' : providerPrefix || call.tool);
+  const summary = actionSummary(call, result) || (isRunning ? 'Running...' : providerPrefix || call.tool);
+  const resources = extractToolResources({ args: call.args, result });
+  const specialized = Boolean(diff || ((kind === 'command' || kind === 'read' || kind === 'write') && toolOutputText(result)) || (kind === 'command' && toolCommand(call.args)));
 
   return (
-    <div className="chat-tool-row" data-state={state}>
+    <div className="chat-tool-row" data-state={state} data-kind={kind}>
       <button
         onClick={() => setExpanded(!expanded)}
         className="chat-tool-row-button"
+        type="button"
+        aria-expanded={expanded}
         title={expanded ? 'Collapse tool result' : 'Expand tool result'}
       >
         <span className="chat-tool-row-status" aria-hidden="true">
@@ -1220,47 +1908,43 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
           ) : hasError ? (
             <AlertCircle className="h-3.5 w-3.5" />
           ) : (
-            <CheckCircle className="h-3.5 w-3.5" />
+            <ToolKindIcon kind={kind} />
           )}
         </span>
-        <span className="chat-tool-row-main">
-          <span className="chat-tool-row-title">
-            <span>{label}</span>
-          </span>
-          <span className="chat-tool-row-summary">{summary}</span>
-        </span>
+        <span className="chat-tool-row-title"><span>{label}</span></span>
+        <span className="chat-tool-row-summary">{summary}</span>
         <span className="chat-tool-row-meta">
           {providerPrefix && <span>{providerPrefix}</span>}
           {duration != null && <span>{formatDuration(duration)}</span>}
-          {executionId && (
-            <a
-              href={`/executions/${executionId}`}
-              onClick={e => e.stopPropagation()}
-              className="chat-tool-row-link"
-              title="View execution"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-          )}
+          {!isRunning && !hasError && <Check className="chat-tool-state-check h-3 w-3" aria-hidden="true" />}
           {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </span>
       </button>
 
+      {(resources.length > 0 || executionId) && (
+        <div className="chat-tool-resource-list" aria-label="Tool resources">
+          {resources.map(resource => <ToolResourceLink key={resource.url} resource={resource} />)}
+          {executionId && (
+            <Link to={`/executions/${executionId}`} className="chat-tool-resource-link internal" title="View execution">
+              <Workflow className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="chat-tool-resource-label">Execution</span>
+              <span className="chat-tool-resource-title">{executionId}</span>
+              <ChevronRight className="h-3 w-3 chat-tool-resource-open" aria-hidden="true" />
+            </Link>
+          )}
+        </div>
+      )}
+
       {expanded && (
         <div className="chat-tool-row-details">
-          {hasArgs && (
-            <div className="chat-tool-json-block">
-              <div className="chat-tool-json-label">Input</div>
-              <pre>{prettyJson(call.args)}</pre>
-            </div>
+          <ToolSpecializedDetails call={call} kind={kind} result={result} diff={diff} />
+          {hasArgs && !specialized && (
+            <ToolDataBlock label="Input" value={call.args} />
           )}
-          {result && (
-            <div className="chat-tool-json-block">
-              <div className="chat-tool-json-label">Output</div>
-              <pre>{prettyJson(result)}</pre>
-            </div>
+          {result && !specialized && (
+            <ToolDataBlock label="Output" value={result} />
           )}
-          {!hasArgs && !result && (
+          {!hasArgs && !result && !specialized && (
             <div className="chat-tool-empty-detail">Waiting for tool input/output details...</div>
           )}
         </div>
@@ -1271,10 +1955,21 @@ function ToolCallCard({ call, active }: { call: ToolCallRecord | ActiveToolCall;
 
 function toolCallLineText(call: ToolCallRecord | ActiveToolCall): string {
   const label = humanizeToolName(call.tool);
-  const input = argsSummary(call.args);
-  const result = 'result' in call ? resultSummary(call.result) : '';
-  const detail = input || result;
+  const result = 'result' in call ? call.result : undefined;
+  const detail = actionSummary(call, result);
   return detail ? `${label} · ${detail}` : label;
+}
+
+function toolFileKeys(call: ToolCallRecord): string[] {
+  const result = call.result;
+  const direct = toolPath(call.args, result);
+  if (direct) return [direct];
+  const files = (Array.isArray(call.args?.files) ? call.args.files : Array.isArray(result?.files) ? result.files : [])
+    .map(file => firstString(file, ['path', 'file_path', 'filePath', 'filename']))
+    .filter((path): path is string => Boolean(path));
+  if (files.length > 0) return files;
+  const kind = chatToolKind(call.tool);
+  return kind === 'read' || kind === 'write' ? [`${call.toolUseId ?? call.tool}:${call.timestamp}`] : [];
 }
 
 function ToolCallLine({ call, count, active }: { call: ToolCallRecord | ActiveToolCall; count: number; active?: boolean }) {
@@ -1283,16 +1978,20 @@ function ToolCallLine({ call, count, active }: { call: ToolCallRecord | ActiveTo
   const duration = 'durationMs' in call ? call.durationMs : undefined;
   const executionId = result?.execution_id as string | undefined;
   const hasError = Boolean(result?.error);
+  const kind = chatToolKind(call.tool);
 
   return (
     <div className={`chat-tool-latest-line ${isRunning ? 'running' : ''} ${hasError ? 'error' : ''}`}>
+      <span className="chat-tool-inline-kind" data-kind={kind} aria-hidden="true">
+        {isRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : hasError ? <AlertCircle className="h-3 w-3" /> : <ToolKindIcon kind={kind} />}
+      </span>
       <span className="chat-tool-count">{count} tool call{count === 1 ? '' : 's'}</span>
       <span className="chat-tool-text">{toolCallLineText(call)}</span>
       {duration != null && <span className="chat-tool-duration">{formatDuration(duration)}</span>}
       {executionId && (
-        <a href={`/executions/${executionId}`} target="_blank" rel="noopener noreferrer" className="chat-tool-exec-link" title="Open execution">
-          <ExternalLink className="h-3 w-3" />
-        </a>
+        <Link to={`/executions/${executionId}`} className="chat-tool-exec-link" title="Open execution in Allen">
+          <ChevronRight className="h-3 w-3" />
+        </Link>
       )}
     </div>
   );
@@ -1302,29 +2001,23 @@ function ToolCallLine({ call, count, active }: { call: ToolCallRecord | ActiveTo
  * Completed message: tool calls reduced to latest activity.
  */
 function ToolCallsSection({ calls }: { calls?: ToolCallRecord[] }) {
-  const [showTools, setShowTools] = useState(false);
   if (!calls || calls.length === 0) return null;
-
-  const latestCall = calls[calls.length - 1];
+  const duration = calls.reduce((total, call) => total + (call.durationMs ?? 0), 0);
+  const files = new Set(calls.flatMap(toolFileKeys)).size;
+  const queries = calls.filter(call => /query|search|find/i.test(toolBaseName(call.tool))).length;
+  const summary = [files ? `${files} file${files === 1 ? '' : 's'}` : null, queries ? `${queries} quer${queries === 1 ? 'y' : 'ies'}` : null, `${calls.length} tool${calls.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
 
   return (
-    <div className="mt-3 space-y-2">
-      {latestCall && (
-        <button type="button" className="chat-tool-disclosure" data-expanded={showTools} onClick={() => setShowTools(value => !value)}>
-          {showTools ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          <ToolCallLine call={latestCall} count={calls.length} />
-        </button>
-      )}
-      {showTools && (
-        <div className="chat-tool-history">
-          <div className="chat-tool-history-head">
-            <span>Tool calls</span>
-            <span>{calls.length}</span>
-          </div>
-          {calls.map((call, i) => <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} />)}
-        </div>
-      )}
-    </div>
+    <details className="chat-activity-group tools" open>
+      <summary className="chat-activity-summary">
+        <ChevronRight className="chat-activity-chevron" />
+        <span>Worked for {formatDuration(duration)}</span>
+        <em>{summary}</em>
+      </summary>
+      <div className="chat-activity-expansion chat-tool-history">
+        {calls.map((call, i) => <ToolCallCard key={`${call.toolUseId ?? call.tool}-${i}`} call={call} />)}
+      </div>
+    </details>
   );
 }
 
@@ -2008,6 +2701,175 @@ function archivedActivityRowsForRun(run: SpawnedAgent, count: number): Array<{ k
   }
 }
 
+function isWorkflowRun(run: SpawnedAgent): boolean {
+  return run.kind === 'workflow' || run.runContext?.runType === 'workflow';
+}
+
+function workflowStepsForDisplay(run: SpawnedAgent): NonNullable<SpawnedAgent['runContext']>['workflowSteps'] {
+  const steps = run.runContext?.workflowSteps ?? [];
+  const status = String(run.runContext?.status ?? run.status ?? '').toLowerCase();
+  if (status !== 'completed' && status !== 'merged') return steps;
+
+  return steps.map(step => {
+    const stepStatus = String(step.status ?? '').toLowerCase();
+    const hasRunData = (step.attempts ?? 0) > 0
+      || Boolean(step.startedAt || step.completedAt || step.durationMs || step.io?.input || step.io?.output);
+    if (['pending', 'not_started', 'queued'].includes(stepStatus) && !hasRunData) {
+      return { ...step, status: 'skipped' };
+    }
+    return step;
+  });
+}
+
+function workflowRunProgress(run: SpawnedAgent): { current: number; total: number; label: string } {
+  const context = run.runContext;
+  const steps = workflowStepsForDisplay(run);
+  const status = String(context?.status ?? run.status ?? '').toLowerCase();
+  const total = Math.max(context?.progress.total ?? 0, steps.length);
+  const completed = steps.filter(step => ['completed', 'skipped'].includes(String(step.status).toLowerCase())).length;
+  const activeIndex = steps.reduce((highest, step, index) => {
+    const stepStatus = String(step.status).toLowerCase();
+    return stepStatus !== 'pending' && stepStatus !== 'queued' ? Math.max(highest, index) : highest;
+  }, -1);
+  const current = status === 'completed'
+    ? total
+    : Math.min(total, Math.max(context?.progress.completed ?? 0, completed, activeIndex + 1));
+
+  if (status === 'waiting_for_input' || status === 'waiting' || context?.humanInput.required) {
+    return { current, total, label: 'waiting for you' };
+  }
+  if (status === 'completed') return { current, total, label: 'completed' };
+  if (status === 'failed') return { current, total, label: 'failed' };
+  if (isCancelledExecutionStatus(status)) return { current, total, label: 'cancelled' };
+  if (status === 'queued' || status === 'pending') return { current, total, label: 'queued' };
+  return { current, total, label: 'running' };
+}
+
+function workflowStepPresentation(step: NonNullable<SpawnedAgent['runContext']>['workflowSteps'][number]): {
+  glyph: string;
+  tone: string;
+  meta: string;
+} {
+  const status = String(step.status ?? 'pending').toLowerCase();
+  const duration = formatDuration(step.durationMs);
+  if (status === 'completed') {
+    return { glyph: '✓', tone: 'complete', meta: duration === '—' ? '' : duration };
+  }
+  if (status === 'skipped') {
+    return { glyph: '↷', tone: 'skipped', meta: 'skipped' };
+  }
+  if (status === 'waiting_for_input' || status === 'waiting') {
+    return { glyph: '?', tone: 'waiting', meta: 'waiting' };
+  }
+  if (status === 'running') {
+    return { glyph: '•', tone: 'running', meta: duration === '—' ? 'running' : duration };
+  }
+  if (status === 'failed' || isCancelledExecutionStatus(status)) {
+    return { glyph: '×', tone: 'failed', meta: status === 'failed' ? 'failed' : 'cancelled' };
+  }
+  return { glyph: '○', tone: 'pending', meta: '' };
+}
+
+function WorkflowRunCard({
+  run,
+  headerAction,
+  footer,
+}: {
+  run: SpawnedAgent;
+  headerAction?: React.ReactNode;
+  footer?: React.ReactNode;
+}) {
+  const context = run.runContext;
+  const status = context?.status ?? run.status;
+  const isActive = !TERMINAL_RUN_STATUSES.has(status);
+  const [open, setOpen] = useState(isActive);
+  const workflowName = context?.execution.workflowName || context?.title || run.agent;
+  const progress = workflowRunProgress(run);
+  const steps = workflowStepsForDisplay(run);
+  const executionPath = `/executions/${run.executionId}`;
+  const isDesktopRuntime = typeof window !== 'undefined' && Boolean(window.allenDesktop);
+
+  return (
+    <details
+      className={`chat-workflow-run ${progress.label.replace(/\s+/g, '-')}`}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="chat-workflow-summary">
+        <span className="chat-workflow-icon" aria-hidden="true"><Workflow /></span>
+        <span className="chat-workflow-name">{workflowName}</span>
+        <span className="chat-workflow-progress">
+          {progress.total > 0 ? `${progress.current}/${progress.total} · ` : ''}{progress.label}
+        </span>
+        <ChevronRight className="chat-workflow-chevron" aria-hidden="true" />
+      </summary>
+      <div className="chat-workflow-expanded">
+        {steps.length > 0 ? (
+          <div className="chat-workflow-steps">
+            {steps.map(step => {
+              const presentation = workflowStepPresentation(step);
+              return (
+                <div className="chat-workflow-step" key={`${run.executionId}-${step.id}`}>
+                  <span className={`chat-workflow-step-glyph ${presentation.tone}`} aria-hidden="true">
+                    {presentation.glyph}
+                  </span>
+                  <span className="chat-workflow-step-name">{step.name}</span>
+                  {presentation.meta && <span className="chat-workflow-step-meta">{presentation.meta}</span>}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="chat-workflow-empty">Workflow details are loading…</div>
+        )}
+        {headerAction && <div className="chat-workflow-action">{headerAction}</div>}
+        <div className="chat-workflow-footer">
+          {isDesktopRuntime ? (
+            <Link to={executionPath}>Open execution →</Link>
+          ) : (
+            <a href={executionPath} target="_blank" rel="noopener noreferrer">Open execution →</a>
+          )}
+        </div>
+        {footer}
+      </div>
+    </details>
+  );
+}
+
+function ChatExecutionRunList({
+  runs,
+  renderExecutionHeaderAction,
+  renderExecutionFooter,
+}: {
+  runs: SpawnedAgent[];
+  renderExecutionHeaderAction?: (run: SpawnedAgent) => React.ReactNode;
+  renderExecutionFooter?: (run: SpawnedAgent) => React.ReactNode;
+}) {
+  const workflowRuns = runs.filter(isWorkflowRun);
+  const otherRuns = runs.filter(run => !isWorkflowRun(run));
+  return (
+    <>
+      {workflowRuns.map(run => (
+        <WorkflowRunCard
+          key={run.executionId}
+          run={run}
+          headerAction={renderExecutionHeaderAction?.(run)}
+          footer={renderExecutionFooter?.(run)}
+        />
+      ))}
+      {otherRuns.length > 0 && (
+        <React.Suspense fallback={<div className="run-progress-loading">Loading execution details...</div>}>
+          <ChatExecutionsPanel
+            runs={otherRuns}
+            renderExecutionHeaderAction={renderExecutionHeaderAction}
+            renderExecutionFooter={renderExecutionFooter}
+          />
+        </React.Suspense>
+      )}
+    </>
+  );
+}
+
 function RunProgressFeed({
   runs,
   renderExecutionHeaderAction,
@@ -2064,13 +2926,11 @@ function RunProgressFeed({
 
   return (
     <section className="run-progress-feed" aria-label={heading}>
-      <React.Suspense fallback={<div className="run-progress-loading">Loading execution details...</div>}>
-        <ChatExecutionsPanel
-          runs={activeRuns}
-          renderExecutionHeaderAction={renderExecutionHeaderAction}
-          renderExecutionFooter={renderExecutionLogs}
-        />
-      </React.Suspense>
+      <ChatExecutionRunList
+        runs={activeRuns}
+        renderExecutionHeaderAction={renderExecutionHeaderAction}
+        renderExecutionFooter={renderExecutionLogs}
+      />
     </section>
   );
 }
@@ -2144,7 +3004,7 @@ function WorkflowInterventionPrompt({
   );
 }
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentReports = [], pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel, watchers = [] }: ChatMessageListProps) {
+export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentReports = [], pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel, watchers = [], conversationTitle, conversationTag, conversationWorkflow, documentCount = 0, provider, model, onOpenFileReference, onOpenChatReference, onOpenInternalReference, resourceScopeKey }: ChatMessageListProps) {
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
   const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
   const hasActiveSpawnedRuns = spawnedAgents.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
@@ -2206,6 +3066,8 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
+  const initialHistoryRef = useRef(true);
+  const sessionRef = useRef<string | undefined>(messages[0]?.sessionId);
   const scrollToBottomIfPinned = useCallback(() => {
     if (autoScrollRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: streaming ? 'smooth' : 'instant' });
@@ -2224,6 +3086,18 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
   }, []);
 
   useEffect(() => {
+    const sessionId = messages[0]?.sessionId;
+    if (sessionRef.current !== sessionId) {
+      sessionRef.current = sessionId;
+      initialHistoryRef.current = true;
+    }
+    if (initialHistoryRef.current && messages.length > 0 && !streaming) {
+      if (containerRef.current) containerRef.current.scrollTop = 0;
+      autoScrollRef.current = false;
+      initialHistoryRef.current = false;
+      return;
+    }
+    if (streaming) autoScrollRef.current = true;
     if (autoScrollRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: streaming ? 'smooth' : 'instant' });
     }
@@ -2242,7 +3116,17 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
   };
 
   return (
+    <MarkdownResourceContext.Provider value={{ onOpenFileReference, onOpenChatReference, onOpenInternalReference, resourceScopeKey }}>
     <div ref={containerRef} className="chat-stream-v2">
+      {conversationTitle && (
+        <div className="v8-chat-conversation-head">
+          <span className="v8-chat-detail-live" aria-label="Conversation active" />
+          <h1>{conversationTitle}</h1>
+          {conversationTag && <span className="v8-chat-head-tag">{conversationTag}</span>}
+          {conversationWorkflow && <span className="v8-chat-head-meta">{conversationWorkflow}</span>}
+          {documentCount > 0 && <span className="v8-chat-head-meta">{documentCount} docs</span>}
+        </div>
+      )}
       {messages.length === 0 && !streaming && (
         <div className="chat-empty-stream" />
       )}
@@ -2292,6 +3176,8 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               <span className="ch-msg-who">
                 {msg.role === 'user' ? senderLabel : assistantDisplayName(activeAgent ? agentMap[activeAgent] : undefined)}
               </span>
+              {msg.role !== 'user' && provider && <span className={`ch-provider-mark ${provider.includes('claude') ? 'claude' : 'codex'}`} aria-hidden="true">◆</span>}
+              {msg.role !== 'user' && model && <span className="ch-msg-model">{getModelDisplay(provider ?? '', model).modelLabel}</span>}
               <span className="ch-msg-ts" title={formatTimestampTitle(msg.createdAt)}>
                 {formatTime(msg.createdAt)}
               </span>
@@ -2364,9 +3250,10 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
 
         {messageRuns.length > 0 && !messageHasActiveRuns && (
           <section className="run-progress-feed" aria-label={`${messageRuns.length} linked execution${messageRuns.length === 1 ? '' : 's'}`}>
-            <React.Suspense fallback={<div className="run-progress-loading">Loading execution details...</div>}>
-              <ChatExecutionsPanel runs={messageRuns} renderExecutionHeaderAction={renderWorkflowInterventionHeaderAction} />
-            </React.Suspense>
+            <ChatExecutionRunList
+              runs={messageRuns}
+              renderExecutionHeaderAction={renderWorkflowInterventionHeaderAction}
+            />
           </section>
         )}
 
@@ -2462,5 +3349,6 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
 
       <div ref={bottomRef} />
     </div>
+    </MarkdownResourceContext.Provider>
   );
 }

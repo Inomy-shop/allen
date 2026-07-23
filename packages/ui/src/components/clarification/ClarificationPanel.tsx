@@ -208,7 +208,7 @@ export default function ClarificationPanel({
   // overflow-auto, which only worked when the card had a bounded height
   // and silently clipped tall content otherwise.
   return (
-    <div className="relative flex flex-col min-h-0">
+    <div className="v8-clarification-panel relative flex flex-col min-h-0">
       {/* Header — icon + title + subtitle. Only renders when a title is
           supplied; callers that provide their own outer header (e.g. the
           intervention detail hero card) pass only `prompt` and skip this. */}
@@ -393,7 +393,7 @@ export default function ClarificationPanel({
               <button
                 type="submit"
                 disabled={locked || submitting || ((mode === 'approval' || mode === 'escalation') && !decision)}
-                className={`px-4 py-2 rounded text-sm font-medium flex items-center gap-2 transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${submitButtonClass(decision, severity)}`}
+                className={`v8-clarification-submit px-4 py-2 rounded text-sm font-medium flex items-center gap-2 transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${submitButtonClass(decision, severity)}`}
               >
                 {submitting
                   ? <span className="w-3.5 h-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />
@@ -430,7 +430,7 @@ function ArtifactButtons({
             key={`${d.url}-${i}`}
             type="button"
             onClick={() => onOpen(d)}
-            className="inline-flex max-w-[280px] items-center gap-2 rounded border border-app bg-app-card px-3 py-2 text-[11px] font-mono text-theme-secondary transition-colors hover:border-accent-blue/40 hover:bg-accent-blue/10 hover:text-theme-primary"
+            className="v8-clarification-artifact inline-flex max-w-[280px] items-center gap-2 rounded border border-app bg-app-card px-3 py-2 text-[11px] font-mono text-theme-secondary transition-colors hover:border-accent-blue/40 hover:bg-accent-blue/10 hover:text-theme-primary"
           >
             <BookOpen className="w-3.5 h-3.5 shrink-0 text-accent-blue" />
             <span className="truncate">{d.label}</span>
@@ -499,9 +499,11 @@ function ReviewContent({
 }) {
   if (type === 'markdown') {
     return (
-      <div className="rounded-lg border border-app bg-surface-100/50 p-4 max-h-[70vh] overflow-auto">
-        <div className="prose prose-sm prose-invert max-w-none prose-pre:bg-app-muted prose-code:text-accent-blue prose-headings:font-heading prose-headings:tracking-tight">
-          {renderMarkdown(content) as React.ReactNode}
+      <div className="v8-clarification-review artifact-viewer max-h-[70vh] overflow-auto rounded-lg border border-app">
+        <div className="artifact-viewer__reading">
+          <div className="prose max-w-none">
+            {renderMarkdown(content) as React.ReactNode}
+          </div>
         </div>
       </div>
     );
@@ -624,8 +626,15 @@ function ArtifactPreviewSidebar({
   if (artifact) {
     return (
       <div className="absolute inset-y-0 right-0 z-[35] flex w-full justify-end bg-black/25 backdrop-blur-[2px]">
-        <aside className="flex h-full w-full max-w-5xl flex-col border-l border-app-strong bg-app-card shadow-2xl">
-          <ArtifactViewer artifact={artifact} onClose={onClose} />
+        <aside className="flex h-full w-full max-w-5xl flex-col overflow-hidden border-l border-app-strong bg-app-card shadow-2xl">
+          <div className="resource-tab-content h-full">
+            <ArtifactViewer
+              artifact={artifact}
+              presentation="tab"
+              hideTabStrip
+              onClose={onClose}
+            />
+          </div>
         </aside>
       </div>
     );
@@ -705,8 +714,12 @@ function renderArtifactContent(content: string, contentType: string, url: string
   const lower = `${contentType} ${url}`.toLowerCase();
   if (lower.includes('markdown') || lower.endsWith('.md') || lower.includes('.md?')) {
     return (
-      <div className="prose prose-sm prose-invert max-w-none">
-        {renderMarkdown(content) as React.ReactNode}
+      <div className="artifact-viewer">
+        <div className="artifact-viewer__reading !p-0">
+          <div className="prose max-w-none">
+            {renderMarkdown(content) as React.ReactNode}
+          </div>
+        </div>
       </div>
     );
   }
@@ -1107,7 +1120,7 @@ function DecisionButtons({
               type="button"
               onClick={() => onChange(b.key)}
               disabled={disabled}
-              className={`group flex min-w-[170px] items-center gap-2 px-3.5 py-2.5 rounded border text-[13px] font-body transition-all disabled:opacity-50 ${decisionButtonClass(b.tone, selected)}`}
+              className={`v8-clarification-decision group flex min-w-[170px] items-center gap-2 px-3.5 py-2.5 rounded border text-[13px] font-body transition-all disabled:opacity-50 ${decisionButtonClass(b.tone, selected)}`}
             >
               <span className="shrink-0">{b.icon}</span>
               <span className="text-left">{b.label}</span>
@@ -1124,7 +1137,7 @@ function DecisionButtons({
 
 function SectionLabel({ icon, text }: { icon?: React.ReactNode; text: string }) {
   return (
-    <div className="flex items-center gap-1.5 mb-2.5 overline">
+    <div className="v8-clarification-section-label flex items-center gap-1.5 mb-2.5 overline">
       {icon}
       {text}
     </div>

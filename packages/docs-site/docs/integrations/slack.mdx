@@ -1,0 +1,104 @@
+---
+title: 'Slack'
+description: 'Start Allen conversations from Slack, connect Slack tools through MCP, and receive workflow intervention notices.'
+---
+
+Allen supports three distinct Slack capabilities: mention-based conversations, optional Slack tools through MCP, and workflow intervention notifications. Configure only the path you need; enabling one does not automatically enable the others.
+
+:::info Media placeholders
+Before publishing, capture a first `@Allen` mention, its threaded follow-up, the matching read-only conversation in Allen, the Slack MCP preset with secrets hidden, and a workflow intervention notification. Suggested files: `static/img/docs/integrations-slack-01.png` through `static/img/docs/integrations-slack-05.png`, plus `static/videos/docs/integrations-slack-short.mp4` for the mention-to-thread flow.
+:::
+
+## Choose the Slack capability
+
+| Capability | Best for | Configuration |
+| --- | --- | --- |
+| Slack-managed conversations | Asking Allen for help without leaving a channel | Slack Events API, bot token, and signing secret |
+| Slack MCP tools | Letting approved agents inspect or act on Slack data | **Settings → MCP Servers** and the Slack preset |
+| Intervention notifications | Alerting a user or channel when a workflow needs input | Slack bot configuration and an optional notification channel |
+
+The Slack MCP preset does not configure mention-based conversations. Mention handling requires a Slack app that can send signed events to the Allen server.
+
+## Configure mention-based conversations
+
+An Allen operator must complete this setup:
+
+1. Create or select a Slack app for the workspace.
+2. Add the bot permissions needed to receive app mentions, read the relevant thread, post replies and reactions, and read supported attachments.
+3. Enable **Event Subscriptions** and set the request URL to the public HTTPS address for Allen's `/api/slack/events` endpoint.
+4. Subscribe the bot to the `app_mention` event.
+5. Configure `ALLEN_SLACK_BOT_TOKEN` and `ALLEN_SLACK_SIGNING_SECRET` in the Allen runtime.
+6. Reinstall the Slack app if its permissions changed, then invite the bot to a low-risk test channel.
+7. Mention the bot and confirm that it reacts and replies in the same thread.
+
+Slack must be able to reach the events endpoint. Allen rejects events with an invalid or stale signature, ignores bot-authored events, and de-duplicates repeated Slack event IDs.
+
+## Start and continue a Slack conversation
+
+1. In a channel containing the bot, write `@Allen` followed by a clear request.
+2. Continue the task by replying in the thread created for that mention.
+3. Keep all follow-up context in that thread. A new top-level mention starts a separate Allen conversation.
+4. Review the final answer before acting on code, credentials, deployments, or external records.
+
+Allen adds an in-progress reaction while it works, then marks the message as completed or failed. The final response is posted to the Slack thread. When `ALLEN_SLACK_PROGRESS_POSTS` is enabled, Allen may also post throttled progress updates for longer work.
+
+If the linked conversation is already busy, Slack receives a wait message instead of starting overlapping work.
+
+## Attach supported files
+
+Allen can add a limited set of Slack attachments to the request:
+
+| File | Behavior |
+| --- | --- |
+| Images | Downloaded to Allen's uploads area and linked into the request |
+| PDFs | Downloaded to Allen's uploads area and linked into the request |
+| Plain text or Markdown | Included inline when small enough |
+
+Each mention processes at most 10 attachments. Individual files are limited to 25 MB, and inline text is limited to 8 KB. Unsupported or oversized files are skipped rather than silently treated as complete context.
+
+:::caution
+Slack messages and files are untrusted input. Do not attach secrets, private keys, production exports, or sensitive customer data. Uploaded files and any capability links generated for them may be visible to people who can access the conversation or thread.
+:::
+
+## Review the conversation in Allen
+
+Slack-started conversations also appear in Allen. They are intentionally read-only there:
+
+- the composer says **This conversation is managed via Slack. Reply in the Slack thread to continue.**;
+- the model selector cannot be changed in Allen;
+- Slack-managed sessions use the server-managed Slack model configuration.
+
+Return to the original Slack thread for follow-up messages. Starting a second Allen chat does not continue the Slack thread's context.
+
+## Add Slack tools through MCP
+
+Use the Slack MCP preset when an approved agent or workflow needs Slack search, channel, message, or user tools.
+
+1. Open **Settings → MCP Servers**.
+2. Select **Add MCP server**, then **Preset**.
+3. Choose **Slack** and enter the requested bot token and team ID values.
+4. Select **Connect** and verify a **Connected** result and a plausible tool count.
+5. Allow the server only for the agents or workflow nodes that need it.
+6. Start with a read-only tool call before granting or approving message-writing actions.
+
+See [Add an MCP Server](/guides/add-an-mcp-server) for the complete setup and verification flow.
+
+## Receive workflow intervention notifications
+
+When Slack notifications are configured, Allen can notify the workflow starter when a run pauses for human input. It can resolve the recipient from a Slack ID or email and can also post to the channel configured by `ALLEN_SLACK_INTERVENTIONS_CHANNEL`.
+
+The notification is additive: the intervention remains available in Allen, and a Slack delivery failure does not resolve or cancel it. Open the linked Allen execution, review the evidence, and submit the decision there.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| Slack rejects the request URL | Confirm the public HTTPS URL ends in `/api/slack/events` and reaches the correct Allen server. |
+| Mentions receive no reaction or reply | Check the bot token, signing secret, `app_mention` subscription, app installation, channel invitation, and server logs. |
+| A follow-up starts a new conversation | Reply inside the original Slack thread instead of creating a new top-level mention. |
+| An attachment is missing | Check its type, 25 MB file limit, 10-file mention limit, and Slack file permissions. |
+| The Allen composer is disabled | This is expected for Slack-managed sessions; continue in Slack. |
+| Slack tools are unavailable to an agent | Test the Slack MCP server, then check the agent or workflow-node MCP allowlist. |
+| Intervention notices are missing | Check the recipient's Slack identity mapping, bot permissions, and optional intervention channel. |
+
+Related guides: [MCP](/integrations/mcp), [Model Providers](/integrations/model-providers), and [Security](/reference/security).

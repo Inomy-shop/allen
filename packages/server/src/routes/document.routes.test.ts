@@ -429,6 +429,57 @@ describe('documentRoutes', () => {
     expect(res.status).toBe(409);
   });
 
+  it('D11a resolves all open comment threads', async () => {
+    await seedDocument({ documentId: 'd11-all-doc' });
+    const base = {
+      documentId: 'd11-all-doc',
+      authorType: 'human',
+      body: 'Review comment',
+      anchor: { type: 'line', lineStart: 1, lineEnd: 1, context: 'test', anchoredAtVersion: 1 },
+      reopenCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    await db.collection('document_comments').insertMany([
+      { ...base, commentId: 'd11-open-1', threadId: 'd11-thread-1', status: 'open' },
+      { ...base, commentId: 'd11-open-2', threadId: 'd11-thread-2', status: 'open' },
+      { ...base, commentId: 'd11-stale', threadId: 'd11-thread-stale', status: 'stale' },
+    ]);
+
+    const res = await request(app)
+      .post('/api/documents/d11-all-doc/comments/resolve-all')
+      .send({ resolutionNote: 'Reviewed together' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.resolvedCount).toBe(2);
+    expect(res.body.comments).toHaveLength(2);
+    expect(res.body.comments.every((comment: { status: string }) => comment.status === 'resolved')).toBe(true);
+    expect((await db.collection('document_comments').findOne({ commentId: 'd11-stale' }))?.status).toBe('stale');
+  });
+
+  it('document summary counts threads, not replies', async () => {
+    await seedDocument({ documentId: 'count-doc', sourceArtifactId: 'count-art' });
+    const base = {
+      documentId: 'count-doc',
+      threadId: 'count-thread',
+      authorType: 'human',
+      body: 'Comment',
+      status: 'open',
+      anchor: { type: 'line', lineStart: 1, lineEnd: 1, context: 'test', anchoredAtVersion: 1 },
+      reopenCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    await db.collection('document_comments').insertMany([
+      { ...base, commentId: 'count-parent' },
+      { ...base, commentId: 'count-reply', parentCommentId: 'count-parent' },
+    ]);
+
+    const res = await request(app).get('/api/documents/by-artifact/count-art');
+    expect(res.status).toBe(200);
+    expect(res.body.unresolvedCommentCount).toBe(1);
+  });
+
   // ── D12: POST /:documentId/comments/:commentId/reopen ──
 
   it('D12 reopens a resolved comment', async () => {

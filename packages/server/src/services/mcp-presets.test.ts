@@ -7,6 +7,21 @@ vi.mock('@allen/engine', () => ({
 import { MCP_PRESETS } from './mcp.service.js';
 
 describe('MCP_PRESETS', () => {
+  it('includes Playwright MCP preset with safe stdio defaults', () => {
+    const playwright = MCP_PRESETS.find((preset) => preset.name === 'playwright');
+
+    expect(playwright).toMatchObject({
+      name: 'playwright',
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', '@playwright/mcp@latest', '--headless', '--isolated'],
+      envKeys: [],
+      docsUrl: 'https://playwright.dev/mcp/installation',
+    });
+
+    expect(MCP_PRESETS.filter((preset) => preset.name === 'playwright')).toHaveLength(1);
+  });
+
   it('includes one X API preset backed by xurl and no separate X Docs preset', () => {
     const xapi = MCP_PRESETS.find((preset) => preset.name === 'xapi');
 

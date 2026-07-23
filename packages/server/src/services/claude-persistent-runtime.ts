@@ -8,6 +8,7 @@ import { buildControlledMcpConfig, writeClaudeMcpConfigFile } from './chat-contr
 import { logRuntimeEvent } from './chat-runtime-logs.js';
 import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
 import { applyClaudeChatNativeToolPolicyToArgs } from './claude-chat-tool-policy.js';
+import { mergeToolArguments, parseClaudeToolResult } from './chat-tool-normalization.js';
 import type { ChatTraceEvent } from './chat-llm.js';
 import type { PersistentChatRuntime, RuntimeCreateInput, RuntimeSlashCommand, RuntimeTurnInput, RuntimeTurnResult } from './chat-runtime-types.js';
 
@@ -25,6 +26,7 @@ type ActiveTurn = {
   tokenUsage: TokenUsageInfo | null;
   trace: ChatTraceEvent[];
   pendingTools: Map<string, PendingTool>;
+  streamToolInputs: Map<number, { id: string; tool: string; partialJson: string }>;
   resolve: (result: RuntimeTurnResult) => void;
   reject: (error: Error) => void;
 };
@@ -78,6 +80,7 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
         tokenUsage: null,
         trace,
         pendingTools: new Map(),
+        streamToolInputs: new Map(),
         resolve,
         reject,
       };
@@ -231,6 +234,10 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
 
     const model = normalizeModelAlias(input.model) ?? input.model;
     if (model && model !== 'default') args.push('--model', model);
+    const reasoningEffort = input.resolvedSettings?.reasoningEffort;
+    if (reasoningEffort && reasoningEffort !== 'off') {
+      args.push('--effort', reasoningEffort === 'ultra' ? 'max' : reasoningEffort);
+    }
     if (input.resumeSessionId) args.push('--resume', input.resumeSessionId);
     else if (input.systemPrompt) {
       args.push(claudeSupportsSystemPrompt() ? '--system-prompt' : '--append-system-prompt', input.systemPrompt);
@@ -347,6 +354,7 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
         turn.text = '';
         turn.thinking = '';
         turn.pendingTools.clear();
+        turn.streamToolInputs.clear();
         turn.input.callbacks.onText('');
         return;
       }
@@ -410,12 +418,39 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
           data: { text: turn.thinking },
         });
         turn.input.callbacks.onThinking?.(turn.thinking);
+      } else if (delta.type === 'input_json_delta') {
+        const index = typeof event.index === 'number' ? event.index : Number(event.index);
+        const streaming = Number.isInteger(index) ? turn.streamToolInputs.get(index) : undefined;
+        if (streaming && typeof delta.partial_json === 'string') streaming.partialJson += delta.partial_json;
       }
     }
 
     if (event.type === 'content_block_start') {
       const block = (event.content_block ?? {}) as Record<string, unknown>;
-      if (block.type === 'tool_use') this.handleToolUse(turn, block);
+      if (block.type === 'tool_use') {
+        this.handleToolUse(turn, block);
+        const index = typeof event.index === 'number' ? event.index : Number(event.index);
+        const id = String(block.id ?? '');
+        const tool = String(block.name ?? '');
+        if (Number.isInteger(index) && id && tool) turn.streamToolInputs.set(index, { id, tool, partialJson: '' });
+      }
+    }
+
+    if (event.type === 'content_block_stop') {
+      const index = typeof event.index === 'number' ? event.index : Number(event.index);
+      const streaming = Number.isInteger(index) ? turn.streamToolInputs.get(index) : undefined;
+      if (streaming) {
+        try {
+          const input = JSON.parse(streaming.partialJson || '{}') as unknown;
+          if (input && typeof input === 'object' && !Array.isArray(input)) {
+            this.handleToolUse(turn, { id: streaming.id, name: streaming.tool, input });
+          }
+        } catch {
+          // The completed assistant block is a second, authoritative chance to
+          // capture the full input. Ignore incomplete JSON here.
+        }
+        turn.streamToolInputs.delete(index);
+      }
     }
   }
 
@@ -457,10 +492,35 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
   private handleToolUse(turn: ActiveTurn, block: Record<string, unknown>): void {
     const id = String(block.id ?? '');
     const tool = String(block.name ?? '');
-    if (!id || !tool || turn.pendingTools.has(id)) return;
+    if (!id || !tool) return;
     const args = block.input && typeof block.input === 'object' && !Array.isArray(block.input)
       ? block.input as Record<string, unknown>
       : {};
+    const existing = turn.pendingTools.get(id);
+    if (existing) {
+      const merged = mergeToolArguments(existing.args, args);
+      if (!merged.changed) return;
+      existing.args = merged.args;
+      existing.tool = tool;
+      const traceEvent = [...turn.trace].reverse().find(event => event.type === 'tool_call' && event.toolUseId === id);
+      if (traceEvent) {
+        traceEvent.tool = tool;
+        traceEvent.args = merged.args;
+      }
+      logRuntimeEvent({
+        db: turn.input.db,
+        sessionId: turn.input.chatSessionId,
+        provider: this.provider,
+        runtimeId: this.id,
+        eventType: 'normalized',
+        event: 'tool_input',
+        data: { tool, args: merged.args, toolUseId: id },
+      });
+      // Re-emitting start updates the existing pending/SSE record by toolUseId;
+      // it does not create a second tool row.
+      turn.input.callbacks.onToolStart(tool, merged.args, id);
+      return;
+    }
     turn.pendingTools.set(id, { tool, args, startMs: Date.now() });
     turn.trace.push({ timestamp: new Date(), type: 'tool_call', tool, toolUseId: id, args });
     logRuntimeEvent({
@@ -482,7 +542,7 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
       const pending = turn.pendingTools.get(id);
       if (!pending) continue;
       const durationMs = Date.now() - pending.startMs;
-      const result = parseToolResult(block.content);
+      const result = parseClaudeToolResult(block.content);
       turn.trace.push({ timestamp: new Date(), type: 'tool_result', tool: pending.tool, toolUseId: id, result, durationMs });
       logRuntimeEvent({
         db: turn.input.db,
@@ -514,25 +574,6 @@ function claudePermissionMode(input: RuntimeTurnInput): string {
     if (fragment.permissionMode === 'plan') return 'plan';
   }
   return 'bypassPermissions';
-}
-
-function parseToolResult(content: unknown): Record<string, unknown> {
-  let raw = '';
-  if (Array.isArray(content)) {
-    raw = content.map((item) => {
-      if (item && typeof item === 'object' && 'text' in item) return String((item as { text?: unknown }).text ?? '');
-      return String(item ?? '');
-    }).join('');
-  } else if (typeof content === 'string') {
-    raw = content;
-  } else {
-    raw = JSON.stringify(content ?? {});
-  }
-  try {
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return { raw };
-  }
 }
 
 let hookEventsSupported: boolean | undefined;

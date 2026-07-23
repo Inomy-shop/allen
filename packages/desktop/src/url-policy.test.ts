@@ -27,6 +27,10 @@ describe('isAllowedExternalUrl', () => {
   // Local preview — allowed
   it('allows http://localhost:12000/', () => expect(isAllowedExternalUrl('http://localhost:12000/')).toBe(true));
   it('allows http://127.0.0.1:12001/', () => expect(isAllowedExternalUrl('http://127.0.0.1:12001/')).toBe(true));
+  it('allows mailto and tel links', () => {
+    expect(isAllowedExternalUrl('mailto:hello@example.com')).toBe(true);
+    expect(isAllowedExternalUrl('tel:+15551234567')).toBe(true);
+  });
 
   // Blocked
   it('blocks http://evil.com (non-loopback http)', () => expect(isAllowedExternalUrl('http://evil.com')).toBe(false));

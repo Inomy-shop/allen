@@ -79,7 +79,14 @@ vi.mock('../components/chat/ChatMessageList', () => ({
 }));
 
 vi.mock('../components/design-studio/WorkspaceFilesPanel', () => ({
-  default: () => null,
+  default: ({ workspaceName }: { workspaceName?: string }) => <aside data-testid="design-files">{workspaceName}</aside>,
+}));
+
+vi.mock('../services/designStudioService', () => ({
+  designStudio: {
+    getWorkspace: vi.fn().mockResolvedValue({ _id: 'w1', name: 'Acme design' }),
+    start: vi.fn(),
+  },
 }));
 
 vi.mock('../components/workspace/XTerminal', () => ({
@@ -138,6 +145,9 @@ describe('DesignStudioSessionPage', () => {
     renderPage();
 
     await expectComposerSelection(provider, model);
+    expect(screen.getByText('New design chat')).toBeTruthy();
+    expect(screen.getByText('design mode')).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('design-files')).toHaveTextContent('Acme design'));
     expect(mocks.composerSelections).not.toContainEqual({
       provider: 'claude',
       model: 'claude-opus-4-8',

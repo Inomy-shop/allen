@@ -1,0 +1,89 @@
+---
+title: 'Get Around Allen'
+description: 'Learn where to start work, follow progress, and review results in the Allen desktop app.'
+---
+
+The **Dashboard** is your starting point in Allen. Use it to begin a task, see work that is running, and respond when an execution needs your input.
+
+This page introduces the main areas of the desktop app. You do not need to learn every area before starting your first task.
+
+## Start from the Dashboard
+
+The **New chat** composer lets you describe a task and choose the context Allen should use.
+
+1. Select a repository when the request depends on a codebase.
+2. Confirm the provider and model you want Allen to use.
+3. Choose an agent when the task belongs to a configured specialist. Leave the default selection for general requests.
+4. Describe the outcome, constraints, and evidence that would make the task complete.
+5. Send the request and follow the conversation.
+
+For example:
+
+> In the selected repository, investigate why the account form sometimes submits twice. Explain the cause first. Do not change files until I approve the plan.
+
+When Allen has not been fully configured, the Dashboard can also show setup cards for GitHub, Linear, repositories, and your first dispatched task. Connect only the services required by the work you plan to do.
+
+## Choose the right area
+
+| Area | Use it when you want to |
+| --- | --- |
+| **Dashboard** | Start a chat and see work that is running, recent, or waiting for you. |
+| **Executions** | Follow an agent or workflow run, inspect progress, answer a question, or review logs and artifacts. |
+| **History** | Find and continue an earlier conversation. |
+| **Repositories** | Connect a local checkout or clone a GitHub repository. |
+| **Workspaces** | Work in an isolated copy of a repository and review its chats, files, diffs, terminals, services, and previews. |
+| **Linear** | Work from connected Linear issues. |
+| **Pull requests** | Review connected GitHub pull requests and open related workspaces. |
+| **Design Studio** | Explore a product or interface direction before implementation. |
+| **Teams & Agents** | Choose, create, and organize specialists for recurring responsibilities. |
+| **Workflows** | Run or create a repeatable process with defined inputs, steps, checks, and approval points. |
+| **Settings** | Manage models, MCP servers, schedules, team access, account preferences, and app updates. |
+
+If you are unsure, start from the **Dashboard**. Allen can help decide whether the request should remain in chat or move to an agent or workflow.
+
+## Give Allen the right context
+
+The quality of a result depends on the source material attached to the request:
+
+- Select a **repository** for questions about committed project code.
+- Open or select a **workspace** when the request depends on active changes or may modify files.
+- Start from **Linear** when a ticket contains the requirements or acceptance criteria.
+- Attach a file when the task depends on a document, image, report, or other local input.
+
+State which source is authoritative when two sources disagree. For changes, also name what must remain unchanged and which checks should pass.
+
+## Follow work in progress
+
+The Dashboard groups active work into three useful views:
+
+- **Needs You** shows approvals, questions, or blocked checkpoints.
+- **Running Conversation** shows chats with active agent or workflow work.
+- **Recent Conversation** gives you a quick way back to the latest chats. Use **History** to search the full list.
+
+For detailed progress, open **Executions** and select the run. Check the current status before reading older logs. If the run is waiting, answer the displayed question or approval request instead of starting a duplicate task.
+
+## Review the result
+
+Before continuing with a commit, push, pull request, ticket update, or other external action:
+
+1. Compare the result with the original request and acceptance criteria.
+2. Open the workspace and inspect every changed file and diff.
+3. Confirm which checks ran and whether they passed.
+4. Open the artifacts produced by the chat, agent, or workflow.
+5. Resolve unanswered questions or failed steps.
+6. Approve only the next action you intend to take.
+
+A completed response is not automatically an approved change. The review step is where you decide whether the work is correct and ready to continue.
+
+## Work faster in the desktop app
+
+- Press **⌘L** to focus the chat composer. From another page, it returns you to the Dashboard and focuses the composer.
+- Press **⌘K** to open the command palette and jump to common pages or actions.
+- From a workspace, open the working copy in **VS Code** or **Cursor** when that editor is available.
+- Use **Settings → General** to change appearance, manage update checks, and view release notes.
+
+## Next: run your first workflow
+
+You are ready for the next guide when you can start a repository-grounded chat, find the resulting execution, and identify where Allen shows work that needs your input.
+
+Continue with [First Workflow](/getting-started/first-workflow) to complete a bounded task and review its execution from start to finish.
