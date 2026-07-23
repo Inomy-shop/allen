@@ -3,10 +3,6 @@ title: 'Environment Reference'
 description: 'Configure Allen web and desktop runtimes without exposing credentials or overriding managed values.'
 ---
 
-:::info Media placeholders
-Before publishing, capture **Settings → Runtime**, **Settings → Models**, desktop diagnostics, and a redacted web `.env`. Never show credential values, connection strings, private paths, or capability URLs.
-:::
-
 Allen resolves configuration differently in web/server mode and packaged desktop:
 
 - **Web/server mode:** the server loads the repository-root `.env`. **Settings → Runtime** shows the active configuration but is read-only; edit the deployment environment and restart the server.
