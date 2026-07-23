@@ -17,3 +17,9 @@ infra/
 .DS_Store
 **/.DS_Store
 __pycache__/
+
+# Docusaurus docs-site build output
+packages/docs-site/build/
+packages/docs-site/.docusaurus/
+packages/docs-site/deploy/
+.gstack/

@@ -239,14 +239,14 @@ export function WorkflowInterventionDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/55 p-6 backdrop-blur-sm"
+      className="v8-activity-backdrop fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/55 p-6 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label={title}
       onClick={() => !submitting && onClose()}
     >
       <div
-        className="flex max-h-[92vh] w-[96vw] max-w-7xl flex-col overflow-hidden rounded-lg border border-app-strong bg-app-card shadow-2xl"
+        className="v8-activity-modal v8-activity-modal-review flex max-h-[92vh] w-[96vw] max-w-7xl flex-col overflow-hidden rounded-lg border border-app-strong bg-app-card shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-app bg-app-card px-4 py-3">

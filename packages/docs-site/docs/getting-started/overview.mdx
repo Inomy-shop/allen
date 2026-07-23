@@ -1,0 +1,111 @@
+---
+title: 'Welcome to Allen'
+slug: /
+description: 'Coordinate people, AI agents, workflows, tools, and approvals to turn work into reviewable outcomes.'
+---
+
+Allen is a desktop command center for getting work done with AI. It brings conversations, specialist agents, repeatable workflows, connected tools, human decisions, and durable outputs into one place.
+
+Allen is not only for coding. A product manager can turn a request into a plan and coordinate review. A marketing team can configure agents and workflows for research, briefs, campaigns, and approvals. Designers can explore product directions. Developers and engineers can investigate, implement, test, and review changes in isolated workspaces. Operations teams can schedule recurring work or connect external systems for broader automation.
+
+The common idea is simple: **describe the outcome, give Allen the right context, choose how the work should run, and review the result before it moves forward.**
+
+:::info Media placeholders
+Before publishing, capture the **Dashboard**, **Teams & Agents**, **Workflows**, **Executions**, **Schedules**, and one representative non-coding run alongside a repository-backed run. Use screenshots or short clips where they make the execution and review loop easier to understand. Remove credentials, customer data, private repository content, and proprietary prompts.
+:::
+
+## Who Allen is for
+
+Allen is useful wherever work can be expressed as a goal, supported with context, and completed through a clear process.
+
+| Role or team | Example outcomes |
+| --- | --- |
+| **Product managers** | Research a problem, shape requirements, turn tickets into plans, coordinate specialists, and collect reviewable decisions. |
+| **Developers and engineers** | Investigate incidents, plan changes, work in an isolated repository copy, run validation, and prepare a result for review. |
+| **Marketing teams** | Configure specialists and workflows for research, campaign briefs, content production, reviews, and approved external actions. |
+| **Design and research teams** | Explore product directions, synthesize evidence, produce design artifacts, and keep feedback attached to the work. |
+| **Operations teams** | Run recurring checks, create reports, monitor systems, and automate processes across connected tools. |
+| **Cross-functional teams** | Coordinate a process that needs several specialists, parallel work, validation gates, or a human decision before it continues. |
+
+What Allen can do depends on the teams, agents, workflows, models, and integrations available in your installation. Built-in resources provide useful starting points; your organization can add specialists and processes for other domains without turning Allen into a coding-only tool.
+
+## What Allen is built around
+
+- **Chat** is the flexible starting point. Ask a question, develop an idea, or describe an outcome without designing a process first.
+- **Agents** are AI specialists with a defined role, model, instructions, tools, and permissions.
+- **Teams** group related agents under a clear mission and lead so responsibility and routing stay understandable.
+- **Workflows** turn repeatable work into visible stages. They can coordinate agents, call tools, branch on results, run independent work in parallel, pause for human input, and preserve outputs.
+- **Integrations and MCP servers** give approved access to external services and data sources such as ticketing, source control, communication, or business systems.
+- **Executions and artifacts** make work reviewable. You can follow progress, answer a paused run, inspect evidence, and keep plans, reports, designs, or other outputs attached to the work.
+- **Schedules** trigger configured agents or workflows for recurring automation.
+- **Repositories and workspaces** support tasks that involve code or files. They are important engineering capabilities, not a requirement for every Allen task.
+
+## How work moves through Allen
+
+Most work follows the same loop, whether the result is a product plan, campaign brief, design proposal, operational report, or code change:
+
+1. **Start with an outcome.** Say what you need, who it is for, what constraints matter, and how you will judge success.
+2. **Add the right context.** Select or mention the relevant ticket, file, repository, workspace, agent, workflow, or connected system. Leave unrelated context out.
+3. **Choose the execution path.** Use chat for flexible work, an agent for one specialist responsibility, or a workflow for a repeatable multi-step process.
+4. **Follow the work.** Open **Executions** to watch progress, inspect stages, answer questions, and respond when a run pauses for input or review.
+5. **Review the outcome.** Read the final response and artifacts, check supporting evidence, and confirm any proposed external or repository action before it happens.
+
+This visible loop is what makes Allen useful for both one-off requests and ongoing automation: the process can be repeated without hiding the work or removing human judgment.
+
+## Start with the desktop app
+
+1. [Install Allen Desktop](/getting-started/installation) from the [Allen website](https://askallen.build/) or your organization's approved download.
+2. Open Allen and complete onboarding. The guided setup creates your account, checks the runtime, configures model defaults, connects a repository, and offers a first workflow.
+3. Continue from the **Dashboard**, where you can start a conversation and see recent or active work.
+
+The current guided first workflow uses a small bug fix or feature build to teach the workspace, execution, and review loop. That tutorial is coding-oriented; the rest of Allen is not limited to repository work. You can also skip the guided run and begin with a chat, an available specialist, or a workflow that fits your role.
+
+After onboarding, use:
+
+- **Teams & Agents** to understand or extend the specialists available to your organization.
+- **Workflows** to inspect and run repeatable processes.
+- **Executions** to follow active, paused, completed, or failed work.
+- **Design Studio** for product design exploration and prototype-oriented work.
+- **Schedules** for recurring agent or workflow runs.
+- **Settings** for models, MCP servers, runtime configuration, and account preferences.
+
+## Choose a good first outcome
+
+Start with a small, useful task whose result you can review in one sitting. For example:
+
+- **Product:** “Turn these requirements into a launch plan with open questions, risks, and approval points.”
+- **Marketing:** “Create a campaign brief from these source materials and pause before any external publishing action.”
+- **Design:** “Compare three approaches for this product flow and save the recommendation as an artifact.”
+- **Engineering:** “Investigate this focused issue, make the change in a workspace, run the relevant checks, and show me the diff.”
+- **Operations:** “Run this check on a schedule and save a concise report for every run.”
+
+Only choose an agent, workflow, integration, or repository that the outcome actually needs. Keeping the first run narrow makes it easier to see what each resource contributes.
+
+If you use the guided repository workflow, continue with [First Workflow](/getting-started/first-workflow). Use a low-risk task, follow the live execution, and review the changed files, validation evidence, and artifacts before committing, pushing, opening a pull request, or taking another external action.
+
+## Get the most value from Allen
+
+1. **Describe outcomes, not just activities.** “Prepare a decision-ready launch plan” is more useful than “look at these tickets.”
+2. **Name the boundaries.** Say what Allen may change, what must remain untouched, which sources are authoritative, and where approval is required.
+3. **Use repeatable workflows for repeatable work.** Once a useful process becomes predictable, give it defined inputs, stages, checks, outputs, and human checkpoints.
+4. **Keep permissions narrow.** Give agents and integrations only the tools and access required for their responsibility.
+5. **Review artifacts and evidence.** A completed run is not automatically an approved result. Check the output, supporting evidence, and any proposed action.
+6. **Automate gradually.** Run a process manually, improve it, and only then schedule it or broaden its access.
+
+## Find the right guide
+
+| Goal | Start here |
+| --- | --- |
+| Ask a question, shape an idea, or give Allen a task | [Start a Chat](/guides/start-a-chat) |
+| Understand how specialist groups are organized | [Teams](/concepts/teams) |
+| Create a specialist for a recurring responsibility | [Create an Agent](/guides/create-an-agent) |
+| Create a reusable multi-step process | [Create a Workflow](/guides/create-a-workflow) |
+| Run an existing process | [Run a Workflow](/guides/run-a-workflow) |
+| Follow progress or answer a paused run | [Monitor an Execution](/guides/monitor-execution) |
+| Review a saved plan, report, design, or other output | [Use Artifacts](/guides/use-artifacts) |
+| Let Allen use an external tool or data source | [Add an MCP Server](/guides/add-an-mcp-server) |
+| Connect a codebase | [Add a Repository](/guides/add-a-repository) |
+| Make code or file changes in an isolated working copy | [Create or Open a Workspace](/guides/create-or-open-a-workspace) |
+| Add a model or change which model Allen uses | [Add a Model](/guides/add-a-model) or [Change Models](/guides/change-models) |
+
+If you are unsure where to begin, start a chat from the **Dashboard** and describe the outcome in plain language. Add only the context the task needs; Allen can then help identify whether the work belongs in the conversation, with a specialist, in a workflow, or through a connected tool.

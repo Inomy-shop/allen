@@ -1,26 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import {
-  Clock3,
-  ExternalLink,
-  FolderGit2,
-  GitBranch,
-  ListFilter,
-  Loader2,
-  Play,
-  RefreshCw,
-  Search,
-  Workflow,
-} from 'lucide-react';
+import { Search } from 'lucide-react';
 import { executions as api } from '../services/api';
-import StatusBadge from '../components/common/StatusBadge';
-import Select from '../components/common/Select';
-import IconTooltipButton from '../components/common/IconTooltipButton';
 import { mergeExecutionSnapshot, snapshotFromExecution, useExecutionStore } from '../stores/executionStore';
 
 type TypeFilter = '' | 'agent' | 'workflow';
 type SourceFilter = '' | 'chat' | 'workflow' | 'design';
-type ActivityTab = 'running' | 'recent';
 
 const PAGE_SIZE = 50;
 
@@ -60,26 +45,19 @@ function shortDuration(ms: number | null | undefined): string {
   return `${m}m ${Math.floor(s % 60)}s`;
 }
 
+function displayedDuration(exec: any, nowMs: number): string {
+  const duration = shortDuration(executionDurationMs(exec, nowMs));
+  if (!isActiveStatus(exec.status) || duration === '-') return duration;
+  const minuteMatch = duration.match(/^(\d+)m/);
+  return minuteMatch ? `${minuteMatch[1]}m…` : `${duration.replace(/\.0s$/, 's')}…`;
+}
+
 function executionDurationMs(exec: any, nowMs: number): number | null | undefined {
   if (!isActiveStatus(exec.status)) return exec.durationMs;
   const startedAt = exec.startedAt ?? exec.createdAt;
   const startedMs = startedAt ? new Date(startedAt).getTime() : NaN;
   if (!Number.isFinite(startedMs)) return exec.durationMs;
   return Math.max(exec.durationMs ?? 0, nowMs - startedMs);
-}
-
-function shortAge(value: string | Date | null | undefined): string {
-  if (!value) return '—';
-  const then = new Date(value).getTime();
-  if (!Number.isFinite(then)) return '—';
-  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
 }
 
 function executionId(exec: any): string {
@@ -132,21 +110,28 @@ function executionSourceLabel(exec: any): string {
 }
 
 function prettyWorkflowName(exec: any): string {
-  const name = String(exec?.workflowName ?? exec?.name ?? 'Untitled execution');
+  const name = String(exec?.title ?? exec?.workflowName ?? exec?.name ?? 'Untitled execution');
   return name.replace(/^.*:spawn_agent\//, '').replace(/[-_]/g, ' ');
 }
 
 function executionStartedAt(exec: any): string {
   const value = exec?.startedAt ?? exec?.createdAt;
-  if (!value) return 'Not started';
+  if (!value) return 'not started';
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return 'Not started';
+  if (!Number.isFinite(date.getTime())) return 'not started';
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase();
+  if (startOfDate === startOfToday) return `today ${time}`;
+  if (startOfDate === startOfToday - 86_400_000) return `yesterday ${time}`;
   return date.toLocaleString([], {
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-  });
+  }).toLowerCase();
 }
 
 function compactPath(path?: string | null): string {
@@ -164,7 +149,7 @@ function firstString(...values: unknown[]): string | null {
   return null;
 }
 
-function executionRunContext(exec: any): { kind: 'workspace' | 'repository' | 'path' | 'none'; label: string; detail?: string; title?: string } {
+function executionRunContext(exec: any): { label: string; detail: string; title?: string } {
   const workspace = exec?.workspace ?? null;
   const repository = exec?.repository ?? null;
   const input = exec?.input ?? {};
@@ -180,97 +165,83 @@ function executionRunContext(exec: any): { kind: 'workspace' | 'repository' | 'p
   const fallbackPath = firstString(workspacePath, repoPath, meta?.cwd);
 
   if (workspace) {
-    const label = firstString(workspace.name) ?? 'Workspace';
-    const repo = firstString(workspace.repoName);
+    const label = firstString(workspace.branch, workspace.name) ?? 'workspace';
+    const repo = firstString(workspace.repoName, repository?.name) ?? 'no repository context';
     return {
-      kind: 'workspace',
       label,
-      detail: repo ?? undefined,
+      detail: repo,
       title: workspacePath ?? undefined,
     };
   }
 
   if (repository) {
     return {
-      kind: 'repository',
-      label: firstString(repository.name) ?? 'Repository',
-      detail: firstString(repository.defaultBranch) ? `default ${repository.defaultBranch}` : undefined,
+      label: 'no workspace',
+      detail: firstString(repository.name) ?? 'repository context',
       title: repoPath ?? undefined,
     };
   }
 
   if (fallbackPath) {
     return {
-      kind: 'path',
-      label: 'Path',
+      label: 'no workspace',
       detail: compactPath(fallbackPath),
       title: fallbackPath,
     };
   }
 
-  return { kind: 'none', label: 'No workspace', detail: 'No repository context' };
+  return { label: 'no workspace', detail: 'no repository context' };
 }
 
-function ContextIcon({ kind }: { kind: 'workspace' | 'repository' | 'path' | 'none' }) {
-  if (kind === 'workspace') return <FolderGit2 className="h-3 w-3 shrink-0 text-accent" />;
-  if (kind === 'repository') return <GitBranch className="h-3 w-3 shrink-0 text-accent-blue" />;
-  if (kind === 'path') return <GitBranch className="h-3 w-3 shrink-0 text-theme-subtle" />;
-  return <Workflow className="h-3 w-3 shrink-0 text-theme-subtle" />;
+function executionKindLabel(exec: any): string {
+  const surface = String(exec?.meta?.sourceSurface ?? '').toLowerCase();
+  if (surface === 'design_tab') return 'design';
+  if (executionSourceLabel(exec) === 'chat') {
+    return exec?.meta?.executionMode === 'build' ? 'chat · build' : 'chat';
+  }
+  if (isSpawnedAgentExecution(exec)) return 'agent';
+  return 'workflow';
 }
 
-function sourceTextClass(source: string): string {
-  if (source === 'agent') return 'text-accent-blue';
-  if (source === 'chat') return 'text-accent-green';
-  if (source === 'linear') return 'text-accent-yellow';
-  return 'text-theme-muted';
+function executionStatusLabel(exec: any): string {
+  const status = String(exec?.status ?? 'pending').replaceAll('_', ' ').toLowerCase();
+  if (!isActiveStatus(exec?.status)) return status;
+  const completed = Number(exec?.progress?.completed ?? exec?.completedNodes?.length ?? 0);
+  const total = Number(exec?.progress?.total ?? exec?.totalNodes ?? 0);
+  return total > 0 ? `${status} · ${completed}/${total}` : status;
+}
+
+function executionStatusTone(status: string): string {
+  if (status === 'completed') return 'success';
+  if (status === 'failed') return 'error';
+  if (status === 'waiting_for_input' || status === 'queued') return 'warning';
+  if (isActiveStatus(status)) return 'running';
+  return 'neutral';
 }
 
 function ExecutionRow({ exec, nowMs }: { exec: any; nowMs: number }) {
   const id = executionId(exec);
-  const source = executionSourceLabel(exec);
-  const duration = shortDuration(executionDurationMs(exec, nowMs));
-  const isActive = isActiveStatus(exec.status);
   const context = executionRunContext(exec);
-  const currentStep = firstString(
-    exec?.currentStep,
-    Array.isArray(exec?.currentNodes) ? exec.currentNodes.filter(Boolean).join(', ') : null,
-    exec?.failedNode,
-  );
+  const tone = executionStatusTone(exec?.status);
 
   return (
     <Link
       to={`/executions/${id}`}
-      className="group grid min-h-[58px] grid-cols-[minmax(0,1fr)_176px_132px_96px_36px] items-center gap-4 border-t border-app px-4 py-2.5 transition-colors first:border-t-0 hover:bg-app-muted/30"
+      className="v8-execution-list__row"
     >
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-[13.5px] font-semibold text-theme-primary">{prettyWorkflowName(exec)}</span>
-            {isActive && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent-green" />}
-            <span className={`shrink-0 font-mono text-[10.5px] ${sourceTextClass(source)}`}>{source}</span>
-            {currentStep && (
-              <>
-                <span className="text-theme-subtle">·</span>
-                <span className="min-w-0 truncate font-mono text-[11px] text-theme-muted">{currentStep}</span>
-              </>
-            )}
-          </div>
-          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11.5px] text-theme-muted">
-            <ContextIcon kind={context.kind} />
-            <span className="shrink-0 text-theme-secondary">{context.label}</span>
-            {context.detail && <><span className="text-theme-subtle">·</span><span className="truncate font-mono" title={context.kind === 'path' ? context.title ?? context.detail : context.detail}>{context.detail}</span></>}
-          </div>
-        </div>
+      <div className="v8-execution-list__primary">
+        <b>
+          {prettyWorkflowName(exec)}
+          <span className="v8-execution-list__kind">{executionKindLabel(exec)}</span>
+        </b>
+        <small title={context.title}>{context.label} · {context.detail}</small>
       </div>
-
-      <div className="justify-self-start">
-        <StatusBadge status={exec.status ?? 'pending'} />
-      </div>
-      <span className="truncate font-mono text-[11px] text-theme-muted">{executionStartedAt(exec)}</span>
-      <span className="font-mono text-[11px] text-theme-secondary">{isActive ? duration : duration}</span>
-      <span className="flex h-8 w-8 items-center justify-center rounded-md text-theme-muted transition-colors group-hover:bg-app group-hover:text-theme-primary">
-        <ExternalLink className="h-3.5 w-3.5" />
+      <span className={`v8-execution-list__status is-${tone} ${isActiveStatus(exec?.status) ? 'is-pulsing' : ''}`}>
+        {executionStatusLabel(exec)}
       </span>
+      <time>{executionStartedAt(exec)}</time>
+      <time>{displayedDuration(exec, nowMs)}</time>
+      <span className="v8-execution-list__arrow" aria-hidden="true">→</span>
     </Link>
   );
 }
@@ -286,7 +257,6 @@ export default function ExecutionListPage() {
   const typeFilter = (searchParams.get('type') ?? '') as TypeFilter;
   const sourceFilter = (searchParams.get('source') ?? '') as SourceFilter;
   const search = searchParams.get('q') ?? '';
-  const requestedView = searchParams.get('view');
   const page = Math.max(0, Number(searchParams.get('page') ?? '0') || 0);
 
   const updateParams = (updates: Record<string, string | null>) => {
@@ -298,10 +268,7 @@ export default function ExecutionListPage() {
     setSearchParams(next);
   };
 
-  const setFilter = (s: string) => updateParams({ status: s || null, page: null });
-  const setTypeFilter = (t: string) => updateParams({ type: t || null, page: null });
   const setSourceFilter = (s: string) => updateParams({ source: s || null, page: null });
-  const setActiveTab = (view: ActivityTab) => updateParams({ view, page: null });
 
   // Local search input state — debounced into the URL so list refreshes
   // don't fire on every keystroke.
@@ -343,10 +310,9 @@ export default function ExecutionListPage() {
   function matchesSourceFilter(exec: any): boolean {
     if (!sourceFilter) return true;
     const surface = exec?.meta?.sourceSurface ?? '';
-    const chatSessionId = exec?.meta?.chatSessionId;
     if (sourceFilter === 'design') return surface === 'design_tab';
-    if (sourceFilter === 'chat') return surface === 'chat' || Boolean(chatSessionId);
-    if (sourceFilter === 'workflow') return (exec?.type === 'workflow' || surface === 'workflow') && !chatSessionId;
+    if (sourceFilter === 'chat') return surface !== 'design_tab' && executionSourceLabel(exec) === 'chat';
+    if (sourceFilter === 'workflow') return executionKindLabel(exec) === 'workflow';
     return true;
   }
 
@@ -375,177 +341,75 @@ export default function ExecutionListPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveData, sourceFilter]);
 
-  const statusOptions = [
-    { value: '', label: 'All statuses' },
-    { value: 'running', label: 'Running' },
-    { value: 'completed', label: 'Completed' },
-    { value: 'failed', label: 'Failed' },
-    { value: 'cancelled', label: 'Cancelled' },
-    { value: 'queued', label: 'Queued' },
-    { value: 'waiting_for_input', label: 'Waiting for input' },
-  ];
-  const typeOptions = [
-    { value: '', label: 'All types' },
-    { value: 'workflow', label: 'Workflow' },
-    { value: 'agent', label: 'Agent' },
-  ];
   const runningNow = hideSpawnedChildrenWhenParentVisible(sorted.filter(exec => isActiveStatus(exec.status)));
   const recentExecs = hideSpawnedChildrenWhenParentVisible(sorted.filter(exec => isTerminalStatus(exec.status)));
-  const activeTab: ActivityTab =
-    requestedView === 'running' || requestedView === 'recent'
-      ? requestedView
-      : runningNow.length > 0
-        ? 'running'
-        : 'recent';
-  const visibleExecs = activeTab === 'running' ? runningNow : recentExecs;
+  const visibleExecs = hideSpawnedChildrenWhenParentVisible(sorted);
+  const recentCount = Math.max(recentExecs.length, total - runningNow.length);
 
   const vm = paginationViewModel({ page, total, pageSize: PAGE_SIZE });
 
   return (
-    <div className="content scroll-hide bg-app" data-screen-label="activity">
-      <div className="w-full px-8 py-8">
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
-              <Play className="h-[18px] w-[18px]" />
-            </span>
-            <div>
-              <h1 className="text-[24px] font-semibold leading-tight text-theme-primary">Executions</h1>
-              <p className="mt-1 text-[13px] text-theme-muted">Live workflow and agent runs across Allen.</p>
-            </div>
+    <div className="v8-execution-list content scroll-hide bg-app" data-screen-label="activity">
+      <div className="v8-execution-list__wrap">
+        <header className="v8-execution-list__header">
+          <div className="v8-execution-list__headline">
+            <h1>Executions</h1>
+            <p>Live workflow and agent runs across Allen.</p>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="inline-flex h-9 items-center rounded-md border border-app bg-app-card p-1">
-              <button
-                type="button"
-                className={`inline-flex h-7 items-center gap-2 rounded-md px-2.5 text-[12px] font-medium transition-colors ${
-                  activeTab === 'running'
-                    ? 'bg-app-muted text-theme-primary'
-                    : 'text-theme-muted hover:text-theme-primary'
-                }`}
-                onClick={() => setActiveTab('running')}
-              >
-                <Loader2 className={`h-3.5 w-3.5 ${runningNow.length ? 'animate-spin text-accent-green' : ''}`} />
-                <span>Running</span>
-                <span className="font-mono text-[11px]">{runningNow.length}</span>
-              </button>
-              <button
-                type="button"
-                className={`inline-flex h-7 items-center gap-2 rounded-md px-2.5 text-[12px] font-medium transition-colors ${
-                  activeTab === 'recent'
-                    ? 'bg-app-muted text-theme-primary'
-                    : 'text-theme-muted hover:text-theme-primary'
-                }`}
-                onClick={() => setActiveTab('recent')}
-              >
-                <Clock3 className="h-3.5 w-3.5" />
-                <span>Recent</span>
-                <span className="font-mono text-[11px]">{recentExecs.length}</span>
-              </button>
-            </div>
-            <IconTooltipButton
-              label="Refresh executions"
-              onClick={() => void refresh()}
-              className="h-9 w-9 border border-app bg-app-card hover:border-app-strong"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            </IconTooltipButton>
+          <div className="v8-execution-list__counts" aria-label="Execution counts">
+            <span className={`v8-execution-list__count is-running ${runningNow.length ? 'is-pulsing' : ''}`}>{runningNow.length} running</span>
+            <span className="v8-execution-list__count is-recent">{recentCount} recent</span>
           </div>
-        </div>
+        </header>
 
-        <div className="mb-4 rounded-md border border-app bg-app-card px-4 py-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative min-w-[300px] flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
-              <input
-                type="text"
-                value={searchInput}
-                onChange={e => onSearchChange(e.target.value)}
-                placeholder="Search execution id, workflow, or node"
-                className="h-9 w-full rounded-md border border-app bg-app px-8 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
-              />
-            </div>
-            <div className="w-[156px]">
-              <Select
-                value={typeFilter}
-                onChange={setTypeFilter}
-                options={typeOptions}
-                searchPlaceholder="Search type"
-                searchable={false}
-              />
-            </div>
-            <div className="w-[184px]">
-              <Select
-                value={filter}
-                onChange={setFilter}
-                options={statusOptions}
-                searchPlaceholder="Search status"
-                searchable={false}
-              />
-            </div>
-            <div className="flex shrink-0 items-center gap-2 font-mono text-[11px] text-theme-muted">
-              <ListFilter className="h-3.5 w-3.5" />
-              <span>{visibleExecs.length} shown</span>
-            </div>
-          </div>
-          {/* Source filter chips */}
-          <div className="mt-2.5 flex items-center gap-1.5 border-t border-app pt-2.5">
-            <span className="mr-1 font-mono text-[10.5px] uppercase tracking-wide text-theme-subtle">Source</span>
-            {(['', 'chat', 'workflow', 'design'] as SourceFilter[]).map((s) => {
-              const label = s === '' ? 'All' : s === 'chat' ? 'Chat' : s === 'workflow' ? 'Workflow' : 'Design';
-              const active = sourceFilter === s;
+        <div className="v8-execution-list__toolbar">
+          <label className="v8-execution-list__search">
+            <Search aria-hidden="true" />
+            <input
+              type="text"
+              value={searchInput}
+              onChange={e => onSearchChange(e.target.value)}
+              placeholder="Search execution, workflow, or node"
+            />
+          </label>
+          <div className="v8-execution-list__sources" role="group" aria-label="Filter executions by source">
+            {(['', 'chat', 'workflow', 'design'] as SourceFilter[]).map((source) => {
+              const label = source === '' ? 'All' : source === 'chat' ? 'Chat' : source === 'workflow' ? 'Workflow' : 'Design';
               return (
                 <button
-                  key={s}
+                  key={source}
                   type="button"
-                  onClick={() => setSourceFilter(s)}
-                  className={`inline-flex h-6 items-center rounded-full px-2.5 text-[11px] font-medium transition-colors ${
-                    active
-                      ? 'bg-accent-soft text-accent'
-                      : 'bg-app-muted text-theme-muted hover:bg-app-muted hover:text-theme-secondary'
-                  }`}
+                  aria-pressed={sourceFilter === source}
+                  onClick={() => setSourceFilter(source)}
                 >
                   {label}
                 </button>
               );
             })}
           </div>
+          <span className="v8-execution-list__shown">{visibleExecs.length} shown</span>
         </div>
 
-        <section className="overflow-hidden rounded-md border border-app bg-app-card">
+        <section className="v8-execution-list__table" aria-label="Executions">
           {visibleExecs.length > 0 && (
-            <div className="grid grid-cols-[minmax(0,1fr)_176px_132px_96px_36px] items-center gap-4 border-b border-app bg-app-muted/25 px-4 py-2 font-mono text-[10.5px] uppercase tracking-[0.14em] text-theme-muted">
+            <div className="v8-execution-list__row v8-execution-list__table-head">
               <span>Execution</span>
               <span>Status</span>
-              <span>Started</span>
-              <span>Duration</span>
+              <time>Started</time>
+              <time>Duration</time>
               <span />
             </div>
           )}
           {loading && visibleExecs.length === 0 ? (
             Array.from({ length: 5 }).map((_, index) => (
-              <div key={index} className="border-t border-app px-4 py-3 first:border-t-0">
-                <div className="flex items-center gap-4">
-                  <div className="h-9 w-9 animate-pulse rounded-md bg-app-muted" />
-                  <div className="min-w-0 flex-1">
-                    <div className="h-4 w-56 animate-pulse rounded-md bg-app-muted" />
-                    <div className="mt-2 h-3 w-80 animate-pulse rounded-md bg-app-muted" />
-                  </div>
-                  <div className="h-7 w-24 animate-pulse rounded-md bg-app-muted" />
-                </div>
+              <div key={index} className="v8-execution-list__row v8-execution-list__skeleton" aria-hidden="true">
+                <span><i /><i /></span><i /><i /><i /><i />
               </div>
             ))
           ) : visibleExecs.length === 0 ? (
-            <div className="px-5 py-12 text-center">
-              <Play className="mx-auto h-8 w-8 text-theme-subtle" />
-              <div className="mt-4 text-[15px] font-semibold text-theme-primary">
-                {activeTab === 'running' ? 'No executions running' : 'No recent executions'}
-              </div>
-              <p className="mt-1 text-[13px] text-theme-muted">
-                {activeTab === 'running'
-                  ? 'New agent work appears here as soon as Allen starts a run.'
-                  : 'Completed, failed, and cancelled runs will appear here.'}
-              </p>
+            <div className="v8-execution-list__empty">
+              <strong>No executions found</strong>
+              <p>Runs will appear here as soon as Allen starts workflow or agent work.</p>
             </div>
           ) : (
             visibleExecs.map((exec: any) => (
@@ -554,8 +418,10 @@ export default function ExecutionListPage() {
           )}
         </section>
 
-        {activeTab === 'recent' && vm.visible && (
-          <div className="mt-5 flex items-center justify-between border-t border-app pt-4">
+        <p className="v8-execution-list__footnote">Click a run to open its detail. Failed runs open at the decision that needs you.</p>
+
+        {vm.visible && (
+          <div className="v8-execution-list__pagination">
             <button
               type="button"
               className="inline-flex h-9 items-center rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-40"

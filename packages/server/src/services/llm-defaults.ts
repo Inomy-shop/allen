@@ -124,8 +124,8 @@ export function getRequiredProviders(): { claude: boolean; codex: boolean } {
  *         OTHER provider. `'default'` and unknown strings pass through.
  *       * `planMode: true` dropped when env provider ≠ claude-cli and not
  *         a claude-compatible provider.
- *       * `reasoningEffort: 'max'` dropped when env provider ≠ claude-cli
- *         and not a claude-compatible provider.
+ *       * reasoning effort is preserved because supported levels are
+ *         provider/model-specific and validated at the runtime boundary.
  */
 export async function normalizeNodeOverridesForProvider(
   overrides: Record<string, unknown> | undefined | null,
@@ -169,11 +169,6 @@ export async function normalizeNodeOverridesForProvider(
   // planMode: claude-cli (and claude-compatible) only.
   if (out.planMode === true && envProvider !== 'claude' && !isClaudeCompatibleProvider(envProvider)) {
     delete out.planMode;
-  }
-
-  // reasoningEffort 'max': claude-cli (and compatible) only.
-  if (out.reasoningEffort === 'max' && envProvider !== 'claude' && !isClaudeCompatibleProvider(envProvider)) {
-    delete out.reasoningEffort;
   }
 
   return out;

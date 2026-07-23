@@ -14,6 +14,7 @@ import { workspaces as wsApi } from '../../services/workspaceService';
 import { chat as chatApi, agents as agentsApi } from '../../services/api';
 import { MessageSquare, X, ExternalLink, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { resourceScopeKey } from '../../stores/documentTabStore';
 
 interface EmbeddedChatProps {
   workspaceId: string;
@@ -163,6 +164,7 @@ export function EmbeddedChat({
             activeAgent={activeSession?.activeAgent}
             onSuggestionClick={handleSend}
             onSaveToLearnings={() => {}}
+            resourceScopeKey={activeSessionId ? resourceScopeKey('chat', activeSessionId) : resourceScopeKey('workspace', workspaceId)}
           />
         )}
       </div>

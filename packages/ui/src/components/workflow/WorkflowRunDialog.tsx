@@ -162,11 +162,11 @@ export default function WorkflowRunDialog({ workflow, onClose, onStarted }: Work
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 overflow-y-auto"
+      className="v8-activity-backdrop fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 overflow-y-auto"
       onClick={onClose}
     >
       <div
-        className="card w-full max-w-lg overflow-hidden shadow-popover"
+        className="v8-activity-modal card w-full max-w-lg overflow-hidden shadow-popover"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-6 py-5 border-b border-app">

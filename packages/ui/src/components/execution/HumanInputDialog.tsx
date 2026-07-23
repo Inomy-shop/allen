@@ -44,7 +44,7 @@ export default function HumanInputDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-6"
+      className="v8-activity-backdrop fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-6"
       onClick={onCancel}
     >
       {/* Card grows with content; the OUTER overlay scrolls when the card
@@ -52,7 +52,7 @@ export default function HumanInputDialog({
           overflow-hidden, which clipped tall prompts/forms and hid the
           submit button below the fold with no scroll path. */}
       <div
-        className={`my-[3vh] flex w-full flex-col overflow-hidden rounded-xl border border-app-strong bg-app-card shadow-2xl ${
+        className={`v8-activity-modal v8-activity-modal-review my-[3vh] flex w-full flex-col overflow-hidden rounded-xl border border-app-strong bg-app-card shadow-2xl ${
           hasReview ? 'max-w-6xl' : 'max-w-2xl'
         }`}
         onClick={(e) => e.stopPropagation()}

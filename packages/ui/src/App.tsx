@@ -3,18 +3,21 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import NotificationBell from './components/common/NotificationBell';
 import ShortcutKey from './components/common/ShortcutKey';
+import Button from './components/common/Button';
+import Dialog from './components/common/Dialog';
 import {
-  CirclePlay, GitBranch, GitPullRequest, History, LayoutDashboard, Settings,
-  FolderGit2, TicketCheck, Workflow,
-  ChevronRight, Plus, PenTool,
+  GitBranch, GitPullRequest, Settings,
+  FolderGit2, TicketCheck, Workflow, House, MessageCircle, ListTodo,
+  ChevronRight, ChevronDown, Plus, PenTool,
   Sun, Moon, Search, PanelLeft, Command, ArrowRight, UsersRound, ArrowLeft,
   SlidersHorizontal, CircleUserRound, HardDrive, Server, CalendarClock, Brain, Cpu,
-  Trash2, AlertTriangle, Copy, Check, BarChart3, X, Lightbulb, Loader2, Zap,
+  Trash2, AlertTriangle, Copy, Check, BarChart3, X, Loader2, Zap,
 } from 'lucide-react';
 import { useSettingsStore } from './stores/settingsStore';
 import { resolveColorMode } from './lib/theme';
 import { useAuthStore } from './stores/authStore';
 import { useExecutionStore } from './stores/executionStore';
+import { resourceScopeKey, useDocumentTabStore } from './stores/documentTabStore';
 import { BRAND_NAME } from './lib/brand';
 import {
   chat as chatApi,
@@ -27,8 +30,26 @@ import { usePanelLayout } from './hooks/usePanelLayout';
 import { WorkspaceCreateDialog, type WorkspaceCreateRepo } from './components/workspace/WorkspaceCreateDialog';
 import { workspaceChatPath } from './lib/workspace-routes';
 import { workspaceCreateBaseBranch } from './lib/workspace-create';
-import DesignStudioCreateDialog from './components/design/DesignStudioCreateDialog';
-import { designStudio, DESIGN_STUDIO_WORKSPACE_UPDATED_EVENT, type Workspace as DesignStudioWorkspace } from './services/designStudioService';
+import {
+  V8AgentsIcon,
+  V8AllenDesignIcon,
+  V8AllenMark,
+  V8DocumentsIcon,
+  V8ExecutionsIcon,
+  V8HomeIcon,
+  V8LinearIcon,
+  V8PullRequestsIcon,
+  V8ReposIcon,
+  V8SessionsIcon,
+  V8SidebarCollapseIcon,
+  V8SidebarExpandIcon,
+  V8ThemeMoonIcon,
+  V8ThemeSunIcon,
+  V8WorkflowsIcon,
+  V8WorkspacesIcon,
+} from './components/common/V8SidebarIcons';
+import DocumentTabHost from './components/artifacts/DocumentTabHost';
+import MediaViewerHost from './components/media/MediaViewerHost';
 
 interface NavItem {
   to: string;
@@ -53,7 +74,7 @@ interface CommandItem {
   icon: React.ComponentType<{ className?: string }>;
 }
 
-type SidebarPanelId = 'design-studio' | 'workspaces' | 'navigation';
+type SidebarPanelId = 'workspaces' | 'navigation';
 
 interface SidebarWorkspace {
   _id: string;
@@ -107,50 +128,50 @@ function sidebarRepoForWorkspace(repos: SidebarRepo[], workspace?: SidebarWorksp
   }) ?? null;
 }
 
-// ── Nav Groups (Allen design system: flat navigation with subtle dividers) ──
+// V8 information architecture: four permanent destinations and one
+// collapsible Library. Prototype-only surfaces intentionally remain visible
+// as placeholders so the shipped navigation stays visually identical.
+const CORE_NAV_ITEMS: NavItem[] = [
+  { to: '/', icon: V8HomeIcon, label: 'Home', end: true },
+  { to: '/chats', icon: V8SessionsIcon, label: 'Sessions', activePrefixes: ['/chats', '/chat'] },
+  { to: '/executions', icon: V8ExecutionsIcon, label: 'Executions', activePrefixes: ['/executions'] },
+  { to: '/workspaces', icon: V8WorkspacesIcon, label: 'Workspaces' },
+];
 
-const NAV_GROUPS: NavGroup[] = [
-  { id: 'primary', items: [
-    { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
-    { to: '/executions', icon: CirclePlay, label: 'Executions', activePrefixes: ['/executions'] },
-    { to: '/chats', icon: History, label: 'History', activePrefixes: ['/chats', '/chat'] },
-  ]},
-  { id: 'sources', dividerBefore: true, items: [
-    { to: '/tickets', icon: TicketCheck, label: 'Linear' },
-    { to: '/pull-requests', icon: GitPullRequest, label: 'Pull requests' },
-    { to: '/agents?section=repos', icon: GitBranch, label: 'Repositories' },
-    { to: '/workspaces', icon: FolderGit2, label: 'Workspaces' },
-  ]},
-  { id: 'design', dividerBefore: true, items: [
-    { to: '/studio', icon: PenTool, label: 'Design Studio', activePrefixes: ['/studio'] },
-  ]},
-  { id: 'studio', dividerBefore: true, items: [
-    { to: '/agents?section=teams-agents', icon: UsersRound, label: 'Teams & Agents' },
-    { to: '/workflows', icon: Workflow, label: 'Workflows', activePrefixes: ['/workflows'] },
-  ]},
+const LIBRARY_NAV_ITEMS: NavItem[] = [
+  { to: '/repos', icon: V8ReposIcon, label: 'Repos' },
+  { to: '/tickets', icon: V8LinearIcon, label: 'Linear' },
+  { to: '/pull-requests', icon: V8PullRequestsIcon, label: 'Pull requests' },
+  { to: '/documents', icon: V8DocumentsIcon, label: 'Documents' },
+  { to: '/agents?section=teams-agents', icon: V8AgentsIcon, label: 'Agents' },
+  { to: '/workflows', icon: V8WorkflowsIcon, label: 'Workflows', activePrefixes: ['/workflows'] },
 ];
 
 const SETTINGS_NAV_GROUPS: NavGroup[] = [
-  { id: 'settings-primary', items: [
+  { id: 'settings-workspace', label: 'Workspace', items: [
     { to: '/settings/general', icon: SlidersHorizontal, label: 'General', activePrefixes: ['/settings/general'], end: true },
-    { to: '/settings/runtime', icon: HardDrive, label: 'Runtime', activePrefixes: ['/settings/runtime'] },
-    { to: '/settings/models', icon: Cpu, label: 'Models', activePrefixes: ['/settings/models'] },
-    { to: '/settings/usage', icon: BarChart3, label: 'Usage', activePrefixes: ['/settings/usage'] },
-    { to: '/settings/mcp', icon: Server, label: 'MCP Servers', activePrefixes: ['/settings/mcp'] },
+    { to: '/settings/account', icon: CircleUserRound, label: 'Account', activePrefixes: ['/settings/account'] },
   ]},
-  { id: 'settings-allen', label: 'Allen', items: [
+  { id: 'settings-intelligence', label: 'Intelligence', items: [
+    { to: '/settings/models', icon: Cpu, label: 'Models & providers', activePrefixes: ['/settings/models'] },
+    { to: '/settings/context', icon: Brain, label: 'Context engine', activePrefixes: ['/settings/context'] },
+  ]},
+  { id: 'settings-connections', label: 'Connections', items: [
+    { to: '/settings/mcp', icon: Server, label: 'MCP servers', activePrefixes: ['/settings/mcp'] },
+  ]},
+  { id: 'settings-automation', label: 'Automation', items: [
     { to: '/settings/schedules', icon: CalendarClock, label: 'Schedules', activePrefixes: ['/settings/schedules'] },
     { to: '/settings/learnings', icon: Brain, label: 'Learnings', activePrefixes: ['/settings/learnings'] },
-    { to: '/settings/skills', icon: Zap, label: 'Skills', activePrefixes: ['/settings/skills'] },
-    { to: '/settings/team', icon: UsersRound, label: 'Team', activePrefixes: ['/settings/team'] },
   ]},
-  { id: 'settings-account', label: 'User', items: [
-    { to: '/settings/account', icon: CircleUserRound, label: 'Account', activePrefixes: ['/settings/account'] },
+  { id: 'settings-system', label: 'System', items: [
+    { to: '/settings/runtime', icon: HardDrive, label: 'Runtime', activePrefixes: ['/settings/runtime'] },
+    { to: '/settings/usage', icon: BarChart3, label: 'Usage', activePrefixes: ['/settings/usage'] },
+    { to: '/settings/team', icon: UsersRound, label: 'Team', activePrefixes: ['/settings/team'] },
   ]},
 ];
 
 const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
-  { prefix: '/studio', label: 'Design Studio' },
+  { prefix: '/studio', label: 'Allen Design' },
   { prefix: '/chats', label: 'History' },
   { prefix: '/threads', label: 'History' },
   { prefix: '/chat', label: 'Chat' },
@@ -169,13 +190,13 @@ const ROUTE_TITLES: Array<{ prefix: string; label: string }> = [
 ];
 
 const COMMANDS: CommandItem[] = [
-  { id: 'dashboard', label: 'Open dashboard', group: 'Navigate', to: '/', icon: LayoutDashboard },
-  { id: 'executions', label: 'Open executions', group: 'Navigate', to: '/executions', icon: CirclePlay },
-  { id: 'chats', label: 'Open history', group: 'Navigate', to: '/chats', icon: History },
-  { id: 'studio', label: 'Open Design Studio', group: 'Navigate', to: '/studio', icon: PenTool },
-  { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: History },
-  { id: 'activity', label: 'View execution log', group: 'Executions', to: '/executions', icon: CirclePlay },
-  { id: 'running', label: 'View running executions', group: 'Executions', to: '/executions?status=running', icon: CirclePlay },
+  { id: 'dashboard', label: 'Open dashboard', group: 'Navigate', to: '/', icon: House },
+  { id: 'executions', label: 'Open executions', group: 'Navigate', to: '/executions', icon: ListTodo },
+  { id: 'chats', label: 'Open history', group: 'Navigate', to: '/chats', icon: MessageCircle },
+  { id: 'studio', label: 'Open Allen Design', group: 'Navigate', to: '/studio', icon: PenTool },
+  { id: 'chat', label: 'Open assistant chat', group: 'Action', to: '/chat', icon: MessageCircle },
+  { id: 'activity', label: 'View execution log', group: 'Executions', to: '/executions', icon: ListTodo },
+  { id: 'running', label: 'View running executions', group: 'Executions', to: '/executions?status=running', icon: ListTodo },
   { id: 'tickets', label: 'Open Linear', group: 'Sources', to: '/tickets', icon: TicketCheck },
   { id: 'pulls', label: 'Open pull requests', group: 'Sources', to: '/pull-requests', icon: GitPullRequest },
   { id: 'repos', label: 'Open repositories', group: 'Sources', to: '/agents?section=repos', icon: GitBranch },
@@ -191,12 +212,12 @@ const COMMANDS: CommandItem[] = [
   { id: 'agents', label: 'Open teams & agents', group: 'Studio', to: '/agents?section=teams-agents', icon: UsersRound },
 ];
 
-const SIDEBAR_PANEL_ORDER: SidebarPanelId[] = ['design-studio', 'navigation', 'workspaces'];
+const SIDEBAR_PANEL_ORDER: SidebarPanelId[] = ['navigation', 'workspaces'];
 const SIDEBAR_PANEL_LABELS: Record<SidebarPanelId, string> = {
-  'design-studio': 'Design Studio',
   workspaces: 'Workspaces',
   navigation: 'App navigation',
 };
+const LIBRARY_OPEN_KEY = 'allen-nav-lib';
 const WORKSPACE_REPO_COLLAPSE_KEY = 'allen-app-sidebar-collapsed-workspace-repos';
 const WORKSPACE_REPO_RECENT_LIMIT = 5;
 const SETTINGS_ROUTE_DETAILS: Array<{ prefix: string; label: string }> = [
@@ -230,6 +251,15 @@ function saveCollapsedWorkspaceRepos(value: Set<string>) {
   }
 }
 
+function loadLibraryOpen(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(LIBRARY_OPEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 function sidebarWorkspaceTime(workspace: SidebarWorkspace): number {
   // Order by the most recent linked chat message first, falling back to
   // workspace metadata timestamps when a workspace has no chat activity.
@@ -242,17 +272,6 @@ function workspaceRepoLabel(workspace: SidebarWorkspace): string {
   return workspace.repoName
     ?? workspace.repoPath?.split('/').filter(Boolean).at(-1)
     ?? 'Unknown repo';
-}
-
-function dsStatusInfo(status: DesignStudioWorkspace['profileStatus']): { label: string; cls: string } {
-  switch (status) {
-    case 'pending': return { label: 'Setup needed', cls: 'bg-amber-500/15 text-amber-500' };
-    case 'analyzing': return { label: 'Analyzing…', cls: 'bg-blue-500/15 text-blue-400' };
-    case 'needs_review': return { label: 'Review profile', cls: 'bg-amber-500/15 text-amber-500' };
-    case 'needs_choice': return { label: 'Action needed', cls: 'bg-orange-500/15 text-orange-500' };
-    case 'confirmed': return { label: 'Ready', cls: 'bg-emerald-500/15 text-emerald-500' };
-    default: return { label: 'Unknown', cls: 'bg-theme-subtle/15 text-theme-subtle' };
-  }
 }
 
 function routeTitle(pathname: string, search = ''): string {
@@ -782,11 +801,7 @@ export default function App() {
   const [workspaceCreateRepo, setWorkspaceCreateRepo] = useState<WorkspaceCreateRepo | null>(null);
   const [collapsedWorkspaceRepos, setCollapsedWorkspaceRepos] = useState<Set<string>>(() => loadCollapsedWorkspaceRepos());
   const [expandedWorkspaceRepos, setExpandedWorkspaceRepos] = useState<Set<string>>(() => new Set());
-  const [appVersion, setAppVersion] = useState(__ALLEN_APP_VERSION__);
-  const [dsWorkspaces, setDsWorkspaces] = useState<DesignStudioWorkspace[]>([]);
-  const [dsWorkspacesLoading, setDsWorkspacesLoading] = useState(false);
-  const [dsWorkspaceSearch, setDsWorkspaceSearch] = useState('');
-  const [dsCreateOpen, setDsCreateOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(loadLibraryOpen);
   const sidebarGestureLockRef = useRef(false);
   const sidebarWheelGestureActiveRef = useRef(false);
   const sidebarWheelCanRearmRef = useRef(true);
@@ -796,11 +811,23 @@ export default function App() {
   const sidebarCarouselRef = useRef<HTMLDivElement | null>(null);
 
   const currentUser = useAuthStore((s) => s.user);
+  const setActiveResourceScope = useDocumentTabStore((s) => s.setActiveScope);
+  const routeResourceScope = useMemo(() => {
+    const chatId = location.pathname.match(/^\/chat\/([^/]+)/)?.[1];
+    if (chatId) return resourceScopeKey('chat', decodeURIComponent(chatId));
+    const executionId = location.pathname.match(/^\/executions\/([^/]+)/)?.[1];
+    if (executionId) return resourceScopeKey('execution', decodeURIComponent(executionId));
+    if (location.pathname === '/documents') return resourceScopeKey('surface', 'documents');
+    const workspaceId = new URLSearchParams(location.search).get('workspaceId');
+    if (location.pathname === '/chat' && workspaceId) return resourceScopeKey('workspace', workspaceId);
+    return resourceScopeKey('surface', location.pathname || 'home');
+  }, [location.pathname, location.search]);
+  const documentTabOpen = useDocumentTabStore((s) => Boolean(s.activeArtifactId || s.activeFileKey));
+  const chatOwnsDocumentTabs = location.pathname === '/chat' || location.pathname.startsWith('/chat/');
 
-  // Initials for the avatar tile
-  const userInitial = currentUser?.name?.charAt(0)?.toUpperCase()
-    || currentUser?.email?.charAt(0)?.toUpperCase()
-    || '?';
+  useEffect(() => {
+    setActiveResourceScope(routeResourceScope);
+  }, [routeResourceScope, setActiveResourceScope]);
 
   // Theme toggle — flips between light and dark, persists via the
   // existing settings store (which also handles the .dark class +
@@ -813,7 +840,16 @@ export default function App() {
   const workspaceIdFromPath = location.pathname.match(/^\/workspaces\/([^/]+)/)?.[1] ?? null;
   const workspaceIdFromSearch = new URLSearchParams(location.search).get('workspaceId');
   const activeWorkspaceId = workspaceIdFromPath ?? workspaceIdFromSearch ?? chatSessionWorkspaceId;
-  const dsWorkspaceIdFromPath = location.pathname.match(/^\/studio\/workspaces\/([^/]+)/)?.[1] ?? null;
+  const activeSidebarWorkspace = activeWorkspaceId
+    ? sidebarWorkspaces.find(workspace => workspace._id === activeWorkspaceId) ?? null
+    : null;
+  const activeSidebarRepo = activeSidebarWorkspace
+    ? sidebarRepoForWorkspace(sidebarRepos, activeSidebarWorkspace)
+    : null;
+  const brandWorkspaceName = activeSidebarRepo?.name
+    ?? activeSidebarWorkspace?.repoName
+    ?? sidebarRepos[0]?.name
+    ?? 'allen-internal';
   const routeChatConversationId = location.pathname.match(/^\/chat\/([^/]+)/)?.[1] ?? null;
   const copyableChatConversationId = location.pathname.startsWith('/chat') ? routeChatConversationId ?? activeChatConversationId : null;
   const isWorkspaceChatRoute = location.pathname.startsWith('/chat') && Boolean(activeWorkspaceId);
@@ -849,12 +885,6 @@ export default function App() {
     }
     return ordered.sort((a, b) => b.latest - a.latest);
   }, [sidebarRepos, sidebarWorkspaces, workspaceSearch]);
-
-  const filteredDsWorkspaces = useMemo(() => {
-    const q = dsWorkspaceSearch.trim().toLowerCase();
-    if (!q) return dsWorkspaces;
-    return dsWorkspaces.filter((ws) => ws.name.toLowerCase().includes(q));
-  }, [dsWorkspaces, dsWorkspaceSearch]);
 
   async function openCreateWorkspaceForRepo(repo?: WorkspaceCreateRepo | null) {
     if (!repo) return;
@@ -908,20 +938,6 @@ export default function App() {
       setDeletingWorkspaceId(null);
     }
   }
-
-  useEffect(() => {
-    let cancelled = false;
-    window.allenDesktop?.getRuntimeInfo?.()
-      .then((info) => {
-        if (!cancelled && info?.appVersion) setAppVersion(info.appVersion);
-      })
-      .catch(() => {
-        // Web/dev mode uses the build-time fallback.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     const index = window.history.state?.idx;
@@ -1109,79 +1125,28 @@ export default function App() {
     if (!quiet) setSidebarWorkspacesLoading(false);
   }, []);
 
-  const loadDsWorkspaces = useCallback(async (quiet = false) => {
-    if (!quiet) setDsWorkspacesLoading(true);
-    try {
-      const items = await designStudio.listWorkspaces();
-      setDsWorkspaces(items ?? []);
-    } catch (err) {
-      console.error('[design-studio-sidebar] failed to load workspaces', err);
-      if (!quiet) setDsWorkspaces([]);
-    } finally {
-      if (!quiet) setDsWorkspacesLoading(false);
-    }
-  }, []);
-
-  const applyDsWorkspaceUpdate = useCallback((workspace: DesignStudioWorkspace) => {
-    setDsWorkspaces(prev => {
-      const idx = prev.findIndex(item => item._id === workspace._id);
-      if (idx === -1) return [workspace, ...prev];
-      const next = [...prev];
-      next[idx] = { ...next[idx], ...workspace };
-      return next;
-    });
-  }, []);
-
-  const applyDsWorkspaceStatus = useCallback((workspaceId: string, profileStatus: DesignStudioWorkspace['profileStatus']) => {
-    setDsWorkspaces(prev => prev.map(item =>
-      item._id === workspaceId ? { ...item, profileStatus } : item,
-    ));
-  }, []);
-
-  const removeDsWorkspace = useCallback((workspaceId: string) => {
-    setDsWorkspaces(prev => prev.filter(item => item._id !== workspaceId));
-  }, []);
-
   useEffect(() => {
     if (sidebarPanel !== 'workspaces') return;
     void loadSidebarWorkspaces(false);
   }, [sidebarPanel, loadSidebarWorkspaces]);
 
   useEffect(() => {
-    if (sidebarPanel !== 'design-studio') return;
-    void loadDsWorkspaces(false);
-  }, [sidebarPanel, loadDsWorkspaces]);
+    if (location.hash === '#workspaces') setSidebarPanel('workspaces');
+  }, [location.hash]);
 
   useEffect(() => {
-    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-    function onDesignStudioWorkspaceUpdated(event: Event) {
-      const detail = (event as CustomEvent<{
-        workspaceId?: string;
-        workspace?: DesignStudioWorkspace;
-        profileStatus?: DesignStudioWorkspace['profileStatus'];
-        deleted?: boolean;
-      }>).detail ?? {};
+    const libraryRoute = ['/tickets', '/pull-requests', '/documents', '/agents', '/workflows']
+      .some((prefix) => location.pathname.startsWith(prefix));
+    if (libraryRoute) setLibraryOpen(true);
+  }, [location.pathname]);
 
-      if (detail.deleted && detail.workspaceId) {
-        removeDsWorkspace(detail.workspaceId);
-      } else if (detail.workspace) {
-        applyDsWorkspaceUpdate(detail.workspace);
-      } else if (detail.workspaceId && detail.profileStatus) {
-        applyDsWorkspaceStatus(detail.workspaceId, detail.profileStatus);
-      }
-
-      if (sidebarPanel === 'design-studio') {
-        if (refreshTimer) clearTimeout(refreshTimer);
-        refreshTimer = setTimeout(() => void loadDsWorkspaces(true), 300);
-      }
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LIBRARY_OPEN_KEY, libraryOpen ? '1' : '0');
+    } catch {
+      // Persistence is an enhancement; navigation remains fully functional.
     }
-
-    window.addEventListener(DESIGN_STUDIO_WORKSPACE_UPDATED_EVENT, onDesignStudioWorkspaceUpdated);
-    return () => {
-      if (refreshTimer) clearTimeout(refreshTimer);
-      window.removeEventListener(DESIGN_STUDIO_WORKSPACE_UPDATED_EVENT, onDesignStudioWorkspaceUpdated);
-    };
-  }, [applyDsWorkspaceStatus, applyDsWorkspaceUpdate, loadDsWorkspaces, removeDsWorkspace, sidebarPanel]);
+  }, [libraryOpen]);
 
   // Keep the sidebar ordered by recent chat activity in real time while it is
   // open: refresh on the workspace-activity event (fired when a chat message is
@@ -1240,12 +1205,14 @@ export default function App() {
   const navPanel = usePanelLayout({
     storageKey: 'app-nav',
     direction: 'horizontal',
-    defaultSize: 290,
-    minSize: 260,
-    maxSize: 396,
+    defaultSize: 236,
+    minSize: 220,
+    maxSize: 320,
   });
 
   const isSettingsRoute = location.pathname.startsWith('/settings');
+  const isHomeRoute = location.pathname === '/';
+  const isPrototypePageRoute = isSettingsRoute || isHomeRoute || location.pathname.startsWith('/chat') || ['/chats', '/repos', '/tickets', '/workspaces', '/documents', '/pull-requests', '/agents', '/workflows', '/executions'].includes(location.pathname) || location.pathname.startsWith('/pull-requests/') || location.pathname.startsWith('/workflows/') || location.pathname.startsWith('/executions/') || location.pathname.startsWith('/studio');
   const shellNavState = navPanel.collapsed && !isSettingsRoute ? 'nav-collapsed' : 'nav-expanded';
   const sidebarPanelIndex = Math.max(0, SIDEBAR_PANEL_ORDER.indexOf(sidebarPanel));
 
@@ -1348,7 +1315,12 @@ export default function App() {
     <div className={`app-shell ${shellNavState} ${isSettingsRoute ? 'settings-shell' : ''}`}>
       {/* Navigation sidebar — collapsible and resizable */}
       {isSettingsRoute ? (
-        <nav className="sidebar settings-mode-sidebar !w-[290px] !min-w-[290px] [animation:none]">
+        <nav className="sidebar settings-mode-sidebar [animation:none]">
+          <div className="settings-mode-brandicon">
+            <button type="button" onClick={() => navigate('/')} aria-label="Return to Allen">
+              <PanelLeft className="h-3.5 w-3.5" />
+            </button>
+          </div>
           <div className="settings-mode-head">
             <button
               type="button"
@@ -1359,8 +1331,9 @@ export default function App() {
               }}
             >
               <ArrowLeft className="h-4 w-4" />
-              <span>Back to app</span>
+              <span>Settings</span>
             </button>
+            <NotificationBell />
           </div>
 
           <div className="sidebar-inner settings-mode-inner scroll-hide">
@@ -1386,15 +1359,23 @@ export default function App() {
                     >
                       <item.icon className="ico" />
                       <span>{item.label}</span>
+                      {item.to === '/settings/team' && <small className="settings-mode-admin">admin</small>}
                     </NavLink>
                   ))}
                 </div>
               </div>
             ))}
           </div>
+          <button type="button" className="settings-mode-user" onClick={() => navigate('/settings/account')}>
+            <span className="settings-mode-avatar">{(currentUser?.name || currentUser?.email || 'A').charAt(0).toUpperCase()}</span>
+            <span className="settings-mode-usercopy">
+              <b>{currentUser?.name || 'Allen operator'}</b>
+              <small>{currentUser?.email || 'Local workspace'}</small>
+            </span>
+          </button>
         </nav>
       ) : navPanel.collapsed ? (
-        <div className="sidebar sidebar-icon">
+        <div className="sidebar sidebar-icon prototype-sidebar">
           <div className="brand brand-collapsed">
             <button
               onClick={navPanel.toggle}
@@ -1402,33 +1383,53 @@ export default function App() {
               title="Expand navigation"
               aria-label="Expand navigation"
             >
-              [a]
+              <V8AllenMark className="h-4 w-4" />
             </button>
           </div>
           <div className="sidebar-inner scroll-hide">
-            {NAV_GROUPS.map(group => (
-              <div key={group.id} className={`nav-group ${group.dividerBefore ? 'mt-2 pt-2 before:mx-2 before:mb-2 before:block before:border-t before:border-app before:content-[""]' : ''}`}>
-                <div className="nav-group-items">
-                  {group.items.map(item => (
-                    <NavLink
-                      key={item.to}
-                      to={item.to}
-                      end={item.end ?? item.to === '/'}
-                      className={({ isActive }) =>
-                        `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`
-                      }
-                      aria-label={item.label}
-                      data-sidebar-tooltip={item.label}
-                    >
-                      <item.icon className="ico" />
-                      <span className="lbl">{item.label}</span>
-                    </NavLink>
-                  ))}
-                </div>
+            <div className="nav-group">
+              <div className="nav-group-items">
+                {CORE_NAV_ITEMS.map(item => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.end ?? item.to === '/'}
+                    className={({ isActive }) => `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`}
+                    aria-label={item.label}
+                    data-sidebar-tooltip={item.label}
+                  >
+                    <item.icon className="ico" />
+                    <span className="lbl">{item.label}</span>
+                  </NavLink>
+                ))}
               </div>
-            ))}
+            </div>
+            <div className="nav-group mt-2 border-t border-app pt-2">
+              <div className="nav-group-items">
+                {LIBRARY_NAV_ITEMS.map(item => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    className={({ isActive }) => `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`}
+                    aria-label={item.label}
+                    data-sidebar-tooltip={item.label}
+                  >
+                    <item.icon className="ico" />
+                    <span className="lbl">{item.label}</span>
+                  </NavLink>
+                ))}
+              </div>
+            </div>
           </div>
           <div className="sidebar-foot-wrap sidebar-foot-icon">
+            <NavLink
+              to="/studio"
+              className="foot-btn"
+              aria-label="Allen Design"
+              data-sidebar-tooltip="Allen Design"
+            >
+              <V8AllenDesignIcon className="h-4 w-4" />
+            </NavLink>
             <NavLink
               to="/settings/general"
               className="foot-btn"
@@ -1443,24 +1444,35 @@ export default function App() {
               title="Expand navigation"
               aria-label="Expand navigation"
             >
-              <ChevronRight className="w-4 h-4" />
+              <V8SidebarExpandIcon className="w-4 h-4" />
             </button>
           </div>
         </div>
       ) : (
         /* Expanded: full nav with dynamic width */
-        <nav
-          className="sidebar !w-[290px] !min-w-[290px] [animation:none]"
-        >
-          {/* Workspace switcher pill — with collapse button */}
-          <div className="brand">
-            <NavLink to="/" className="brand-link">
+        <nav className="sidebar prototype-sidebar [animation:none]">
+          <div className="brand prototype-brand">
+            <NavLink to="/" className="brand-link min-w-0 flex-1">
               <div className="brand-mark">
-                [a]
+                <V8AllenMark className="h-4 w-4" />
               </div>
-              <span className="brand-name">{BRAND_NAME}</span>
+              <span className="min-w-0 flex-1 overflow-hidden">
+                <span className="brand-name block">{BRAND_NAME}</span>
+                <span className="brand-workspace block truncate">
+                  {brandWorkspaceName}
+                </span>
+              </span>
             </NavLink>
-            <span className="brand-sub">v{appVersion}</span>
+            <NotificationBell />
+            <button
+              type="button"
+              onClick={navPanel.toggle}
+              className="foot-btn shrink-0"
+              title="Collapse navigation"
+              aria-label="Collapse navigation"
+            >
+              <V8SidebarCollapseIcon className="h-4 w-4" />
+            </button>
           </div>
 
           <div
@@ -1473,12 +1485,21 @@ export default function App() {
             }}
           >
             <div
-              className="flex h-full transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
-              style={{ transform: `translate3d(-${sidebarPanelIndex * 100}%, 0, 0)` }}
+              className="flex h-full gap-7 transition-transform duration-300 ease-[cubic-bezier(0.2,0.7,0.2,1)]"
+              style={{ transform: `translate3d(calc(-${sidebarPanelIndex * 100}% - ${sidebarPanelIndex * 28}px), 0, 0)` }}
             >
-              <div className="order-3 min-w-0 w-full shrink-0">
+              <div
+                className="order-2 min-w-0 w-full shrink-0"
+                aria-hidden={sidebarPanel !== 'workspaces'}
+                {...(sidebarPanel !== 'workspaces' ? { inert: '' } : {})}
+              >
                 <div className="flex min-h-0 h-full flex-col">
-                  <div className="px-4 pb-3 pt-2">
+                  <div className="prototype-workspace-head">
+                    <span>Workspaces</span>
+                    <span>{sidebarWorkspaces.length}</span>
+                    <button type="button" onClick={() => navigate('/workspaces')}>New</button>
+                  </div>
+                  <div className="px-3 pb-2 pt-0">
                     <div className="relative">
                       <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
                       <input
@@ -1632,115 +1653,61 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="order-1 min-w-0 w-full shrink-0">
-                <div className="flex min-h-0 h-full flex-col">
-                  {/* ── Design Studio sidebar panel ── */}
-                  <div className="flex items-center justify-between px-4 pb-2 pt-2">
-                    <div className="flex items-center gap-1.5">
-                      <PenTool className="h-3.5 w-3.5 text-theme-muted" />
-                      <span className="text-[12.5px] font-medium text-theme-secondary">Design Studio</span>
+              <div
+                className="order-1 min-w-0 w-full shrink-0"
+                aria-hidden={sidebarPanel !== 'navigation'}
+                {...(sidebarPanel !== 'navigation' ? { inert: '' } : {})}
+              >
+                <div className="sidebar-inner prototype-sidebar-nav scroll-hide">
+                  <div className="nav-group prototype-core-nav">
+                    <div className="nav-group-items">
+                      {CORE_NAV_ITEMS.map(item => (
+                        <NavLink
+                          key={item.to}
+                          to={item.to}
+                          end={item.end ?? item.to === '/'}
+                          className={({ isActive }) => `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`}
+                        >
+                          <item.icon className="ico" />
+                          <span className="lbl">{item.label}</span>
+                        </NavLink>
+                      ))}
                     </div>
+                  </div>
+
+                  <div className="prototype-library">
                     <button
                       type="button"
-                      className="flex h-6 w-6 items-center justify-center rounded-md text-theme-muted transition-colors hover:bg-app-muted hover:text-accent"
-                      title="New design"
-                      aria-label="New design"
-                      onClick={() => setDsCreateOpen(true)}
+                      onClick={() => setLibraryOpen((open) => !open)}
+                      className="prototype-library-toggle"
+                      aria-label="Library"
+                      aria-expanded={libraryOpen}
                     >
-                      <Plus className="h-3.5 w-3.5" />
+                      <ChevronDown className={`prototype-library-chevron ${libraryOpen ? '' : '-rotate-90'}`} />
+                      <span>Library</span>
+                      {!libraryOpen && <span className="prototype-library-total">{LIBRARY_NAV_ITEMS.length}</span>}
                     </button>
-                  </div>
-                  {/* Search */}
-                  <div className="px-4 pb-3 pt-1">
-                    <div className="relative">
-                      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
-                      <input
-                        value={dsWorkspaceSearch}
-                        onChange={(e) => setDsWorkspaceSearch(e.target.value)}
-                        placeholder="Search design workspaces"
-                        className="input h-9 w-full pl-8 pr-3 text-[12px]"
-                        aria-label="Search design workspaces"
-                      />
-                    </div>
-                  </div>
-                  {/* List */}
-                  <div className="scroll-hide flex-1 space-y-1 overflow-y-auto px-2 pb-3">
-                    {dsWorkspacesLoading && (
-                      <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">Loading design workspaces…</div>
-                    )}
-                    {!dsWorkspacesLoading && dsWorkspaces.length === 0 && (
-                      <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">
-                        No design workspaces yet.
-                        <button
-                          type="button"
-                          className="ml-1 text-accent hover:underline"
-                          onClick={() => setDsCreateOpen(true)}
-                        >
-                          Create one
-                        </button>
-                        .
-                      </div>
-                    )}
-                    {!dsWorkspacesLoading && dsWorkspaces.length > 0 && filteredDsWorkspaces.length === 0 && (
-                      <div className="px-3 py-4 text-center text-[12px] text-theme-subtle">No matching workspaces.</div>
-                    )}
-                    {filteredDsWorkspaces.map((ws) => {
-                      const active = ws._id === dsWorkspaceIdFromPath;
-                      const statusInfo = dsStatusInfo(ws.profileStatus);
-                      return (
-                        <button
-                          key={ws._id}
-                          type="button"
-                          tabIndex={0}
-                          onClick={() => navigate(`/studio/workspaces/${ws._id}`)}
-                          className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors ${
-                            active
-                              ? 'border-transparent bg-transparent text-accent'
-                              : 'border-transparent text-theme-muted hover:bg-app-muted hover:text-theme-secondary'
-                          }`}
-                          aria-current={active ? 'true' : undefined}
-                        >
-                          {ws.kind === 'repo'
-                            ? <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-theme-muted" />
-                            : <Lightbulb className="h-3.5 w-3.5 shrink-0 text-theme-muted" />}
-                          <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-5">{ws.name}</span>
-                          <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px] font-medium ${statusInfo.cls}`}>
-                            {statusInfo.label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              <div className="order-2 min-w-0 w-full shrink-0">
-                <div className="sidebar-inner scroll-hide">
-                  {NAV_GROUPS.map(group => (
-                    <div key={group.id} className={`nav-group ${group.dividerBefore ? 'mt-2 pt-2 before:mx-3 before:mb-2 before:block before:border-t before:border-app before:content-[""]' : ''}`}>
-                      <div className="nav-group-items">
-                        {group.items.map(item => (
+                    {libraryOpen && (
+                      <div className="nav-group-items prototype-library-items">
+                        {LIBRARY_NAV_ITEMS.map(item => (
                           <NavLink
                             key={item.to}
                             to={item.to}
-                            end={item.end ?? item.to === '/'}
-                            className={({ isActive }) =>
-                              `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`
-                            }
+                            className={({ isActive }) => `nav-item ${isNavItemActive(item, location, isActive) ? 'active' : ''}`}
                           >
                             <item.icon className="ico" />
                             <span className="lbl">{item.label}</span>
                           </NavLink>
                         ))}
                       </div>
-                    </div>
-                  ))}
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center justify-center gap-2 px-3 py-2">
+          <div className="prototype-sidebar-dots">
             {SIDEBAR_PANEL_ORDER.map((panel) => (
               <button
                 key={panel}
@@ -1749,61 +1716,39 @@ export default function App() {
                 aria-current={sidebarPanel === panel ? 'true' : undefined}
                 title={SIDEBAR_PANEL_LABELS[panel]}
                 onClick={() => setSidebarPanel(panel)}
-                className={`h-2.5 w-2.5 rounded-full border transition-colors ${
+                className={`prototype-sidebar-dot ${
                   sidebarPanel === panel
-                    ? 'border-accent bg-accent'
-                    : 'border-theme-subtle/40 bg-theme-subtle/35 hover:border-theme-subtle/60 hover:bg-theme-subtle/60'
+                    ? 'active'
+                    : ''
                 }`}
               />
             ))}
           </div>
 
-          {/* Bottom — user chip + version */}
-          <div className="sidebar-foot-wrap">
-            {currentUser && (
-              <div className="sidebar-foot">
-                <div className="avatar">
-                  {userInitial}
-                </div>
-                <div className="user-meta">
-                  <div className="nm">{currentUser.name}</div>
-                  <div className="em">{currentUser.email}</div>
-                </div>
-                <NavLink
-                  to="/settings/general"
-                  className="foot-btn"
-                  title="Settings"
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                </NavLink>
-              </div>
-            )}
-            {!currentUser && (
-              <NavLink
-                to="/settings/general"
-                className={({ isActive }) => `nav-item sidebar-settings-link ${isActive ? 'active' : ''}`}
-              >
-                <Settings className="ico" />
-                <span className="lbl">Settings</span>
-              </NavLink>
-            )}
+          <div className="sidebar-foot-wrap prototype-sidebar-bottom">
+            <NavLink
+              to="/studio"
+              aria-label="Allen Design"
+              className={({ isActive }) => `prototype-design-link ${isActive ? 'active' : ''}`}
+            >
+              <span className="prototype-design-mark"><V8AllenDesignIcon /></span>
+              <span className="prototype-design-copy"><b>Allen Design</b><small>AI interface design</small></span>
+              <ChevronRight className="prototype-design-arrow" />
+            </NavLink>
+            <NavLink
+              to="/settings/general"
+              className={({ isActive }) => `prototype-settings-link ${isActive ? 'active' : ''}`}
+            >
+              <span className="prototype-settings-mark"><span /></span>
+              <span>Settings</span>
+            </NavLink>
           </div>
 
-          {dsCreateOpen && (
-            <DesignStudioCreateDialog
-              onClose={() => setDsCreateOpen(false)}
-              onCreated={(id) => {
-                setDsCreateOpen(false);
-                void loadDsWorkspaces(true);
-                navigate(`/studio/workspaces/${id}`);
-              }}
-            />
-          )}
         </nav>
       )}
 
       <main className="flex-1 min-w-0 bg-app relative flex flex-col overflow-hidden">
-        <AppTopbar
+        {!isPrototypePageRoute && !documentTabOpen && <AppTopbar
           title={title}
           detail={detail}
           liveCount={liveCount}
@@ -1817,13 +1762,26 @@ export default function App() {
           colorMode={resolvedMode}
           onColorModeToggle={toggleColorMode}
           chatConversationId={copyableChatConversationId}
-        />
-        <div className="flex-1 min-h-0 overflow-auto">
+        />}
+        {isPrototypePageRoute && !location.pathname.startsWith('/chat') && !documentTabOpen && (
+          <button
+            type="button"
+            className="home-theme-toggle"
+            onClick={toggleColorMode}
+            aria-label={`Switch to ${resolvedMode === 'dark' ? 'light' : 'dark'} theme`}
+            title={`Switch to ${resolvedMode === 'dark' ? 'light' : 'dark'} theme`}
+          >
+            {resolvedMode === 'dark' ? <V8ThemeMoonIcon /> : <V8ThemeSunIcon />}
+          </button>
+        )}
+        <div className={`relative flex-1 min-h-0 ${documentTabOpen ? 'overflow-hidden' : 'overflow-auto'}`}>
           <ErrorBoundary>
             <Outlet />
           </ErrorBoundary>
+          {documentTabOpen && !chatOwnsDocumentTabs && <DocumentTabHost workspaceId={activeWorkspaceId} />}
         </div>
       </main>
+      <MediaViewerHost />
       {updatePrompt && (
         <UpdatePromptModal
           prompt={updatePrompt}
@@ -1879,50 +1837,37 @@ function WorkspaceDeleteConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Delete workspace"
-      onClick={() => {
-        if (!deleting) onCancel();
-      }}
-    >
-      <div
-        className="w-full max-w-md overflow-hidden rounded-lg border border-app bg-app-card shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-start gap-3 border-b border-app px-5 py-4">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent-red/25 bg-accent-red/10">
-            <AlertTriangle className="h-4 w-4 text-accent-red" />
-          </div>
-          <div className="min-w-0">
-            <h2 className="text-[15px] font-semibold text-theme-primary">Delete workspace</h2>
-            <p className="mt-1 text-[12px] leading-5 text-theme-muted">
-              This will delete <span className="font-medium text-theme-primary">{workspace.name}</span> from your workspace list.
-            </p>
-          </div>
-        </div>
-        <div className="flex justify-end gap-2 px-5 py-4">
-          <button
+    <Dialog
+      open
+      onClose={onCancel}
+      dismissible={!deleting}
+      title="Delete workspace"
+      description={<>This will delete <span className="font-medium text-theme-primary">{workspace.name}</span> from your workspace list.</>}
+      icon={<AlertTriangle className="h-4 w-4 text-accent-red" />}
+      className="max-w-md"
+      footer={(
+        <>
+          <Button
             type="button"
             onClick={onCancel}
             disabled={deleting}
-            className="btn btn-secondary btn-sm"
+            variant="secondary"
+            size="sm"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             onClick={onConfirm}
             disabled={deleting}
-            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-sm border border-accent-red/35 bg-accent-red px-3 text-[12px] font-medium text-white transition-colors hover:bg-accent-red/90 disabled:cursor-not-allowed disabled:opacity-60"
+            variant="danger"
+            size="sm"
+            leadingIcon={<Trash2 className="h-3.5 w-3.5" />}
           >
-            <Trash2 className="h-3.5 w-3.5" />
             {deleting ? 'Deleting...' : 'Delete'}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </>
+      )}
+    />
   );
 }

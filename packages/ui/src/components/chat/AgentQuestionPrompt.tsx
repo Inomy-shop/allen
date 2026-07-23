@@ -22,7 +22,7 @@ export function AgentQuestionPrompt({ question, fromAgent, agentInfo, onAnswer }
   }
 
   return (
-    <div className="mx-4 mb-4 rounded-lg border border-accent-cyan/30 bg-accent-cyan/5 overflow-hidden">
+    <div className="v8-agent-question mx-4 mb-4 rounded-lg border border-accent-cyan/30 bg-accent-cyan/5 overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-2.5 px-4 py-3 border-b border-accent-cyan/15">
         <div className="w-6 h-6 rounded-full flex items-center justify-center" style={{ backgroundColor: agentColor + '20', border: `1px solid ${agentColor}30` }}>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bot, Check, ChevronDown, Crown, Search, User } from 'lucide-react';
+import { V8ChevronDownIcon, V8ComposerUserIcon } from '../common/V8SidebarIcons';
 
 export interface AgentChatOption {
   name: string;
@@ -19,6 +20,7 @@ interface AgentChatDropdownProps {
   disabled?: boolean;
   loading?: boolean;
   variant?: 'default' | 'composer';
+  controlPresentation?: 'default' | 'v8-home';
   showAssistant?: boolean;
 }
 
@@ -37,6 +39,7 @@ export default function AgentChatDropdown({
   disabled = false,
   loading = false,
   variant = 'default',
+  controlPresentation = 'default',
   showAssistant = true,
 }: AgentChatDropdownProps) {
   const [open, setOpen] = useState(false);
@@ -100,6 +103,7 @@ export default function AgentChatDropdown({
       ? 'Assistant'
       : 'Select agent';
   const isComposer = variant === 'composer';
+  const isV8Home = controlPresentation === 'v8-home';
 
   const handleOpen = () => {
     if (disabled) return;
@@ -181,14 +185,20 @@ export default function AgentChatDropdown({
         }
       >
         {value === null ? (
-          <User className={`${isComposer ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-theme-muted shrink-0`} />
+          isV8Home
+            ? <V8ComposerUserIcon className="h-3.5 w-3.5 shrink-0 text-theme-secondary" />
+            : <User className={`${isComposer ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-theme-muted shrink-0`} />
         ) : (
           <Bot className={`${isComposer ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-theme-muted shrink-0`} />
         )}
         <span className="truncate max-w-[140px]">{displayLabel}</span>
-        <ChevronDown
-          className={`${isComposer ? 'w-2.5 h-2.5' : 'w-3.5 h-3.5'} shrink-0 transition-transform text-theme-subtle ${open ? 'rotate-180' : ''}`}
-        />
+        {isV8Home ? (
+          <V8ChevronDownIcon className={`h-2.5 w-2.5 shrink-0 text-theme-subtle transition-transform ${open ? 'rotate-180' : ''}`} />
+        ) : (
+          <ChevronDown
+            className={`${isComposer ? 'w-2.5 h-2.5' : 'w-3.5 h-3.5'} shrink-0 transition-transform text-theme-subtle ${open ? 'rotate-180' : ''}`}
+          />
+        )}
       </button>
 
       {open &&

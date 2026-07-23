@@ -292,6 +292,8 @@ describe('design-studio routes', () => {
     expect(session?.provider).toBe('claude');
     expect(session?.model).toBe('claude-opus-4-8');
     expect(session?.studioWorkspaceId).toBe(ws._id);
+    expect(session?.teamClassification).toBe('design');
+    expect(session?.teamClassificationSource).toBe('studio_default');
     expect(String(session?.repoId)).toBe(repoId);
     expect(session?.repoName).toBe('Acme App');
     expect(session?.repoPath).toContain('design-studio/workspaces');

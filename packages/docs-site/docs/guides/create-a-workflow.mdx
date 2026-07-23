@@ -1,0 +1,129 @@
+---
+title: 'Create a Workflow'
+description: 'Build and validate a repeatable Allen workflow with explicit inputs and review points.'
+---
+
+:::info Media placeholders
+Before publishing, capture the **Workflows** list, Visual and YAML builder modes, the INPUT schema editor, a validation error, and a safe test execution.
+:::
+
+Use a workflow when work should follow the same reviewable sequence each time. A workflow makes inputs, agent steps, branches, retries, human decisions, and outputs visible instead of hiding the whole process in one prompt.
+
+## Plan the workflow first
+
+Define:
+
+- the user outcome;
+- the minimum required inputs;
+- the agent or deterministic step responsible for each stage;
+- the outputs later steps need;
+- the decisions that require a human;
+- the side effects that must be gated;
+- the evidence that proves the run succeeded.
+
+Start with the shortest successful path. Add branches, retries, and parallel work only after the basic path runs correctly.
+
+## Create the workflow
+
+1. Open **Workflows** and select **New workflow**.
+2. Use the pencil beside the title to set a unique name and useful description.
+3. Select the **INPUT** node and define the run form. Give every field a clear label and description, and mark only truly required fields as required.
+4. Add steps from the node palette:
+
+   | Node | Use it for |
+   | --- | --- |
+   | **Agent** | Run a configured Allen agent and collect its output. |
+   | **Code** | Run a supported deterministic built-in function. |
+   | **Human** | Pause for clarification, review, recovery, or approval. |
+   | **Workflow** | Run another saved workflow as a sub-step. |
+   | **Condition** | Make an explicit branch from workflow state. |
+
+5. Configure each node in the properties panel.
+6. Connect **INPUT** to the first step and every successful terminal path to **END**.
+7. Select **Save**.
+8. Select **Validate** and resolve errors before running.
+9. Select **Run** and use harmless test input.
+
+On the canvas, the entry node is **INPUT**. In YAML edges, the same entry is named `START`.
+
+## Define inputs for operators
+
+The input schema becomes the **Run Workflow** form. Supported schema signals include labels, descriptions, defaults, required flags, types, enumerated choices, and explicit widgets.
+
+Use:
+
+- a repository picker for repository paths when the workflow declares a repository requirement;
+- a select for a closed set of choices;
+- a checkbox for booleans;
+- a number field for numeric values;
+- a textarea for a substantial request or description.
+
+Preview the form from the INPUT editor. If an operator would have to guess what a value means, improve the label or description before saving.
+
+## Configure nodes and outputs
+
+Give nodes short names that explain their purpose in the execution view, such as `investigate`, `review`, or `approve`.
+
+Agent nodes should declare named outputs when downstream steps depend on their result. Prompts and conditions can then reference workflow inputs and prior output through template expressions. Keep output names stable and describe the expected content clearly.
+
+Use node-level model or MCP overrides only when that step genuinely needs different behavior. An override applies to that node; it does not edit the underlying agent.
+
+## Add human review where risk changes
+
+Use a Human node before actions such as:
+
+- changing a repository or deployment;
+- opening, merging, or updating a pull request;
+- sending a message or modifying an external ticket;
+- accepting an ambiguous plan;
+- continuing after exhausted retries.
+
+The review should show the decision, relevant evidence, and available actions. A vague “continue?” checkpoint does not give the operator enough information.
+
+## Use Visual and YAML modes safely
+
+The builder has **Visual** and **YAML** modes. Allen converts the current definition when you switch modes, and YAML mode includes a graph preview.
+
+Use Visual mode for layout and common properties. Use YAML for fields that are easier to review as a complete definition. When YAML is invalid, the visual view cannot absorb the change; fix the YAML before switching back.
+
+Unsaved changes trigger a leave warning. If you choose **Run** with unsaved changes, Allen asks whether to run the currently saved version. Save first when the test must include your latest edits.
+
+## Understand validation
+
+A new unsaved workflow can only receive a local YAML parse check. Save it once, then **Validate** to run the full server checks.
+
+Validation checks graph structure and references, including:
+
+- an edge from `START` and at least one path to `END`;
+- edge targets and orphan nodes;
+- known agents and deterministic functions;
+- bounded backward/retry edges;
+- human field/action configuration;
+- condition syntax;
+- suspicious output references, retry counts, and parallel paths.
+
+Errors block the builder's **Run** action. Warnings identify behavior that deserves review and a test; they are not proof that the workflow will fail.
+
+Validation cannot prove that credentials, external services, repository state, or the quality of an agent response will be correct at runtime.
+
+## Move workflows between installations
+
+The **Workflows** page can export the currently displayed workflows as a portable JSON bundle and import a bundle later. After import, validate each workflow and review its references to local agents, MCP servers, tools, and environment-specific inputs.
+
+## Preflight checklist
+
+- Input labels and descriptions are understandable without reading YAML.
+- Every path can reach **END** or an intentional human wait.
+- Retry loops are bounded.
+- Risky side effects have a meaningful human review.
+- Agent outputs needed downstream are named and described.
+- Repository-changing work uses the intended workspace strategy.
+- Node overrides are exceptional, not a second set of hidden defaults.
+- Final results are visible as output or saved artifacts.
+
+## Related pages
+
+- [Workflows](/concepts/workflows)
+- [Run a Workflow](/guides/run-a-workflow)
+- [Monitor an execution](/guides/monitor-execution)
+- [Artifacts](/concepts/artifacts)

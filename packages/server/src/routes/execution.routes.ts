@@ -470,7 +470,7 @@ export function executionRoutes(db: Db): Router {
         return res.status(400).json({ error: 'model is required', code: 'invalid_model' });
       }
       if (reasoningEffort !== undefined &&
-        !['off', 'low', 'medium', 'high', 'max'].includes(reasoningEffort)) {
+        !['off', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(reasoningEffort)) {
         return res.status(400).json({ error: 'invalid reasoningEffort value', code: 'invalid_reasoning_effort' });
       }
 

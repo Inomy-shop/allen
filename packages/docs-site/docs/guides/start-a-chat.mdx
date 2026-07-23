@@ -1,0 +1,107 @@
+---
+title: 'Start a Chat'
+---
+
+Use chat to ask Allen a question, investigate a repository, plan work, or coordinate an agent or workflow. Choose the right repository or workspace before the first message so Allen can ground its answer in the correct code and working copy.
+
+:::info Media placeholders
+Add screenshots or clips before publishing. Suggested captures: `static/img/docs/guides-start-a-chat-01.png` through `static/img/docs/guides-start-a-chat-05.png`, plus `static/videos/docs/guides-start-a-chat-short.mp4`. Show **New conversation**, the model and repository selectors, Plan mode, a workspace-linked chat, and the **Tasks**, **Files**, **Changes**, and **Context** panels.
+:::
+
+## Before you start
+
+Decide what kind of conversation you need:
+
+- **General question:** start a normal conversation without repository context.
+- **Repository-grounded question:** select a registered repository before sending the first message.
+- **Planning only:** turn on **Plan** when you want investigation and a proposed approach without file changes.
+- **Work in progress:** open the conversation from an active workspace so Allen uses that workspace's branch and files.
+- **Specialist help:** select an agent when you already know which specialist should own the request. Otherwise, let Allen choose the route.
+
+For code changes, use a workspace rather than the registered repository checkout. A workspace gives you an isolated branch and reviewable changes. See [Create or Open a Workspace](./create-or-open-a-workspace).
+
+## Start a conversation
+
+1. Open Allen's chat from the Assistant area or choose **Open assistant chat** from the command palette.
+2. Select **New conversation**.
+3. If the request concerns code, choose the repository before the first message. The repository is locked after the session starts.
+4. Choose a provider and model if the default is not appropriate. You can also set reasoning effort when the selected model supports it.
+5. Optionally select an agent or turn on **Plan**.
+6. Add files by using the attachment button, dragging them into the composer, or pasting them.
+7. Write the request and send it.
+
+When you start from a workspace, Allen opens a workspace-linked chat automatically. You can create multiple chat tabs in that workspace and reopen earlier conversations from **Previous chats**.
+
+## Write a useful request
+
+State the outcome, constraints, and evidence you expect. For example:
+
+```text
+In the selected repository, explain why the checkout request can return 409.
+Check the current route, service, and relevant tests. Do not edit files.
+Summarize the verified cause and list the evidence you inspected.
+```
+
+For change requests, also say:
+
+- which behavior should change;
+- what must remain unchanged;
+- which checks must pass;
+- whether commits, pushes, or pull requests are allowed;
+- what reviewable output you expect, such as a diff, test result, artifact, or link.
+
+Avoid pasting secrets, access tokens, or private credentials into chat or attachments.
+
+## Follow running work
+
+While Allen is responding:
+
+- choose **Stop** to interrupt the current response;
+- queue follow-up messages for the same conversation;
+- use **Steer** on a queued message when you need to redirect an active turn immediately;
+- inspect **Tasks** for linked agent or workflow work;
+- inspect **Files** and **Changes** for workspace output;
+- inspect **Context** to see which repository guidance was injected;
+- open produced artifacts and execution links instead of relying only on the summary.
+
+A conversation can hold up to three queued messages. Edit or remove a queued message if its assumptions have changed.
+
+## Respond to requests for input
+
+Some work pauses for a decision, approval, or structured value. Read the request carefully and answer only after checking the proposed action, target, and side effects. If the request belongs to a workflow execution, the linked execution page provides the durable status and recovery controls.
+
+## Review the result
+
+Before acting on a chat response:
+
+1. Check which repository or workspace the conversation used.
+2. Open linked files, changes, artifacts, executions, or external resources.
+3. Confirm that claimed tests or commands actually completed successfully.
+4. Review any proposed state-changing action before approving it.
+
+Chat is the coordination surface; a successful response does not by itself mean code was committed, pushed, deployed, or merged.
+
+## Troubleshooting
+
+### The repository selector is locked
+
+Repository context is fixed after the session begins. Start a new conversation and select the correct repository before sending the first message.
+
+### A model or agent cannot be changed
+
+Wait for the active response to finish or stop it first. Some controls are disabled while a turn is streaming.
+
+### Workspace files are missing
+
+Confirm that the workspace is still active and that you opened chat from that workspace. Archived or failed workspaces are not used as an active working directory.
+
+### A follow-up did not run immediately
+
+Open the queue. The message may be waiting behind the active turn; use **Steer** only when the current response should be redirected.
+
+## Related concepts
+
+- [Chat](../concepts/chat)
+- [Repositories](../concepts/repositories)
+- [Workspaces](../concepts/workspaces)
+- [Workflows](../concepts/workflows)

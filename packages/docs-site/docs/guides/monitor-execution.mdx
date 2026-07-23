@@ -1,0 +1,136 @@
+---
+title: 'Monitor Execution'
+---
+
+Use **Executions** to follow agent and workflow runs, answer requests for input, inspect durable evidence, and recover failed work without losing track of what already happened.
+
+:::info Media placeholders
+Add screenshots or clips before publishing. Suggested captures: `static/img/docs/guides-monitor-execution-01.png` through `static/img/docs/guides-monitor-execution-06.png`, plus `static/videos/docs/guides-monitor-execution-short.mp4`. Show the execution list, **Graph**, **Trace**, **Logs**, a node inspector, an input request, artifacts, and a recovery action.
+:::
+
+## Find the execution
+
+1. Open **Executions**.
+2. Use **Running** for active work or **Recent** for finished and paused runs.
+3. Search by execution ID, workflow, or node.
+4. Narrow the list by:
+   - type: workflow or agent;
+   - status: queued, running, completed, failed, cancelled, or waiting for input;
+   - source: chat, workflow, or design.
+5. Open the execution you want to inspect.
+
+The list shows the run type, name, status, duration, and current or last relevant node so you can distinguish similar work before taking action.
+
+## Read the status first
+
+The execution header summarizes status, duration, cost, child-execution cost, and a pull-request link when one is recorded.
+
+Interpret common states this way:
+
+- **Queued** has not started running.
+- **Running** is actively progressing or waiting on runtime work.
+- **Waiting for input** needs a human answer, approval, escalation decision, or model-recovery choice.
+- **Completed** reached a terminal success state; still review the outputs.
+- **Failed** stopped on an error and may be recoverable.
+- **Cancelled** stopped early; external side effects from completed steps may still exist.
+
+Do not retry or rerun until you understand the current state and any effects already produced.
+
+## Inspect the execution
+
+Use the three main views together:
+
+### Graph
+
+**Graph** shows workflow structure and node status. Select a node to inspect its input, output, runtime, model, token and cost information, tool calls, injected context, and spawned child work when available.
+
+### Trace
+
+**Trace** provides an ordered view of node attempts. Turn on **Timeline** when duration and overlap matter. Use it to identify the first failure, slow steps, repeated attempts, and parent-child relationships.
+
+### Logs
+
+**Logs** shows live and persisted execution output and includes descendant work by default. Use search and pagination for long runs. Logs explain runtime behavior, but pair them with node output and artifacts before drawing conclusions.
+
+The side panel also provides **Artifacts** and **Rerun from State** when those features are available for the execution.
+
+## Respond to waiting input
+
+When an execution is **Waiting for input**:
+
+1. Read the prompt and the node that requested it.
+2. Inspect the graph, trace, logs, and relevant artifacts.
+3. Confirm the target and side effects.
+4. Complete the requested fields or choose the approval action.
+5. Submit once, then watch the status change before trying again.
+
+Model recovery is a special waiting state used after automatic model retries are exhausted. Choose an available registered provider and model only after checking why the previous attempts failed.
+
+Imported executions are read-only evidence. They cannot accept new input, resume, or use model-recovery actions.
+
+## Recover failed or interrupted work
+
+Available recovery actions depend on the execution type and state:
+
+- **Retry** starts again from a failed node.
+- **Resume workflow** continues a resumable workflow.
+- **Resume agent with prompt** continues agent work with additional guidance.
+- **Rerun from State** uses a checkpoint, optionally with edited state or feedback.
+- a checkpoint can continue the same terminal execution or fork a new execution;
+- **Cancel** or subtree cancellation stops work that should not continue.
+
+Before recovery:
+
+1. Find the first meaningful failure, not only the final error.
+2. Check whether files, commits, pull requests, tickets, messages, or deployments were already created.
+3. Correct the cause or provide precise recovery guidance.
+4. Prefer the narrowest recovery action that preserves valid completed work.
+5. Verify the new attempt separately.
+
+Retries are not automatically idempotent. A failed or cancelled run may already have changed external systems.
+
+## Review the final output
+
+For every terminal run:
+
+- open artifacts and external links;
+- review node output and validation logs;
+- inspect workspace files and changes when code was involved;
+- confirm that reported tests actually passed;
+- check child executions, not only the parent summary;
+- record any unresolved warning or manual follow-up.
+
+A **Completed** status means the execution finished according to its runtime path. It does not replace human review of the result.
+
+## Understand live and durable evidence
+
+The page updates active runs as events arrive. Some detailed attempt data becomes durable only after the attempt finishes, so a live node can show less information than the same node after completion. Refresh the execution when a just-finished trace or log entry is missing.
+
+Use the persisted execution page, artifacts, workspace diff, and linked external resources as the audit trail for final decisions.
+
+## Troubleshooting
+
+### The execution appears stuck
+
+Refresh and check whether it is queued, waiting for input, in model recovery, or blocked inside a child execution. Inspect the latest trace and logs before cancelling.
+
+### Logs are too noisy
+
+Select the relevant node, search the logs, and use the trace to find the failing attempt. Disable descendant scope only when child work is not relevant.
+
+### Retry is unavailable
+
+The current state or execution type may not support it. Look for **Resume**, **Rerun from State**, a checkpoint, or a waiting-input action instead.
+
+### Submitted input seems ignored
+
+Confirm that the execution was still waiting for that input and that the status changed after submission. Avoid submitting the same approval repeatedly.
+
+### A completed run has no expected output
+
+Inspect artifacts, child executions, node output, and linked workspace changes. Completion can be valid even when a downstream external action was not part of the run.
+
+## Related concepts
+
+- [Workflows](../concepts/workflows)
+- [Artifacts](../concepts/artifacts)

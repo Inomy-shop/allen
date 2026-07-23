@@ -8,7 +8,6 @@ import {
   Cpu,
   FolderOpen,
   HardDrive,
-  LogOut,
   Monitor,
   Moon,
   Server,
@@ -22,7 +21,7 @@ import { ProviderModelRegistrySection } from '../components/settings/ModelRegist
 import UsageDashboard from '../components/settings/UsageDashboard';
 import Select from '../components/common/Select';
 import ShortcutKey from '../components/common/ShortcutKey';
-import { ProviderIcon } from '../components/chat/ChatInput';
+import ProviderIcon, { providerIconColor } from '../components/common/ProviderIcon';
 import { auth as authApi, system as systemApi, type DesktopRuntimeSettingsResponse } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -33,10 +32,10 @@ import { type ColorMode } from '../lib/theme';
 import CronManagerPage from './CronManagerPage';
 import LearningsPage from './LearningsPage';
 import SkillsSettingsPage from './SkillsSettingsPage';
-import UsersAdminPage from './UsersAdminPage';
 
 const TABS = [
   { id: 'general', adminOnly: false },
+  { id: 'context', adminOnly: false },
   { id: 'runtime', adminOnly: false },
   { id: 'models', adminOnly: true },
   { id: 'usage', adminOnly: false },
@@ -53,17 +52,22 @@ type TabId = (typeof TABS)[number]['id'];
 const PAGE_COPY: Record<TabId, { title: string; description: string; icon: React.ElementType }> = {
   general: {
     title: 'General',
-    description: 'Set the everyday behavior for Allen on this device.',
+    description: 'Workspace identity, appearance, and application updates.',
     icon: User,
+  },
+  context: {
+    title: 'Context engine',
+    description: 'Repo memory that grounds agents in your codebase.',
+    icon: Brain,
   },
   runtime: {
     title: 'Runtime',
-    description: 'Review desktop runtime paths, database mode, logs, and diagnostics.',
+    description: 'Local engine limits and paths.',
     icon: HardDrive,
   },
   models: {
-    title: 'Models',
-    description: 'Manage LLM models across all providers. Add, edit, and deactivate models without code changes.',
+    title: 'Models & providers',
+    description: 'Defaults by job, then every provider with its own model registry and credentials.',
     icon: Cpu,
   },
   usage: {
@@ -72,18 +76,18 @@ const PAGE_COPY: Record<TabId, { title: string; description: string; icon: React
     icon: BarChart3,
   },
   mcp: {
-    title: 'MCP Servers',
-    description: 'Register and inspect Model Context Protocol servers available to Allen.',
+    title: 'MCP servers',
+    description: 'Tool servers available to Allen and its agents.',
     icon: Server,
   },
   schedules: {
     title: 'Schedules',
-    description: 'Manage recurring Allen jobs and scheduled automation.',
+    description: 'Recurring Allen jobs, in plain words.',
     icon: CalendarClock,
   },
   learnings: {
     title: 'Learnings',
-    description: 'Review reusable knowledge Allen has collected from work.',
+    description: 'Preferences Allen has picked up from working with you.',
     icon: Brain,
   },
   skills: {
@@ -93,12 +97,12 @@ const PAGE_COPY: Record<TabId, { title: string; description: string; icon: React
   },
   team: {
     title: 'Team',
-    description: 'Manage users, roles, and workspace access.',
+    description: 'People, roles, and workspace access.',
     icon: ShieldCheck,
   },
   account: {
     title: 'Account',
-    description: 'Review your signed-in profile and session.',
+    description: 'Your profile on this Allen instance.',
     icon: User,
   },
 };
@@ -122,9 +126,9 @@ const SETTINGS_TAB_ALIASES: Record<string, TabId> = {
 };
 
 const COLOR_MODE_OPTIONS = [
-  { value: 'system' as ColorMode, label: 'System', icon: Monitor },
   { value: 'light' as ColorMode, label: 'Light', icon: Sun },
   { value: 'dark' as ColorMode, label: 'Dark', icon: Moon },
+  { value: 'system' as ColorMode, label: 'System', icon: Monitor },
 ];
 
 function SettingsPageShell({
@@ -137,13 +141,9 @@ function SettingsPageShell({
   wide?: boolean;
 }) {
   const page = PAGE_COPY[activeTab];
-  const Icon = page.icon;
   return (
-    <div className={`settings-page ${wide ? 'wide' : ''}`}>
+    <div className={`settings-page v8-settings-page ${wide ? 'wide' : ''}`}>
       <div className="settings-page-head">
-        <div className="settings-page-icon">
-          <Icon className="h-4 w-4" />
-        </div>
         <div className="min-w-0">
           <h1>{page.title}</h1>
           <p>{page.description}</p>
@@ -162,20 +162,22 @@ function SettingsPanel({
   children,
 }: {
   className?: string;
-  title: string;
+  title?: string;
   description?: string;
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className={`settings-panel ${className ?? ''}`}>
-      <div className="settings-panel-head">
-        <div className="settings-panel-head-copy">
-          <h2>{title}</h2>
-          {description && <p>{description}</p>}
+      {(title || description || action) && (
+        <div className="settings-panel-head">
+          <div className="settings-panel-head-copy">
+            {title && <h2>{title}</h2>}
+            {description && <p>{description}</p>}
+          </div>
+          {action && <div className="settings-panel-head-action">{action}</div>}
         </div>
-        {action && <div className="settings-panel-head-action">{action}</div>}
-      </div>
+      )}
       <div className="settings-panel-body">{children}</div>
     </section>
   );
@@ -218,7 +220,8 @@ function SettingsSwitch({
     <button
       type="button"
       className={`settings-switch ${checked ? 'active' : ''}`}
-      aria-pressed={checked}
+      role="switch"
+      aria-checked={checked}
       disabled={disabled}
       onClick={onClick}
     >
@@ -251,6 +254,10 @@ function SettingsBadge({ tone = 'neutral', children }: { tone?: 'neutral' | 'ok'
   return <span className={`settings-badge ${tone}`}>{children}</span>;
 }
 
+function SettingsSectionLabel({ children }: { children: React.ReactNode }) {
+  return <div className="settings-section-label">{children}</div>;
+}
+
 function formatProfileDate(iso: string | null): string {
   if (!iso) return '-';
   const d = new Date(iso);
@@ -272,92 +279,6 @@ function formatRoleLabel(role: string): string {
     .join(' ');
 }
 
-
-function formatReleaseDate(iso?: string): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-function ReleaseNotesModal({
-  notes,
-  loadingDetail,
-  error,
-  onClose,
-}: {
-  notes: AllenReleaseNotesIndex;
-  loadingDetail: boolean;
-  error: string | null;
-  onClose: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
-      <div className="flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border border-app bg-app-card shadow-2xl">
-        <div className="flex items-center justify-between gap-4 border-b border-app px-5 py-3.5">
-          <div className="flex min-w-0 items-center gap-2">
-            <h2 id="release-notes-title" className="truncate text-[17px] font-semibold tracking-tight text-theme-primary">Allen release history</h2>
-            {notes.source === 'cache' && <SettingsBadge tone="warn">Cached</SettingsBadge>}
-          </div>
-          <button type="button" className="settings-secondary-button" onClick={onClose}>Close</button>
-        </div>
-
-        {error && (
-          <div className="border-b border-app px-5 py-3 text-[12px] text-theme-muted">
-            {error}
-          </div>
-        )}
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-          {loadingDetail && <p className="mb-4 text-[12px] text-theme-muted">Loading release details...</p>}
-
-          {notes.releases.length > 0 ? (
-            <div className="space-y-6">
-              {notes.releases.map((release) => (
-                <article key={release.version} className="px-1 py-2">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="text-[15px] font-semibold text-theme-primary">{release.version}</h3>
-                      {release.publishedAt && (
-                        <div className="mt-1 text-[12px] text-theme-muted">
-                          {formatReleaseDate(release.publishedAt)}
-                        </div>
-                      )}
-                    </div>
-                    {release.channel && <SettingsBadge>{release.channel}</SettingsBadge>}
-                  </div>
-
-                  {release.summary && <p className="mt-3 text-[13px] leading-5 text-theme-muted">{release.summary}</p>}
-
-                  {(release.sections?.length ?? 0) > 0 ? (
-                    <div className="mt-4 space-y-4">
-                      {release.sections!.map((section) => (
-                        <section key={`${release.version}-${section.title}`}>
-                          <h4 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-theme-muted">{section.title}</h4>
-                          {section.items.length > 0 ? (
-                            <ul className="mt-2 list-disc space-y-1.5 pl-5 text-[13px] leading-5 text-theme-secondary">
-                              {section.items.map((item, index) => <li key={`${release.version}-${section.title}-${index}`}>{item}</li>)}
-                            </ul>
-                          ) : (
-                            <p className="mt-2 text-[13px] text-theme-muted">No entries.</p>
-                          )}
-                        </section>
-                      ))}
-                    </div>
-                  ) : (
-                    !loadingDetail && <p className="mt-4 text-[13px] text-theme-muted">No detailed notes are available for this release yet.</p>
-                  )}
-                </article>
-              ))}
-            </div>
-          ) : (
-            <p className="text-[13px] text-theme-muted">No releases are available.</p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function AppearancePicker() {
   const colorMode = useSettingsStore((s) => s.colorMode);
@@ -383,50 +304,32 @@ function AppearancePicker() {
 }
 
 function GeneralTab() {
+  const [workspaceName, setWorkspaceName] = useState(() => localStorage.getItem('allen.workspace.name') || 'allen-internal');
+  const [updateChannel, setUpdateChannel] = useState(() => localStorage.getItem('allen.update.channel') || 'Stable');
+  const [launchAtLogin, setLaunchAtLogin] = useState(() => localStorage.getItem('allen.launch.at.login') !== 'false');
   const [updateSettings, setUpdateSettings] = useState<Awaited<ReturnType<NonNullable<typeof window.allenDesktop>['getUpdateSettings']>> | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
-  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
-  const [releaseNotes, setReleaseNotes] = useState<AllenReleaseNotesIndex | null>(null);
-  const [releaseNotesStatus, setReleaseNotesStatus] = useState<string | null>(null);
-  const [loadingReleaseNotes, setLoadingReleaseNotes] = useState(false);
-  const [loadingReleaseDetail, setLoadingReleaseDetail] = useState(false);
-  const desktopUpdatesAvailable = Boolean(window.allenDesktop);
 
   useEffect(() => {
-    if (!desktopUpdatesAvailable) return;
-    void window.allenDesktop?.getUpdateSettings()
+    if (!window.allenDesktop?.getUpdateSettings) return;
+    void window.allenDesktop.getUpdateSettings()
       .then(setUpdateSettings)
       .catch((err) => setUpdateStatus(err instanceof Error ? err.message : String(err)));
-  }, [desktopUpdatesAvailable]);
-
-  async function toggleAutoUpdates() {
-    if (!window.allenDesktop?.setAutoUpdateEnabled || !updateSettings) return;
-    setUpdateStatus(null);
-    try {
-      const updated = await window.allenDesktop.setAutoUpdateEnabled(!updateSettings.autoUpdateEnabled);
-      setUpdateSettings(updated);
-      setUpdateStatus(updated.autoUpdateEnabled ? 'Automatic update checks enabled.' : 'Automatic update checks disabled.');
-    } catch (err) {
-      setUpdateStatus(err instanceof Error ? err.message : String(err));
-    }
-  }
+  }, []);
 
   async function checkForUpdatesNow() {
-    if (!window.allenDesktop?.checkForUpdates) return;
+    if (!window.allenDesktop?.checkForUpdates) {
+      setUpdateStatus('Update checks are available in the packaged desktop app.');
+      return;
+    }
     setCheckingUpdates(true);
     setUpdateStatus(null);
     try {
       const result = await window.allenDesktop.checkForUpdates();
-      if (result.status === 'disabled') {
-        setUpdateStatus('Update checks are disabled for this build.');
-      } else if (result.status === 'not-available') {
-        setUpdateStatus(`Allen ${result.currentVersion} is up to date.`);
-      } else {
-        setUpdateStatus(result.opened
-          ? `Allen ${result.latestVersion} installer opened.`
-          : `Allen ${result.latestVersion} is available.`);
-      }
+      if (result.status === 'disabled') setUpdateStatus('Update checks are disabled for this build.');
+      else if (result.status === 'not-available') setUpdateStatus(`Allen ${result.currentVersion} is up to date.`);
+      else setUpdateStatus(result.opened ? `Allen ${result.latestVersion} installer opened.` : `Allen ${result.latestVersion} is available.`);
     } catch (err) {
       setUpdateStatus(err instanceof Error ? err.message : String(err));
     } finally {
@@ -434,133 +337,64 @@ function GeneralTab() {
     }
   }
 
-  async function openReleaseNotes() {
-    if (!window.allenDesktop?.getReleaseNotes) return;
-    setReleaseNotesOpen(true);
-    setLoadingReleaseNotes(true);
-    setLoadingReleaseDetail(false);
-    setReleaseNotesStatus(null);
-    try {
-      const result = await window.allenDesktop.getReleaseNotes();
-      setReleaseNotes(result);
-      void loadAllReleaseDetails(result);
-    } catch (err) {
-      setReleaseNotesStatus(err instanceof Error ? err.message : String(err));
-      setReleaseNotesOpen(false);
-    } finally {
-      setLoadingReleaseNotes(false);
-    }
+  function updateWorkspaceName(value: string) {
+    setWorkspaceName(value);
+    localStorage.setItem('allen.workspace.name', value);
   }
 
-  async function loadAllReleaseDetails(index: AllenReleaseNotesIndex) {
-    if (!window.allenDesktop?.getReleaseNote || index.releases.length === 0) return;
-    setLoadingReleaseDetail(true);
-    setReleaseNotesStatus(null);
-    const results = await Promise.allSettled(
-      index.releases.map((release) => window.allenDesktop!.getReleaseNote(release.version, release.notesUrl)),
-    );
-    const details = new Map<string, AllenReleaseNotesEntry>();
-    let failedCount = 0;
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        details.set(result.value.version, result.value);
-      } else {
-        failedCount += 1;
-      }
-    }
-    setReleaseNotes((current) => current
-      ? {
-        ...current,
-        releases: current.releases.map((release) => ({ ...release, ...(details.get(release.version) ?? {}) })),
-      }
-      : current);
-    if (failedCount > 0) {
-      setReleaseNotesStatus(`${failedCount} release detail file${failedCount === 1 ? '' : 's'} could not be loaded.`);
-    }
-    setLoadingReleaseDetail(false);
+  function updateReleaseChannel(value: string) {
+    setUpdateChannel(value);
+    localStorage.setItem('allen.update.channel', value);
   }
 
+  function toggleLaunchAtLogin() {
+    setLaunchAtLogin((current) => {
+      const next = !current;
+      localStorage.setItem('allen.launch.at.login', String(next));
+      return next;
+    });
+  }
+
+  const currentVersion = updateSettings?.currentVersion || __ALLEN_APP_VERSION__;
 
   return (
     <SettingsPageShell activeTab="general">
-      <SettingsPanel title="Workspace behavior" description="Defaults for the local Allen desktop experience.">
-        <SettingsRow label="Appearance" description="Use system mode or choose a fixed light or dark theme.">
+      <SettingsPanel className="settings-general-ledger">
+        <SettingsRow label="Workspace name" description="Shown in the sidebar and window title.">
+          <input
+            className="settings-readonly-input settings-workspace-name"
+            aria-label="Workspace name"
+            value={workspaceName}
+            onChange={(event) => updateWorkspaceName(event.target.value)}
+          />
+        </SettingsRow>
+        <SettingsRow label="Version" description="Allen Desktop">
+          <div className="settings-inline-action">
+            <SettingsValue mono>{currentVersion} · up to date</SettingsValue>
+            <button type="button" className="settings-secondary-button" onClick={() => void checkForUpdatesNow()}>
+              {checkingUpdates ? 'Checking...' : 'Check for updates'}
+            </button>
+          </div>
+        </SettingsRow>
+        <SettingsRow label="Update channel" description="Beta gets new builds about a week early.">
+          <select
+            className="select-native settings-select settings-update-channel"
+            aria-label="Update channel"
+            value={updateChannel}
+            onChange={(event) => updateReleaseChannel(event.target.value)}
+          >
+            <option>Stable</option>
+            <option>Beta</option>
+          </select>
+        </SettingsRow>
+        <SettingsRow label="Theme" description="Follow the system, or lock light / dark.">
           <AppearancePicker />
         </SettingsRow>
-        <SettingsRow label="Command palette" description="Quickly navigate and run app commands.">
-          <ShortcutKey value="⌘K" />
-        </SettingsRow>
-        <SettingsRow label="Focus chat input" description="Focus chat input, or jump to dashboard and focus it from another page.">
-          <ShortcutKey value="⌘L" />
+        <SettingsRow label="Launch at login" description="Start Allen when you sign in to this Mac.">
+          <SettingsSwitch checked={launchAtLogin} onClick={toggleLaunchAtLogin} />
         </SettingsRow>
       </SettingsPanel>
-
-      <SettingsPanel title="Application updates" description="Control whether Allen checks for new production builds on startup.">
-        {desktopUpdatesAvailable ? (
-          <>
-            <SettingsRow label="Automatic checks" description="When enabled, Allen checks for a new version when the desktop app opens.">
-              <SettingsSwitch
-                checked={updateSettings?.autoUpdateEnabled ?? true}
-                disabled={!updateSettings}
-                onClick={() => void toggleAutoUpdates()}
-              />
-            </SettingsRow>
-            <SettingsRow label="Current version" description="Manually check the production update feed now.">
-              <div className="settings-field-control">
-                <div className="settings-inline-action">
-                  <SettingsValue mono>{updateSettings?.currentVersion ?? '-'}</SettingsValue>
-                  <button
-                    type="button"
-                    className="settings-secondary-button"
-                    disabled={checkingUpdates}
-                    onClick={() => void checkForUpdatesNow()}
-                  >
-                    <span>{checkingUpdates ? 'Checking...' : 'Check for updates'}</span>
-                  </button>
-                </div>
-                {updateStatus && <div className="settings-field-meta"><span>{updateStatus}</span></div>}
-              </div>
-            </SettingsRow>
-            <SettingsRow label="Release notes" description="View changelog entries for all published desktop releases.">
-              <div className="settings-field-control">
-                <div className="settings-inline-action">
-                  <button
-                    type="button"
-                    className="settings-secondary-button"
-                    disabled={loadingReleaseNotes}
-                    onClick={() => void openReleaseNotes()}
-                  >
-                    <span>{loadingReleaseNotes ? 'Loading...' : 'View release notes'}</span>
-                  </button>
-                </div>
-                {releaseNotesStatus && !releaseNotesOpen && <div className="settings-field-meta"><span>{releaseNotesStatus}</span></div>}
-              </div>
-            </SettingsRow>
-          </>
-        ) : (
-          <SettingsRow label="Updates" description="Update controls are available in the packaged desktop app.">
-            <SettingsValue>Unavailable</SettingsValue>
-          </SettingsRow>
-        )}
-      </SettingsPanel>
-
-      <SettingsPanel title="Notifications" description="Keep interruptions focused on work that needs attention.">
-        <SettingsRow label="Run completions" description="Notify when Allen completes a long-running task.">
-          <SettingsSwitch />
-        </SettingsRow>
-        <SettingsRow label="Daily digest" description="Summarize completed work and unresolved items.">
-          <SettingsValue>Off</SettingsValue>
-        </SettingsRow>
-      </SettingsPanel>
-
-      {releaseNotesOpen && releaseNotes && (
-        <ReleaseNotesModal
-          notes={releaseNotes}
-          loadingDetail={loadingReleaseDetail}
-          error={releaseNotesStatus}
-          onClose={() => setReleaseNotesOpen(false)}
-        />
-      )}
+      {updateStatus && <p className="settings-status-line">{updateStatus}</p>}
     </SettingsPageShell>
   );
 }
@@ -624,6 +458,14 @@ function runtimeSelectOptions(field: RuntimeSettingField, values: Record<string,
   return field.options ?? [];
 }
 
+function runtimeFieldProvider(fieldKey: string, values: Record<string, string>): string | null {
+  if (fieldKey.endsWith('_PROVIDER')) return null;
+  if (fieldKey === 'ALLEN_DEFAULT_CHAT_MODEL') return values.ALLEN_DEFAULT_CHAT_PROVIDER ?? null;
+  if (fieldKey === 'ALLEN_DEFAULT_AGENT_MODEL') return values.ALLEN_DEFAULT_AGENT_PROVIDER ?? null;
+  if (fieldKey === 'ALLEN_CONTEXT_LLM_MODEL') return values.ALLEN_CONTEXT_LLM_PROVIDER ?? null;
+  return null;
+}
+
 function RuntimeSettingControl({
   editable,
   field,
@@ -668,9 +510,18 @@ function RuntimeSettingControl({
   if (field.kind === 'select') {
     const options = runtimeSelectOptions(field, runtimeValues, registryModels);
     const hasCurrentValue = value === '' || options.some((option) => option.value === value);
-    const selectOptions = hasCurrentValue
+    const baseSelectOptions = hasCurrentValue
       ? options
       : [{ value, label: value }, ...options];
+    const modelProvider = runtimeFieldProvider(field.key, runtimeValues);
+    const selectOptions = baseSelectOptions.map(option => {
+      const optionProvider = field.key.endsWith('_PROVIDER') ? option.value : modelProvider;
+      if (!optionProvider || !option.value) return option;
+      return {
+        ...option,
+        icon: <ProviderIcon provider={optionProvider} className={`h-4 w-4 ${providerIconColor(optionProvider)}`} />,
+      };
+    });
     return (
       <Select
         className="settings-runtime-select"
@@ -767,7 +618,7 @@ function CliProviderRows({ modelRegistry }: { modelRegistry: UseModelRegistryRet
                 aria-expanded={expanded}
               >
                 <span className="settings-provider-mark">
-                  <ProviderIcon provider={p.provider} className="h-3.5 w-3.5" />
+                  <ProviderIcon provider={p.provider} className={`h-4 w-4 ${providerIconColor(p.provider)}`} />
                 </span>
                 <span className="settings-provider-copy">
                   <span className="settings-provider-title-line">
@@ -970,7 +821,7 @@ function LlmProvidersPanel({
                   aria-expanded={expanded}
                 >
                   <span className="settings-provider-mark">
-                    <ProviderIcon provider={config.groupId} className="h-3.5 w-3.5" />
+                    <ProviderIcon provider={config.groupId} className={`h-4 w-4 ${providerIconColor(config.groupId)}`} />
                   </span>
                   <span className="settings-provider-copy">
                     <span className="settings-provider-title-line">
@@ -1475,14 +1326,70 @@ function ModelsTab() {
   );
 }
 
+function ContextTab() {
+  const navigate = useNavigate();
+  const [refreshCadence, setRefreshCadence] = useState(() => localStorage.getItem('allen.context.refresh-cadence') || 'On change');
+  const [injectionPolicy, setInjectionPolicy] = useState(() => localStorage.getItem('allen.context.injection-policy') || 'Auto');
+
+  function persistCadence(value: string) {
+    setRefreshCadence(value);
+    localStorage.setItem('allen.context.refresh-cadence', value);
+  }
+
+  function persistInjectionPolicy(value: string) {
+    setInjectionPolicy(value);
+    localStorage.setItem('allen.context.injection-policy', value);
+  }
+
+  return (
+    <SettingsPageShell activeTab="context">
+      <SettingsPanel className="settings-general-ledger">
+        <SettingsRow label="Provider" description="Knowledge recall and repository graph backend.">
+          <div className="settings-inline-action">
+            <SettingsValue mono>Cognee</SettingsValue>
+            <SettingsBadge tone="ok">connected</SettingsBadge>
+          </div>
+        </SettingsRow>
+        <SettingsRow label="Refresh cadence" description="When Allen should refresh repository knowledge.">
+          <select
+            className="select-native settings-select settings-context-select"
+            aria-label="Refresh cadence"
+            value={refreshCadence}
+            onChange={(event) => persistCadence(event.target.value)}
+          >
+            <option>On change</option>
+            <option>Hourly</option>
+            <option>Daily</option>
+          </select>
+        </SettingsRow>
+        <SettingsRow label="Default injection policy" description="How much recalled context is loaded into an agent run.">
+          <select
+            className="select-native settings-select settings-context-select settings-context-policy"
+            aria-label="Default injection policy"
+            value={injectionPolicy}
+            onChange={(event) => persistInjectionPolicy(event.target.value)}
+          >
+            <option>Auto</option>
+            <option>Manifest only</option>
+            <option>Never full-auto</option>
+          </select>
+        </SettingsRow>
+        <SettingsRow label="Per-repo settings" description="Indexing health, mappings, and policies by repository.">
+          <button type="button" className="settings-secondary-button" onClick={() => navigate('/repos')}>
+            Open repositories <span aria-hidden="true">→</span>
+          </button>
+        </SettingsRow>
+      </SettingsPanel>
+    </SettingsPageShell>
+  );
+}
+
 function McpTab() {
   return (
     <SettingsPageShell activeTab="mcp" wide>
-      <SettingsPanel title="Configured servers" description="Servers can expose tools and resources to Allen workflows.">
-        <div className="[&_.mcp-settings-panel]:p-0 [&_.mcp-panel-head]:border-b [&_.mcp-panel-head]:border-app [&_.mcp-panel-head]:px-4 [&_.mcp-panel-head]:py-3.5 [&_.mcp-panel-head_h2]:font-body [&_.mcp-panel-head_h2]:text-[13px] [&_.mcp-panel-head_h2]:font-semibold [&_.mcp-panel-head_h2]:normal-case [&_.mcp-panel-head_h2]:tracking-normal [&_.mcp-panel-head_p]:mt-1 [&_.mcp-panel-head_p]:text-[12px] [&_.mcp-panel-body]:p-3.5 [&_.mcp-server-groups]:space-y-3.5 [&_.mcp-server-group_h3]:mb-2 [&_.mcp-server-group_h3]:px-0.5 [&_.mcp-server-group_h3]:font-body [&_.mcp-server-group_h3]:text-[12px] [&_.mcp-server-group_h3]:font-semibold [&_.mcp-server-group_h3]:normal-case [&_.mcp-server-group_h3]:tracking-normal [&_.mcp-server-card]:rounded-lg [&_.mcp-server-card]:border-app [&_.mcp-server-card]:bg-app-card [&_.mcp-server-row]:min-h-16 [&_.mcp-server-row]:px-3.5 [&_.mcp-server-row]:py-3 [&_.mcp-server-details]:bg-app-muted/45 [&_.mcp-server-details]:px-4 [&_.mcp-server-details]:py-3">
-          <McpServerManager />
-        </div>
-      </SettingsPanel>
+      <div className="settings-mcp-compact">
+        <McpServerManager compact />
+      </div>
     </SettingsPageShell>
   );
 }
@@ -1491,7 +1398,7 @@ function SchedulesTab() {
   return (
     <SettingsPageShell activeTab="schedules" wide>
       <div className="settings-embedded-page">
-        <CronManagerPage />
+        <CronManagerPage compact />
       </div>
     </SettingsPageShell>
   );
@@ -1501,7 +1408,7 @@ function LearningsTab() {
   return (
     <SettingsPageShell activeTab="learnings" wide>
       <div className="settings-embedded-page">
-        <LearningsPage />
+        <LearningsPage compact />
       </div>
     </SettingsPageShell>
   );
@@ -1526,11 +1433,20 @@ function UsageTab() {
 }
 
 function TeamTab() {
+  const navigate = useNavigate();
   return (
-    <SettingsPageShell activeTab="team" wide>
-      <div className="settings-embedded-page">
-        <UsersAdminPage />
-      </div>
+    <SettingsPageShell activeTab="team">
+      <SettingsPanel className="settings-team-handoff">
+        <div className="settings-handoff-card">
+          <div>
+            <strong>Manage people and roles in Teams</strong>
+            <span>Add members, set access, and organise the agents working in this workspace.</span>
+          </div>
+          <button type="button" className="settings-secondary-button" onClick={() => navigate('/agents?section=teams-agents')}>
+            Open Teams <span aria-hidden="true">→</span>
+          </button>
+        </div>
+      </SettingsPanel>
     </SettingsPageShell>
   );
 }
@@ -1568,40 +1484,32 @@ function AccountTab() {
 
   return (
     <SettingsPageShell activeTab="account">
-      <SettingsPanel title="Profile" description="This is the account Allen uses for local desktop access.">
-        <div className="settings-account-card">
+      <SettingsPanel className="settings-account-ledger">
+        <div className="settings-identity-row">
           <div className="settings-avatar-dot">{avatarInitial}</div>
-          <div className="min-w-0">
+          <div className="settings-identity-copy">
             <strong>{displayName}</strong>
             <span>{user.email}</span>
           </div>
-          <span className="ml-auto inline-flex h-6 shrink-0 items-center rounded-md border border-app bg-app-muted px-2 text-[12px] font-medium text-theme-secondary">
-            {formatRoleLabel(user.role)}
-          </span>
+          <SettingsBadge>{formatRoleLabel(user.role).toLowerCase()}</SettingsBadge>
         </div>
-        <SettingsRow label="Full name">
-          <ReadOnlyInput value={user.name || '-'} />
+        <SettingsRow
+          label="Password"
+          description={user.mustResetPassword ? 'A password reset is required.' : `Account created ${formatProfileDate(user.createdAt)}.`}
+        >
+          <button
+            type="button"
+            className="settings-secondary-button"
+            onClick={() => navigate('/reset-password?from=/settings/account')}
+          >
+            Change password
+          </button>
         </SettingsRow>
-        <SettingsRow label="User ID">
-          <SettingsValue mono>{user.id}</SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="Created">
-          <SettingsValue>{formatProfileDate(user.createdAt)}</SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="Last login">
-          <SettingsValue>{formatProfileDate(user.lastLoginAt)}</SettingsValue>
-        </SettingsRow>
-        {user.mustResetPassword && (
-          <SettingsRow label="Password">
-            <SettingsBadge tone="warn">Reset required</SettingsBadge>
-          </SettingsRow>
-        )}
       </SettingsPanel>
-
-      <SettingsPanel title="Session">
-        <SettingsRow label="Sign out" description="End this Allen session on this device.">
+      <SettingsSectionLabel>Session</SettingsSectionLabel>
+      <SettingsPanel className="settings-account-ledger">
+        <SettingsRow label="Sign out" description="Ends this desktop session.">
           <button type="button" className="settings-danger-button" onClick={() => void handleLogout()}>
-            <LogOut className="h-3.5 w-3.5" />
             <span>Sign out</span>
           </button>
         </SettingsRow>
@@ -1612,6 +1520,7 @@ function AccountTab() {
 
 const TAB_COMPONENTS: Record<TabId, React.FC> = {
   account: AccountTab,
+  context: ContextTab,
   general: GeneralTab,
   learnings: LearningsTab,
   models: ModelsTab,
@@ -1645,7 +1554,7 @@ export default function SettingsPage() {
   const TabContent = TAB_COMPONENTS[activeTab];
 
   return (
-    <div className="content scroll-hide" data-screen-label="settings">
+    <div className="content scroll-hide v8-settings" data-screen-label="settings">
       <main className={activeTab === 'skills' ? 'settings-main settings-main-full' : 'settings-main'}>
         <TabContent />
       </main>

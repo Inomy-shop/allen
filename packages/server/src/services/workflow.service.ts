@@ -6,6 +6,10 @@ import { ObjectId, type Collection, type Db } from 'mongodb';
 import { validateWorkflow, loadAgents, getBuiltIns, generateMermaid, normalizeModelAlias } from '@allen/engine';
 import type { WorkflowDef, ValidationResult } from '@allen/engine';
 import { notDeletedFilter, softDeleteSet, restoreSet } from './soft-delete.js';
+import {
+  parseTeamClassification,
+  type TeamClassification,
+} from '../types/team-classification.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -52,6 +56,8 @@ export class WorkflowService {
         description: 1,
         version: 1,
         tags: 1,
+        teamClassification: 1,
+        teamClassificationSource: 1,
         validation: 1,
         updatedAt: 1,
         archived: 1,
@@ -116,6 +122,8 @@ export class WorkflowService {
         description: 1,
         version: 1,
         validation: 1,
+        teamClassification: 1,
+        teamClassificationSource: 1,
         updatedAt: 1,
         'parsed.nodes': 1, // counted then discarded
       },
@@ -129,6 +137,8 @@ export class WorkflowService {
         name: w.name,
         description: (w.description as string) ?? '',
         version: (w.version as number) ?? 1,
+        teamClassification: w.teamClassification ?? null,
+        teamClassificationSource: w.teamClassificationSource ?? null,
         isValid: validation?.valid ?? false,
         nodeCount: parsed?.nodes ? Object.keys(parsed.nodes).length : 0,
         updatedAt: w.updatedAt,
@@ -327,7 +337,13 @@ export class WorkflowService {
     return changed;
   }
 
-  async create(body: { yaml?: string; parsed?: WorkflowDef; createdBy?: string; tags?: string[] }): Promise<Record<string, unknown>> {
+  async create(body: {
+    yaml?: string;
+    parsed?: WorkflowDef;
+    createdBy?: string;
+    tags?: string[];
+    teamClassification?: TeamClassification | null;
+  }): Promise<Record<string, unknown>> {
     let parsed: WorkflowDef;
     let rawYaml: string;
 
@@ -344,6 +360,7 @@ export class WorkflowService {
     if (await this.addMissingNodeOverrideProviders(parsed)) {
       rawYaml = yaml.dump(parsed, { lineWidth: 120, noRefs: true, sortKeys: false });
     }
+    const teamClassification = parseTeamClassification(body.teamClassification) ?? null;
 
     // Check for soft-deleted record with the same name — restore instead of insert.
     // Also reject active duplicates so the agent gets a clear error.
@@ -361,10 +378,24 @@ export class WorkflowService {
           reactFlowData: null,
           validation,
           tags: body.tags ?? [],
+          teamClassification,
+          teamClassificationSource: body.teamClassification !== undefined ? 'manual' : null,
           createdBy: body.createdBy ?? 'system',
         }),
       );
-      return { ...deleted, name: parsed.name, description: parsed.description, version: (deleted.version as number ?? 0) + 1, yaml: rawYaml, parsed, validation, tags: body.tags, restored: true };
+      return {
+        ...deleted,
+        name: parsed.name,
+        description: parsed.description,
+        version: (deleted.version as number ?? 0) + 1,
+        yaml: rawYaml,
+        parsed,
+        validation,
+        tags: body.tags,
+        teamClassification,
+        teamClassificationSource: body.teamClassification !== undefined ? 'manual' : null,
+        restored: true,
+      };
     }
 
     const existing = await this.col.findOne({ name: parsed.name, ...notDeletedFilter });
@@ -383,6 +414,8 @@ export class WorkflowService {
       reactFlowData: null,
       validation,
       tags: body.tags ?? [],
+      teamClassification,
+      teamClassificationSource: body.teamClassification !== undefined ? 'manual' : null,
       createdBy: body.createdBy ?? 'system',
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -392,7 +425,12 @@ export class WorkflowService {
     return { ...doc, _id: result.insertedId };
   }
 
-  async update(id: string, body: { yaml?: string; parsed?: WorkflowDef; reactFlowData?: unknown }): Promise<Record<string, unknown>> {
+  async update(id: string, body: {
+    yaml?: string;
+    parsed?: WorkflowDef;
+    reactFlowData?: unknown;
+    teamClassification?: TeamClassification | null;
+  }): Promise<Record<string, unknown>> {
     const { ObjectId } = await import('mongodb');
     const existing = await this.col.findOne({ _id: new ObjectId(id), ...notDeletedFilter });
     if (!existing) throw new Error('Workflow not found');
@@ -423,8 +461,34 @@ export class WorkflowService {
     if (body.reactFlowData !== undefined) {
       updates.reactFlowData = body.reactFlowData;
     }
+    if (body.teamClassification !== undefined) {
+      updates.teamClassification = parseTeamClassification(body.teamClassification) ?? null;
+      updates.teamClassificationSource = 'manual';
+    }
 
     await this.col.updateOne({ _id: new ObjectId(id) }, { $set: updates });
+    if (body.teamClassification !== undefined) {
+      const executionRows = await this.db.collection('executions').find(
+        {
+          $or: [
+            { workflowId: id },
+            { workflowName: String(existing.name ?? '') },
+          ],
+        },
+        { projection: { _id: 1, id: 1 } },
+      ).toArray();
+      const rootIds = new Set<string>();
+      for (const row of executionRows) {
+        rootIds.add(String(row._id));
+        if (typeof row.id === 'string' && row.id) rootIds.add(row.id);
+      }
+      const { ArtifactService } = await import('./artifact.service.js');
+      await new ArtifactService(this.db).propagateInheritedClassification(
+        'workflow',
+        [...rootIds],
+        parseTeamClassification(body.teamClassification) ?? null,
+      );
+    }
     return { ...existing, ...updates };
   }
 
@@ -525,6 +589,7 @@ export class WorkflowService {
               parsed: yamlContent ? undefined : parsed,
               createdBy: 'import',
               tags: Array.isArray(item.tags) ? item.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+              teamClassification: parseTeamClassification(item.teamClassification),
             });
             created.push(String(createdDoc.name));
           } catch (err) {
@@ -541,6 +606,7 @@ export class WorkflowService {
           parsed: yamlContent ? undefined : parsed,
           createdBy: 'import',
           tags: Array.isArray(item.tags) ? item.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+          teamClassification: parseTeamClassification(item.teamClassification),
         });
         created.push(String(createdDoc.name));
       } catch (err) {
@@ -550,4 +616,15 @@ export class WorkflowService {
     return { created, skipped };
   }
 
+}
+
+/** Persist Unknown explicitly for workflows created before team classification existed. */
+export async function backfillWorkflowTeamClassifications(
+  db: Db,
+): Promise<{ matched: number; modified: number }> {
+  const result = await db.collection('workflows').updateMany(
+    { teamClassification: { $exists: false } },
+    { $set: { teamClassification: null, teamClassificationSource: null } },
+  );
+  return { matched: result.matchedCount, modified: result.modifiedCount };
 }

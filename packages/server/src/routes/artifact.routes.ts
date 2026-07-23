@@ -16,14 +16,32 @@ import { createHash } from 'node:crypto';
 import type { Db } from 'mongodb';
 import {
   ArtifactService,
+  type ArtifactDoc,
   type ArtifactRootType,
   type ArtifactContentType,
   type SaveArtifactInput,
 } from '../services/artifact.service.js';
 import { param } from '../types.js';
+import { parseTeamClassification } from '../types/team-classification.js';
 
 const ROOT_TYPES = new Set(['chat', 'workflow', 'agent']);
 const CONTENT_TYPES = new Set(['markdown', 'json', 'csv', 'text', 'code', 'binary']);
+
+function libraryUserId(req: Request): string {
+  const user = (req as unknown as {
+    user?: { _id?: unknown; id?: unknown; sub?: unknown; email?: unknown };
+  }).user;
+  return String(user?._id ?? user?.id ?? user?.sub ?? user?.email ?? 'local-user');
+}
+
+function artifactForUser(doc: ArtifactDoc, userId: string) {
+  const { savedByUserIds: _savedByUserIds, favoriteByUserIds: _favoriteByUserIds, ...artifact } = doc;
+  return {
+    ...artifact,
+    saved: doc.savedByUserIds?.includes(userId) ?? false,
+    favorite: doc.favoriteByUserIds?.includes(userId) ?? false,
+  };
+}
 
 export function publicArtifactRoutes(db: Db): Router {
   const router = Router();
@@ -88,7 +106,8 @@ export function artifactRoutes(db: Db): Router {
         limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined,
         skip: req.query.skip ? parseInt(req.query.skip as string, 10) : undefined,
       });
-      res.json(docs);
+      const userId = libraryUserId(req);
+      res.json(docs.map(doc => artifactForUser(doc, userId)));
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -99,7 +118,7 @@ export function artifactRoutes(db: Db): Router {
     try {
       const doc = await service.get(param(req, 'id'));
       if (!doc) return res.status(404).json({ error: 'Artifact not found' });
-      res.json(doc);
+      res.json(artifactForUser(doc, libraryUserId(req)));
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -134,6 +153,49 @@ export function artifactRoutes(db: Db): Router {
         createdByUserId,
       });
       res.status(201).json(result);
+    } catch (err: unknown) {
+      const code = (err as { statusCode?: number }).statusCode ?? 500;
+      res.status(code).json({ error: (err as Error).message });
+    }
+  });
+
+  // PATCH /api/artifacts/:id/library-state — persist Documents-library state.
+  router.patch('/:id/library-state', async (req: Request, res: Response) => {
+    try {
+      const { saved, favorite } = req.body ?? {};
+      if (saved === undefined && favorite === undefined) {
+        return res.status(400).json({ error: 'saved or favorite is required' });
+      }
+      if (
+        (saved !== undefined && typeof saved !== 'boolean')
+        || (favorite !== undefined && typeof favorite !== 'boolean')
+      ) {
+        return res.status(400).json({ error: 'saved and favorite must be booleans' });
+      }
+
+      const userId = libraryUserId(req);
+      const doc = await service.updateLibraryState(param(req, 'id'), userId, { saved, favorite });
+      if (!doc) return res.status(404).json({ error: 'Artifact not found' });
+      res.json(artifactForUser(doc, userId));
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // PATCH /api/artifacts/:id/classification — manual Documents classification.
+  router.patch('/:id/classification', async (req: Request, res: Response) => {
+    try {
+      const classification = parseTeamClassification(req.body?.teamClassification);
+      if (classification === undefined) {
+        return res.status(400).json({ error: 'teamClassification is required' });
+      }
+      const userId = libraryUserId(req);
+      const doc = await service.updateClassification(
+        param(req, 'id'),
+        classification,
+      );
+      if (!doc) return res.status(404).json({ error: 'Artifact not found' });
+      res.json(artifactForUser(doc, userId));
     } catch (err: unknown) {
       const code = (err as { statusCode?: number }).statusCode ?? 500;
       res.status(code).json({ error: (err as Error).message });

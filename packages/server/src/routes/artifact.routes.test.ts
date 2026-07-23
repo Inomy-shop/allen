@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MongoClient, type Db } from 'mongodb';
+import { MongoClient, ObjectId, type Db } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { artifactRoutes, publicArtifactRoutes } from './artifact.routes.js';
@@ -67,6 +67,47 @@ describe('artifactRoutes', () => {
     expect(identity?.versions[0]?.content).toContain('Ship unified artifacts.');
   });
 
+  it('inherits its parent classification and supports a manual override', async () => {
+    const chatId = new ObjectId();
+    await db.collection('chat_sessions').insertOne({
+      _id: chatId,
+      title: 'Product planning',
+      teamClassification: 'product',
+      teamClassificationSource: 'manual',
+    });
+
+    const created = await request(app)
+      .post('/api/artifacts')
+      .send({
+        rootType: 'chat',
+        rootId: chatId.toHexString(),
+        filename: 'requirements.md',
+        content: '# Requirements',
+        contentType: 'markdown',
+      })
+      .expect(201);
+
+    const inherited = await request(app).get(`/api/artifacts/${created.body.artifactId}`).expect(200);
+    expect(inherited.body).toMatchObject({
+      teamClassification: 'product',
+      teamClassificationSource: 'inherited',
+    });
+
+    const overridden = await request(app)
+      .patch(`/api/artifacts/${created.body.artifactId}/classification`)
+      .send({ teamClassification: 'design' })
+      .expect(200);
+    expect(overridden.body).toMatchObject({
+      teamClassification: 'design',
+      teamClassificationSource: 'manual',
+    });
+
+    await request(app)
+      .patch(`/api/artifacts/${created.body.artifactId}/classification`)
+      .send({ teamClassification: 'sales' })
+      .expect(400);
+  });
+
   it('adds a document version when an existing artifact is overwritten', async () => {
     const first = await request(app)
       .post('/api/artifacts')
@@ -112,6 +153,40 @@ describe('artifactRoutes', () => {
     expect(res.status).toBe(201);
     const identity = await new DocumentService(db).findIdentityByArtifactId(res.body.artifactId);
     expect(identity).toBeNull();
+  });
+
+  it('keeps saved and favorite library state independent', async () => {
+    const created = await request(app)
+      .post('/api/artifacts')
+      .send({
+        rootType: 'chat',
+        rootId: 'chat-library',
+        filename: 'library-note.md',
+        content: '# Library note',
+        contentType: 'markdown',
+      });
+    expect(created.status).toBe(201);
+
+    const initial = await request(app).get(`/api/artifacts/${created.body.artifactId}`);
+    expect(initial.body).toMatchObject({ saved: false, favorite: false });
+
+    const saved = await request(app)
+      .patch(`/api/artifacts/${created.body.artifactId}/library-state`)
+      .send({ saved: true });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({ saved: true, favorite: false });
+    expect(saved.body.savedByUserIds).toBeUndefined();
+    expect(saved.body.favoriteByUserIds).toBeUndefined();
+
+    const favorited = await request(app)
+      .patch(`/api/artifacts/${created.body.artifactId}/library-state`)
+      .send({ favorite: true });
+    expect(favorited.body).toMatchObject({ saved: true, favorite: true });
+
+    const removed = await request(app)
+      .patch(`/api/artifacts/${created.body.artifactId}/library-state`)
+      .send({ saved: false });
+    expect(removed.body).toMatchObject({ saved: false, favorite: false });
   });
 
   const binaryCases = [

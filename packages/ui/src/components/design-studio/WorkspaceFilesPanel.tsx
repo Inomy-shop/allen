@@ -16,7 +16,6 @@ import {
   FileText,
   Folder,
   FolderOpen,
-  Layers,
   ListTree,
   Loader2,
   RefreshCw,
@@ -143,7 +142,7 @@ export function groupWorkspaceFiles(files: WorkspaceFile[]) {
   return { dashboard, designGroups, systemFiles, loosePages, otherFiles };
 }
 
-export default function WorkspaceFilesPanel({ workspaceId }: { workspaceId: string | null }) {
+export default function WorkspaceFilesPanel({ workspaceId, workspaceName = 'Allen Design workspace' }: { workspaceId: string | null; workspaceName?: string }) {
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -213,31 +212,25 @@ export default function WorkspaceFilesPanel({ workspaceId }: { workspaceId: stri
   const hasFiles = files.length > 0;
 
   return (
-    <aside className="flex w-[380px] min-w-[320px] flex-col border-l border-app bg-app-card">
-      <div className="border-b border-app px-4 py-3">
+    <aside className="v8-design-filepanel">
+      <div className="v8-design-filehead">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <div className="flex items-center gap-2 text-[13px] font-semibold text-theme-primary">
-              <Layers className="h-4 w-4 text-accent" />
-              Design system
-            </div>
-            <p className="mt-0.5 text-[11px] text-theme-muted">Workspace files and export controls</p>
+            <h2>{workspaceName}</h2>
+            <p>Persistent Allen Design workspace</p>
           </div>
-          <button className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary" onClick={() => void refresh()} aria-label="Refresh files">
+          <button className="v8-design-file-refresh" onClick={() => void refresh()} aria-label="Refresh files">
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
           </button>
         </div>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <button className="btn btn-secondary btn-sm justify-center gap-1.5 !rounded-md" onClick={() => open('index.html')} disabled={!hasFiles}>
-            <ExternalLink className="h-3.5 w-3.5" /> Preview
+        <div className="v8-design-fileactions">
+          <button className="v8-btn v8-btn--ghost" onClick={() => open('index.html')} disabled={!hasFiles}>
+            <ExternalLink /> Open
           </button>
-          <button className="btn btn-primary btn-sm justify-center gap-1.5 !rounded-md" onClick={exportSystem} disabled={!hasFiles || exporting} title="Exports to Downloads/Allen Design Studio">
-            {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Export
+          <button className="v8-btn v8-btn--ghost" onClick={exportSystem} disabled={!hasFiles || exporting} title="Exports to Downloads/Allen Design">
+            {exporting ? <Loader2 className="animate-spin" /> : <Upload />} Export
           </button>
         </div>
-        <p className="mt-2 truncate font-mono text-[10.5px] text-theme-muted" title="~/Downloads/Allen Design Studio">
-          Export path: ~/Downloads/Allen Design Studio
-        </p>
         <div className="mt-3 flex rounded-md border border-app bg-app p-0.5">
           <ModeButton active={mode === 'explorer'} icon={<ListTree className="h-3.5 w-3.5" />} label="Explorer" onClick={() => setMode('explorer')} />
           <ModeButton active={mode === 'grouped'} icon={<Rows3 className="h-3.5 w-3.5" />} label="Grouped" onClick={() => setMode('grouped')} />

@@ -1,7 +1,7 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo, type MouseEvent } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo, type CSSProperties, type MouseEvent } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, ArrowDown, X, XCircle, Pause, Play, RefreshCw, Wifi, WifiOff,
+  ArrowLeft, ArrowDown, X, XCircle, Play, RefreshCw,
   RotateCcw, Brain, Bot, Clock, DollarSign, Terminal,
   CheckCircle, AlertCircle, Wrench, ChevronDown, ChevronRight,
   ArrowRight, AlertTriangle, Save, Activity,
@@ -13,12 +13,14 @@ import { useExecution, type TimelineEvent, type NodeState } from '../hooks/useEx
 import { useResizable } from '../hooks/useResizable';
 import { executions as api, authHeaders, interventions as interventionsApi, repos as reposApi, system as systemApi, type ModelRecoveryProviderGroup, type RunStatus, type SpawnedChild } from '../services/api';
 import StatusBadge from '../components/common/StatusBadge';
+import Select from '../components/common/Select';
+import ProviderIcon, { providerIconColor } from '../components/common/ProviderIcon';
 import CostDisplay from '../components/common/CostDisplay';
 import TokenUsageDisplay from '../components/common/TokenUsageDisplay';
 import SpawnCostBreakdown from '../components/execution/SpawnCostBreakdown';
 import { renderMarkdown } from '../components/chat/ChatMessageList';
-import LiveGraph from '../components/execution/LiveGraph';
 import Timeline from '../components/execution/Timeline';
+import StructuredExecutionLogs from '../components/execution/StructuredExecutionLogs';
 import NodeDetail from '../components/execution/NodeDetail';
 import { RepoContextInjectionPanel, groupContextRefs } from '../components/execution/NodeInspector';
 import ArtifactsPanel from '../components/artifacts/ArtifactsPanel';
@@ -31,9 +33,16 @@ import { WorkflowInterventionDialog, type WorkflowInterventionSubmit } from '../
 import { ToolCallRow, type ToolCall } from '../components/common/ToolCallLog';
 import { buildTracesForTimeline } from '../utils/executionState';
 import { workspaceChatPath } from '../lib/workspace-routes';
+import {
+  reasoningEffortOptionsFor,
+  type ReasoningEffortValue,
+} from '../lib/reasoning-effort';
 import { registryDefaultModelForProvider, getModelDisplay } from '../hooks/useModelRegistry';
 import { pickRecoveryDefaultModel } from '../utils/modelRecoveryDefaults';
 import { useExecutionStore } from '../stores/executionStore';
+import { resourceScopeKey, useDocumentTabStore } from '../stores/documentTabStore';
+import ExecutionSummaryStrip from '../components/execution/ExecutionSummaryStrip';
+import { workflowNodes as workflowNodeRecord } from '../utils/workflowShape';
 
 type ExecutionRightPanelView = 'node' | 'rerun' | 'artifacts';
 
@@ -53,6 +62,31 @@ function formatDuration(ms: number | null | undefined): string {
   const hours = Math.floor(totalMin / 60);
   const remainMin = totalMin % 60;
   return `${hours}h ${remainMin}m`;
+}
+
+function compactNumber(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1).replace(/\.0$/, '')}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 100_000 ? 0 : 1).replace(/\.0$/, '')}K`;
+  return String(value);
+}
+
+function aggregateTokenLabel(traces: any[]): string {
+  let cached = 0;
+  let input = 0;
+  let output = 0;
+  let found = false;
+  for (const trace of traces) {
+    const usage = trace?.tokenUsage;
+    if (!usage || typeof usage !== 'object') continue;
+    const cachedValue = Number(usage.inputCachedTokens ?? 0);
+    const inputValue = Number(usage.inputNonCachedTokens ?? usage.inputTokens ?? 0);
+    const outputValue = Number(usage.outputTokens ?? 0);
+    cached += Number.isFinite(cachedValue) ? cachedValue : 0;
+    input += Number.isFinite(inputValue) ? inputValue : 0;
+    output += Number.isFinite(outputValue) ? outputValue : 0;
+    found = found || cachedValue > 0 || inputValue > 0 || outputValue > 0;
+  }
+  return found ? `${compactNumber(cached)} cache · ${compactNumber(input)} in · ${compactNumber(output)} out` : '—';
 }
 
 function sleep(ms: number): Promise<void> {
@@ -271,7 +305,7 @@ function ModelRecoveryDialog({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedProvider, setSelectedProvider] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
-  const [reasoningEffort, setReasoningEffort] = useState('off');
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortValue>('off');
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -373,7 +407,11 @@ function ModelRecoveryDialog({
               {failureCategory.replace(/_/g, ' ')}
             </div>
             <div className="mt-2 grid gap-2 text-theme-muted sm:grid-cols-2">
-              <div>Failed provider: <span className="font-mono text-theme-primary">{failedProvider ?? 'unknown'}</span></div>
+              <div className="flex items-center gap-1.5">
+                Failed provider:
+                <ProviderIcon provider={failedProvider} className={`h-4 w-4 ${providerIconColor(failedProvider)}`} />
+                <span className="font-mono text-theme-primary">{failedProvider ?? 'unknown'}</span>
+              </div>
               <div>Failed model: <span className="font-mono text-theme-primary">{failedModel ?? 'unknown'}</span></div>
               <div>Attempt: <span className="font-mono text-theme-primary">{Number.isFinite(attempt) ? attempt : 1}/{Number.isFinite(maxAttempts) ? maxAttempts : 1}</span></div>
             </div>
@@ -386,47 +424,52 @@ function ModelRecoveryDialog({
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <label className="space-y-2">
+            <div className="space-y-2">
               <span className="text-xs font-medium uppercase tracking-wide text-theme-muted">Provider</span>
-              <select
-                className="w-full rounded-lg border border-[rgb(var(--color-border)/0.7)] bg-app-bg px-3 py-2 text-sm text-theme-primary outline-none focus:border-theme-primary"
+              <Select
                 value={selectedProvider}
                 disabled={loadingModels || submitting}
-                onChange={(event) => setSelectedProvider(event.target.value)}
-              >
-                {providerGroups.map((group) => (
-                  <option key={group.provider} value={group.provider}>{group.providerDisplayName || group.provider}</option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-2">
+                onChange={setSelectedProvider}
+                searchable={false}
+                ariaLabel="Select recovery provider"
+                options={providerGroups.map(group => ({
+                  value: group.provider,
+                  label: group.providerDisplayName || group.provider,
+                  icon: <ProviderIcon provider={group.provider} className={`h-4 w-4 ${providerIconColor(group.provider)}`} />,
+                }))}
+              />
+            </div>
+            <div className="space-y-2">
               <span className="text-xs font-medium uppercase tracking-wide text-theme-muted">Model</span>
-              <select
-                className="w-full rounded-lg border border-[rgb(var(--color-border)/0.7)] bg-app-bg px-3 py-2 text-sm text-theme-primary outline-none focus:border-theme-primary"
+              <Select
                 value={selectedModel}
                 disabled={!selectedProviderGroup || loadingModels || submitting}
-                onChange={(event) => setSelectedModel(event.target.value)}
-              >
-                {(selectedProviderGroup?.models ?? []).map((model) => (
-                  <option key={model.fullId} value={model.fullId}>{model.displayName || model.fullId}</option>
-                ))}
-              </select>
-            </label>
+                onChange={setSelectedModel}
+                ariaLabel="Select recovery model"
+                options={(selectedProviderGroup?.models ?? []).map(model => ({
+                  value: model.fullId,
+                  label: model.displayName || model.fullId,
+                  icon: <ProviderIcon provider={selectedProvider} className={`h-4 w-4 ${providerIconColor(selectedProvider)}`} />,
+                }))}
+              />
+            </div>
           </div>
 
-          <label className="block space-y-2">
+          <div className="space-y-2">
             <span className="text-xs font-medium uppercase tracking-wide text-theme-muted">Reasoning effort</span>
-            <select
-              className="w-full rounded-lg border border-[rgb(var(--color-border)/0.7)] bg-app-bg px-3 py-2 text-sm text-theme-primary outline-none focus:border-theme-primary"
+            <Select
               value={reasoningEffort}
               disabled={submitting}
-              onChange={(event) => setReasoningEffort(event.target.value)}
-            >
-              {['off', 'low', 'medium', 'high', 'max'].map((value) => (
-                <option key={value} value={value}>{value}</option>
-              ))}
-            </select>
-          </label>
+              onChange={(value) => setReasoningEffort(value as ReasoningEffortValue)}
+              searchable={false}
+              ariaLabel="Select recovery reasoning effort"
+              options={reasoningEffortOptionsFor(selectedProvider, selectedModel).map(option => ({
+                value: option.value,
+                label: option.label,
+                sublabel: option.description,
+              }))}
+            />
+          </div>
 
           {loadError && (
             <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">{loadError}</div>
@@ -458,28 +501,42 @@ function ModelRecoveryDialog({
 function WorkflowTraceTable({
   nodeStates,
   traces,
+  workflowNodes,
   selectedNode,
   onSelectNode,
 }: {
   nodeStates: Map<string, NodeState>;
   traces: any[];
+  workflowNodes: string[];
   selectedNode: string | null;
   onSelectNode: (node: string) => void;
 }) {
+  const displayStates = new Map<string, NodeState>();
+  for (const name of workflowNodes) {
+    displayStates.set(name, nodeStates.get(name) ?? {
+      name,
+      status: 'pending',
+      attempt: 0,
+      streamText: '',
+      activity: [],
+    });
+  }
+  for (const [name, state] of nodeStates) if (!displayStates.has(name)) displayStates.set(name, state);
+
   return (
-    <div className="min-h-0 flex-1 overflow-auto bg-app-card">
-      <table className="w-full text-xs font-body">
+    <div className="v8-execution-trace min-h-0 flex-1 overflow-auto bg-app-card">
+      <table className="ex-table w-full text-xs font-body">
         <thead className="sticky top-0 z-10">
           <tr className="bg-app-muted overline border-b border-[rgb(var(--color-border)/0.45)]">
             <th className="text-left px-4 py-2 font-medium">Node</th>
             <th className="text-left px-4 py-2 font-medium">Status</th>
             <th className="text-left px-4 py-2 font-medium">Attempt</th>
             <th className="text-left px-4 py-2 font-medium">Duration</th>
-            <th className="text-left px-4 py-2 font-medium">Cost</th>
+            <th className="text-left px-4 py-2 font-medium">Cost / tokens</th>
           </tr>
         </thead>
         <tbody>
-          {Array.from(nodeStates.entries()).map(([name, state]) => {
+          {Array.from(displayStates.entries()).map(([name, state]) => {
             const nodeTraces = traces.filter((t: any) => t.node === name);
             const dedupMap = new Map<number, any>();
             for (const t of nodeTraces) dedupMap.set(t.attempt, t);
@@ -533,8 +590,8 @@ function WorkflowTraceTable({
               <tr
                 key={name}
                 onClick={() => onSelectNode(name)}
-                className={`cursor-pointer border-b border-[rgb(var(--color-border)/0.35)] transition-colors hover:bg-accent-blue/5 ${
-                  selectedNode === name ? 'bg-accent-blue/10' : ''
+                className={`${state.status === 'pending' ? 'up' : ''} cursor-pointer border-b border-[rgb(var(--color-border)/0.35)] transition-colors ${
+                  selectedNode === name ? 'on' : ''
                 }`}
               >
                 <td className="px-4 py-2 font-mono text-theme-primary">
@@ -555,10 +612,10 @@ function WorkflowTraceTable({
                     </div>
                   )}
                 </td>
-                <td className="px-4 py-2"><StatusBadge status={state.status} /></td>
-                <td className="px-4 py-2 text-theme-secondary tabular-nums font-mono">{state.attempt}</td>
+                <td className="px-4 py-2"><span className={`tr-status ${state.status === 'running' ? 'run' : ''} ${state.status === 'pending' ? 'pend' : ''}`} style={{ '--c': state.status === 'completed' ? 'rgb(var(--color-accent-green))' : state.status === 'running' ? 'rgb(var(--color-accent))' : state.status === 'failed' ? 'rgb(var(--color-accent-red))' : state.status === 'waiting_for_input' ? 'rgb(var(--color-accent-purple))' : 'var(--v8-faint)' } as CSSProperties}><i />{state.status.replaceAll('_', ' ')}</span></td>
+                <td className="px-4 py-2 text-theme-secondary tabular-nums font-mono">{state.attempt > 0 ? state.attempt : '—'}</td>
                 <td className="px-4 py-2 text-theme-secondary tabular-nums font-mono">
-                  {totalDuration != null ? formatDuration(totalDuration) : '-'}
+                  {totalDuration != null ? formatDuration(totalDuration) : '—'}
                 </td>
                 <td className="px-4 py-2">
                   <CostDisplay cost={totalCost} />
@@ -573,8 +630,152 @@ function WorkflowTraceTable({
           })}
         </tbody>
       </table>
+      <p className="v8-execution-trace__hint">Upcoming nodes run automatically when their dependencies complete · click a row to inspect it</p>
     </div>
   );
+}
+
+function CompactExecutionGraph({
+  workflow,
+  nodeStates,
+  selectedNode,
+  onSelectNode,
+}: {
+  workflow: any;
+  nodeStates: Map<string, NodeState>;
+  selectedNode: string | null;
+  onSelectNode: (node: string) => void;
+}) {
+  const nodes = workflowNodeRecord(workflow);
+  const entries = Object.keys(nodes).map((name) => ({
+    name,
+    definition: nodes[name] as any,
+    state: nodeStates.get(name) ?? {
+      name,
+      status: 'pending',
+      attempt: 0,
+      streamText: '',
+      activity: [],
+    },
+  }));
+  const pendingCount = entries.filter(({ state }) => state.status === 'pending').length;
+
+  return (
+    <div className="v8-execution-graph" aria-label="Workflow execution graph">
+      <div className="v8-execution-graph__flow">
+        {entries.map(({ name, definition, state }, index) => {
+          const type = String(definition?.type ?? 'agent');
+          return (
+            <div className="v8-execution-graph__step" key={name}>
+              <button
+                type="button"
+                className={`v8-execution-graph__node ${state.status} ${type === 'human' ? 'human' : ''} ${selectedNode === name ? 'selected' : ''}`}
+                onClick={() => onSelectNode(name)}
+                aria-current={selectedNode === name ? 'step' : undefined}
+              >
+                <span className="v8-execution-graph__dot" aria-hidden="true" />
+                <span>{name}</span>
+              </button>
+              {index < entries.length - 1 && <span className="v8-execution-graph__arrow" aria-hidden="true">→</span>}
+            </div>
+          );
+        })}
+      </div>
+      <p>
+        {pendingCount > 0
+          ? `${pendingCount} upcoming node${pendingCount === 1 ? '' : 's'} will run automatically as dependencies complete.`
+          : 'All workflow nodes have started or completed.'}
+      </p>
+    </div>
+  );
+}
+
+type StructuredStep = {
+  id: string;
+  name: string;
+  index: number;
+  type?: string | null;
+  agent?: string | null;
+  status: string;
+  attempts: number;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+  cost?: { actual: number | null; estimated: number } | null;
+  tokenUsage?: import('../services/api').TokenUsageInfo | null;
+  error?: string | null;
+  io?: { input?: string | null; output?: string | null } | null;
+};
+
+const EXECUTION_STEP_COPY: Array<{ match: RegExp; short: string; complete: string; active: string; pending: string; description: string }> = [
+  { match: /(produce|design).*(tdd|technical|plan)|technical.*plan/, short: 'Plan', complete: 'Designed the technical plan', active: 'Designing the technical plan', pending: 'Design the technical plan', description: 'Maps requirements to implementation touchpoints and tests.' },
+  { match: /audit.*(tdd|plan)|plan.*audit/, short: 'Audit', complete: 'Audited the plan against the requirements', active: 'Auditing the plan', pending: 'Audit the technical plan', description: 'Checks requirement coverage independently before implementation.' },
+  { match: /approval|approve|gate/, short: 'Approve', complete: 'You approved the plan', active: 'Waiting for plan approval', pending: 'Approve the plan', description: 'A human checkpoint keeps the implementation inside the approved scope.' },
+  { match: /workspace/, short: 'Workspace', complete: 'Prepared an isolated workspace', active: 'Preparing an isolated workspace', pending: 'Prepare an isolated workspace', description: 'Creates a clean worktree so the main branch stays untouched.' },
+  { match: /(^|_)(implement|build)($|_)/, short: 'Build', complete: 'Built the feature', active: 'Building the feature', pending: 'Build the feature', description: 'Implements the approved plan and writes the required tests.' },
+  { match: /(^|_)qa($|_)|quality|test/, short: 'QA', complete: 'Finished quality checks', active: 'Running quality checks', pending: 'Run quality checks', description: 'Runs unit, integration, and browser verification.' },
+  { match: /validator|validate/, short: 'Validate', complete: 'Completed independent validation', active: 'Running independent validation', pending: 'Independent validation', description: 'Re-checks the requirements against evidence instead of trusting upstream reports.' },
+  { match: /doc/, short: 'Docs', complete: 'Updated documentation', active: 'Updating documentation', pending: 'Update documentation', description: 'Keeps module documentation and the README accurate for the change.' },
+  { match: /review/, short: 'Review', complete: 'Completed code review', active: 'Reviewing the code', pending: 'Code review', description: 'Reviews the diff for correctness and convention fit.' },
+  { match: /(^|_)pr($|_)|pull.*request/, short: 'PR', complete: 'Opened the pull request', active: 'Opening the pull request', pending: 'Open the pull request', description: 'Includes validation evidence, safety notes, and links to approved artifacts.' },
+  { match: /summary|summarize/, short: 'Summary', complete: 'Finished the run summary', active: 'Writing the run summary', pending: 'Run summary', description: 'Captures what shipped, evidence links, cost, and follow-ups.' },
+];
+
+function isFinishedStep(status: string): boolean {
+  return ['completed', 'approved', 'success', 'succeeded'].includes(status);
+}
+
+function isActiveStep(status: string): boolean {
+  return ['running', 'in_progress', 'waiting_for_input', 'failed'].includes(status);
+}
+
+function stepPresentation(name: string, status: string) {
+  const normalized = name.toLowerCase().replaceAll('-', '_');
+  const matched = EXECUTION_STEP_COPY.find(item => item.match.test(normalized));
+  const fallback = normalized
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, char => char.toUpperCase());
+  if (!matched) return {
+    short: fallback,
+    title: isFinishedStep(status) ? `Completed ${fallback.toLowerCase()}` : isActiveStep(status) ? fallback : fallback,
+    description: isFinishedStep(status) ? 'Completed successfully.' : isActiveStep(status) ? 'This step is currently in progress.' : 'Runs automatically when its dependencies complete.',
+  };
+  return {
+    short: matched.short,
+    title: isFinishedStep(status) ? matched.complete : isActiveStep(status) ? matched.active : matched.pending,
+    description: matched.description,
+  };
+}
+
+function formatClock(value?: string | null): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function technicalTokenLabel(tokenUsage?: import('../services/api').TokenUsageInfo | null): string {
+  if (!tokenUsage) return '';
+  const compact = (value: number) => {
+    if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+    if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+    return String(value);
+  };
+  const parts = [
+    tokenUsage.inputCachedTokens != null ? `${compact(tokenUsage.inputCachedTokens)} c` : null,
+    tokenUsage.inputNonCachedTokens != null ? `${compact(tokenUsage.inputNonCachedTokens)} in` : null,
+    tokenUsage.outputTokens != null ? `${compact(tokenUsage.outputTokens)} out` : null,
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+function artifactLabel(filename?: string | null): string {
+  if (!filename) return 'Run artifact';
+  return filename
+    .replace(/\.[^.]+$/, '')
+    .replaceAll('-', ' ')
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, char => char.toUpperCase());
 }
 
 const LOG_PAGE_SIZE = 250;
@@ -2065,6 +2266,7 @@ function AgentPanel({
 function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, refresh, runContext, contextEngineEnabled, spawnSubtree }: {
   execution: any; agentName: string; traces: any[]; id: string; liveToolCalls?: any[]; refresh: () => void; runContext?: RunStatus | null; contextEngineEnabled: boolean; spawnSubtree?: SpawnedChild[];
 }) {
+  const openDocument = useDocumentTabStore(state => state.openDocument);
   // Attempt selector — when the user has resumed the agent at least once,
   // traces has multiple rows (one per attempt). The latest attempt is
   // selected by default; earlier attempts are viewable via tabs.
@@ -2092,7 +2294,6 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   const [resumeBusy, setResumeBusy] = useState(false);
   const [agentArtifacts, setAgentArtifacts] = useState<ArtifactDoc[]>([]);
   const [agentArtifactsLoading, setAgentArtifactsLoading] = useState(true);
-  const [agentArtifactPreview, setAgentArtifactPreview] = useState<ArtifactDoc | null>(null);
   const [registeredRepos, setRegisteredRepos] = useState<ExecutionRepoSummary[]>([]);
   const [agentContextOpen, setAgentContextOpen] = useState(false);
   const [agentContextReport, setAgentContextReport] = useState<any | null>(null);
@@ -2272,10 +2473,11 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
   }, [id, execution.status, runContext?.artifacts, agentName]);
 
   const openAgentArtifact = async (artifact: ArtifactDoc) => {
-    setAgentArtifactPreview(artifact);
+    const scopeKey = resourceScopeKey('execution', id);
+    openDocument(artifact, { sourceLabel: 'Execution', scopeKey });
     try {
       const full = await artifactsApi.get(artifact.artifactId);
-      setAgentArtifactPreview(full);
+      openDocument(full, { sourceLabel: 'Execution', scopeKey });
     } catch {
       // Runtime context already gives enough metadata for the viewer URL.
     }
@@ -2740,23 +2942,6 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         </aside>
       </main>
 
-      {agentArtifactPreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Artifact preview">
-          <button
-            type="button"
-            className="absolute inset-0"
-            onClick={() => setAgentArtifactPreview(null)}
-            aria-label="Close artifact preview"
-          />
-          <div className="relative flex h-[min(760px,calc(100vh-48px))] w-[min(980px,calc(100vw-48px))] overflow-hidden rounded-md border border-app-strong bg-app-card shadow-2xl">
-            <ArtifactViewer
-              artifact={agentArtifactPreview}
-              onClose={() => setAgentArtifactPreview(null)}
-            />
-          </div>
-        </div>
-      )}
-
       <AgentLogsDrawer
         open={logsOpen}
         onClose={() => setLogsOpen(false)}
@@ -2798,14 +2983,22 @@ export default function ExecutionDetailPage() {
   const {
     execution, workflow, traces, timeline, nodeStates,
     logs, logFilter, setLogFilter,
-    loading, connected, isLive, refresh, markExecutionRunning,
+    loading, isLive, refresh, markExecutionRunning,
     children, descendantsMode, toggleDescendants,
     spawnSubtree,
     liveToolCallsByNode,
   } = useExecution(id);
   const executionSnapshot = useExecutionStore(state => id ? state.entities[id] : undefined);
+  const openDocument = useDocumentTabStore(state => state.openDocument);
 
+  const [stepInspectorOpen, setStepInspectorOpen] = useState(false);
+  // Legacy execution controls remain mounted in a non-rendered compatibility
+  // branch until the structured page fully replaces their deep-link routes.
   const [rightPanelView, setRightPanelView] = useState<ExecutionRightPanelView>('node');
+  const [mainView, setMainView] = useState<'graph' | 'trace' | 'logs'>('trace');
+  const [traceTimelineOpen, setTraceTimelineOpen] = useState(false);
+  const [checkpointCount] = useState(0);
+  const [artifactCount] = useState(0);
   // Deep-link node selection via ?node=X query param. Keeps the URL as the
   // source of truth so selections survive reload + can be shared.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -2818,15 +3011,11 @@ export default function ExecutionDetailPage() {
   };
   const inspectNode = (n: string | null) => {
     setSelectedNode(n);
-    setRightPanelView('node');
+    setStepInspectorOpen(Boolean(n));
   };
   // Interventions for this workflow run — drives the pending approval action
   // in the header while keeping the execution canvas focused.
   const [runInterventions, setRunInterventions] = useState<any[]>([]);
-  const [mainView, setMainView] = useState<'graph' | 'trace' | 'logs'>('trace');
-  const [traceTimelineOpen, setTraceTimelineOpen] = useState(false);
-  const [checkpointCount, setCheckpointCount] = useState<number | null>(null);
-  const [artifactCount, setArtifactCount] = useState<number | null>(null);
   const [workflowArtifacts, setWorkflowArtifacts] = useState<ArtifactDoc[]>([]);
   const [runContext, setRunContext] = useState<RunStatus | null>(null);
   const [contextEvaluationBusy, setContextEvaluationBusy] = useState(false);
@@ -2854,25 +3043,20 @@ export default function ExecutionDetailPage() {
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    api.checkpoints.list(id)
-      .then((list) => { if (!cancelled) setCheckpointCount((list ?? []).length); })
-      .catch(() => {});
     const loadArtifacts = () => {
       artifactsApi.list({ rootType: 'workflow', rootId: id, limit: 500 })
         .then((list) => {
           if (cancelled) return;
           const next = list ?? [];
           setWorkflowArtifacts(next);
-          setArtifactCount(next.length);
         })
         .catch(() => {
           if (cancelled) return;
           setWorkflowArtifacts([]);
-          setArtifactCount(0);
         });
     };
     loadArtifacts();
-    if (rightPanelView === 'artifacts' && (execution?.status === 'running' || execution?.status === 'waiting_for_input' || execution?.status === 'queued')) {
+    if (execution?.status === 'running' || execution?.status === 'waiting_for_input' || execution?.status === 'queued') {
       const timer = window.setInterval(loadArtifacts, 10000);
       return () => {
         cancelled = true;
@@ -2880,7 +3064,7 @@ export default function ExecutionDetailPage() {
       };
     }
     return () => { cancelled = true; };
-  }, [id, execution?.status, execution?.completedNodes?.length, rightPanelView]);
+  }, [id, execution?.status, execution?.completedNodes?.length]);
 
   useEffect(() => {
     if (!id) return;
@@ -2956,7 +3140,6 @@ export default function ExecutionDetailPage() {
     || latestModelRecoveryIntervention?.widget === 'model_recovery';
   const effectivePendingIntervention = isModelRecoveryWaiting ? undefined : pendingIntervention;
   const approvalPending = Boolean(effectivePendingIntervention || (!isModelRecoveryWaiting && runContext?.humanInput?.required));
-  const waitingInputLooksLikeApproval = isModelRecoveryWaiting || looksLikeApprovalInput(latestInputNode, latestInputFields);
 
   // Auto-select node based on execution state.
   // IMPORTANT: the right-side detail pane should NOT auto-follow the running
@@ -3053,7 +3236,7 @@ export default function ExecutionDetailPage() {
     prevStatusRef.current = status;
   }, [execution?.status, execution?.failedNode, execution?.completedNodes, execution?.currentNodes, latestInputEvent, nodeStates, selectedNode]);
 
-  const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 40, minSize: 20, maxSize: 60, unit: 'percent' });
+  const { size: rightWidth, handleMouseDown: rightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 320, minSize: 280, maxSize: 520 });
   const { size: artifactRightWidth, handleMouseDown: artifactRightResizeStart } = useResizable({ direction: 'horizontal', initialSize: 56, minSize: 28, maxSize: 78, unit: 'percent' });
 
   const handleCancel = useCallback(async () => {
@@ -3132,6 +3315,12 @@ export default function ExecutionDetailPage() {
     () => buildTracesForTimeline(traces ?? [], nodeStates),
     [traces, nodeStates],
   );
+  const technicalLogState = usePagedExecutionLogs({
+    executionId: id ?? '',
+    enabled: Boolean(id),
+    liveLogs: logs,
+    includeDescendants: true,
+  });
 
   if (loading) {
     return <div className="flex items-center justify-center h-full text-theme-muted font-mono text-sm">LOADING...</div>;
@@ -3194,7 +3383,6 @@ export default function ExecutionDetailPage() {
       }
     : undefined;
   const selectedState = selectedNode ? nodeStates.get(selectedNode) : undefined;
-  const isPaused = execution.status === 'waiting_for_input' && !latestInputEvent;
   // When execution is waiting_for_input and has active recovery state, show
   // "Model Recovery" badge instead of generic "Waiting for Input".
   const hasRecoveryState = isModelRecoveryWaiting;
@@ -3217,40 +3405,359 @@ export default function ExecutionDetailPage() {
     return execution.cost;
   })();
 
-  // Child executions (spawned agents AND nested sub-workflows) live in their
-  // OWN execution rows — node costs here never include them (workflow-type
-  // node traces carry method 'child_execution' with zero cost). Fold the
-  // entire child subtree (children, grandchildren, …) into the header chip;
-  // each child row's cost is its own-trace sum, so nothing counts twice.
-  const spawnRollup = (() => {
-    const rows = spawnSubtree ?? [];
-    if (rows.length === 0) return null;
-    let actual = 0;
-    let estimated = 0;
-    let sawCost = false;
-    for (const c of rows) {
-      if (c.cost?.actual != null) { actual += c.cost.actual; sawCost = true; }
-      if (c.cost?.estimated) { estimated += c.cost.estimated; sawCost = true; }
-    }
-    return { actual, estimated, sawCost, count: rows.length };
-  })();
-
-
   const agentNodeNames = Object.entries((workflow?.parsed?.nodes ?? workflow?.nodes ?? {}) as Record<string, any>)
     .filter(([, nodeDef]) => ((nodeDef as any)?.type ?? 'agent') === 'agent')
     .map(([name]) => name);
-  const workflowNodeNames = workflow?.parsed?.nodes ? Object.keys(workflow.parsed.nodes) : [];
+  const workflowNodeNames = Object.keys(workflowNodeRecord(workflow));
+  const displayNodeStates = new Map<string, NodeState>();
+  for (const nodeName of workflowNodeNames) {
+    displayNodeStates.set(nodeName, nodeStates.get(nodeName) ?? {
+      name: nodeName,
+      status: 'pending',
+      attempt: 0,
+      streamText: '',
+      activity: [],
+    });
+  }
+  for (const [nodeName, state] of nodeStates) if (!displayNodeStates.has(nodeName)) displayNodeStates.set(nodeName, state);
+  const progressedNodeCount = Array.from(displayNodeStates.values()).filter(state => state.status !== 'pending').length;
+  const upcomingNodeCount = Array.from(displayNodeStates.values()).filter(state => state.status === 'pending').length;
+  const executionSource = String(execution.source ?? execution.meta?.source ?? 'manual').replaceAll('_', ' ');
+  const chatSessionId = execution.meta?.chatSessionId ?? execution.chat?.sessionId ?? execution.chatSessionId;
+  const structuredSteps: StructuredStep[] = runContext?.workflowSteps?.length
+    ? runContext.workflowSteps
+    : Array.from(displayNodeStates.entries()).map(([name, state], index) => {
+        const trace = [...traces].reverse().find((item: any) => item.node === name);
+        return {
+          id: name,
+          name,
+          index,
+          type: workflowNodeRecord(workflow)[name]?.type ?? 'agent',
+          agent: workflowNodeRecord(workflow)[name]?.agent ?? null,
+          status: state.status,
+          attempts: state.attempt,
+          durationMs: state.durationMs ?? trace?.durationMs ?? null,
+          cost: state.cost ?? trace?.cost ?? null,
+          tokenUsage: trace?.tokenUsage ?? null,
+          error: trace?.error ?? null,
+          io: {
+            input: trace?.inputState ? JSON.stringify(trace.inputState) : null,
+            output: trace?.output ? JSON.stringify(trace.output) : null,
+          },
+        };
+      });
+  const activeStepIndex = structuredSteps.findIndex(step => isActiveStep(step.status));
+  const firstPendingStepIndex = structuredSteps.findIndex(step => !isFinishedStep(step.status));
+  const currentStepIndex = activeStepIndex >= 0
+    ? activeStepIndex
+    : execution.status === 'completed'
+      ? Math.max(0, structuredSteps.length - 1)
+      : Math.max(0, firstPendingStepIndex);
+  const currentStep = structuredSteps[currentStepIndex] ?? structuredSteps[0];
+  const currentStepCopy = stepPresentation(currentStep?.name ?? 'workflow', currentStep?.status ?? execution.status);
+  const finishedStepCount = structuredSteps.filter(step => isFinishedStep(step.status)).length;
+  const actionRequired = approvalPending || execution.status === 'waiting_for_input' || execution.status === 'failed';
+  const isTerminal = ['completed', 'cancelled'].includes(execution.status);
+  const currentOutputForSummary = currentStep
+    ? (displayNodeStates.get(currentStep.name)?.output ?? [...traces].reverse().find((trace: any) => trace.node === currentStep.name)?.output)
+    : null;
+  const currentOutputText = currentOutputForSummary ? JSON.stringify(currentOutputForSummary).toLowerCase() : '';
+  const qaLayersPassed = currentStepCopy.short === 'QA'
+    && currentOutputText.includes('unit')
+    && currentOutputText.includes('integration')
+    && (currentOutputText.includes('pass') || currentOutputText.includes('success'));
+  const structuredTitle = execution.status === 'completed'
+    ? `Allen finished ${execution.workflowName}`
+    : actionRequired
+      ? `Allen needs your decision on ${currentStepCopy.short.toLowerCase()}`
+      : execution.status === 'queued'
+        ? 'Allen is preparing this run'
+        : `Allen is ${currentStepCopy.title.toLowerCase()}`;
+  const structuredSummary = actionRequired
+    ? `${finishedStepCount} of ${structuredSteps.length} steps are preserved. Review the current step and choose how Allen should continue.`
+    : isTerminal
+      ? `All ${structuredSteps.length} workflow steps are accounted for. The run record, artifacts, and technical evidence remain available below.`
+      : qaLayersPassed
+        ? 'The build is done. Unit and integration layers passed; browser evidence is being captured now. Everything after this runs automatically.'
+        : `${finishedStepCount} steps are complete. ${currentStepCopy.description} Everything after this continues automatically unless a decision or failure needs you.`;
+  const resolvedIntervention = [...runInterventions].reverse().find((intervention: any) => intervention.status !== 'pending');
+  const producedItems = (() => {
+    const items: Array<{ key: string; title: string; subtitle: string; href?: string; artifact?: ArtifactDoc }> = workflowArtifacts.slice(0, 4).map(artifact => ({
+      key: artifact.artifactId,
+      title: artifactLabel(artifact.filename),
+      subtitle: artifact.description ?? `${artifact.contentType} · ${artifact.createdByAgent ?? 'saved by this run'}`,
+      artifact,
+    }));
+    const add = (key: string, title: string, subtitle: string, href?: string) => {
+      if (items.length < 4 && !items.some(item => item.key === key || item.title.toLowerCase() === title.toLowerCase())) items.push({ key, title, subtitle, href });
+    };
+    const finishedNames = structuredSteps.filter(step => isFinishedStep(step.status)).map(step => step.name.toLowerCase());
+    if (finishedNames.some(name => /tdd|plan/.test(name))) add('technical-plan', 'Technical plan', 'audited · approved for implementation');
+    if (finishedNames.some(name => /implement|build/.test(name))) add('code-changes', 'Code changes', runContext?.workspace?.branch ? `workspace · ${runContext.workspace.branch}` : 'completed in the isolated workspace', runContext?.workspace?.id ? workspaceChatPath(runContext.workspace.id) : undefined);
+    if (structuredSteps.some(step => /qa|quality|test/.test(step.name.toLowerCase()) && step.status !== 'pending')) add('verification', 'Verification evidence', isFinishedStep(structuredSteps.find(step => /qa|quality|test/.test(step.name.toLowerCase()))?.status ?? '') ? 'quality checks completed' : 'building now');
+    if (runContext?.pullRequest) add('pull-request', runContext.pullRequest.number ? `Pull request #${runContext.pullRequest.number}` : 'Pull request', runContext.pullRequest.status ?? 'opened by this run', runContext.pullRequest.url ?? undefined);
+    return items;
+  })();
+  const currentNodeState = currentStep ? displayNodeStates.get(currentStep.name) : undefined;
+  const currentTrace = currentStep ? [...traces].reverse().find((trace: any) => trace.node === currentStep.name) : undefined;
+  const currentEvidence = (() => {
+    const output = currentNodeState?.output ?? currentTrace?.output;
+    if (output && typeof output === 'object' && !Array.isArray(output)) {
+      return Object.entries(output as Record<string, unknown>)
+        .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
+        .slice(0, 3)
+        .map(([key, value]) => `${key.replaceAll('_', ' ')} — ${String(value)}`);
+    }
+    return (currentNodeState?.activity ?? []).slice(-3).map((entry: any) => String(entry.message ?? entry.label ?? entry.type ?? '')).filter(Boolean);
+  })();
+  const runCost = Math.max(
+    Number(runContext?.execution.costOwn?.actual ?? runContext?.execution.costOwn?.estimated ?? 0),
+    Number(liveCost?.actual ?? liveCost?.estimated ?? 0),
+    Number(execution.cost?.actual ?? execution.cost?.estimated ?? 0),
+  );
+  const legacyPullRequest = (runContext?.pullRequest ?? {}) as NonNullable<RunStatus['pullRequest']>;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="v8-execution-detail flex flex-col h-full">
+      <main className="v8-structured-execution">
+        <p className="v8-structured-execution__eyebrow">
+          <Link to="/executions">Executions</Link>
+          <span>/</span>
+          <span>{execution.id ?? execution._id}</span>
+          <span>·</span>
+          <span>{execution.workflowName}</span>
+          <span>·</span>
+          <span>{formatClock(execution.startedAt) ? `started ${formatClock(execution.startedAt)} from ${executionSource}` : `started from ${executionSource}`}</span>
+        </p>
+
+        <header className="v8-structured-execution__hero">
+          <div>
+            <h1>{structuredTitle}</h1>
+            <p>{structuredSummary}</p>
+          </div>
+          <div className="v8-structured-execution__hero-actions">
+            {runContext?.workspace?.id && (
+              <Link className="v8-structured-button" to={workspaceChatPath(runContext.workspace.id)}>Open workspace</Link>
+            )}
+            {actionRequired && (
+              <button
+                type="button"
+                className="v8-structured-button v8-structured-button--ink"
+                onClick={() => effectivePendingIntervention ? setApprovalModalOpen(true) : setInputDialogDismissed(false)}
+              >
+                Review &amp; decide →
+              </button>
+            )}
+          </div>
+        </header>
+
+        <dl className="v8-structured-execution__metrics" aria-label="Execution summary">
+          <div><dt>status</dt><dd>{actionRequired ? 'paused · needs you' : isTerminal ? execution.status : currentStepCopy.title.toLowerCase()}</dd></div>
+          <div><dt>step</dt><dd>{Math.min(currentStepIndex + 1, structuredSteps.length)} of {structuredSteps.length}</dd></div>
+          <div><dt>elapsed</dt><dd>{formatDuration(execution.durationMs).replace(/ 0s$/, '') || '—'}</dd></div>
+          <div><dt>run cost</dt><dd>{runCost > 0 ? `$${runCost.toFixed(2)}` : '—'}</dd></div>
+        </dl>
+
+        <div className="v8-structured-execution__rail" aria-label="Workflow steps">
+          {structuredSteps.map((step, index) => {
+            const copy = stepPresentation(step.name, step.status);
+            const done = isFinishedStep(step.status);
+            const active = isActiveStep(step.status);
+            return (
+              <button
+                type="button"
+                key={step.id || step.name}
+                className={`v8-structured-execution__rail-step ${done ? 'done' : ''} ${active ? 'active' : ''} ${step.status === 'failed' ? 'failed' : ''}`}
+                onClick={() => inspectNode(step.name)}
+                title={copy.title}
+              >
+                <i>{done ? '✓' : step.status === 'failed' ? '!' : index + 1}</i>
+                <span>{copy.short}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="v8-structured-execution__rail-meta">
+          <span>started {formatClock(execution.startedAt) || '—'} · {execution.status === 'running' ? 'running' : execution.status} {formatDuration(execution.durationMs).replace(/ 0s$/, '')}</span>
+          <span>{actionRequired ? 'paused · waiting on you' : `${structuredSteps.length - finishedStepCount} steps remaining`}</span>
+        </div>
+
+        <div className={`v8-structured-execution__attention ${actionRequired ? 'needs-action' : ''}`}>
+          <span><i />{actionRequired ? 'action needed' : 'nothing needs you'}</span>
+          <p>{actionRequired ? 'Review the current step. Completed work is preserved while this run waits.' : 'Allen pings you only for decisions or failures — the remaining steps continue automatically.'}</p>
+          {actionRequired && <button type="button" onClick={() => effectivePendingIntervention ? setApprovalModalOpen(true) : setInputDialogDismissed(false)}>Review &amp; decide →</button>}
+        </div>
+
+        <div className="v8-structured-execution__grid">
+          <section className="v8-structured-execution__progress">
+            <div className="v8-structured-section-head">
+              <h2>Progress</h2>
+              <span>step {Math.min(currentStepIndex + 1, structuredSteps.length)} of {structuredSteps.length} · auto-continues · click a step to inspect</span>
+            </div>
+            <div className="v8-structured-progress-list">
+              {structuredSteps.map((step, index) => {
+                const copy = stepPresentation(step.name, step.status);
+                const done = isFinishedStep(step.status);
+                const active = isActiveStep(step.status);
+                const trace = [...traces].reverse().find((item: any) => item.node === step.name);
+                const duration = step.durationMs ?? trace?.durationMs;
+                return (
+                  <button type="button" className={`v8-structured-progress-row ${done ? 'done' : ''} ${active ? 'active' : ''} ${step.status === 'failed' ? 'failed' : ''}`} key={step.id || step.name} onClick={() => inspectNode(step.name)}>
+                    <span className="v8-structured-progress-row__marker">{done ? '✓' : step.status === 'failed' ? '!' : index + 1}</span>
+                    <span className="v8-structured-progress-row__copy">
+                      <strong>{copy.title}</strong>
+                      <small>{step.error || copy.description}</small>
+                      {active && step.name === currentStep?.name && currentEvidence.length > 0 && (
+                        <span className="v8-structured-progress-row__evidence">
+                          {currentEvidence.map((item, evidenceIndex) => <em key={`${item}-${evidenceIndex}`}><i />{item}</em>)}
+                        </span>
+                      )}
+                    </span>
+                    <time>{formatClock(step.startedAt)}{duration != null ? `${step.startedAt ? ' · ' : ''}${formatDuration(duration)}` : !active && !done ? 'auto' : ''}</time>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="v8-structured-execution__progress-hint">Click a step to inspect its input, output, response, tools, and context.</p>
+          </section>
+
+          <aside className="v8-structured-execution__side">
+            <section>
+              <div className="v8-structured-section-head"><h2>Needs you</h2><span>{actionRequired ? '1 waiting' : '0 waiting'} · {resolvedIntervention ? '1 resolved' : '0 resolved'}</span></div>
+              <div className="v8-structured-card-list">
+                <div className="v8-structured-card-row">
+                  <div>
+                    <strong>{actionRequired ? (runContext?.humanInput?.title ?? 'This run needs your decision') : 'Nothing waiting on you'}</strong>
+                    <small>{actionRequired ? 'The workflow is paused with all completed work preserved.' : 'pinged only for decisions or failures'}</small>
+                  </div>
+                  <span className={actionRequired ? 'alert' : 'clear'}><i />{actionRequired ? 'waiting' : 'clear'}</span>
+                </div>
+                {actionRequired && (
+                  <div className="v8-structured-card-row">
+                    <div><strong>{currentStepCopy.title}</strong><small>{runContext?.humanInput?.stage ?? currentStep?.name}</small></div>
+                    <button type="button" onClick={() => effectivePendingIntervention ? setApprovalModalOpen(true) : setInputDialogDismissed(false)}>Review</button>
+                  </div>
+                )}
+                {!actionRequired && resolvedIntervention && (
+                  <div className="v8-structured-card-row">
+                    <div><strong>{resolvedIntervention.title ?? 'Workflow decision — resolved'}</strong><small>{resolvedIntervention.status}</small></div>
+                    <button type="button" onClick={() => inspectNode(resolvedIntervention.nodeName ?? currentStep?.name)}>View</button>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section>
+              <div className="v8-structured-section-head"><h2>Produced by this run</h2><span>so far</span></div>
+              <div className="v8-structured-card-list">
+                {producedItems.length > 0 ? producedItems.map(item => (
+                  item.artifact ? (
+                    <button className="v8-structured-resource-row" type="button" onClick={() => item.artifact && id && openDocument(item.artifact, { sourceLabel: 'Execution', scopeKey: resourceScopeKey('execution', id) })} key={item.key}>
+                      <span><strong>{item.title}</strong><small>{item.subtitle}</small></span><b>→</b>
+                    </button>
+                  ) : item.href ? (
+                    <a className="v8-structured-resource-row" href={item.href} key={item.key} target={item.href.startsWith('http') ? '_blank' : undefined} rel={item.href.startsWith('http') ? 'noreferrer' : undefined}>
+                      <span><strong>{item.title}</strong><small>{item.subtitle}</small></span><b>→</b>
+                    </a>
+                  ) : (
+                    <div className="v8-structured-resource-row" key={item.key}><span><strong>{item.title}</strong><small>{item.subtitle}</small></span><b>→</b></div>
+                  )
+                )) : <div className="v8-structured-card-row"><div><strong>No artifacts yet</strong><small>Outputs appear here as steps complete.</small></div></div>}
+              </div>
+            </section>
+          </aside>
+        </div>
+
+        <details className="v8-structured-technical" open>
+          <summary>
+            <span>Technical detail — trace, tokens, logs</span>
+            <b>{runCost > 0 ? `$${runCost.toFixed(2)}` : '—'} · {aggregateTokenLabel(traces)}</b>
+          </summary>
+          <div className="v8-structured-technical__body">
+            <table>
+              <thead><tr><th>node</th><th>status</th><th>attempt</th><th>duration</th><th>cost · tokens</th></tr></thead>
+              <tbody>
+                {structuredSteps.map(step => {
+                  const trace = [...traces].reverse().find((item: any) => item.node === step.name);
+                  const cost = step.cost ?? trace?.cost;
+                  const costValue = Number(cost?.actual ?? cost?.estimated ?? 0);
+                  const tokenLabel = technicalTokenLabel(step.tokenUsage ?? trace?.tokenUsage);
+                  return (
+                    <tr key={step.id || step.name} onClick={() => inspectNode(step.name)}>
+                      <td>{step.name}</td>
+                      <td><span className={`v8-structured-status ${step.status}`}><i />{step.status === 'approved' ? 'approved · you' : step.status.replaceAll('_', ' ')}</span></td>
+                      <td>{step.attempts > 0 ? step.attempts : '—'}</td>
+                      <td>{step.durationMs != null || trace?.durationMs != null ? formatDuration(step.durationMs ?? trace?.durationMs) : '—'}</td>
+                      <td>{costValue > 0 ? `$${costValue.toFixed(2)}` : '—'}{tokenLabel ? ` · ${tokenLabel}` : ''}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <StructuredExecutionLogs
+              executionId={id ?? execution.id}
+              logs={technicalLogState.visibleLogs}
+              nodeFilter={logFilter}
+              workflowNodes={workflowNodeNames}
+              traces={traces}
+              isLive={isLive}
+              loadedCount={technicalLogState.loadedCount}
+              hasOlderLogs={technicalLogState.hasOlder}
+              loadingInitial={technicalLogState.loadingInitial}
+              loadingOlderLogs={technicalLogState.loadingOlder}
+              error={technicalLogState.error}
+              onNodeFilterChange={setLogFilter}
+              onLoadOlderLogs={technicalLogState.loadOlder}
+            />
+            <p>Node ids, agents, and gate semantics come from the workflow definition. Prompts and responses live in each step’s Details.</p>
+          </div>
+        </details>
+      </main>
+
+      {stepInspectorOpen && selectedNode && (
+        <>
+          <button type="button" className="v8-structured-inspector-backdrop" onClick={() => setStepInspectorOpen(false)} aria-label="Close step inspector" />
+          <aside className="v8-structured-inspector" aria-label="Step inspector">
+            <div className="v8-structured-inspector__head"><b>Step</b><button type="button" onClick={() => setStepInspectorOpen(false)} aria-label="Close">×</button></div>
+            <NodeDetail
+              nodeName={selectedNode}
+              nodeState={selectedState}
+              trace={selectedTraceWithContextFinding}
+              allTraces={selectedTraces}
+              waitingInput={null}
+              onSubmitInput={handleSubmitInput}
+              spawnedChildren={(children ?? []).filter(child => child.parentCaller === selectedNode)}
+              allChildren={children ?? []}
+              descendantsMode={descendantsMode}
+              onToggleDescendants={toggleDescendants}
+              contextEngineEnabled={contextEngineEnabled}
+              workflowContextEvaluation={runContext?.execution.contextWorkflowEvaluation ?? null}
+              onRerunWorkflowContextEvaluation={contextEngineEnabled ? handleRerunContextEvaluation : undefined}
+              workflowContextEvaluationBusy={contextEvaluationBusy}
+              artifacts={workflowArtifacts}
+            />
+          </aside>
+        </>
+      )}
+
+      {approvalModalOpen && effectivePendingIntervention && (
+        <ExecutionApprovalModal
+          executionId={id ?? execution.id}
+          intervention={effectivePendingIntervention}
+          onClose={() => setApprovalModalOpen(false)}
+          onSubmitted={() => { void loadRunInterventions(); refresh(); }}
+        />
+      )}
+
+      {false && <>
       {/* Top bar — matches handoff/pages/detail-views.jsx ExecutionDetailV2 */}
-      <header className="px-6 pt-4 pb-3 border-b border-app shrink-0">
+      <header className="v8-execution-detail__head px-6 pt-4 pb-3 border-b border-app shrink-0">
         <div className="flex items-center gap-2 mb-2 text-[12px] text-theme-muted">
-          <Link to="/executions" className="hover:text-theme-primary transition-colors flex items-center gap-1">
-            <ArrowLeft className="w-3 h-3" /> Activity
+          <Link to={`/workflows/${execution.workflowId ?? workflow?._id ?? ''}?tab=runs`} className="hover:text-theme-primary transition-colors flex items-center gap-1">
+            <ArrowLeft className="w-3 h-3" /> Runs
           </Link>
           <span className="text-theme-subtle">/</span>
-          <span className="font-mono">{id?.slice(0, 8)}</span>
+          <span>{execution.workflowName}</span>
         </div>
 
         <div className="flex items-center justify-between gap-3">
@@ -3259,126 +3766,47 @@ export default function ExecutionDetailPage() {
               {execution.workflowName}
             </h1>
             <StatusBadge status={badgeStatus} />
-            {isPaused && !hasRecoveryState && (
-              <span className="badge bg-accent-orange/10 text-accent-orange gap-1">
-                <Pause className="w-3 h-3" /> paused
-              </span>
-            )}
-            {execution.status === 'waiting_for_input' && inputDialogDismissed && !effectivePendingIntervention && (
-              <button
-                onClick={() => setInputDialogDismissed(false)}
-                className={waitingInputLooksLikeApproval ? 'cr-approval-button' : 'badge badge-warn cursor-pointer'}
-                title="Reopen the input dialog"
-              >
-                {waitingInputLooksLikeApproval ? (
-                  <>
-                    <span className="cr-approval-main">{isModelRecoveryWaiting ? 'Approve model change' : 'Approve'}</span>
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </>
-                ) : (
-                  <>
-                    <MessageSquare className="w-3 h-3" />
-                    Respond to input
-                    <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse" />
-                  </>
-                )}
-              </button>
-            )}
-            {approvalPending && effectivePendingIntervention && (
-              <button
-                type="button"
-                onClick={() => setApprovalModalOpen(true)}
-                className="cr-approval-button"
-                title="Open approval dialog"
-              >
-                <span className="cr-approval-main">Approve</span>
-                <ChevronRight className="h-3.5 w-3.5" />
-              </button>
-            )}
-            {isLive && (
-              <span title={connected ? 'Live' : 'Disconnected'}>
-                {connected
-                  ? <Wifi className="w-3 h-3 text-accent-green" />
-                  : <WifiOff className="w-3 h-3 text-accent-red" />}
-              </span>
-            )}
-            {execution.durationMs != null && (
-              <span className="text-[12px] text-theme-muted font-mono">{formatDuration(execution.durationMs)}</span>
-            )}
-            <CostDisplay cost={liveCost} />
-            {spawnRollup?.sawCost && (
-              <span
-                className="text-[10px] text-accent-blue font-mono"
-                title={`Spawned child agents spent $${spawnRollup.actual.toFixed(2)} on their own models (own run: $${(liveCost?.actual ?? 0).toFixed(2)}). Per-agent breakdown in the node inspector's Spawned Agents panel.`}
-              >
-                + ${spawnRollup.actual.toFixed(2)} · {spawnRollup.count} child agent{spawnRollup.count === 1 ? '' : 's'}
-              </span>
-            )}
+            <span className="v8-execution-detail__id">{execution.id ?? execution._id}</span>
           </div>
 
         <div className="flex items-center gap-2">
-          {runContext?.pullRequest && (
+          {legacyPullRequest && (
             <a
-              href={runContext.pullRequest.url ?? '#'}
-              target={runContext.pullRequest.url ? '_blank' : undefined}
-              rel={runContext.pullRequest.url ? 'noreferrer' : undefined}
+              href={legacyPullRequest.url ?? '#'}
+              target={legacyPullRequest.url ? '_blank' : undefined}
+              rel={legacyPullRequest.url ? 'noreferrer' : undefined}
               className="btn-ghost text-xs inline-flex max-w-[280px] items-center gap-1.5 text-accent-green"
-              title={runContext.pullRequest.title ?? (runContext.pullRequest.number ? `PR #${runContext.pullRequest.number}` : 'Pull request')}
+              title={legacyPullRequest.title ?? (legacyPullRequest.number ? `PR #${legacyPullRequest.number}` : 'Pull request')}
             >
               <GitPullRequest className="h-[1em] w-[1em] shrink-0" />
               <span className="shrink-0">
-                {runContext.pullRequest.number ? `PR #${runContext.pullRequest.number}` : 'Pull request'}
+                {legacyPullRequest.number ? `PR #${legacyPullRequest.number}` : 'Pull request'}
               </span>
-              {runContext.pullRequest.title && (
+              {legacyPullRequest.title && (
                 <>
                   <span className="text-theme-subtle">·</span>
                   <span className="truncate text-theme-secondary">
-                    {runContext.pullRequest.title}
+                    {legacyPullRequest.title}
                   </span>
                 </>
               )}
-              {runContext.pullRequest.status && (
+              {legacyPullRequest.status && (
                 <span className="shrink-0 font-mono text-[10px] text-theme-muted">
-                  {runContext.pullRequest.status}
+                  {legacyPullRequest.status}
                 </span>
               )}
-              {runContext.pullRequest.url && <ExternalLink className="h-[1em] w-[1em] shrink-0 text-theme-subtle" />}
+              {legacyPullRequest.url && <ExternalLink className="h-[1em] w-[1em] shrink-0 text-theme-subtle" />}
             </a>
           )}
-          <button onClick={refresh} className="btn-ghost text-xs" title="Refresh">
-            <RefreshCw className="w-3.5 h-3.5" />
-          </button>
           <button
-            onClick={() => setRightPanelView('rerun')}
-            className={`btn-ghost text-xs inline-flex items-center gap-1 ${rightPanelView === 'rerun' ? 'text-theme-primary bg-app-muted' : ''}`}
-            title="Show saved states, rerun controls, and feedback"
+            onClick={() => approvalPending ? setApprovalModalOpen(true) : setInputDialogDismissed(false)}
+            className="btn-ghost text-xs"
+            disabled={!approvalPending && execution.status !== 'waiting_for_input'}
           >
-            <Save className="w-3.5 h-3.5" />
-            <span>Rerun from State</span>
-            {checkpointCount != null && checkpointCount > 0 && (
-              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
-                {checkpointCount}
-              </span>
-            )}
-            {feedbackEntries.length > 0 && (
-              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
-                {feedbackEntries.length}f
-              </span>
-            )}
+            Needs input <span className="text-accent-purple">{approvalPending || execution.status === 'waiting_for_input' ? 1 : 0}</span>
           </button>
-          <button
-            onClick={() => setRightPanelView('artifacts')}
-            className={`btn-ghost text-xs inline-flex items-center gap-1 ${rightPanelView === 'artifacts' ? 'text-theme-primary bg-app-muted' : ''}`}
-            title="Show artifacts saved by agents during this run"
-          >
-            <FileText className="w-3.5 h-3.5" />
-            <span>Artifacts</span>
-            {artifactCount != null && artifactCount > 0 && (
-              <span className="ml-0.5 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
-                {artifactCount}
-              </span>
-            )}
-          </button>
+          <button onClick={() => setMainView('logs')} className="btn-ghost text-xs">Logs <span className="text-theme-subtle">{logs.length}</span></button>
+          <button onClick={() => setRightPanelView('node')} className="btn-ghost text-xs">Context <span className="text-theme-subtle">{runContext?.execution.contextWorkflowEvaluation?.result?.nodeFindings?.length ?? 0}</span></button>
           {execution.status === 'failed' && execution.failedNode && (
             <button
               onClick={() => handleRetryFrom(execution.failedNode)}
@@ -3393,13 +3821,33 @@ export default function ExecutionDetailPage() {
             </button>
           )}
           {isLive && (
-            <button onClick={handleCancel} className="btn-danger text-xs" title="Cancel execution">
-              <XCircle className="w-3.5 h-3.5 mr-1" /> Cancel
+            <button
+              onClick={approvalPending
+                ? () => setApprovalModalOpen(true)
+                : execution.status === 'waiting_for_input'
+                  ? () => setInputDialogDismissed(false)
+                  : handleCancel}
+              className="v8-btn v8-btn--ink text-xs"
+              title={approvalPending || execution.status === 'waiting_for_input' ? 'Resume execution' : 'Cancel execution'}
+            >
+              {approvalPending || execution.status === 'waiting_for_input' ? 'Resume' : 'Cancel'}
             </button>
           )}
           </div>
         </div>
+        <p className="v8-execution-detail__source">Workflow execution · started from {executionSource}{chatSessionId ? <> · <Link to={`/chat/${chatSessionId}`}>Open chat →</Link></> : null}</p>
       </header>
+
+      <ExecutionSummaryStrip
+        completed={progressedNodeCount}
+        total={displayNodeStates.size}
+        duration={formatDuration(execution.durationMs).replace(/ 0s$/, '')}
+        cost={Math.max(
+          Number(liveCost?.actual ?? liveCost?.estimated ?? 0),
+          Number(execution.cost?.actual ?? execution.cost?.estimated ?? 0),
+        ) || null}
+        tokens={aggregateTokenLabel(traces)}
+      />
 
       {/* Failure banner — prominent resume-from-node controls when the
           execution has failed. The compact `Retry` button in the top bar
@@ -3513,13 +3961,15 @@ export default function ExecutionDetailPage() {
       )}
 
       {/* Main content — single graph/trace workspace + context/inspector */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="v8-execution-detail__workspace flex-1 flex flex-col overflow-hidden">
         <div className="flex-1 flex overflow-hidden min-h-0">
           <div className="flex-1 min-w-0 overflow-hidden bg-[rgb(var(--color-app-background))] flex flex-col">
-            <div className="flex items-center justify-between gap-3 border-b border-app bg-app-card px-4 py-2 shrink-0">
-              <div className="inline-flex rounded-md border border-app bg-app-muted p-0.5">
+            <div className="v8-execution-detail__views flex items-center justify-between gap-3 border-b border-app bg-app-card px-4 py-2 shrink-0">
+              <div className="inline-flex rounded-md border border-app bg-app-muted p-0.5" role="tablist" aria-label="Execution views">
                 <button
                   type="button"
+                  role="tab"
+                  aria-selected={mainView === 'graph'}
                   onClick={() => setMainView('graph')}
                   className={`rounded px-3 py-1.5 text-[11px] font-mono transition-colors ${mainView === 'graph' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
 	                >
@@ -3527,6 +3977,8 @@ export default function ExecutionDetailPage() {
 	                </button>
 	                <button
 	                  type="button"
+	                  role="tab"
+	                  aria-selected={mainView === 'trace'}
 	                  onClick={() => setMainView('trace')}
 	                  className={`rounded px-3 py-1.5 text-[11px] font-mono transition-colors ${mainView === 'trace' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
 	                >
@@ -3534,6 +3986,8 @@ export default function ExecutionDetailPage() {
 	                </button>
 	                <button
 	                  type="button"
+	                  role="tab"
+	                  aria-selected={mainView === 'logs'}
 	                  onClick={() => setMainView('logs')}
 	                  className={`inline-flex items-center gap-1 rounded px-3 py-1.5 text-[11px] font-mono transition-colors ${mainView === 'logs' ? 'bg-app-card text-theme-primary shadow-sm' : 'text-theme-muted hover:text-theme-primary'}`}
 	                >
@@ -3542,21 +3996,32 @@ export default function ExecutionDetailPage() {
 	              </div>
               <div className="flex items-center gap-3">
                 <div className="font-mono text-[10px] text-theme-muted">
-                  {Array.from(nodeStates.values()).filter(state => state.status === 'completed').length}/{nodeStates.size} nodes
+                  {displayNodeStates.size} nodes{upcomingNodeCount > 0 ? ` · ${upcomingNodeCount} upcoming` : ''}
                 </div>
+                {mainView === 'trace' && (
+                  <button
+                    type="button"
+                    onClick={() => setTraceTimelineOpen(open => !open)}
+                    className={`btn-ghost text-xs ${traceTimelineOpen ? 'text-accent' : ''}`}
+                    title="Toggle node execution timeline"
+                  >
+                    Timeline
+                    {tracesForTimeline.length > 0 && (
+                      <span className="ml-1 font-mono text-[10px] tabular-nums text-theme-subtle">
+                        {tracesForTimeline.length}
+                      </span>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
             <div className="flex-1 min-h-0 overflow-hidden">
 	              {mainView === 'graph' ? (
-	                <LiveGraph
+	                <CompactExecutionGraph
 	                  workflow={workflow}
-	                  nodeStates={nodeStates}
+	                  nodeStates={displayNodeStates}
 	                  selectedNode={selectedNode}
 	                  onSelectNode={inspectNode}
-	                  spawnCounts={(children ?? []).reduce((acc: Record<string, number>, c) => {
-                    if (c.parentCaller) acc[c.parentCaller] = (acc[c.parentCaller] ?? 0) + 1;
-                    return acc;
-                  }, {})}
 	                />
 	              ) : mainView === 'logs' ? (
 	                <ExecutionLogsPanel
@@ -3569,27 +4034,6 @@ export default function ExecutionDetailPage() {
 	                />
 	              ) : (
 	                <div className="flex h-full min-h-0 flex-col overflow-hidden bg-app-card">
-                  <div className="border-b border-app px-4 py-2 flex items-center justify-between gap-3 bg-surface-50">
-                    <div>
-                      <div className="text-[12px] font-semibold text-theme-primary">Trace</div>
-                      <div className="text-[10px] font-mono text-theme-muted">
-                        {tracesForTimeline.length} timeline {tracesForTimeline.length === 1 ? 'entry' : 'entries'}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setTraceTimelineOpen(open => !open)}
-                      className={`btn-ghost text-xs ${traceTimelineOpen ? 'text-accent' : ''}`}
-                      title="Toggle node execution timeline"
-                    >
-                      Timeline
-                      {tracesForTimeline.length > 0 && (
-                        <span className="ml-1 px-1 py-px rounded-sm bg-accent-soft text-accent text-[10px] font-mono tabular-nums">
-                          {tracesForTimeline.length}
-                        </span>
-                      )}
-                    </button>
-                  </div>
                   {traceTimelineOpen && (
                     <div className="border-b border-app p-4">
                       <GanttTimeline
@@ -3601,6 +4045,7 @@ export default function ExecutionDetailPage() {
                   <WorkflowTraceTable
                     nodeStates={nodeStates}
                     traces={traces}
+                    workflowNodes={workflowNodeNames}
                     selectedNode={selectedNode}
                     onSelectNode={inspectNode}
                   />
@@ -3611,14 +4056,19 @@ export default function ExecutionDetailPage() {
 
           {/* Right: Run context + Node detail — resizable */}
           <div
-            className="min-h-0 overflow-hidden shrink-0 bg-surface border-l-2 border-app hover:border-accent-blue/50 transition-colors relative flex flex-col"
-            style={{ width: `${rightPanelView === 'artifacts' ? artifactRightWidth : rightWidth}%` }}
+            className="v8-execution-inspector min-h-0 overflow-hidden shrink-0 bg-surface border-l-2 border-app hover:border-accent-blue/50 transition-colors relative flex flex-col"
+            style={{ width: rightPanelView === 'artifacts' ? `${artifactRightWidth}%` : rightWidth }}
           >
             {/* Invisible resize grab zone on the left edge */}
             <div
               className="absolute top-0 left-0 bottom-0 w-2 cursor-col-resize z-10"
               onMouseDown={rightPanelView === 'artifacts' ? artifactRightResizeStart : rightResizeStart}
             />
+            <div className="exr-tabs" role="tablist" aria-label="Run inspector">
+              <button type="button" role="tab" aria-selected={rightPanelView === 'node'} className={rightPanelView === 'node' ? 'on' : ''} onClick={() => setRightPanelView('node')}>Node</button>
+              <button type="button" role="tab" aria-selected={rightPanelView === 'rerun'} className={rightPanelView === 'rerun' ? 'on' : ''} onClick={() => setRightPanelView('rerun')}>Rerun {checkpointCount != null && checkpointCount > 0 ? <span>{checkpointCount}</span> : null}</button>
+              <button type="button" role="tab" aria-selected={rightPanelView === 'artifacts'} className={rightPanelView === 'artifacts' ? 'on' : ''} onClick={() => setRightPanelView('artifacts')}>Artifacts {artifactCount != null && artifactCount > 0 ? <span>{artifactCount}</span> : null}</button>
+            </div>
             <div className="min-h-0 flex-1 overflow-hidden">
 	              {rightPanelView === 'rerun' ? (
 	                <div className="h-full overflow-auto bg-app-card p-4">
@@ -3669,6 +4119,9 @@ export default function ExecutionDetailPage() {
           </div>
         </div>
       </div>
+
+      <p className="v8-execution-detail__audit-note">Execution detail · every run keeps its prompt, response, tools, and context for audit</p>
+      </>}
 
       {/* Inline human-input dialog — brought back for clarification flows
           that carry reviewable content. The legacy /interventions/:id page

@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Loader2, RefreshCw, Check, Plus, FileText, FolderGit2, MessageSquare, ExternalLink, Upload, Folder, Palette, Sparkles, Trash2 } from 'lucide-react';
 import Select from '../components/common/Select';
+import ProviderIcon, { providerIconColor } from '../components/common/ProviderIcon';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import {
   designStudio,
@@ -69,35 +70,36 @@ export default function DesignStudioWorkspacePage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-app px-6 py-5">
-      <button className="mb-4 inline-flex w-fit items-center gap-1.5 rounded-md px-1 py-1 text-[12px] text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary" onClick={() => navigate('/studio')}>
-        <ArrowLeft className="h-3.5 w-3.5" /> All workspaces
+    <div className="v8-page v8-design-workspace-page overflow-y-auto">
+      <div className="v8-page__wrap v8-design-workspace-page__wrap">
+      <button className="v8-design-back" onClick={() => navigate('/studio')}>
+        <ArrowLeft /> All Allen Design workspaces
       </button>
-      <header className="mb-5 rounded-md border border-app bg-app-card px-5 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+      <header className="v8-design-workspace-head">
+        <div className="v8-design-workspace-head__row">
           <div className="min-w-0">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <WorkspaceKindBadge ws={ws} />
+            <div className="v8-design-workspace-badges">
               <StatusBadge status={ws.profileStatus} />
+              <WorkspaceKindBadge ws={ws} />
             </div>
-            <h1 className="truncate text-[22px] font-semibold text-theme-primary">{ws.name}</h1>
-            <p className="mt-1 max-w-3xl truncate font-mono text-[11px] text-theme-muted">
+            <h1>{ws.name}</h1>
+            <p className="mono">
               {ws.kind === 'repo' ? ws.sourceRepoPath || 'Repository workspace' : 'Greenfield design workspace'}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <button className="btn btn-secondary btn-sm gap-1.5 !rounded-md" onClick={() => openWorkspacePreview(ws._id)} disabled={files.length === 0}>
-              <ExternalLink className="h-3.5 w-3.5" /> Preview
+          <div className="v8-design-actions">
+            <button className="v8-btn v8-btn--ghost" onClick={() => openWorkspacePreview(ws._id)} disabled={files.length === 0}>
+              <ExternalLink /> Preview
             </button>
             <ExportWorkspaceButton workspaceId={ws._id} disabled={files.length === 0} />
             {ws.kind === 'repo' && (
               <button
-                className="btn btn-secondary btn-sm gap-1.5 !rounded-md text-accent-red hover:bg-accent-red/10 hover:text-accent-red"
+                className="v8-design-danger"
                 onClick={() => setDeleteOpen(true)}
                 disabled={deleting}
-                title="Remove this repository from Design Studio"
+                title="Remove this repository from Allen Design"
               >
-                {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                {deleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
                 Delete
               </button>
             )}
@@ -119,10 +121,10 @@ export default function DesignStudioWorkspacePage() {
       )}
       <DeleteConfirmDialog
         open={deleteOpen}
-        resourceType="Design Studio repository"
+        resourceType="Allen Design repository"
         resourceName={ws.name}
-        title="Delete Design Studio repository"
-        description="This removes the repository from Design Studio, including its design profile, sessions, messages, and generated versions. It does not delete the source repository checkout."
+        title="Delete Allen Design repository"
+        description="This removes the repository from Allen Design, including its design profile, sessions, messages, and generated versions. It does not delete the source repository checkout."
         confirmLabel="Delete repository"
         busy={deleting}
         onConfirm={deleteWorkspace}
@@ -131,14 +133,15 @@ export default function DesignStudioWorkspacePage() {
           setDeleteError(null);
         }}
       />
+      </div>
     </div>
   );
 }
 
 function WorkspaceKindBadge({ ws }: { ws: Workspace }) {
   return (
-    <span className="inline-flex h-7 items-center gap-1.5 rounded-md border border-app bg-app px-2 text-[12px] font-medium text-theme-secondary">
-      {ws.kind === 'repo' ? <FolderGit2 className="h-3.5 w-3.5 text-accent" /> : <Sparkles className="h-3.5 w-3.5 text-accent" />}
+    <span className="v8-design-kind">
+      {ws.kind === 'repo' ? <FolderGit2 /> : <Sparkles />}
       {ws.kind === 'repo' ? 'Repository' : 'New idea'}
     </span>
   );
@@ -153,7 +156,7 @@ function StatusBadge({ status }: { status: Workspace['profileStatus'] }) {
     confirmed: { label: 'Ready', cls: 'border-accent-green/25 bg-accent-green/10 text-accent-green' },
   };
   const item = map[status];
-  return <span className={`inline-flex h-7 items-center rounded-md border px-2 text-[12px] font-medium ${item.cls}`}>{item.label}</span>;
+  return <span className={`v8-design-status ${status === 'confirmed' ? 'ready' : status === 'analyzing' ? 'analyzing' : status === 'pending' ? 'setup' : 'review'} ${item.cls}`}>{item.label}</span>;
 }
 
 async function openWorkspacePreview(workspaceId: string, file = 'index.html') {
@@ -173,8 +176,8 @@ function ExportWorkspaceButton({ workspaceId, disabled }: { workspaceId: string;
     }
   }
   return (
-    <button className="btn btn-primary btn-sm gap-1.5 !rounded-md" onClick={exportWorkspace} disabled={disabled || busy} title="Exports to Downloads/Allen Design Studio">
-      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Export
+    <button className="v8-btn v8-btn--ghost" onClick={exportWorkspace} disabled={disabled || busy} title="Exports to Downloads/Allen Design">
+      {busy ? <Loader2 className="animate-spin" /> : <Upload />} Export
     </button>
   );
 }
@@ -211,7 +214,7 @@ function RepoSetup({ ws, onChange }: { ws: Workspace; onChange: () => Promise<vo
             <div>
               <h2 className="text-[15px] font-semibold text-theme-primary">Repository analysis</h2>
               <p className="mt-1 text-[13px] leading-relaxed text-theme-muted">
-                Analyze the source repo to build the Design Studio kit: tokens, typography, components, icons, and layout patterns.
+                Analyze the source repo to build the Allen Design kit: tokens, typography, components, icons, and layout patterns.
               </p>
             </div>
           </div>
@@ -224,7 +227,11 @@ function RepoSetup({ ws, onChange }: { ws: Workspace; onChange: () => Promise<vo
               searchPlaceholder="Search models..."
               options={[
                 { value: '', label: 'Default Opus model' },
-                ...models.map((m) => ({ value: `${m.provider}::${m.model}`, label: m.label })),
+                ...models.map((m) => ({
+                  value: `${m.provider}::${m.model}`,
+                  label: m.label,
+                  icon: <ProviderIcon provider={m.provider} className={`h-4 w-4 ${providerIconColor(m.provider)}`} />,
+                })),
               ]}
             />
           </label>
@@ -281,7 +288,7 @@ function ProfileReview({ ws, onChange }: { ws: Workspace; onChange: () => Promis
           </div>
           <StatusBadge status={ws.profileStatus} />
         </div>
-        <p className="mb-3 text-[12px] text-theme-muted">This profile feeds the Design Studio kit and every design chat in this workspace.</p>
+        <p className="mb-3 text-[12px] text-theme-muted">This profile feeds the Allen Design kit and every design chat in this workspace.</p>
         <textarea className="input min-h-[170px] w-full rounded-md font-mono text-[12px]" value={summary} onChange={(e) => setSummary(e.target.value)} />
         {(profile.typography || profile.spacing || profile.iconography || profile.layoutPatterns) && (
           <div className="mt-3 grid gap-2 md:grid-cols-2">
@@ -448,82 +455,76 @@ function ConfirmedWorkspace({ ws, sessions, files, repoChanged, onChange, onOpen
   }
 
   return (
-    <div className="grid min-h-0 gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-      <main className="space-y-5">
+    <div className="v8-design-confirmed">
       {repoChanged && (
-        <div className="flex items-center justify-between gap-3 rounded-md border border-accent-yellow/40 bg-accent-yellow/10 px-4 py-3">
-          <span className="text-[12px] text-amber-600">This repository changed since the profile was built. Refresh the profile or keep the current one.</span>
-          <button className="btn btn-secondary btn-sm shrink-0" onClick={updateRepoContext} disabled={busy || refreshBusy}>Refresh profile</button>
+        <div className="v8-design-banner">
+          <span>This repository changed since the profile was built. Refresh the profile or keep the current one.</span>
+          <button className="v8-btn v8-btn--ghost" onClick={updateRepoContext} disabled={busy || refreshBusy}>Refresh profile</button>
         </div>
       )}
 
       <AnalysisSummary ws={ws} files={files} onRefresh={updateRepoContext} refreshBusy={refreshBusy} refreshError={refreshError} />
 
-      <section className="rounded-md border border-app bg-app-card">
-        <div className="flex items-center justify-between gap-3 border-b border-app px-4 py-3">
+      <div className="v8-design-workspace-cols">
+      <section className="v8-design-panel">
+        <div className="v8-design-panelhead">
           <div>
-            <h3 className="text-[14px] font-semibold text-theme-primary">Design chats</h3>
-            <p className="mt-0.5 text-[12px] text-theme-muted">Plan, create, and iterate design groups for this workspace.</p>
+            <h3>Design chats</h3>
+            <p>Plan, create, and iterate design groups for this workspace.</p>
           </div>
-          <button className="btn btn-primary btn-sm inline-flex items-center gap-1.5 !rounded-md" onClick={newSession} disabled={busy}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} New design chat
+          <button className="v8-btn v8-btn--ink" onClick={newSession} disabled={busy}>
+            {busy ? <Loader2 className="animate-spin" /> : <Plus />} New design chat
           </button>
         </div>
         {sessions.length === 0 ? (
-          <div className="p-8 text-center text-[13px] text-theme-muted">
+          <div className="v8-design-panel-empty">
             No design chats yet. Start one to create the first design group.
           </div>
         ) : (
-          <div className="divide-y divide-app">
+          <div>
             {sessions.map((s) => (
-              <button key={s._id} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-app-muted" onClick={() => onOpenSession(s._id)}>
-                <span className="flex min-w-0 items-center gap-3">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-app bg-app text-theme-muted">
-                    <MessageSquare className="h-4 w-4" />
+              <button key={s._id} className="v8-design-chatrow" onClick={() => onOpenSession(s._id)}>
+                <span className="v8-design-rowicon">
+                    <MessageSquare />
                   </span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-[13px] font-medium text-theme-primary">{s.title}</span>
-                    <span className="block font-mono text-[10.5px] text-theme-muted">{s.messageCount} message{s.messageCount === 1 ? '' : 's'}</span>
-                  </span>
+                  <span className="v8-design-rowmain">
+                    <b>{s.title}</b>
+                    <span>{s.messageCount} message{s.messageCount === 1 ? '' : 's'}</span>
                 </span>
-                <span className="shrink-0 text-[11px] text-theme-muted">{new Date(s.lastMessageAt).toLocaleString()}</span>
+                <span className="v8-design-rowtime">{new Date(s.lastMessageAt).toLocaleString()}</span>
               </button>
             ))}
           </div>
         )}
       </section>
-      </main>
 
-      <aside className="space-y-5">
-        <section className="rounded-md border border-app bg-app-card">
-          <div className="border-b border-app px-4 py-3">
-            <h3 className="text-[14px] font-semibold text-theme-primary">Design folders</h3>
-            <p className="mt-0.5 text-[12px] text-theme-muted">Generated groups in this workspace.</p>
+        <section className="v8-design-panel">
+          <div className="v8-design-panelhead">
+            <div>
+            <h3>Design folders</h3>
+            <p>Generated groups in this workspace.</p>
+            </div>
           </div>
           {grouped.designGroups.length === 0 ? (
-            <div className="p-5 text-[13px] text-theme-muted">No design folders yet.</div>
+            <div className="v8-design-panel-empty">No design folders yet.</div>
           ) : (
-            <div className="divide-y divide-app">
+            <div>
               {grouped.designGroups.map((group) => (
-                <div key={group.slug} className="px-4 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Folder className="h-4 w-4 shrink-0 text-accent" />
-                      <div className="min-w-0">
-                        <p className="truncate text-[13px] font-medium text-theme-primary">{group.slug.replace(/[-_]+/g, ' ')}</p>
-                        <p className="font-mono text-[10.5px] text-theme-muted">{group.files.length} HTML file{group.files.length === 1 ? '' : 's'}</p>
-                      </div>
-                    </div>
-                    <button className="rounded-md p-1.5 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary" onClick={() => openWorkspacePreview(ws._id, `designs/${group.slug}/index.html`)} aria-label={`Open ${group.slug}`}>
-                      <ExternalLink className="h-3.5 w-3.5" />
+                <div key={group.slug} className="v8-design-folderrow">
+                    <span className="v8-design-rowicon"><Folder /></span>
+                    <span className="v8-design-rowmain">
+                        <b>{group.slug.replace(/[-_]+/g, ' ')}</b>
+                        <span>{group.files.length} HTML file{group.files.length === 1 ? '' : 's'}</span>
+                    </span>
+                    <button onClick={() => openWorkspacePreview(ws._id, `designs/${group.slug}/index.html`)} aria-label={`Open ${group.slug}`}>
+                      <ExternalLink />
                     </button>
-                  </div>
                 </div>
               ))}
             </div>
           )}
         </section>
-      </aside>
+      </div>
     </div>
   );
 }
@@ -540,8 +541,8 @@ function AnalysisSummary({ ws, files, onRefresh, refreshBusy, refreshError }: {
   const hasProMax = files.some((file) => file.path === 'system/pro-max.md' || file.path === 'system/pro-max.json');
   const hasRepoContext = files.some((file) => file.path === 'system/repo-context.md' || file.path === 'system/repo-context.json');
   return (
-    <section className="rounded-md border border-app bg-app-card">
-      <div className="flex items-center justify-between gap-3 border-b border-app px-4 py-3">
+    <section className="v8-design-panel v8-design-summary">
+      <div className="v8-design-panelhead">
         <div>
           <h3 className="text-[14px] font-semibold text-theme-primary">Repository analysis complete</h3>
           <p className="mt-0.5 text-[12px] text-theme-muted">
@@ -552,7 +553,7 @@ function AnalysisSummary({ ws, files, onRefresh, refreshBusy, refreshError }: {
           <span className="inline-flex h-7 items-center rounded-md border border-app bg-app px-2 font-mono text-[10.5px] text-theme-muted">{systemCount} system files</span>
           {ws.kind === 'repo' && onRefresh && (
             <button
-              className="btn btn-secondary btn-sm inline-flex items-center gap-1.5 !rounded-md"
+              className="v8-btn v8-btn--ghost"
               onClick={onRefresh}
               disabled={refreshBusy}
               title="Re-run analysis and refresh all repo context, design tokens, components, and Pro Max intelligence"
@@ -567,7 +568,7 @@ function AnalysisSummary({ ws, files, onRefresh, refreshBusy, refreshError }: {
         <div className="border-b border-app px-4 py-2 text-[12px] text-accent-red">{refreshError}</div>
       )}
       {profile ? (
-        <div className="grid gap-3 p-4 md:grid-cols-6">
+        <div className="v8-design-metrics">
           <MetricCard label="Colors" value={String(profile.colors.length)} />
           <MetricCard label="Components" value={String(profile.components?.length ?? 0)} />
           <MetricCard label="Typography" value={profile.typography ? 'Captured' : 'Default'} />
@@ -584,9 +585,9 @@ function AnalysisSummary({ ws, files, onRefresh, refreshBusy, refreshError }: {
 
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-app bg-app px-3 py-2">
-      <p className="font-mono text-[10.5px] uppercase text-theme-muted">{label}</p>
-      <p className="mt-1 truncate text-[13px] font-medium text-theme-primary">{value}</p>
+    <div className="v8-design-metric">
+      <span>{label}</span>
+      <b>{value}</b>
     </div>
   );
 }

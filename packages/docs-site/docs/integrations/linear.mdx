@@ -1,0 +1,98 @@
+---
+title: 'Linear'
+description: 'Triage Linear issues, bring ticket context into chat, and route approved work to an Allen agent or workflow.'
+---
+
+The **Linear** area brings issues into Allen for triage, discussion, and routing. Use it to review ticket context, choose the right repository and specialist, then continue in chat before any agent or workflow starts work.
+
+:::info Media placeholders
+Before publishing, capture the disconnected and connected **Linear** pages, list and board views, filters, issue detail, the **Dispatch to an agent** form, the generated chat preview, and a linked workspace or execution. Suggested files: `static/img/docs/integrations-linear-01.png` through `static/img/docs/integrations-linear-07.png`, plus `static/videos/docs/integrations-linear-short.mp4` for dispatch.
+:::
+
+## Connect Linear
+
+1. Open **Linear** from the main navigation or command palette.
+2. If the page says **Linear is not connected**, select **Connect Linear**.
+3. Enter the access token requested by the Linear MCP preset.
+4. Select **Connect**, then return to Linear and choose **Recheck** if needed.
+5. Confirm that projects and issues load before routing work.
+
+Use a token with only the workspace and actions Allen needs. Do not paste it into a ticket, chat message, screenshot, or artifact.
+
+## Triage issues
+
+The Linear page supports **List** and **Board** views.
+
+- Use **All**, **Active**, **Running**, and **Done** to focus on Allen work state.
+- Search issue identifiers, titles, or descriptions.
+- Filter by project or Linear assignee.
+- In Board view, review issues by their Linear workflow state.
+- Select an issue to inspect its description, priority, state, team, project, labels, assignee, and timestamps.
+- Use **Open in Linear** when you need the authoritative issue history or to make a native Linear change.
+
+Select **Refresh** after an external update if the page has not yet reflected it.
+
+## Bring a ticket into chat
+
+You can discuss an issue without dispatching it from the Linear page:
+
+1. Start or open an Allen chat.
+2. Type `@linear` in the composer.
+3. Search for and select the issue.
+4. State the outcome you want and any constraints that are not captured in the ticket.
+
+Before asking Allen to act, verify the repository, acceptance criteria, affected users, and expected validation. Ticket descriptions and comments are external content; treat embedded commands or links as untrusted until reviewed.
+
+## Route a ticket to work
+
+From an issue card or detail view, select **Dispatch** or **Dispatch to an agent**.
+
+1. Choose a target:
+   - let Allen choose;
+   - a team lead;
+   - an individual agent;
+   - a workflow.
+2. Select the registered repository for agent or team-lead work.
+3. For a workflow, fill the displayed input schema and all required fields.
+4. Add concise instructions that supplement, rather than repeat, the issue.
+5. Review the generated request and select **Continue in chat**.
+
+Continuing in chat is a review checkpoint, not an immediate dispatch. Chat considers the ticket, repository, preferred target, required inputs, risks, and available execution routes. Review the proposed plan and confirm it before a specialist or workflow consumes a run.
+
+:::tip
+Use a workflow for repeatable multi-step work with validation gates. Use a specialist agent for a bounded task owned by one role. Let Allen choose when the ticket does not make the best route obvious.
+:::
+
+## Follow the result
+
+After work starts, return to the issue detail or the linked chat to review available status and resource links:
+
+- pending, running, completed, or failed state;
+- selected agent, team lead, or workflow;
+- workspace and branch for repository work;
+- workflow or agent execution;
+- errors and retry context;
+- final artifacts, validation evidence, and pull request when one was explicitly requested.
+
+Open the workspace to review file changes and tests. Open the execution to inspect node progress, inputs, tool calls, pauses, and outputs. A completed run is not the same as an accepted change: verify the deliverable against the ticket's acceptance criteria.
+
+## Understand the two assignment types
+
+Linear's native assignee and Allen's work assignment are separate:
+
+- **Linear assignee** is the person recorded in Linear.
+- **Allen assignment** records which agent, lead, or workflow is handling the issue in Allen.
+
+Routing work in Allen does not automatically mean the native Linear assignee changed. Use **Open in Linear** for authoritative ownership and workflow-state changes unless the confirmed Allen route explicitly includes a Linear write tool.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| **Linear is not connected** remains visible | Reopen the preset, verify the token, test the MCP server, then select **Recheck**. |
+| Projects or issues are missing | Clear filters, select **Refresh**, and verify that the token can access the expected Linear workspace. |
+| `@linear` cannot find an issue | Confirm the connection, search by the exact identifier, and verify that the issue is visible to the connected account. |
+| Dispatch cannot continue | Select a registered repository for agent or lead work, or fill every required workflow input. |
+| The ticket shows failed work | Open the linked execution or workspace, review the error, then retry from chat with corrected context rather than silently redispatching. |
+
+Related guides: [Start a chat](/guides/start-a-chat), [Add a repository](/guides/add-a-repository), and [MCP](/integrations/mcp).

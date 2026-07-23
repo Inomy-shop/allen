@@ -4,7 +4,7 @@
  * Compact, metadata-first layout: actor, line anchor, and time live in one row.
  * Reply and resolve actions expand inline so the thread stays in context.
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import {
   MessageSquare, MessageSquareOff, CheckCircle2, RotateCcw,
   AlertTriangle, User, Bot, X as XIcon, RefreshCw, Send,
@@ -15,17 +15,17 @@ import type { DocumentCommentDoc } from '../../services/documents';
 export interface CommentPanelProps {
   documentId: string;
   currentVersion: number;
+  comments: DocumentCommentDoc[];
+  loading?: boolean;
+  error?: string | null;
   onClose: () => void;
   onJumpToAnchor: (anchor: DocumentCommentDoc['anchor']) => void;
-  onCommentsChanged?: () => void;
+  onCommentsChanged: (updates?: DocumentCommentDoc[]) => void | Promise<void>;
 }
 
 export default function CommentPanel({
-  documentId, currentVersion, onClose, onJumpToAnchor, onCommentsChanged,
+  documentId, currentVersion, comments, loading = false, error, onClose, onJumpToAnchor, onCommentsChanged,
 }: CommentPanelProps) {
-  const [comments, setComments] = useState<DocumentCommentDoc[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<'open' | 'resolved' | 'stale' | 'all'>('open');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
@@ -34,21 +34,7 @@ export default function CommentPanel({
   const [resolutionNote, setResolutionNote] = useState('');
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await documentsApi.listComments(documentId, 'all');
-      setComments(data);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [documentId]);
-
-  useEffect(() => { load(); }, [load]);
+  const [resolvingAll, setResolvingAll] = useState(false);
 
   const threads = comments
     .filter(c => !c.parentCommentId)
@@ -64,13 +50,12 @@ export default function CommentPanel({
     setResolvingId(commentId);
     setActionError(null);
     try {
-      await documentsApi.resolveComment(documentId, commentId, {
+      const updated = await documentsApi.resolveComment(documentId, commentId, {
         resolutionNote: resolutionNote.trim() || 'Resolved',
       });
       setResolutionNote('');
       setResolvingCommentId(null);
-      load();
-      onCommentsChanged?.();
+      await onCommentsChanged([updated]);
     } catch (err) {
       setActionError((err as Error).message);
     } finally {
@@ -81,9 +66,8 @@ export default function CommentPanel({
   async function handleReopen(commentId: string) {
     setActionError(null);
     try {
-      await documentsApi.reopenComment(documentId, commentId);
-      load();
-      onCommentsChanged?.();
+      const updated = await documentsApi.reopenComment(documentId, commentId);
+      await onCommentsChanged([updated]);
     } catch (err) {
       setActionError((err as Error).message);
     }
@@ -94,11 +78,10 @@ export default function CommentPanel({
     setReplyingId(commentId);
     setActionError(null);
     try {
-      await documentsApi.replyToComment(documentId, commentId, { body: replyText.trim() });
+      const reply = await documentsApi.replyToComment(documentId, commentId, { body: replyText.trim() });
       setReplyText('');
       setReplyingTo(null);
-      load();
-      onCommentsChanged?.();
+      await onCommentsChanged([reply]);
     } catch (err) {
       setActionError((err as Error).message);
     } finally {
@@ -106,14 +89,32 @@ export default function CommentPanel({
     }
   }
 
+  const openCount = comments.filter(comment => !comment.parentCommentId && comment.status === 'open').length;
+
+  async function handleResolveAll() {
+    if (openCount === 0) return;
+    setResolvingAll(true);
+    setActionError(null);
+    try {
+      const result = await documentsApi.resolveAllComments(documentId, {
+        resolutionNote: 'Addressed in the current document version.',
+      });
+      await onCommentsChanged(result.comments);
+    } catch (err) {
+      setActionError((err as Error).message);
+    } finally {
+      setResolvingAll(false);
+    }
+  }
+
   return (
-    <div className="flex h-full w-[400px] shrink-0 flex-col border-l border-app bg-app-card">
+    <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-app bg-app-card">
       <div className="shrink-0 border-b border-app px-3 py-2.5">
         <div className="flex items-center gap-2">
           <MessageSquare className="h-4 w-4 shrink-0 text-theme-muted" />
           <h3 className="flex-1 truncate text-[13px] font-semibold text-theme-primary">Comments</h3>
           <button
-            onClick={load}
+            onClick={() => { void onCommentsChanged(); }}
             disabled={loading}
             className="rounded p-1 text-theme-muted transition-colors hover:bg-app-muted hover:text-theme-primary disabled:opacity-50"
             title="Refresh"
@@ -143,6 +144,14 @@ export default function CommentPanel({
               {f === 'open' ? 'Open' : f === 'resolved' ? 'Resolved' : f === 'stale' ? 'Stale' : 'All'}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={() => void handleResolveAll()}
+            disabled={openCount === 0 || resolvingAll}
+            className="ml-auto rounded px-2 py-0.5 font-mono text-[10px] text-accent-green transition-colors hover:bg-accent-green/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {resolvingAll ? 'Resolving…' : `Resolve all${openCount > 0 ? ` (${openCount})` : ''}`}
+          </button>
         </div>
       </div>
 

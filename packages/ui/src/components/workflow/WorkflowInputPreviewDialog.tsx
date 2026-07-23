@@ -51,10 +51,10 @@ export default function WorkflowInputPreviewDialog({ inputSchema, onClose }: Pro
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md"
+      className="v8-activity-backdrop fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md"
       onClick={onClose}
     >
-      <div className="card w-full max-w-lg overflow-hidden shadow-popover" onClick={(event) => event.stopPropagation()}>
+      <div className="v8-activity-modal card w-full max-w-lg overflow-hidden shadow-popover" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-app px-5 py-4">
           <div>
             <h2 className="text-[14px] font-semibold text-theme-primary">Preview Workflow Input</h2>

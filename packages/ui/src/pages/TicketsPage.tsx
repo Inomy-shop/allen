@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import {
@@ -14,7 +14,6 @@ import { renderMarkdown } from '../components/chat/ChatMessageList';
 import { type AgentOption, type TeamOption } from '../components/agents/AgentAssignDropdown';
 import DispatchModal, { type DispatchTarget, type WorkflowOption } from '../components/linear/DispatchModal';
 import RunStatusCard from '../components/executions/RunStatusCard';
-import Select from '../components/common/Select';
 import { workspaceChatPath } from '../lib/workspace-routes';
 import {
   AlertCircle, ChevronDown, ChevronRight, Circle, Clock, ExternalLink,
@@ -260,7 +259,7 @@ export default function TicketsPage() {
   // to satisfy React's rules of hooks.
   type TopTab = 'all' | 'active' | 'done' | 'running';
   const [topTab, setTopTab] = useState<TopTab>('all');
-  const [viewMode, setViewMode] = useState<'list' | 'board'>('board');
+  const [viewMode, setViewMode] = useState<'list' | 'board'>('list');
   useEffect(() => {
     if (topTab === 'active') setStateFilters(new Set<StateType>(['started', 'unstarted']));
     else if (topTab === 'done') setStateFilters(new Set<StateType>(['completed']));
@@ -508,381 +507,230 @@ export default function TicketsPage() {
 
   // ── Render ───────────────────────────────────────────────────────────────
 
+  const linearTitle = status?.workspaceName ?? 'Linear';
+  const linearPageHead = (
+    <div className="v8-pagehead v8-linear-head">
+      <div>
+        <h1 className="v8-linear-title">
+          <svg viewBox="0 0 100 100" width="15" height="15" fill="#5E6AD2" aria-hidden="true">
+            <path d="M1.6 61.3c-.3-1.4 1.3-2.3 2.3-1.3l36.1 36.1c1 1 .1 2.6-1.3 2.3C20.2 94.4 5.6 79.8 1.6 61.3ZM.1 46.4c0 .4.2.8.5 1.1l52 52c.3.3.7.5 1.1.5 3-.2 6-.7 8.8-1.5.7-.2 1-1.1.4-1.7L2.7 37.1c-.5-.5-1.5-.3-1.7.4-.5 2.9-1 5.8-.9 8.9Zm5-19.3c-.2.5-.1 1.1.3 1.5l66 66c.4.4 1 .5 1.5.3 2.3-1 4.5-2.2 6.6-3.6.6-.4.7-1.3.2-1.8L9.9 20c-.5-.5-1.4-.5-1.8.2-1.3 2.1-2.5 4.4-3 6.9Zm10-13.3c-.5-.5-.5-1.3 0-1.8C24 3.9 36.5-.6 50 .1c27.5 1.3 49.4 24.1 49.9 51.6.3 14-5.1 26.7-14 36-.5.5-1.3.5-1.8 0l-69-69Z" />
+          </svg>
+          Linear
+        </h1>
+        <p>{linearTitle} tickets ready for triage, dispatch, and follow-up.</p>
+      </div>
+      {status?.configured && !status.error && (
+        <>
+          <div className="v8-linear-segment" aria-label="Ticket view">
+            <button className={viewMode === 'list' ? 'on' : ''} onClick={() => setViewMode('list')} type="button">
+              <ListIcon /> List
+            </button>
+            <button className={viewMode === 'board' ? 'on' : ''} onClick={() => setViewMode('board')} type="button">
+              <LayoutGrid /> Board
+            </button>
+          </div>
+          <button
+            className="v8-icon-chip"
+            onClick={() => { void loadStatus(); void loadProjects(); void loadIssues(); }}
+            disabled={listLoading}
+            type="button"
+            aria-label="Refresh"
+          >
+            {listLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+          </button>
+        </>
+      )}
+    </div>
+  );
+
   if (statusLoading) {
     return (
-      <div className="content scroll-hide !p-0 h-full bg-app" data-screen-label="linear-tickets">
-        <div className="flex h-full w-full items-center justify-center gap-2 px-8 py-8 font-mono text-[11px] text-theme-muted">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking Linear connection...
+      <main className="v8-page" data-screen-label="linear-tickets">
+        <div className="v8-page__wrap">
+          {linearPageHead}
+          <div className="v8-filter-empty"><Loader2 className="v8-inline-spinner animate-spin" /> Checking Linear connection…</div>
         </div>
-      </div>
+      </main>
     );
   }
 
-  if (!status?.configured) {
-    const statusCheckFailed = Boolean(status?.error);
+  if (!status?.configured || status.error) {
+    const connectionError = status?.error;
     return (
-      <div className="content scroll-hide !p-0 h-full bg-app" data-screen-label="linear-tickets">
-        <div className="flex min-h-full w-full items-center justify-center px-8 py-8">
-        <div className="w-full max-w-[480px] rounded-md border border-app bg-app-card px-6 py-8 text-center">
-          <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-md border border-app bg-app text-accent">
-            <AlertCircle className="h-5 w-5" />
-          </span>
-          <div>
-            <h2 className="mt-5 text-[17px] font-semibold text-theme-primary">
-              {statusCheckFailed ? 'Could not check Linear' : 'Linear is not connected'}
-            </h2>
-            <p className="mt-2 text-[13px] text-theme-muted">
-              {statusCheckFailed
-                ? status?.error
-                : 'Add a Linear API token to Allen before tickets can be synced and dispatched.'}
+      <main className="v8-page" data-screen-label="linear-tickets">
+        <div className="v8-page__wrap">
+          {linearPageHead}
+          <div className="v8-empty v8-linear-empty">
+            <span className="glyph"><AlertCircle /></span>
+            <h2>{connectionError ? 'Could not reach Linear' : 'No tickets synced'}</h2>
+            <p>
+              {connectionError
+                ? connectionError
+                : 'Connect Linear under Settings → MCP servers and tickets appear here with dispatch-to-Allen.'}
             </p>
-          </div>
-          {!statusCheckFailed && (
-            <div className="mt-5 inline-flex items-center gap-2 rounded-md border border-app bg-app px-3 py-2 font-mono text-[11px] text-accent">
-              <KeyRound className="h-3.5 w-3.5" /> ALLEN_LINEAR_ACCESS_TOKEN
-            </div>
-          )}
-          <div className="mt-6 flex items-center justify-center gap-2">
-            {!statusCheckFailed && (
-              <button
-                onClick={() => setShowLinearModal(true)}
-                className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
-                type="button"
-              >
-                Connect Linear
+            <div className="v8-linear-empty-actions">
+              {!connectionError && <button className="v8-btn v8-btn--ink" onClick={() => setShowLinearModal(true)} type="button">Connect Linear</button>}
+              <button className="v8-linear-recheck" onClick={loadStatus} type="button">
+                <RefreshCw /> {connectionError ? 'Retry' : 'Recheck'}
               </button>
-            )}
-            <button
-              onClick={loadStatus}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
-              type="button"
-            >
-              <RefreshCw className="h-3.5 w-3.5" /> {statusCheckFailed ? 'Retry' : 'Recheck'}
-            </button>
+            </div>
           </div>
-        </div>
         </div>
         {showLinearModal && (
           <McpPresetConnectModal
             presetName="linear"
             onClose={() => setShowLinearModal(false)}
-            onConnected={() => {
-              setShowLinearModal(false);
-              void loadStatus();
-            }}
+            onConnected={() => { setShowLinearModal(false); void loadStatus(); }}
           />
         )}
-      </div>
-    );
-  }
-
-  if (status.configured && status.error) {
-    return (
-      <div className="content scroll-hide !p-0 h-full bg-app" data-screen-label="linear-tickets">
-        <div className="flex min-h-full w-full items-center justify-center px-8 py-8">
-        <div className="w-full max-w-[480px] rounded-md border border-accent-red/30 bg-accent-red/5 px-6 py-8 text-center">
-          <AlertCircle className="mx-auto h-6 w-6 text-accent-red" />
-          <h2 className="mt-4 text-[17px] font-semibold text-theme-primary">Could not reach Linear</h2>
-          <p className="mt-2 text-[13px] text-theme-muted">{status.error}</p>
-          <div className="mt-5 flex items-center justify-center gap-2">
-            <button
-              onClick={loadStatus}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
-              type="button"
-            >
-              <RefreshCw className="h-3.5 w-3.5" /> Retry
-            </button>
-          </div>
-        </div>
-        </div>
-      </div>
+      </main>
     );
   }
 
   const totalShown = topTab === 'running' ? runningIssues.length + recentCompletedIssues.length : filteredIssues.length;
   const activeCount = issues.filter(i => i.state.type === 'started' || i.state.type === 'unstarted').length;
-  const runningCount = issues.filter(i => isActiveRun(i.agentAssignee) || isCompletedRun(i.agentAssignee)).length;
+  const runningCount = issues.filter(i => isActiveRun(i.agentAssignee)).length;
+  const displayedGroups: IssueStateGroup[] = topTab === 'running'
+    ? [
+        { key: 'running-now', label: 'Running now', color: 'rgb(var(--color-accent))', type: 'started', issues: runningIssues },
+        { key: 'recent-completed', label: 'Recent completed', color: 'rgb(var(--color-accent-green))', type: 'completed', issues: recentCompletedIssues },
+      ].filter(group => group.issues.length > 0)
+    : groupedStateSections;
+
+  const labelNodes = (issue: LinearIssue) => (
+    <>
+      {issue.labels.slice(0, 2).map(label => (
+        <span className="v8-linear-label" style={{ '--label-color': label.color } as CSSProperties} key={label.id}>{label.name}</span>
+      ))}
+      {issue.labels.length > 2 && <span className="v8-linear-label more">+{issue.labels.length - 2}</span>}
+    </>
+  );
 
   return (
-    <div className="content scroll-hide !p-0 bg-app" data-screen-label="linear-tickets">
-      <div className="flex h-full w-full flex-col px-8 py-8">
-        <div className="mb-6 flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
-              <TicketCheck className="h-[18px] w-[18px]" />
-            </span>
-            <div>
-              <h1 className="text-[24px] font-semibold leading-tight text-theme-primary">Linear</h1>
-              <p className="mt-1 text-[13px] text-theme-muted">
-                {status.workspaceName ?? 'Linear'} tickets ready for triage, dispatch, and follow-up.
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 items-center rounded-md border border-app bg-app-card p-1">
-              <button
-                onClick={() => setViewMode('list')}
-                className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors ${
-                  viewMode === 'list' ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'
-                }`}
-                type="button"
-              >
-                <ListIcon className="h-3.5 w-3.5" /> List
-              </button>
-              <button
-                onClick={() => setViewMode('board')}
-                className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors ${
-                  viewMode === 'board' ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'
-                }`}
-                type="button"
-              >
-                <LayoutGrid className="h-3.5 w-3.5" /> Board
-              </button>
-            </div>
-            <button
-              onClick={() => { void loadStatus(); void loadProjects(); void loadIssues(); }}
-              disabled={listLoading}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-              type="button"
-            >
-              {listLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-              Refresh
-            </button>
-          </div>
-        </div>
+    <main className="v8-page" data-screen-label="linear-tickets">
+      <div className="v8-page__wrap">
+        {linearPageHead}
 
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-app bg-app-card px-3 py-2">
-          <div className="flex items-center gap-1">
+        <div className="v8-tabs v8-linear-tabs">
           {([
             { id: 'all', label: 'All', count: issues.length },
             { id: 'active', label: 'Active', count: activeCount },
             { id: 'running', label: 'Running', count: runningCount },
             { id: 'done', label: 'Done' },
-          ] as { id: TopTab; label: string; count?: number }[]).map(t => (
-            <button
-              key={t.id}
-              onClick={() => setTopTab(t.id)}
-              className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[12px] font-medium transition-colors ${
-                topTab === t.id
-                  ? 'bg-app-muted text-theme-primary shadow-sm'
-                  : 'text-theme-muted hover:text-theme-primary'
-              }`}
-              type="button"
-            >
-              {t.label}
-              {t.count != null && <span className="font-mono text-[11px] text-theme-muted">{t.count}</span>}
+          ] as { id: TopTab; label: string; count?: number }[]).map(tab => (
+            <button className={topTab === tab.id ? 'on' : ''} key={tab.id} onClick={() => setTopTab(tab.id)} type="button">
+              {tab.label}{tab.count != null && <span>{tab.count}</span>}
             </button>
           ))}
-          </div>
-          <span className="font-mono text-[11px] text-theme-muted">{totalShown} shown</span>
+          <span className="v8-tabs__spacer" />
+          <label className="v8-search v8-linear-search">
+            <Search />
+            <input value={search} onChange={event => setSearch(event.target.value)} type="text" placeholder="Search issues…" />
+          </label>
+          <label className="v8-linear-select">
+            <select className="select-native" value={projectFilter} onChange={event => setProjectFilter(event.target.value)} aria-label="Project filter">
+              {projectOptions.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label className="v8-linear-select">
+            <select className="select-native" value={assigneeFilter} onChange={event => setAssigneeFilter(event.target.value)} aria-label="Assignee filter">
+              {assigneeOptions.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}
+            </select>
+          </label>
         </div>
 
-      {/* ── Filter row + main list ──────────────────────────────────────── */}
-      <div className="relative flex min-h-0 flex-1 overflow-hidden">
-        <div className="min-h-0 w-full overflow-y-auto">
-          <div className="space-y-4">
-            {/* Filter row */}
-            <div className="flex flex-wrap items-center gap-3 rounded-md border border-app bg-app-card px-3 py-3 text-[12px] text-theme-muted">
-              <div className="relative min-w-[260px] flex-1">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  placeholder="Search issues…"
-                  className="h-9 w-full rounded-md border border-app bg-app-muted pl-8 pr-3 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
-                />
-              </div>
-              <Select
-                value={projectFilter}
-                onChange={setProjectFilter}
-                options={projectOptions}
-                placeholder="All projects"
-                searchPlaceholder="Search projects..."
-                className="w-[220px]"
-              />
-              <Select
-                value={assigneeFilter}
-                onChange={(value) => setAssigneeFilter(value as 'any' | 'unassigned' | string)}
-                options={assigneeOptions}
-                placeholder="Any assignee"
-                searchPlaceholder="Search assignees..."
-                className="w-[200px]"
-              />
-              <span className="ml-auto font-mono text-[11px] text-theme-muted">{totalShown} of {issues.length}</span>
+        {viewMode === 'list' ? (
+          <div className="v8-linear-view">
+            <div className="v8-linear-panel">
+              {displayedGroups.map(group => {
+                const collapsed = collapsedGroups.has(group.key);
+                return (
+                  <section className="v8-linear-group" key={group.key}>
+                    <button className="v8-linear-grouphead" onClick={() => toggleGroupCollapsed(group.key)} type="button">
+                      {collapsed ? <ChevronRight /> : <ChevronDown />}
+                      <i style={{ background: group.color }} />
+                      <b>{group.label}</b>
+                      <span>{group.issues.length} issue{group.issues.length === 1 ? '' : 's'}</span>
+                    </button>
+                    {!collapsed && group.issues.map(issue => (
+                      <div className={`v8-linear-row${selectedId === issue.id ? ' active' : ''}`} key={issue.id}>
+                        <span className={`v8-linear-priority${issue.priority === 0 ? ' none' : ''}`} style={{ '--priority-color': issue.priority === 1 ? 'rgb(var(--color-accent-red))' : issue.priority === 2 ? 'rgb(var(--color-accent-orange))' : 'rgb(var(--color-text-subtle))' } as CSSProperties}><i /></span>
+                        <button className="v8-linear-id" onClick={() => setSelectedId(issue.id)} type="button">{issue.identifier}</button>
+                        <button className="v8-linear-row-title" onClick={() => setSelectedId(issue.id)} type="button">{issue.title}</button>
+                        <span className="v8-linear-labels">{labelNodes(issue)}</span>
+                        <span className="v8-linear-dispatch-wrap">
+                          <button className="v8-linear-dispatch" onClick={() => setDispatchFor(issue)} type="button">
+                            <Play /> Dispatch
+                          </button>
+                        </span>
+                        <time>{relative(issue.updatedAt).replace(' ago', '')}</time>
+                      </div>
+                    ))}
+                  </section>
+                );
+              })}
+              {listLoading && issues.length === 0 && <div className="v8-filter-empty"><Loader2 className="v8-inline-spinner animate-spin" /> Loading from Linear…</div>}
+              {!listLoading && displayedGroups.length === 0 && (
+                <div className="v8-empty v8-linear-empty">
+                  <span className="glyph"><TicketCheck /></span>
+                  <h2>No tickets synced</h2>
+                  <p>No tickets match the current filters.</p>
+                </div>
+              )}
             </div>
-
-            {topTab === 'running' ? (
-              <div className="space-y-3">
-                <div className="overflow-hidden rounded-md border border-app bg-app-card">
-                  <div className="flex items-center justify-between gap-2 border-b border-app px-4 py-3">
-                    <div>
-                      <div className="text-[13px] font-medium text-theme-primary">Running now</div>
-                      <div className="text-[10px] font-mono text-theme-muted">Pending and active ticket runs</div>
-                    </div>
-                    <span className="text-[11px] font-mono text-theme-muted">{runningIssues.length}</span>
-                  </div>
-                  {runningIssues.length > 0 ? (
-                    <div className="divide-y divide-border">
-                      {runningIssues.map(issue => (
-                        <TicketRow
-                          key={issue.id}
-                          issue={issue}
-                          active={issue.id === selectedId}
-                          onSelect={() => setSelectedId(issue.id)}
-                          onDispatch={() => setDispatchFor(issue)}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="px-4 py-8 text-center text-[12px] italic text-theme-muted">
-                      No ticket runs are active right now.
-                    </div>
-                  )}
-                </div>
-                <div className="overflow-hidden rounded-md border border-app bg-app-card">
-                  <div className="flex items-center justify-between gap-2 border-b border-app px-4 py-3">
-                    <div>
-                      <div className="text-[13px] font-medium text-theme-primary">Recent completed</div>
-                      <div className="text-[10px] font-mono text-theme-muted">Latest successful ticket runs</div>
-                    </div>
-                    <span className="text-[11px] font-mono text-theme-muted">{recentCompletedIssues.length}</span>
-                  </div>
-                  {recentCompletedIssues.length > 0 ? (
-                    <div className="divide-y divide-border">
-                      {recentCompletedIssues.map(issue => (
-                        <TicketRow
-                          key={issue.id}
-                          issue={issue}
-                          active={issue.id === selectedId}
-                          onSelect={() => setSelectedId(issue.id)}
-                          onDispatch={() => setDispatchFor(issue)}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="px-4 py-8 text-center text-[12px] italic text-theme-muted">
-                      No completed ticket runs yet.
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : viewMode === 'list' && (
-              <div className="space-y-3">
-                {groupedStateSections.map(g => {
-                  const list = g.issues;
-                  if (list.length === 0) return null;
-                  const collapsed = collapsedGroups.has(g.key);
-                  return (
-                    <div key={g.key} className="overflow-hidden rounded-md border border-app bg-app-card">
-                      <button
-                        onClick={() => toggleGroupCollapsed(g.key)}
-                        className="flex w-full items-center gap-2 border-b border-app px-4 py-3 text-left transition-colors hover:bg-app-muted/40"
-                      >
-                        {collapsed ? <ChevronRight className="w-3.5 h-3.5 text-theme-muted" /> : <ChevronDown className="w-3.5 h-3.5 text-theme-muted" />}
-                        <span
-                          className="inline-flex items-center gap-2 text-[13px] font-medium text-theme-primary"
-                        >
-                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: g.color }} />
-                          {g.label}
+            {displayedGroups.length > 0 && <p className="v8-page-foot">{totalShown} of {issues.length} shown · live tickets from Linear — hover a row to dispatch it to a workflow</p>}
+          </div>
+        ) : (
+          <div className="v8-linear-view">
+            <div className="v8-linear-board">
+              {displayedGroups.map(group => (
+                <section className="v8-linear-column" key={group.key}>
+                  <header>
+                    <i style={{ background: group.color }} />
+                    <b>{group.label}</b>
+                    <span>{group.issues.length}</span>
+                    <em>{group.issues[0]?.team?.key ?? 'ALL'} · {group.issues[0]?.team?.name ?? linearTitle}</em>
+                  </header>
+                  {group.issues.map(issue => (
+                    <article className="v8-linear-card" key={issue.id}>
+                      <button className="v8-linear-card-open" onClick={() => setSelectedId(issue.id)} type="button">
+                        <span className="v8-linear-card-top">
+                          <span className={`v8-linear-priority${issue.priority === 0 ? ' none' : ''}`} style={{ '--priority-color': issue.priority === 1 ? 'rgb(var(--color-accent-red))' : issue.priority === 2 ? 'rgb(var(--color-accent-orange))' : 'rgb(var(--color-text-subtle))' } as CSSProperties}><i /></span>
+                          {issue.identifier}<time>{relative(issue.updatedAt).replace(' ago', '')}</time>
                         </span>
-                        <span className="text-[11px] font-mono text-theme-muted">{list.length} issue{list.length !== 1 ? 's' : ''}</span>
+                        <span className="v8-linear-card-title">{issue.title}</span>
+                        <span className="v8-linear-labels">{labelNodes(issue)}</span>
                       </button>
-                      {!collapsed && (
-                        <div className="divide-y divide-border">
-                          {list.map(issue => (
-                            <TicketRow
-                              key={issue.id}
-                              issue={issue}
-                              active={issue.id === selectedId}
-                              onSelect={() => setSelectedId(issue.id)}
-                              onDispatch={() => setDispatchFor(issue)}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {!listLoading && filteredIssues.length === 0 && (
-                  <div className="rounded-md border border-dashed border-app bg-app-card p-12 text-center text-[13px] text-theme-muted">
-                    No tickets match the current filters.
-                  </div>
-                )}
-                {listLoading && issues.length === 0 && (
-                  <div className="flex items-center gap-2 text-[11px] font-mono text-theme-muted py-6 px-2">
-                    <Loader2 className="w-3 h-3 animate-spin" /> Loading from Linear...
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Board view — Kanban columns by status */}
-            {viewMode === 'board' && (
-              <div className="flex gap-3 overflow-x-auto pb-3">
-                {groupedStateSections.map(g => {
-                  const list = g.issues;
-                  return (
-                    <div key={g.key} className="flex w-[300px] shrink-0 flex-col overflow-hidden rounded-md border border-app bg-app-card">
-                      <div className="flex shrink-0 items-center gap-2 border-b border-app px-3 py-2.5">
-                        <span className="inline-flex items-center gap-2 text-[13px] font-medium text-theme-primary">
-                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: g.color }} />
-                          {g.label}
-                        </span>
-                        <span className="text-[11px] font-mono text-theme-muted">{list.length}</span>
-                      </div>
-                      <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-[200px]">
-                        {list.length === 0 && (
-                          <div className="text-[11px] text-theme-subtle italic font-body py-4 text-center">
-                            No issues
-                          </div>
-                        )}
-                        {list.map(issue => (
-                          <BoardCard
-                            key={issue.id}
-                            issue={issue}
-                            active={issue.id === selectedId}
-                            onSelect={() => setSelectedId(issue.id)}
-                            onDispatch={() => setDispatchFor(issue)}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-                {!listLoading && filteredIssues.length === 0 && (
-                  <div className="w-full rounded-md border border-dashed border-app bg-app-card p-12 text-center text-[13px] text-theme-muted">
-                    No tickets match the current filters.
-                  </div>
-                )}
+                      <button className="v8-linear-dispatch" onClick={() => setDispatchFor(issue)} type="button"><Play /> Dispatch</button>
+                    </article>
+                  ))}
+                </section>
+              ))}
+            </div>
+            {displayedGroups.length > 0 && <p className="v8-page-foot">grouped by status · {displayedGroups.map(group => group.issues.length).join(' · ')}</p>}
+            {!listLoading && displayedGroups.length === 0 && (
+              <div className="v8-empty v8-linear-empty">
+                <span className="glyph"><TicketCheck /></span>
+                <h2>No tickets synced</h2>
+                <p>No tickets match the current filters.</p>
               </div>
             )}
           </div>
-        </div>
-
+        )}
       </div>
 
-      {/* Drawer */}
       {selectedId && (
         <div className="fixed bottom-0 right-0 top-0 z-50 flex w-[32rem] max-w-[calc(100vw-2rem)] flex-col border-l border-app bg-app-card shadow-[-24px_0_60px_rgba(0,0,0,0.28)]">
           {detailLoading && !detail ? (
-            <div className="p-6 flex items-center gap-2 text-[11px] font-mono text-theme-muted">
-              <Loader2 className="w-3 h-3 animate-spin" /> Loading…
-            </div>
+            <div className="p-6 flex items-center gap-2 text-[11px] font-mono text-theme-muted"><Loader2 className="w-3 h-3 animate-spin" /> Loading…</div>
           ) : detail ? (
-            <TicketDrawer
-              issue={detail}
-              onClose={() => { setSelectedId(null); setDetail(null); }}
-              onDispatch={() => setDispatchFor(detail)}
-              navigate={navigate}
-            />
+            <TicketDrawer issue={detail} onClose={() => { setSelectedId(null); setDetail(null); }} onDispatch={() => setDispatchFor(detail)} navigate={navigate} />
           ) : (
             <div className="p-6 text-[12px] text-theme-muted">Not found.</div>
           )}
         </div>
       )}
 
-      {/* Dispatch modal */}
       {dispatchFor && (
         <DispatchModal
           open={true}
@@ -898,8 +746,7 @@ export default function TicketsPage() {
           onSubmit={(args) => handleDispatch(dispatchFor, args)}
         />
       )}
-      </div>
-    </div>
+    </main>
   );
 }
 

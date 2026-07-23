@@ -50,8 +50,8 @@ export function SetupProgressDialog({ workspaceId, onComplete, onFailed, onCance
   const log = progress?.log ?? [];
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-surface-100 border border-app rounded-lg w-[500px] overflow-hidden">
+    <div className="v8-activity-backdrop fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+      <div className="v8-activity-modal bg-surface-100 border border-app rounded-lg w-[500px] overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-app">
           {ws?.status === 'failed' ? (

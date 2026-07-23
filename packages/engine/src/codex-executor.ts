@@ -106,12 +106,10 @@ export async function executeCodexNode(
   const start = Date.now();
   // Apply recovery overrides first, then per-node overrides, then agent defaults.
   const { model, reasoningEffort } = resolveCodexNodeRuntimeSettings(nodeName, nodeDef, state, role);
-  // Codex doesn't support 'max' — clamp to 'high'. 'off' means "don't emit".
+  // `off` means "don't emit"; all other model-supported values pass through.
   const codexEffort =
     reasoningEffort && reasoningEffort !== 'off'
-      ? reasoningEffort === 'max'
-        ? 'high'
-        : reasoningEffort
+      ? reasoningEffort
       : undefined;
   // Resume by default unless explicitly disabled on the node
   const isResume = !!((nodeDef.resume_on_retry !== false) && sessionId);

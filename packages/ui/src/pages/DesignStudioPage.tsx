@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Palette, Plus, FolderGit2, FolderOpen, Lightbulb, Trash2, Loader2, Download, Check, X } from 'lucide-react';
+import { Palette, Plus, FolderGit2, FolderOpen, Lightbulb, Trash2, Loader2, Download, Check, X, Search } from 'lucide-react';
 import { designStudio, type ImportSource, type Workspace } from '../services/designStudioService';
 import { repos as reposApi } from '../services/api';
 import Select from '../components/common/Select';
@@ -14,14 +14,14 @@ import DesignStudioCreateDialog from '../components/design/DesignStudioCreateDia
 
 function StatusChip({ status }: { status: Workspace['profileStatus'] }) {
   const map: Record<Workspace['profileStatus'], { label: string; cls: string }> = {
-    pending: { label: 'Setup needed', cls: 'bg-amber-500/15 text-amber-500' },
-    analyzing: { label: 'Analyzing…', cls: 'bg-blue-500/15 text-blue-400' },
-    needs_review: { label: 'Review profile', cls: 'bg-amber-500/15 text-amber-500' },
-    needs_choice: { label: 'Action needed', cls: 'bg-orange-500/15 text-orange-500' },
-    confirmed: { label: 'Ready', cls: 'bg-emerald-500/15 text-emerald-500' },
+    pending: { label: 'Setup needed', cls: 'setup' },
+    analyzing: { label: 'Analyzing…', cls: 'analyzing' },
+    needs_review: { label: 'Review profile', cls: 'review' },
+    needs_choice: { label: 'Action needed', cls: 'review' },
+    confirmed: { label: 'Ready', cls: 'ready' },
   };
   const v = map[status];
-  return <span className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${v.cls}`}>{v.label}</span>;
+  return <span className={`v8-design-status ${v.cls}`}>{v.label}</span>;
 }
 
 export default function DesignStudioPage() {
@@ -30,6 +30,7 @@ export default function DesignStudioPage() {
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [query, setQuery] = useState('');
 
   async function refresh() {
     setLoading(true);
@@ -46,63 +47,100 @@ export default function DesignStudioPage() {
     void refresh();
   }
 
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredWorkspaces = workspaces.filter((workspace) => {
+    if (!normalizedQuery) return true;
+    const path = workspace.kind === 'repo' ? workspace.sourceRepoPath ?? '' : 'Greenfield design workspace';
+    return `${workspace.name} ${path} ${workspace.kind}`.toLowerCase().includes(normalizedQuery);
+  });
+
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Palette className="h-5 w-5 text-accent" />
-          <h1 className="text-lg font-semibold text-theme-primary">Design Studio</h1>
+    <div className="v8-page v8-design-home overflow-y-auto">
+      <div className="v8-page__wrap v8-design-home__wrap">
+      <header className="v8-design-head">
+        <div>
+          <div className="v8-design-head__title">
+            <span className="v8-design-head__mark"><Palette /></span>
+            <h1>Allen Design</h1>
+          </div>
+          <p>
+            Create repo-aware design workspaces, analyze product design systems, run design chats, preview generated folders, and export static bundles.
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button className="btn btn-secondary btn-sm inline-flex items-center gap-1.5" onClick={() => setShowImport(true)} title="Create a new workspace from another workspace's designs or an exported folder">
-            <Download className="h-4 w-4" /> Import designs
+        <div className="v8-design-actions">
+          <button className="v8-btn v8-btn--ghost" onClick={() => setShowImport(true)} title="Create a new workspace from another workspace's designs or an exported folder">
+            <Download /> Import designs
           </button>
-          <button className="btn btn-primary btn-sm inline-flex items-center gap-1.5" onClick={() => setShowNew(true)}>
-            <Plus className="h-4 w-4" /> New design
+          <button className="v8-btn v8-btn--ink" onClick={() => setShowNew(true)}>
+            <Plus /> New design
           </button>
         </div>
+      </header>
+
+      <div className="v8-design-toolbar">
+        <label className="v8-search">
+          <Search />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search design workspaces"
+            aria-label="Search design workspaces"
+          />
+        </label>
       </div>
 
-      <p className="mb-6 max-w-2xl text-[13px] text-theme-muted">
-        Create repo-aware design workspaces, analyze product design systems, run design chats, preview generated folders, and export static bundles.
-      </p>
-
       {loading ? (
-        <div className="flex items-center gap-2 text-theme-muted"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+        <div className="v8-design-loading"><Loader2 className="animate-spin" /> Loading…</div>
       ) : workspaces.length === 0 ? (
-        <div className="rounded-md border border-dashed border-app bg-app-card p-10 text-center text-theme-muted">
-          No design workspaces yet. Create one to get started.
+        <div className="v8-design-empty">
+          <span><Palette /></span>
+          <h2>No design workspaces yet</h2>
+          <p>Create one to analyze a repository or develop a new product idea.</p>
+          <button className="v8-btn v8-btn--ink" onClick={() => setShowNew(true)}><Plus /> New design</button>
+        </div>
+      ) : filteredWorkspaces.length === 0 ? (
+        <div className="v8-design-empty compact">
+          <span><Search /></span>
+          <h2>No matching workspaces</h2>
+          <p>Try another workspace name or repository path.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {workspaces.map((ws) => (
-            <div
+        <div className="v8-design-grid">
+          {filteredWorkspaces.map((ws) => (
+            <article
               key={ws._id}
-              className="group relative cursor-pointer rounded-md border border-app bg-app-card p-4 transition-colors hover:border-app-strong hover:bg-app-muted/40"
+              className="v8-design-workspace"
               onClick={() => navigate(`/studio/workspaces/${ws._id}`)}
             >
-              <div className="mb-2 flex items-center gap-2">
-                {ws.kind === 'repo' ? <FolderGit2 className="h-4 w-4 text-theme-muted" /> : <Lightbulb className="h-4 w-4 text-theme-muted" />}
-                <span className="truncate text-[14px] font-medium text-theme-primary">{ws.name}</span>
+              <div className="v8-design-workspace__link">
+              <div className="v8-design-workspace__top">
+                <span className="v8-design-workspace__icon">{ws.kind === 'repo' ? <FolderGit2 /> : <Lightbulb />}</span>
+                <span className="v8-design-workspace__name">{ws.name}</span>
               </div>
-              <div className="flex items-center justify-between">
+              <p className="v8-design-workspace__path" title={ws.sourceRepoPath}>
+                {ws.kind === 'repo' ? ws.sourceRepoPath || 'Repository workspace' : 'Greenfield design workspace'}
+              </p>
+              <div className="v8-design-workspace__foot">
                 <StatusChip status={ws.profileStatus} />
-                <span className="text-[11px] text-theme-muted">{ws.kind === 'repo' ? 'Repository' : 'New idea'}</span>
+                <span>{ws.kind === 'repo' ? 'Repository' : 'New idea'}</span>
+              </div>
               </div>
               <button
-                className="absolute right-2 top-2 hidden rounded-md p-1 text-theme-muted transition-colors hover:bg-app-muted hover:text-accent-red group-hover:block"
+                className="v8-design-workspace__delete"
                 onClick={(e) => { e.stopPropagation(); void remove(ws._id); }}
                 aria-label="Delete workspace"
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <Trash2 />
               </button>
-            </div>
+            </article>
           ))}
         </div>
       )}
 
       {showNew && <DesignStudioCreateDialog onClose={() => setShowNew(false)} onCreated={(id) => navigate(`/studio/workspaces/${id}`)} />}
       {showImport && <ImportAsNewWorkspaceDialog onClose={() => setShowImport(false)} onCreated={(id) => navigate(`/studio/workspaces/${id}`)} />}
+      </div>
     </div>
   );
 }
@@ -285,4 +323,3 @@ function ImportAsNewWorkspaceDialog({ onClose, onCreated }: { onClose: () => voi
     </div>
   );
 }
-

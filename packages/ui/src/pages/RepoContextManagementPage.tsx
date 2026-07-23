@@ -285,8 +285,8 @@ export default function RepoContextManagementPage() {
     : 'none';
 
   return (
-    <div className="min-h-full px-8 pt-8 pb-8">
-      <div className="mb-4 flex items-center justify-between gap-3">
+    <div className="v8-repo-context min-h-full px-8 pt-8 pb-8">
+      <div className="v8-repo-context__head mb-4 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <button
             type="button"
@@ -295,7 +295,7 @@ export default function RepoContextManagementPage() {
           >
             <ArrowLeft className="w-3.5 h-3.5" /> Back to repos
           </button>
-          <h1 className="mt-1 text-[22px] font-semibold text-theme-primary tracking-tight truncate">
+          <h1 className="v8-repo-context__title mt-1 text-[22px] font-semibold text-theme-primary tracking-tight truncate">
             {repo?.name ?? 'Context management'}
           </h1>
           <ContextBuildProgress status={cogneeStatus} stopping={stoppingBuild} onStop={() => void stopContextBuild()} />
@@ -312,7 +312,7 @@ export default function RepoContextManagementPage() {
         <div className="text-xs text-theme-muted animate-pulse">Loading context management...</div>
       ) : (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+          <div className="v8-repo-context__metrics grid grid-cols-2 lg:grid-cols-5 gap-2">
             <Metric label="Curated active" value={activeCurated} />
             <Metric label="Mandatory" value={state?.mandatoryMappings?.length ?? 0} />
             <Metric label="Context provider" value={providerLabel} />
@@ -323,7 +323,7 @@ export default function RepoContextManagementPage() {
               contextRefresh phase is running so we start the fast-poll without
               waiting for the 15 s discovery poll. */}
           <RepoContextSetupCard repoId={id} onCogneeActivity={() => void refreshCogneeStatus()} />
-          <div className="border-b border-app flex gap-1">
+          <div className="v8-repo-context__tabs border-b border-app flex gap-1">
             {([
               ['graph', Network, 'Context Graph'],
               ['curated', BookOpenCheck, 'Curated Context'],

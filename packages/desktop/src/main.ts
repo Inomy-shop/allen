@@ -40,7 +40,6 @@ import { DesktopRealtimeBroker } from './realtime-broker.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const windows = new Set<BrowserWindow>();
 let latestFocusedWindow: BrowserWindow | null = null;
-const trustedPopupWindows = new Set<BrowserWindow>();
 let serverHandle: AllenServerHandle | null = null;
 let realtimeBroker: DesktopRealtimeBroker | null = null;
 let mongoHandle: ManagedMongoRuntime | null = null;
@@ -353,13 +352,12 @@ async function openExternalUrl(raw: string): Promise<boolean> {
   return true;
 }
 
-function installTrustedNavigationGuards(win: BrowserWindow, openTrustedUrl: (targetUrl: string) => void): void {
+function installTrustedNavigationGuards(win: BrowserWindow): void {
   win.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    if (isTrustedAppUrl(targetUrl)) {
-      openTrustedUrl(targetUrl);
-    } else {
-      void openExternalUrl(targetUrl);
-    }
+    // New-window requests must never create a second Allen shell. Resource
+    // links are intercepted by the renderer; every remaining safe URL belongs
+    // in the user's system browser.
+    void openExternalUrl(targetUrl);
     return { action: 'deny' };
   });
 
@@ -368,38 +366,6 @@ function installTrustedNavigationGuards(win: BrowserWindow, openTrustedUrl: (tar
     event.preventDefault();
     void openExternalUrl(targetUrl);
   });
-}
-
-function createTrustedPopupWindow(parent: BrowserWindow, targetUrl: string): void {
-  const popup = new BrowserWindow({
-    width: 1120,
-    height: 820,
-    minWidth: 720,
-    minHeight: 520,
-    title: 'Allen',
-    parent,
-    modal: false,
-    autoHideMenuBar: true,
-    backgroundColor: '#0b1020',
-    webPreferences: {
-      preload: preloadPath(),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-    },
-  });
-
-  trustedPopupWindows.add(popup);
-  popup.on('closed', () => {
-    trustedPopupWindows.delete(popup);
-  });
-
-  installTrustedNavigationGuards(popup, (trustedTargetUrl) => {
-    createTrustedPopupWindow(popup, trustedTargetUrl);
-  });
-  void popup.loadURL(targetUrl);
 }
 
 function navigateTo(path: string): void {
@@ -867,7 +833,7 @@ function createWindow(url: string): BrowserWindow {
       ? {
         titleBarStyle: 'hiddenInset' as const,
         fullSizeContentView: true,
-        trafficLightPosition: { x: 16, y: 20 },
+        trafficLightPosition: { x: 16, y: 4 },
       }
       : {}),
     webPreferences: {
@@ -880,9 +846,7 @@ function createWindow(url: string): BrowserWindow {
     },
   });
 
-  installTrustedNavigationGuards(win, (targetUrl) => {
-    createTrustedPopupWindow(win, targetUrl);
-  });
+  installTrustedNavigationGuards(win);
 
   win.on('focus', () => { latestFocusedWindow = win; });
 

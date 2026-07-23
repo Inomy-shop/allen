@@ -31,7 +31,7 @@ const STATUSES = ['active', 'archived', 'superseded', 'evolved'];
 
 // ── Component ─────────────────────────────────────────────────────────────
 
-export default function LearningsPage() {
+export default function LearningsPage({ compact = false }: { compact?: boolean }) {
   const [activeTab, setActiveTab] = useState<'learnings' | 'evolution'>('learnings');
   const [items, setItems] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
@@ -201,7 +201,7 @@ export default function LearningsPage() {
   }, [activeTab, fetchEvolutionCandidates]);
 
   return (
-    <div className="content scroll-hide learnings-page" data-screen-label="learnings">
+    <div className={`content scroll-hide learnings-page ${compact ? 'learnings-page--compact' : ''}`} data-screen-label="learnings">
       {/* Header */}
       <div className="learnings-head">
         <div>

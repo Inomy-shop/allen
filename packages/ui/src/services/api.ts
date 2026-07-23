@@ -1,4 +1,5 @@
 import { BASE, authHeaders, encodeFilePath, request } from './apiCore';
+import type { TeamClassification } from '../types/teamClassification';
 
 export { authHeaders, request } from './apiCore';
 
@@ -6,7 +7,7 @@ export { authHeaders, request } from './apiCore';
 export const workflows = {
   list: () => request<any[]>('/workflows'),
   get: (id: string) => request<any>(`/workflows/${id}`),
-  create: (body: { yaml?: string; parsed?: any }) =>
+  create: (body: { yaml?: string; parsed?: any; teamClassification?: TeamClassification | null }) =>
     request<any>('/workflows', { method: 'POST', body: JSON.stringify(body) }),
   update: (id: string, body: any) =>
     request<any>(`/workflows/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
@@ -864,13 +865,16 @@ export interface ChatSession {
   agentOverrides?: {
     provider?: 'claude' | 'codex' | null;
     model?: string | null;
-    reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
+    reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
     planMode?: boolean | null;
   };
   repoId?: string;
   repoPath?: string;
   repoName?: string;
   workspaceId?: string;
+  studioWorkspaceId?: string;
+  teamClassification?: TeamClassification | null;
+  teamClassificationSource?: 'manual' | 'studio_default' | 'inherited' | null;
   workspaceName?: string;
   workspaceRepoId?: string;
   workspaceRepoName?: string;
@@ -919,11 +923,11 @@ export interface ChatQueueItem {
 }
 
 export const chat = {
-  listSessions: (params?: { ownerUserId?: string | 'none' }) => {
-    const qs = params?.ownerUserId
-      ? `?ownerUserId=${encodeURIComponent(params.ownerUserId)}`
-      : '';
-    return request<ChatSession[]>(`/chat/sessions${qs}`);
+  listSessions: (params?: { ownerUserId?: string | 'none'; includeStudio?: boolean }) => {
+    const qs = new URLSearchParams();
+    if (params?.ownerUserId) qs.set('ownerUserId', params.ownerUserId);
+    if (params?.includeStudio) qs.set('includeStudio', 'true');
+    return request<ChatSession[]>(`/chat/sessions${qs.toString() ? `?${qs}` : ''}`);
   },
   providers: () => request<any[]>('/chat/providers'),
   slashCommands: (params?: { provider?: string; sessionId?: string; cwd?: string }) => {

@@ -1,0 +1,98 @@
+---
+title: 'Add a Model'
+description: 'Register an exact provider model ID so it can appear in Allen model selectors and cost estimates.'
+---
+
+## What you will accomplish
+
+Add an active model to one provider's registry, verify that it appears in the intended selector, and test that the configured provider can actually run it.
+
+:::info Media placeholders
+Before publishing, capture an expanded **Provider Models** section, the **Add model** dialog, a newly active row, the **Inactive** filter, and the model in one selector. Suggested files: `static/img/docs/guides-add-a-model-01.png` through `static/img/docs/guides-add-a-model-05.png`, plus `static/videos/docs/guides-add-a-model-short.mp4` for the add-and-verify flow.
+:::
+
+## Before you start
+
+- You need an admin account; **Settings → Models** is an admin surface.
+- Connect and authenticate the provider first.
+- Copy the exact model ID from the provider. Do not guess or shorten it.
+- Confirm that your provider account can access the model.
+- Obtain current per-million-token prices if you want Allen to estimate cost.
+
+Adding a registry entry does not create credentials, buy model access, or test the endpoint.
+
+## Add the model
+
+1. Open **Settings → Models**.
+2. Under **LLM Providers**, expand the provider that will run the model.
+3. In **Provider Models**, select **Add model**. The provider is determined by the section you opened and is not a field in the dialog.
+4. Complete the fields:
+
+| Field | What to enter |
+| --- | --- |
+| **Display name** | A concise label users can distinguish in selectors |
+| **Full ID** | The exact ID sent to the provider at execution time |
+| **Provider display name** | The readable group label shown in model lists |
+| **Tier** | **Default**, **Opus**, **Flash**, or **None** |
+| **Input $/MTok** | Current input price per million tokens, if known |
+| **Output $/MTok** | Current output price per million tokens, if known |
+| **Cache read $/MTok** | Current cache-read price per million tokens, if applicable |
+| **Sort order** | A number controlling order inside the provider group |
+
+5. Select **Add model**.
+6. Confirm the row is visible and does not show **inactive**.
+
+New entries are active by default. The provider and full ID must be unique together, including inactive entries.
+
+## Verify the model
+
+1. Open the selector where you intend to use the model: chat, an agent, a workflow-node override, or **Model Recovery**.
+2. Select the provider, then confirm the new display name and full ID map to the intended model.
+3. Run a small, low-risk request.
+4. Review the response, provider/model metadata, tool behavior, token usage, and estimated cost.
+5. Check the provider's own console when access or billing is consequential.
+
+An active model can appear in Allen even when the provider later rejects the ID, account, balance, or request shape. The test run is the evidence that the complete path works.
+
+## Choose tier and pricing carefully
+
+- **Default** makes the entry a preferred default for that provider.
+- **Opus** and **Flash** identify role-like choices used by model selection and defaults.
+- **None** is appropriate when the model should be selectable without taking a tier role.
+- Cost fields feed Allen's operational estimates when token usage is available.
+
+Provider prices change. Update the registry when pricing changes and treat Allen's displayed cost as an estimate rather than an invoice.
+
+## Edit or remove a model safely
+
+Use **Edit model** to correct the display name, provider display name, tier, pricing, or sort order.
+
+Treat **Full ID** as immutable after creation. Although it appears in the edit dialog, the server rejects changing the stored provider/full-ID identity. If the ID is wrong:
+
+1. add a new entry with the correct full ID;
+2. update agents, chats, defaults, and workflow nodes that should use it;
+3. validate the replacement;
+4. delete the incorrect entry only after reviewing remaining references.
+
+**Delete model** removes the entry from normal provider selection by marking it inactive. Existing agents, chat sessions, and workflows keep the model ID already stored on them. Use the **Inactive** filter to audit removed rows.
+
+The current UI does not provide a reactivate action for an inactive entry. Avoid deletion when you may need the exact provider/full-ID pair again.
+
+:::caution
+Do not put API keys, account IDs, or endpoint credentials in a model ID or display name. Registry metadata is not a secret store.
+:::
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| **Models** is unavailable | Confirm you are signed in as an admin. |
+| Save reports an unknown provider | Add the model from a provider group Allen already knows. |
+| Save reports a duplicate | The provider/full-ID pair already exists, possibly under **Inactive**. |
+| Model is absent from a selector | Confirm the entry is active, the provider is selectable, and the surface supports that provider. |
+| Provider rejects the model | Verify the exact full ID, account entitlement, credentials, endpoint, and provider status. |
+| Edit fails after changing **Full ID** | Restore the original ID; create a replacement entry for a different ID. |
+| Cost is blank or wrong | Check all price fields, current provider pricing, the exact model ID, and whether the runtime reported token usage. |
+| Wrong model becomes the provider default | Review **Tier** and **Sort order**, then check **Model Defaults**. |
+
+Related guides: [Model Providers](/integrations/model-providers), [Change Models](/guides/change-models), and [Security](/reference/security).

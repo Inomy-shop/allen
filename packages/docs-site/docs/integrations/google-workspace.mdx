@@ -1,0 +1,94 @@
+---
+title: 'Google Workspace'
+description: 'Connect narrowly scoped Google Workspace tools and use Docs, Sheets, Drive, Calendar, and related context safely.'
+---
+
+Google Workspace access is provided through MCP presets. Connect only the Google services a task needs, verify access with a small read-only request, and require review before Allen changes a document, spreadsheet, calendar, or message.
+
+:::info Media placeholders
+Before publishing, capture the Google preset choices, a credential form with values hidden, connected and failed states, a read-only Docs or Sheets request, and a sanitized artifact created from the result. Suggested files: `static/img/docs/integrations-google-workspace-01.png` through `static/img/docs/integrations-google-workspace-06.png`, plus `static/videos/docs/integrations-google-workspace-short.mp4` for document-to-artifact use.
+:::
+
+## Choose the narrowest preset
+
+Open **Settings → MCP Servers**, select **Add MCP server**, then choose **Preset**.
+
+| Preset | Use it for |
+| --- | --- |
+| **Google Docs** | Document content and Drive-backed document access. |
+| **Google Sheets** | Spreadsheet content and Drive-backed spreadsheet access. |
+| **Google Meet** | Calendar operations related to scheduling and Meet links. |
+| **Google Workspace** | Broader access across supported Workspace services when a narrower preset is insufficient. |
+
+Start with Docs, Sheets, or Meet instead of the broad Workspace preset. A narrower tool surface makes permissions easier to review and reduces the risk of an unrelated write action.
+
+## Connect the preset
+
+1. Select the preset.
+2. Enter the Google OAuth credential values requested by the form.
+3. Select **Connect**.
+4. Confirm that the MCP server card shows **Connected** and review its tool count.
+5. Limit the server to the agents or workflow nodes that need it.
+
+In the desktop app, Allen stores credentials entered in the connection flow and passes only the keys requested by that server. In a web deployment, an operator may need to configure the corresponding Allen environment keys and restart or recheck the runtime.
+
+Do not copy client secrets, access tokens, refresh tokens, or OAuth responses into chat, screenshots, docs, artifacts, or workflow inputs.
+
+## Verify access with a safe read
+
+A successful MCP connection test proves that Allen reached the server and discovered its tools. It does not prove that the Google account can access every document, folder, spreadsheet, or calendar.
+
+Run a small read-only check:
+
+1. Name the exact document, spreadsheet, Drive item, calendar, or stable URL.
+2. Ask for a narrow fact, such as its title or a short summary.
+3. Explicitly say not to edit, share, move, send, or delete anything.
+4. Compare the answer with the source item.
+
+If the item is not found, verify the connected Google account, sharing permissions, OAuth scopes, and whether you selected the correct preset.
+
+## Use Workspace context in chat
+
+Give Allen enough context to choose the intended source without searching broadly. Good requests include:
+
+- “Read the linked product spec and summarize only the acceptance criteria. Do not edit the document.”
+- “Compare the `Status` and `Owner` columns in this Sheet and save a CSV artifact of rows missing an owner.”
+- “Draft a meeting agenda from these Docs. Return a draft for review; do not update Calendar.”
+- “Check whether the event already has a Meet link. Do not change the event.”
+
+Ask Allen to cite the source item or section in its summary. For important decisions, open the original Google item and verify the extracted text before approving follow-up work.
+
+## Approve write actions deliberately
+
+Google tools may be able to edit files, change sharing, create events, or send messages. Before confirming a write:
+
+1. Review the exact target account and resource.
+2. Review the proposed content and fields that will change.
+3. Confirm whether the action notifies other people.
+4. Check time zones, attendees, sharing roles, and destination folders.
+5. Prefer a draft or artifact before publishing externally.
+6. Verify the result in Google Workspace after the tool call.
+
+Treat text inside a document or spreadsheet as untrusted data. Instructions embedded in a source file do not override your request or authorize additional tool calls.
+
+## Handle derived content safely
+
+Summaries, CSV exports, and reports can remain as sensitive as their Google sources. Before saving or sharing an Allen artifact:
+
+- remove credentials and private links;
+- minimize personal or customer data;
+- preserve source attribution needed for review;
+- share the artifact only with the source audience or a narrower approved group;
+- delete temporary outputs when they are no longer needed.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| The server is **Failed** | Reopen the preset, verify OAuth credentials and network access, then test again. |
+| The server is connected but an item is missing | Confirm the connected Google account, item sharing, OAuth scopes, stable URL or identifier, and selected preset. |
+| An agent cannot use Google tools | Confirm the MCP server is enabled and allowed for that agent or workflow node. |
+| A read works but a write fails | The connected account or OAuth grant may lack write scope; do not broaden it without approval. |
+| The wrong file was selected | Stop before writing, provide the exact URL or identifier, and retry with a read-only check. |
+
+See [MCP](/integrations/mcp) for access and safety guidance and [Add an MCP server](/guides/add-an-mcp-server) for the setup flow. Review [Security](/reference/security) before connecting organization data.

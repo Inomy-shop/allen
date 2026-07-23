@@ -7,7 +7,7 @@
 
 import type { Db } from 'mongodb';
 import { ObjectId } from 'mongodb';
-import type { TokenUsageInfo } from '@allen/engine';
+import { describeTool, type TokenUsageInfo } from '@allen/engine';
 import type { Response } from 'express';
 import { PROVIDERS, runChatLLM, type ChatLLMMessage, type ChatProvider } from './chat-llm.js';
 import { AGENT_FALLBACK_CWD, getDefaultChatModel, getDefaultChatProvider, getEnabledProvidersInDefaultOrder, getEnabledProvidersFromRegistry, getTitleGenProviderModel, isClaudeCompatibleProvider, isClaudeFamilyProvider } from './chat-providers.js';
@@ -27,6 +27,11 @@ import { listSlashCommands, type SlashCommandInfo } from './slash-commands.js';
 import type { RuntimeSlashCommand } from './chat-runtime-types.js';
 import { SkillService, normalizeSlug } from './skill.service.js';
 import { ChatContextPacketService } from './context/core/chat-context-packet.service.js';
+import {
+  parseTeamClassification,
+  type TeamClassification,
+  type TeamClassificationSource,
+} from '../types/team-classification.js';
 // Note: embedding.service.ts re-exports from @allen/engine — single implementation shared by engine + server
 
 // ── Types ──
@@ -85,6 +90,9 @@ export interface ChatSession {
   systemPromptOverride?: string;
   /** Design Studio workspace this chat session belongs to, when applicable. */
   studioWorkspaceId?: string;
+  /** Fixed product-level classification. Missing/null is shown as Unknown. */
+  teamClassification?: TeamClassification | null;
+  teamClassificationSource?: TeamClassificationSource | null;
   workspaceName?: string;
   workspaceRepoId?: string;
   workspaceRepoName?: string;
@@ -186,6 +194,7 @@ function archivedWorkspaceSnapshot(workspace: Record<string, unknown>): Archived
 
 export interface ToolCallRecord {
   tool: string;
+  description?: string;
   args: Record<string, unknown>;
   result: Record<string, unknown>;
   durationMs: number;
@@ -688,6 +697,13 @@ interface ActiveQuery {
    *  Without this, clicking "Stop" in the UI only closes the SSE connection
    *  but the agent keeps running in the background burning tokens. */
   abortController: AbortController;
+}
+
+function pendingToolResult(entry: ActiveQuery, toolUseId: string, tool: string) {
+  const direct = entry.pendingToolCalls.get(toolUseId);
+  if (direct) return { key: toolUseId, pending: direct };
+  const fallback = [...entry.pendingToolCalls.entries()].find(([, candidate]) => candidate.tool === tool);
+  return fallback ? { key: fallback[0], pending: fallback[1] } : { key: toolUseId, pending: undefined };
 }
 
 const activeQueries = new Map<string, ActiveQuery>();
@@ -1333,6 +1349,8 @@ export class ChatService {
       ...(owner?.email ? { ownerEmail: owner.email } : {}),
       ...(extras?.systemPromptOverride ? { systemPromptOverride: extras.systemPromptOverride } : {}),
       ...(extras?.studioWorkspaceId ? { studioWorkspaceId: extras.studioWorkspaceId } : {}),
+      teamClassification: extras?.studioWorkspaceId ? 'design' : null,
+      teamClassificationSource: extras?.studioWorkspaceId ? 'studio_default' : null,
       // Design Studio runs the agent in the workspace's design-system folder.
       ...(extras?.repoPath ? { repoPath: extras.repoPath } : {}),
       createdAt: now, updatedAt: now,
@@ -1341,7 +1359,7 @@ export class ChatService {
     return { ...doc, _id: result.insertedId };
   }
 
-  async listSessions(filter?: { ownerUserId?: string | null }): Promise<ChatSession[]> {
+  async listSessions(filter?: { ownerUserId?: string | null; includeStudio?: boolean }): Promise<ChatSession[]> {
     // Owner info is denormalized onto the session at creation time (and
     // backfilled at startup for legacy sessions), so this is a plain find().
     // Pass ownerUserId=null to filter for unowned sessions (automation / legacy
@@ -1351,8 +1369,9 @@ export class ChatService {
       // MongoDB: { field: null } matches both null and missing values.
       query.ownerUserId = filter.ownerUserId;
     }
-    // Design Studio sessions live in the Design Studio tab, not chat History.
-    query.studioWorkspaceId = { $exists: false };
+    // Chat history remains unchanged by default. The shared Sessions page opts
+    // in so Studio conversations can be shown and routed to their own surface.
+    if (!filter?.includeStudio) query.studioWorkspaceId = { $exists: false };
     const sessions = await this.sessions
       .find(query)
       .sort({ lastMessageAt: -1 })
@@ -1803,7 +1822,7 @@ export class ChatService {
       if (entry.currentThinking) sendSSE(res, 'thinking', { text: entry.currentThinking, messageId: entry.messageId });
       if (entry.currentText) sendSSE(res, 'message_delta', { text: entry.currentText, messageId: entry.messageId });
       for (const [toolUseId, pending] of entry.pendingToolCalls) {
-        sendSSE(res, 'tool_start', { tool: pending.tool, args: pending.args, toolUseId, tool_use_id: toolUseId, messageId: entry.messageId });
+        sendSSE(res, 'tool_start', { tool: pending.tool, description: describeTool(pending.tool, pending.args), args: pending.args, toolUseId, tool_use_id: toolUseId, messageId: entry.messageId });
       }
     } else {
       sendSSE(res, 'stream_inactive', { sessionId });
@@ -2336,12 +2355,14 @@ User: ${userMessage.slice(0, 500)}`;
           markActiveQueryHeartbeat(entry, 'tool_running', tool);
           entry.pendingToolCalls.set(toolUseId, { tool, args, startMs: Date.now() });
           this.persistActiveQueryState(entry);
-          broadcastToListeners(entry, 'tool_start', { tool, args, toolUseId, tool_use_id: toolUseId });
+          broadcastToListeners(entry, 'tool_start', { tool, description: describeTool(tool, args), args, toolUseId, tool_use_id: toolUseId });
         },
         onToolResult: (tool: string, resultData: Record<string, unknown>, toolUseId: string, durationMs: number) => {
-          const pending = entry.pendingToolCalls.get(toolUseId);
+          const resolvedPending = pendingToolResult(entry, toolUseId, tool);
+          const pending = resolvedPending.pending;
           const record: ToolCallRecord = {
             tool,
+            description: describeTool(tool, pending?.args ?? {}),
             args: pending?.args ?? {},
             result: resultData,
             durationMs,
@@ -2349,7 +2370,7 @@ User: ${userMessage.slice(0, 500)}`;
             toolUseId,
           };
           entry.toolCalls.push(record);
-          entry.pendingToolCalls.delete(toolUseId);
+          entry.pendingToolCalls.delete(resolvedPending.key);
           const nextPending = entry.pendingToolCalls.values().next().value;
           markActiveQueryHeartbeat(entry, nextPending ? 'tool_running' : 'thinking', nextPending?.tool ?? null);
           this.messages.updateOne(
@@ -2366,7 +2387,7 @@ User: ${userMessage.slice(0, 500)}`;
               ...(!entry.activeToolName ? { $unset: { activeToolName: '' } } : {}),
             },
           ).catch(() => {});
-          broadcastToListeners(entry, 'tool_result', { tool, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
+          broadcastToListeners(entry, 'tool_result', { tool, description: record.description, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
           const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
           if (userReport) {
             broadcastToListeners(entry, 'agent_report', {
@@ -2699,13 +2720,14 @@ User: ${userMessage.slice(0, 500)}`;
               markActiveQueryHeartbeat(entry, 'tool_running', tool);
               entry.pendingToolCalls.set(toolUseId, { tool, args, startMs: Date.now() });
               this.persistActiveQueryState(entry);
-              broadcastToListeners(entry, 'tool_start', { tool, args, toolUseId, tool_use_id: toolUseId });
+              broadcastToListeners(entry, 'tool_start', { tool, description: describeTool(tool, args), args, toolUseId, tool_use_id: toolUseId });
             },
             onToolResult: (tool, resultData, toolUseId, durationMs) => {
-              const pending = entry.pendingToolCalls.get(toolUseId);
-              const record = { tool, args: pending?.args ?? {}, result: resultData, durationMs, timestamp: new Date(), toolUseId };
+              const resolvedPending = pendingToolResult(entry, toolUseId, tool);
+              const pending = resolvedPending.pending;
+              const record = { tool, description: describeTool(tool, pending?.args ?? {}), args: pending?.args ?? {}, result: resultData, durationMs, timestamp: new Date(), toolUseId };
               entry.toolCalls.push(record);
-              entry.pendingToolCalls.delete(toolUseId);
+              entry.pendingToolCalls.delete(resolvedPending.key);
               const nextPending = entry.pendingToolCalls.values().next().value;
               markActiveQueryHeartbeat(entry, nextPending ? 'tool_running' : 'thinking', nextPending?.tool ?? null);
               this.messages.updateOne(
@@ -2722,7 +2744,7 @@ User: ${userMessage.slice(0, 500)}`;
                   ...(!entry.activeToolName ? { $unset: { activeToolName: '' } } : {}),
                 },
               ).catch(() => {});
-              broadcastToListeners(entry, 'tool_result', { tool, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
+              broadcastToListeners(entry, 'tool_result', { tool, description: record.description, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
               const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
               if (userReport) {
                 broadcastToListeners(entry, 'agent_report', {
@@ -3163,6 +3185,7 @@ RULES:
       provider?: string;
       model?: string;
       agentOverrides?: Record<string, unknown> | null;
+      teamClassification?: TeamClassification | null;
     },
   ): Promise<ChatSession | null> {
     const _id = new ObjectId(id);
@@ -3219,7 +3242,19 @@ RULES:
     }
 
     if (update.agentOverrides !== undefined) set.agentOverrides = update.agentOverrides;
+    if (update.teamClassification !== undefined) {
+      set.teamClassification = parseTeamClassification(update.teamClassification) ?? null;
+      set.teamClassificationSource = 'manual';
+    }
     await this.sessions.updateOne({ _id }, { $set: set });
+    if (update.teamClassification !== undefined) {
+      const { ArtifactService } = await import('./artifact.service.js');
+      await new ArtifactService(this.db).propagateInheritedClassification(
+        'chat',
+        [id],
+        parseTeamClassification(update.teamClassification) ?? null,
+      );
+    }
     if (providerOrModelChanged) {
       // Close only Allen's in-memory runtime. Keep llmSessionId/llmSessionCwd so
       // the next turn can use Claude `--resume --model` or Codex `thread/resume`
@@ -3269,4 +3304,30 @@ export async function backfillSessionOwners(db: Db): Promise<{ scanned: number; 
     updated++;
   }
   return { scanned, updated };
+}
+
+/** Idempotently classify legacy Design Studio conversations as Design. */
+export async function backfillStudioTeamClassifications(
+  db: Db,
+): Promise<{ matched: number; modified: number }> {
+  const studio = await db.collection('chat_sessions').updateMany(
+    {
+      studioWorkspaceId: { $exists: true },
+      teamClassification: { $exists: false },
+    },
+    {
+      $set: {
+        teamClassification: 'design',
+        teamClassificationSource: 'studio_default',
+      },
+    },
+  );
+  const unknown = await db.collection('chat_sessions').updateMany(
+    { teamClassification: { $exists: false } },
+    { $set: { teamClassification: null, teamClassificationSource: null } },
+  );
+  return {
+    matched: studio.matchedCount + unknown.matchedCount,
+    modified: studio.modifiedCount + unknown.modifiedCount,
+  };
 }

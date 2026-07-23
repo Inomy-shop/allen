@@ -40,6 +40,8 @@ export type CliQueryOptions = {
   cwd?: string;
   /** Model alias (e.g. 'sonnet'). */
   model?: string;
+  /** Claude Code native effort level. `off` is represented by omission. */
+  reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
   /** Resume a prior session by ID. File is re-materialized for each resume. */
   resume?: string;
   /** Merged env for the child process. */
@@ -145,6 +147,11 @@ export async function* queryViaCli(opts: CliQueryOptions): AsyncGenerator<any, v
   ];
   const normalizedModel = normalizeModelAlias(opts.model);
   if (normalizedModel) args.push('--model', normalizedModel);
+  if (opts.reasoningEffort && opts.reasoningEffort !== 'off') {
+    // Ultra is a Codex-only presentation level. If it reaches the
+    // Claude-compatible path, map it to Claude Code's highest native level.
+    args.push('--effort', opts.reasoningEffort === 'ultra' ? 'max' : opts.reasoningEffort);
+  }
   if (opts.resume) args.push('--resume', opts.resume);
   if (opts.mcpServers && Object.keys(opts.mcpServers).length > 0) {
     args.push('--mcp-config', JSON.stringify({ mcpServers: opts.mcpServers }), '--strict-mcp-config');

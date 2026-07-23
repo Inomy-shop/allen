@@ -1,0 +1,148 @@
+---
+title: 'Workflows'
+description: 'Run repeatable multi-step processes, follow their executions, and intervene at explicit checkpoints.'
+---
+
+A workflow is a reusable, multi-step process for work that needs more structure than one chat response. Workflows can coordinate agents, deterministic actions, decisions, nested workflows, human input, workspace operations, and durable artifacts.
+
+Open **Workflows** to search the available processes, review their shape and validation status, inspect previous runs, or start a new execution.
+
+:::tip Use a workflow when the path matters
+Choose a workflow when you want repeatable inputs, visible stages, validation or approval gates, and reviewable outputs. Use chat for exploration or a one-off question whose process does not need to be encoded.
+:::
+
+## Choose the right workflow
+
+The workflow list shows each workflow's name, version, description, node and edge counts, run count, tags, input schema, and validation status.
+
+Before you run one:
+
+1. Search by the outcome or tag.
+2. Expand the row to review its description, shape, inputs, and validation.
+3. Open **View workflow runs** to inspect recent executions when reliability or cost matters.
+4. Confirm that the workflow matches the repository, risk, and expected deliverables.
+5. Choose **Run workflow** only when its status is valid.
+
+Built-in and custom workflows appear together. Treat the current workflow list as the source of truth because workflows can be added, updated, deleted, imported, or restored in each Allen environment.
+
+## Supply run inputs
+
+**Run Workflow** renders a form from the workflow's declared input schema. Depending on the definition, a field can be text, long-form text, a checkbox, a number, a choice, or a repository picker.
+
+Required fields are marked. Allen casts booleans and numbers before starting the execution and blocks missing or invalid required input.
+
+Make the run input explicit about:
+
+- the outcome and acceptance criteria;
+- the target repository or path;
+- scope and non-goals;
+- required validation and artifacts;
+- whether file edits or external actions are allowed;
+- whether commits, pushes, pull requests, or deployments are permitted.
+
+Selecting a repository supplies its registered path. Workspace isolation happens only if the workflow contains a workspace-creation step.
+
+## How a run progresses
+
+```text
+Run Workflow
+  -> Allen creates an execution
+  -> nodes run in the graph's order and conditions
+  -> activity, outputs, traces, usage, and artifacts are recorded
+  -> human nodes pause and request input when needed
+  -> the execution completes, fails, is cancelled, or waits for intervention
+```
+
+Allen supports five workflow node types:
+
+| Node | Purpose |
+| --- | --- |
+| **Agent** | Assign a task to a configured Allen agent |
+| **Code** | Run a named deterministic built-in action |
+| **Human** | Pause for clarification, review, approval, or recovery input |
+| **Workflow** | Call another workflow with mapped inputs and outputs |
+| **Condition** | Choose the next path from workflow state |
+
+Edges control sequencing and branching. A workflow can also define retries, fallbacks, timeouts, parallel paths, and output mappings.
+
+## Follow the execution
+
+Starting a workflow opens its execution page. Use that page—not only the final message—as the source of truth for the run.
+
+Review:
+
+- overall status and the current node;
+- activity and node outputs;
+- logs and traces when a step fails or behaves unexpectedly;
+- model, token, cost, and context-usage evidence;
+- child executions and delegated agent work;
+- human-input requests and intervention state;
+- artifacts and linked workspaces;
+- validation results and any pull request or external resource produced.
+
+Controls depend on execution state. A running execution can be cancelled or paused; a paused or waiting execution can be resumed when the required input is available. Failed work may expose retry or recovery actions. Use the narrowest recovery that preserves valid earlier work, and inspect the new attempt afterward.
+
+## Human checkpoints
+
+A human node stops the graph and presents declared fields or actions. It can collect clarification, approval, review feedback, a routing choice, or a replacement model when recovery is required.
+
+Read the evidence attached to the checkpoint before responding. Your input becomes part of execution state and can change downstream prompts, conditions, and outputs.
+
+Do not treat every checkpoint as a simple approval:
+
+- answer clarification fields with the missing facts;
+- use review feedback to name the exact change required;
+- reject or stop when evidence is incomplete;
+- verify irreversible or external actions separately.
+
+## Workflows and workspaces
+
+A code-changing workflow should make workspace creation explicit. The workflow normally receives the registered repository path, creates a task worktree, and passes the workspace path to later agent and validation steps.
+
+When a run produces code changes, review both surfaces:
+
+- the **execution** for who ran, what inputs and tools were used, node results, and validation evidence;
+- the **workspace** for the actual files, diff, commands, branch, and Git state.
+
+An execution can complete without creating a commit or pull request. Those are separate state-changing steps and should be visible in the workflow or requested explicitly.
+
+## Create and edit workflows
+
+Choose **New workflow** to open the builder. Allen provides a visual canvas and a synchronized **YAML** editor. The builder guide explains inputs, nodes, edges, templates, conditions, retries, parallelism, and human-in-the-loop configuration.
+
+A safe editing loop is:
+
+1. Define a stable name, clear description, and input schema.
+2. Add the smallest understandable set of nodes.
+3. Connect explicit success, failure, retry, and human-review paths.
+4. Choose **Validate** and resolve every error.
+5. Save the workflow, then run it with a small representative case.
+6. Inspect the full execution before wider use.
+
+Validation checks references such as agent names, built-in code functions, and nested workflows. A workflow with unresolved references is stored with an invalid status and cannot be started from the workflow list.
+
+Editing and saving a workflow increments its version for future runs. Review agent and model overrides on each node: an override applies to that workflow node and does not rewrite the saved agent default.
+
+## Import, export, and delete
+
+Use **Export** to save the currently shown workflows as a portable JSON bundle. **Import JSON** creates workflows that do not already exist, skips active name collisions, and can restore a previously deleted workflow with the same stable name.
+
+Individual workflow YAML can also be imported or exported through workflow operations. Prefer JSON bundles when moving a set of Allen workflows between environments; use YAML when authoring or reviewing one definition.
+
+Deleting a workflow is a soft delete. It disappears from the active list, but recreating or importing the same stable name can restore it. Deletion does not erase completed execution evidence.
+
+Before importing or restoring a workflow, validate its agent names, repository assumptions, tools, model overrides, external integrations, and human gates in the destination environment.
+
+## Workflow design checklist
+
+- **Outcome:** the workflow has one clear purpose and completion condition.
+- **Inputs:** required facts are declared and labeled for the user.
+- **Ownership:** each agent node uses the right specialist.
+- **Isolation:** repository changes use an explicit workspace.
+- **Risk:** human review appears before ambiguous or irreversible actions.
+- **Recovery:** retries and fallbacks handle expected failures without hiding them.
+- **Evidence:** validation results and durable deliverables are saved as artifacts.
+- **Visibility:** users can understand the stages and inspect the execution.
+- **Portability:** environment-specific agents, models, tools, and integrations are documented or validated.
+
+Related concepts: [Agents](/concepts/agents), [Workspaces](/concepts/workspaces), [Artifacts](/concepts/artifacts). Related guides: [Create a workflow](/guides/create-a-workflow), [Run a workflow](/guides/run-a-workflow), [Monitor execution](/guides/monitor-execution).

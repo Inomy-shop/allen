@@ -1,0 +1,117 @@
+---
+title: 'Model Providers'
+description: 'Connect model runtimes, register selectable models, and choose safe defaults for chat and workflow agents.'
+---
+
+Allen separates provider access, model registration, and model selection. A provider connection supplies authentication and runtime access; the model registry supplies selectable model IDs and pricing metadata; defaults choose what new work uses.
+
+:::info Media placeholders
+Before publishing, capture **Model Defaults**, CLI provider states, one configured API provider with its key hidden, an expanded **Provider Models** list, and a provider or model error. Suggested files: `static/img/docs/integrations-model-providers-01.png` through `static/img/docs/integrations-model-providers-05.png`, plus `static/videos/docs/integrations-model-providers-short.mp4` for the connect-and-test flow.
+:::
+
+## Understand the three layers
+
+| Layer | Purpose | Does not do |
+| --- | --- | --- |
+| Provider connection | Gives Allen an authenticated CLI or API execution path | Register every model automatically |
+| Provider Models | Stores active model IDs, labels, tiers, ordering, and optional prices | Create credentials or guarantee model availability |
+| Model Defaults | Chooses defaults for new chats and workflow agents | Rewrite existing chats, agents, or workflows |
+
+The **Models** page is an admin surface. Use the command palette action **Open model settings** or open **Settings → Models**.
+
+## Connect a CLI provider
+
+Allen supports local Claude and Codex CLI providers.
+
+1. Open **Settings → Models** and find **Claude** or **Codex** under **LLM Providers**.
+2. Review the status: connected, CLI missing, or not logged in.
+3. If the CLI is missing, install it on the machine running Allen.
+4. If it is not logged in, authenticate that CLI outside Allen using the provider's normal login flow.
+5. Select **Check again**.
+6. Expand **Provider Models** and confirm the model you intend to use is active.
+7. Run a small, low-risk chat before assigning the provider to important agents or workflows.
+
+CLI providers remain visible when unavailable, but they are selectable for work only after Allen detects a logged-in CLI.
+
+## Connect an API provider
+
+The current **LLM Providers** panel includes Claude-compatible configurations for DeepSeek, Xiaomi MiMo, Kimi, GLM/Z.AI, and OpenRouter.
+
+1. Open **Settings → Models**.
+2. Turn on the provider and expand its settings.
+3. Enter the API key.
+4. Review the API base URL and the provider's primary, high-capability, or fast model fields. Keep the defaults unless your account or compatible endpoint requires different values.
+5. Select **Save settings**.
+6. Expand **Provider Models** and register or verify the exact model IDs the provider accepts.
+7. Run a small validation chat and inspect the response before broader rollout.
+
+In the desktop app, Allen stores the key through its secrets settings. In a web deployment, runtime settings may be read-only; the operator must configure the corresponding `ALLEN_*` environment values and restart when required.
+
+Disabling an API provider that already has a configured key removes that saved key. Confirm that no active agents or workflows depend on it first.
+
+:::caution
+Never put provider keys in model IDs, prompts, repository files, screenshots, artifacts, or logs. Use a least-privileged account, restrict spend at the provider, and rotate a key immediately if it is exposed.
+:::
+
+## Register provider models
+
+Each provider expands to a **Provider Models** section. Active entries feed model selectors and recovery choices.
+
+- Select **Add model** to register an exact provider model ID.
+- Use display names to make selectors readable.
+- Use tiers and sort order to control defaults and ordering.
+- Add input, output, and cache-read prices only when you have current provider pricing.
+- Select **Inactive** to inspect entries removed from normal selection.
+
+Registering a model does not test the endpoint. Validate the provider connection and the exact full model ID with a small run. See [Add a Model](/guides/add-a-model) for field-by-field guidance.
+
+## Choose model defaults
+
+Use **Model Defaults** at the top of the **Models** page:
+
+1. Set **Default chat provider** and **Default chat model** for newly created chat sessions.
+2. Set **Default workflow agent provider** and **Default workflow agent model** only if you want to flatten the built-in role-specific mix.
+3. Keep **Preserve seeded mix** when different built-in roles should retain their configured providers.
+4. Select **Save model settings**.
+5. Restart Allen when the page marks a changed workflow-agent setting as requiring restart.
+
+Default changes apply to future default resolution. They do not migrate values already stored on chat sessions, agents, or workflow nodes.
+
+## Use providers at the right scope
+
+| Scope | Where to choose | Guidance |
+| --- | --- | --- |
+| Chat | Chat model picker | Choose before the first message when possible; an existing chat cannot cross between incompatible provider families. |
+| Agent | **Teams & Agents** edit dialog | Save a stable default and test the agent directly. |
+| Workflow node | **Override Model & MCP servers** | Use only when one node needs a different provider or model. |
+| Failed execution | **Model Recovery** prompt | Retry the failed node without changing saved defaults. |
+
+Slack-managed and imported conversations cannot change model in chat. A streaming conversation also locks its model selector until the active turn finishes.
+
+## Respect provider and model capabilities
+
+- Agent plan mode is supported only for Claude.
+- `max` reasoning effort requires Claude and an Opus model.
+- API providers use a Claude-compatible execution path; compatibility still depends on the selected endpoint and model.
+- OpenRouter models that are not Anthropic models are experimental in this path. Test tool use, structured output, and long-running behavior before production work.
+- An active registry entry can still fail because of credentials, account access, rate limits, balance, provider outages, or an incorrect model ID.
+
+## Interpret usage and recovery
+
+Registry price fields let Allen estimate cost when a runtime reports token usage. Treat the result as an operational estimate, not the provider's billing authority; verify consequential spend in the provider console.
+
+For a recoverable provider or model failure, **Model Recovery** shows the failed provider/model, sanitized error, attempt count, and active alternatives. **Retry with selected model** creates an execution-scoped retry. It does not edit the registry, agent, or workflow. If the replacement is the durable fix, update the appropriate saved scope afterward.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| CLI provider says **CLI missing** | Install the CLI where Allen runs and select **Check again**. |
+| CLI provider says **not logged in** | Authenticate the CLI under the same operating-system user that runs Allen. |
+| API provider says **needs key** | Enter the key and save, or configure the matching runtime environment value. |
+| Model is absent from a picker | Confirm the provider is selectable and the registry entry is active. |
+| Provider rejects a model | Verify the exact full ID and that the account can access it. |
+| Agent settings will not save | Check plan-mode and reasoning-effort compatibility. |
+| Cost is missing or surprising | Verify registry prices, model ID, reported token usage, and current provider pricing. |
+
+Related guides: [Add a Model](/guides/add-a-model), [Change Models](/guides/change-models), and [Security](/reference/security).

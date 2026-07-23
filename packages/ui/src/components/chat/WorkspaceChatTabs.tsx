@@ -1,10 +1,14 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { X, Plus, ChevronDown, MessageSquare, Server, Terminal } from 'lucide-react';
+import { X, ChevronDown, Code2, Files, FileText, MessageSquare, Server, Terminal, GitBranch, Upload } from 'lucide-react';
+import ChatTabCreateMenu from './ChatTabCreateMenu';
+import CopyChatIdButton from './CopyChatIdButton';
 
 export type WorkspaceChatTabId =
   | { kind: 'session'; sessionId: string }
   | { kind: 'temp'; tempId: string }
   | { kind: 'terminal'; terminalId: string }
+  | { kind: 'code-diff' }
+  | { kind: 'file-explorer' }
   | { kind: 'servers' };
 
 export type WorkspaceChatTab = {
@@ -17,31 +21,62 @@ export type WorkspaceChatTab = {
   streaming?: boolean;
 };
 
+export type WorkspaceResourceTab = {
+  key: string;
+  kind: 'document' | 'file';
+  title: string;
+  tooltip: string;
+  scopeKey: string;
+  resourceId: string;
+};
+
 export function getTabKey(tab: WorkspaceChatTab): string {
   if (tab.id.kind === 'session') return tab.id.sessionId;
   if (tab.id.kind === 'terminal') return 'terminal-' + tab.id.terminalId;
+  if (tab.id.kind === 'code-diff') return 'code-diff';
+  if (tab.id.kind === 'file-explorer') return 'file-explorer';
   if (tab.id.kind === 'servers') return 'servers';
   return tab.id.tempId;
 }
 
 type Props = {
+  workspaceContext?: { repoName?: string; branch?: string };
   tabs: WorkspaceChatTab[];
+  resourceTabs?: WorkspaceResourceTab[];
   activeTabKey: string | null;
+  activeResourceKey?: string | null;
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
+  onResourceSelect?: (key: string) => void;
+  onResourceClose?: (key: string) => void;
   onReorder: (dragKey: string, targetKey: string, position: 'before' | 'after') => void;
   onNewTab: () => void;
+  onNewTerminal?: () => void;
+  onOpenCodeDiff?: () => void;
+  onOpenFileExplorer?: () => void;
+  onOpenServers?: () => void;
+  onExport?: () => void;
   availablePreviousChats: Array<{ _id: string; title?: string; lastMessageAt?: string }>;
   onRestore: (sessionId: string) => void;
 };
 
 export default function WorkspaceChatTabs({
+  workspaceContext,
   tabs,
+  resourceTabs = [],
   activeTabKey,
+  activeResourceKey = null,
   onSelect,
   onClose,
+  onResourceSelect,
+  onResourceClose,
   onReorder,
   onNewTab,
+  onNewTerminal,
+  onOpenCodeDiff,
+  onOpenFileExplorer,
+  onOpenServers,
+  onExport,
   availablePreviousChats,
   onRestore,
 }: Props) {
@@ -99,13 +134,14 @@ export default function WorkspaceChatTabs({
   useLayoutEffect(() => {
     function updateTabWidth() {
       const root = rootRef.current;
-      if (!root || tabs.length === 0) return;
+      const totalTabs = tabs.length + resourceTabs.length;
+      if (!root || totalTabs === 0) return;
       const newTabWidth = newTabButtonRef.current?.offsetWidth ?? 32;
       const previousChatsWidth = dropdownButtonRef.current?.offsetWidth ?? 0;
       const reservedWidth = newTabWidth + previousChatsWidth;
       const availableWidth = Math.max(0, root.clientWidth - reservedWidth);
-      const nextWidth = Math.min(300, Math.max(88, Math.floor(availableWidth / tabs.length)));
-      const nextRailWidth = Math.min(nextWidth * tabs.length, availableWidth);
+      const nextWidth = Math.min(300, Math.max(88, Math.floor(availableWidth / totalTabs)));
+      const nextRailWidth = Math.min(nextWidth * totalTabs, availableWidth);
       setTabMetrics(current => (
         current.tabWidth === nextWidth && current.railWidth === nextRailWidth
           ? current
@@ -119,7 +155,7 @@ export default function WorkspaceChatTabs({
     if (newTabButtonRef.current) observer.observe(newTabButtonRef.current);
     if (dropdownButtonRef.current) observer.observe(dropdownButtonRef.current);
     return () => observer.disconnect();
-  }, [tabs.length, sortedPrev.length]);
+  }, [tabs.length, resourceTabs.length, sortedPrev.length]);
 
   function handleClose(e: React.MouseEvent, key: string, tab: WorkspaceChatTab) {
     e.stopPropagation();
@@ -136,17 +172,27 @@ export default function WorkspaceChatTabs({
   }
 
   return (
-    <div ref={rootRef} className="workspace-chat-tabs flex items-center gap-0 border-b border-app bg-app shrink-0 overflow-hidden">
+    <div ref={rootRef} className="workspace-chat-tabs v8-chat-detail-header flex items-center gap-0 border-b border-app bg-app shrink-0 overflow-hidden">
+      {(workspaceContext?.repoName || workspaceContext?.branch) && (
+        <div className="workspace-chat-tabs__context" title={[workspaceContext.repoName, workspaceContext.branch].filter(Boolean).join(' / ')}>
+          <GitBranch aria-hidden="true" />
+          {workspaceContext.repoName && <span>{workspaceContext.repoName}</span>}
+          {workspaceContext.repoName && workspaceContext.branch && <b>/</b>}
+          {workspaceContext.branch && <code>{workspaceContext.branch}</code>}
+        </div>
+      )}
       <div
-        className="flex min-w-0 shrink items-stretch overflow-hidden"
+        className="workspace-chat-tabs__rail scroll-hide flex min-w-0 shrink items-stretch overflow-x-auto overflow-y-hidden"
         style={{ width: tabMetrics.railWidth }}
       >
         {tabs.map((tab) => {
           const key = getTabKey(tab);
-          const isActive = key === activeTabKey;
+          const isActive = !activeResourceKey && key === activeTabKey;
           const isTerminal = tab.id.kind === 'terminal';
           const isServers = tab.id.kind === 'servers';
-          const isChat = !isTerminal && !isServers;
+          const isCodeDiff = tab.id.kind === 'code-diff';
+          const isFileExplorer = tab.id.kind === 'file-explorer';
+          const isChat = !isTerminal && !isServers && !isCodeDiff && !isFileExplorer;
           const label = tab.title || (isTerminal ? 'Terminal' : isServers ? 'Servers' : tab.isTemp ? (tab.tempIndex != null && tab.tempIndex > 0 ? `New chat ${tab.tempIndex}` : 'New chat') : 'chat');
           const isDragging = draggingKey === key;
           const dropBefore = dragOver?.key === key && dragOver.position === 'before' && draggingKey !== key;
@@ -201,15 +247,61 @@ export default function WorkspaceChatTabs({
               {isServers && (
                 <Server className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               )}
+              {isCodeDiff && (
+                <Code2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              )}
+              {isFileExplorer && (
+                <Files className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              )}
               {tab.streaming && (
                 <span className="h-1.5 w-1.5 rounded-full bg-green-500 shrink-0 animate-pulse" title="Streaming" />
               )}
               <span className="truncate flex-1 text-xs" title={label}>{label}</span>
+              {tab.id.kind === 'session' && (
+                <CopyChatIdButton
+                  chatId={tab.id.sessionId}
+                  chatTitle={label}
+                  className="workspace-chat-tab__action"
+                />
+              )}
               <button
                 type="button"
                 onClick={(e) => handleClose(e, key, tab)}
-                className="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 rounded hover:bg-app-muted p-0.5 transition-opacity"
+                className="workspace-chat-tab__action shrink-0 rounded p-0.5"
                 aria-label="Close tab"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          );
+        })}
+        {resourceTabs.map(tab => {
+          const isActive = tab.key === activeResourceKey;
+          const Icon = tab.kind === 'document' ? FileText : Code2;
+          return (
+            <div
+              key={tab.key}
+              role="tab"
+              aria-selected={isActive}
+              className={`group relative flex items-center gap-1.5 border-r border-t border-app px-3 py-2 transition-colors cursor-pointer select-none ${
+                isActive
+                  ? 'border-t-accent bg-accent-soft text-accent font-semibold'
+                  : 'border-t-transparent bg-app text-theme-muted hover:bg-app-muted hover:text-theme-secondary'
+              }`}
+              style={{ width: tabMetrics.tabWidth, minWidth: tabMetrics.tabWidth, maxWidth: 300 }}
+              onClick={() => onResourceSelect?.(tab.key)}
+              title={tab.tooltip}
+            >
+              <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate flex-1 text-xs">{tab.title}</span>
+              <button
+                type="button"
+                className="workspace-chat-tab__action shrink-0 rounded p-0.5"
+                aria-label={`Close ${tab.title}`}
+                onClick={event => {
+                  event.stopPropagation();
+                  onResourceClose?.(tab.key);
+                }}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -218,20 +310,24 @@ export default function WorkspaceChatTabs({
         })}
       </div>
 
-      {/* New tab button */}
-      <button
+      <ChatTabCreateMenu
         ref={newTabButtonRef}
-        type="button"
-        onClick={onNewTab}
-        className="flex items-center gap-1 px-2 py-2 text-theme-muted hover:text-theme-primary hover:bg-app-muted transition-colors shrink-0"
-        aria-label="New chat tab"
-        title="New chat"
-      >
-        <Plus className="h-3.5 w-3.5" />
-      </button>
+        onNewChat={onNewTab}
+        onNewTerminal={onNewTerminal}
+        onOpenCodeDiff={onOpenCodeDiff}
+        onOpenFileExplorer={onOpenFileExplorer}
+        onOpenServers={onOpenServers}
+      />
+
+      {onExport && (
+        <button type="button" className="v8-chat-detail-export" onClick={onExport} aria-label="Export chat">
+          <Upload aria-hidden="true" />
+          <span>Export</span>
+        </button>
+      )}
 
       {/* Previous chats dropdown */}
-      <div className="relative ml-auto shrink-0" ref={dropdownRef}>
+      <div className="workspace-chat-tabs__previous relative shrink-0" ref={dropdownRef}>
         <button
           ref={dropdownButtonRef}
           type="button"

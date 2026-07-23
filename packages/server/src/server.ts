@@ -18,7 +18,11 @@ import { repoRoutes } from './routes/repo.routes.js';
 import { learningRoutes, executionLearningsRoute } from './routes/learning.routes.js';
 import { chatRoutes } from './routes/chat.routes.js';
 import { chatExportImportRoutes } from './routes/chat-export-import.routes.js';
-import { ChatService, backfillSessionOwners } from './services/chat.service.js';
+import {
+  ChatService,
+  backfillSessionOwners,
+  backfillStudioTeamClassifications,
+} from './services/chat.service.js';
 import { mcpRoutes } from './routes/mcp.routes.js';
 import { alertRoutes } from './routes/alert.routes.js';
 import { workspaceRoutes, publicWorkspaceRoutes } from './routes/workspace.routes.js';
@@ -26,6 +30,7 @@ import { pullRequestRoutes } from './routes/pull-request.routes.js';
 import { fileRoutes, publicFileRoutes } from './routes/file.routes.js';
 import { artifactRoutes, publicArtifactRoutes } from './routes/artifact.routes.js';
 import { ArtifactService } from './services/artifact.service.js';
+import { backfillWorkflowTeamClassifications } from './services/workflow.service.js';
 import { slackRoutes } from './routes/slack.routes.js';
 import { startTerminalWebSocketServer, type TerminalWebSocketServerHandle } from './services/workspace-terminal.js';
 import { createWorkspaceProxy, createWorkspaceUpgradeHandler } from './services/workspace-proxy.js';
@@ -221,6 +226,37 @@ async function runBootTasks(db: Db, cronService: CronService): Promise<void> {
     }
   } catch (err) {
     logger.error('[chat] Session owner backfill failed', { component: 'chat', error: (err as Error).message });
+  }
+  try {
+    const { matched, modified } = await backfillStudioTeamClassifications(db);
+    if (matched > 0) {
+      logger.info('[chat] Backfilled Studio team classifications', {
+        component: 'chat',
+        matched,
+        modified,
+      });
+    }
+  } catch (err) {
+    logger.error('[chat] Studio classification backfill failed', {
+      component: 'chat',
+      error: (err as Error).message,
+    });
+  }
+  try {
+    const workflowBackfill = await backfillWorkflowTeamClassifications(db);
+    const artifactBackfill = await new ArtifactService(db).backfillTeamClassifications();
+    if (workflowBackfill.modified > 0 || artifactBackfill.updated > 0) {
+      logger.info('[classification] Backfilled workflow and document teams', {
+        component: 'classification',
+        workflows: workflowBackfill.modified,
+        documents: artifactBackfill.updated,
+      });
+    }
+  } catch (err) {
+    logger.error('[classification] Workflow/document classification backfill failed', {
+      component: 'classification',
+      error: (err as Error).message,
+    });
   }
 
   await registerCronActions(db, cronService);

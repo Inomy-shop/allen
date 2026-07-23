@@ -1,6 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 // =====================================================================
-// ALLEN UI · v2 (prototype-aligned direction)
+// ALLEN UI · V8 reusable foundation
 // ---------------------------------------------------------------------
 // - darkMode: 'class' is preserved so the .dark theme works.
 // - Legacy v1 glow box-shadows kept as no-ops so existing JSX with
@@ -67,14 +67,15 @@ export default {
         'glow-cyan':   'none',
       },
       fontSize: {
-        '2xs':    ['11px', { lineHeight: '1.5' }],
-        'meta':   ['11px', { lineHeight: '1.5', letterSpacing: '0' }],
-        'caption':['12px', { lineHeight: '1.5' }],
-        'body':   ['13px', { lineHeight: '1.55' }],
-        'title':  ['14px', { lineHeight: '1.4', letterSpacing: '0' }],
-        'h2':     ['18px', { lineHeight: '1.3', letterSpacing: '0' }],
-        'h1':     ['24px', { lineHeight: '1.25', letterSpacing: '0' }],
-        'display':['44px', { lineHeight: '1.05', letterSpacing: '0' }],
+        'micro':  ['9.5px', { lineHeight: '1.4' }],
+        'meta':   ['10.5px', { lineHeight: '1.45', letterSpacing: '0' }],
+        '2xs':    ['11.5px', { lineHeight: '1.5' }],
+        'caption':['12.5px', { lineHeight: '1.5' }],
+        'body':   ['14px', { lineHeight: '1.55' }],
+        'title':  ['15px', { lineHeight: '1.35', letterSpacing: '0' }],
+        'h2':     ['17px', { lineHeight: '1.3', letterSpacing: '0' }],
+        'h1':     ['19px', { lineHeight: '1.25', letterSpacing: '0' }],
+        'display':['24px', { lineHeight: '1.2', letterSpacing: '-0.015em' }],
       },
       animation: {
         'pulse-running': 'pulse-running 2s ease-in-out infinite',

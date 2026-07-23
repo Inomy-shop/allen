@@ -24,6 +24,15 @@ import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
 
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'];
+const VIDEO_MIME_TYPES: Record<string, string> = {
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  m4v: 'video/x-m4v',
+  ogv: 'video/ogg',
+};
+
 type ErrorPayload = { error: string; code?: string };
 
 function contextProviderDisabledPayload(error = 'Context provider is disabled. Set ALLEN_CONTEXT_PROVIDER to enable context engine flows.'): Record<string, unknown> {
@@ -285,19 +294,23 @@ function readRepoFile(repoPath: string, rawFilePath: string): Record<string, unk
     throw err;
   }
   const ext = extname(rawFilePath).slice(1).toLowerCase();
-  const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'];
-  if (imageExtensions.includes(ext)) {
-    const maxImageSize = 50 * 1024 * 1024;
-    if (stats.size > maxImageSize) {
-      const err = new Error('Image file too large (max 50MB)') as Error & { status?: number };
+  const isImage = IMAGE_EXTENSIONS.includes(ext);
+  const isVideo = Boolean(VIDEO_MIME_TYPES[ext]);
+  if (isImage || isVideo) {
+    const maxMediaSize = (isVideo ? 100 : 50) * 1024 * 1024;
+    if (stats.size > maxMediaSize) {
+      const err = new Error(`${isVideo ? 'Video' : 'Image'} file too large (max ${isVideo ? 100 : 50}MB)`) as Error & { status?: number };
       err.status = 413;
       throw err;
     }
     return {
       path: rawFilePath,
       content: readFileSync(fullPath).toString('base64'),
-      isImage: true,
-      mimeType: `image/${ext === 'jpg' ? 'jpeg' : ext === 'svg' ? 'svg+xml' : ext}`,
+      isImage,
+      isVideo,
+      mimeType: isVideo
+        ? VIDEO_MIME_TYPES[ext]
+        : `image/${ext === 'jpg' ? 'jpeg' : ext === 'svg' ? 'svg+xml' : ext}`,
     };
   }
   const maxTextSize = 10 * 1024 * 1024;

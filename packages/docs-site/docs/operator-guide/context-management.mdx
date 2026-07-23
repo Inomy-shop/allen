@@ -1,0 +1,125 @@
+---
+title: 'Context Management'
+description: 'Prepare, inspect, test, and maintain repository context used by Allen agents.'
+---
+
+:::info Media placeholders
+Before publishing, capture **Cognee Context** in Runtime settings, a repository's context setup card, Context Graph, Curated Context, Mandatory Context, Playground, and an import preview. Do not expose private source content.
+:::
+
+Repository context helps Allen retrieve relevant guidance before an agent works. It improves routing and grounding, but it does not replace reading the current source for claims about implementation or behavior.
+
+Allen separates two kinds of guidance:
+
+- **Curated Context** is searchable, reusable repository knowledge. Allen selects it when it matches the task.
+- **Mandatory Context** is agent-specific guidance that is always considered for the mapped agent. Use it only for rules that must not depend on semantic recall.
+
+## Enable repository context
+
+1. Open **Settings → Runtime**.
+2. Turn on **Cognee Context** and save the runtime settings.
+3. If the setup panel reports missing prerequisites, select **Set up Cognee context** and review the result.
+4. Open **Teams & Agents → Repos** (or **Repos**, depending on the current navigation), find a registered repository, and open its context-management action.
+
+Saving the context-provider toggle applies to future context builds without an application restart. If runtime settings are managed outside the UI, configure `ALLEN_CONTEXT_PROVIDER=cognee` before preparing a repository.
+
+## Prepare a repository
+
+Select **Prepare repo context** on the repository's context-management page. The setup run shows four phases:
+
+1. **Preflight** — confirms the repository and provider can be used.
+2. **Curation** — creates or refreshes curated entries.
+3. **Mandatory** — proposes and saves agent mappings.
+4. **Graph** — refreshes the Cognee-backed index and graph.
+
+You can expand setup details to inspect counts, file failures, mapping actions, and graph status. A running setup can be cancelled. A failed or partial setup can be resumed from its recorded state.
+
+### Advanced setup options
+
+- **Clean rebuild context graph** replaces the provider graph instead of resuming an incremental refresh.
+- **Force re-curation** reprocesses all curation candidates instead of reusing unchanged entries.
+
+Use the normal incremental path first. A clean rebuild is appropriate when provider state is demonstrably stale or inconsistent, not as a routine retry.
+
+## Maintain Curated Context
+
+Use **Curated Context** for stable knowledge that should be retrieved when relevant: architecture boundaries, operating guidance, domain rules, or repository conventions.
+
+For each entry, review its source path, title, category, inclusion state, summary, retrieval text, and curated content. Keep entries:
+
+- grounded in a current repository source;
+- short enough to retrieve precisely;
+- explicit about scope and exceptions;
+- free of secrets or customer data;
+- archived when the source is obsolete.
+
+Retrieval text helps semantic search find the entry. Curated content is the agent-facing material used after Allen resolves a matching reference. Write both for their separate purposes instead of copying a long source file into each field.
+
+After material curated content changes, refresh repository context so semantic retrieval reflects it.
+
+## Maintain Mandatory Context
+
+Mandatory mappings attach specific repository guidance to selected agents. Use them for non-negotiable rules such as a security boundary, an agent-specific operating procedure, or an always-required review policy.
+
+Avoid mapping broad documentation to every agent. Mandatory context consumes prompt space on every matching run and can drown out task-specific evidence.
+
+Use the agent filter to audit mappings. Deactivating a mapping preserves its history and stops new agent runs from receiving it. Re-enable it only after confirming the guidance is still current.
+
+Mandatory mapping changes affect new turns/runs directly; they do not require a Cognee graph rebuild.
+
+## Inspect the Context Graph
+
+The **Context Graph** tab lets you search and filter nodes and relationships, expand a selected node, and inspect the evidence behind a connection.
+
+Use the graph to answer diagnostic questions such as:
+
+- Was the expected document ingested?
+- Does the relationship connect the intended sources?
+- Is the graph stale after a source change?
+
+Graph proximity is not proof that a claim is correct. Open the underlying repository source before relying on it.
+
+## Test with Playground
+
+Use **Playground** before changing an agent prompt or making broad context edits:
+
+1. Select the agent whose role you want to simulate.
+2. Enter a realistic task query.
+3. Run the search.
+4. Compare selected references with injected references.
+5. Inspect the generated query, scores, reasons, and content.
+
+If an expected source is absent, check its inclusion state, retrieval text, category, source path, graph freshness, and the selected agent. If too much context is injected, narrow the entry or remove an unnecessarily broad mandatory mapping.
+
+## Use Context Review
+
+The **Context Review** tab surfaces context-quality findings and remediation work. Use it to review repeated misses or bloated injections rather than tuning thresholds from a single run.
+
+Execution detail also records the context attempt for a run. Compare that record with Playground using the same agent and request when investigating why a run received unexpected context.
+
+## Import and export safely
+
+**Export** creates a portable package of curated entries and mandatory mappings. It does not copy the full provider graph.
+
+**Import** provides a preview before applying changes. Review create/update/skip/conflict actions and confirm a repository-name mismatch explicitly. After an import, refresh the context graph when Allen reports that provider context is stale.
+
+Treat context packages as executable guidance: review their content and agent mappings before applying them to another installation.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Context management is unavailable | Enable **Cognee Context** under **Settings → Runtime**, save, and complete provider setup. |
+| Setup stopped | Expand details, fix the failed phase, then use **Resume setup**. |
+| Expected document is missing | Curated inclusion, source path, retrieval text, graph status, and setup file failures. |
+| Agent receives no mandatory guidance | Agent name, mapping enabled state, and the context record on a new run. |
+| Graph remains stale | Run an incremental refresh; use a clean rebuild only after confirming provider state is inconsistent. |
+| Imported content is not retrieved | Review import conflicts, then refresh the graph and retest in Playground. |
+| Context is present but the answer is wrong | Inspect current source. Context selection is supporting evidence, not a substitute for verification. |
+
+## Related pages
+
+- [Repositories](/concepts/repositories)
+- [Agents](/concepts/agents)
+- [Security reference](/reference/security)
+- [Troubleshooting](/operator-guide/troubleshooting)

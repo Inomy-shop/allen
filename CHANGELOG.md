@@ -6,6 +6,32 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-07-23
+
+Large UI redesign release.
+
+### Added
+
+- **Redesigned interface across every major surface** (`packages/ui`): a new shared component foundation (`common/Button`, `Dialog`, `Field`, `Surface`, `Typography`, `ProviderIcon`, `V8SidebarIcons`) with the dashboard, sidebar navigation, sessions, repositories, Linear, workspaces, documents, pull requests (list + detail), teams (list + detail), workflows (list, detail, ensemble detail), executions (list + detail), repository context, conversation detail, workspace detail, Allen Design (page, workspace, session), and settings surfaces all rebuilt against the new design.
+- **Universal document viewer and unified document/resource workspace** (`packages/ui`, `packages/server`): new `DocumentTabHost`, `DocumentReviewRail`, and `MediaViewerHost` components backed by `documentTabStore` and `mediaViewerStore`, so documents and chat resources open as tabs in one workspace. Chat resources open in sibling tabs, with supporting `artifact.service` / `document.service` changes.
+- **Structured workflow execution logs** (`packages/ui`, `packages/server`): new `StructuredExecutionLogs` and `ExecutionSummaryStrip` components giving execution logs a structured, summarized view.
+- **Team classification** (`packages/server`, `packages/ui`): new team-classification types and a `TeamClassificationSelect` control, plus Studio session routing.
+- **Provider tool activity in chat** (`packages/server`, `packages/ui`): a new `chat-tool-normalization` service surfaces provider tool activity in the chat transcript.
+- **Documentation site** (`packages/docs-site`): a new Docusaurus site with audited, code-verified content across getting started, concepts, feature guides, integrations, and the operator guide.
+- **Playwright MCP preset** (`packages/server`): added a Playwright MCP server preset to the preset catalog.
+
+### Changed
+
+- **Model controls and document library state** (`packages/ui`): refined model selection controls and document library state handling, including a shared reasoning-effort helper.
+- **Workspace chat tabs and composer** (`packages/ui`): unified the workspace chat tabs and composer, and refined composer focus and height behaviour.
+- **Desktop spacing and diff backgrounds** (`packages/ui`): polished spacing and code-diff backgrounds.
+
+### Fixed
+
+- **Chat documents isolated by conversation** (`packages/ui`): documents no longer leak between chat conversations.
+- **Execution log node labels** (`packages/ui`): long node labels are truncated instead of overflowing.
+- **Chat execution and resource handling** (`packages/ui`): refined handling of chat executions and attached resources.
+
 ## [0.1.20] - 2026-07-16
 
 ### Added

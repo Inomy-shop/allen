@@ -1,388 +1,137 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ChevronDown, Download, FolderGit2, GitBranch, ListFilter, MessageSquare, Search, UserRound } from 'lucide-react';
-import { chat as chatApi, users as usersApi } from '../services/api';
-import { useAuthStore, type AuthUser } from '../stores/authStore';
+import { Inbox, Search } from 'lucide-react';
+import { chat as chatApi, type ChatSession } from '../services/api';
 import { getModelDisplay } from '../hooks/useModelRegistry';
-import ChatImportPreviewModal from '../components/chat/ChatImportPreviewModal';
+import {
+  TEAM_CLASSIFICATION_META,
+  teamClassificationKey,
+  type TeamClassificationKey,
+} from '../types/teamClassification';
 
-interface ChatSessionItem {
-  _id: string;
-  title: string;
-  status: 'active' | 'archived';
-  messageCount: number;
-  lastMessageAt?: string;
-  provider?: string;
-  model?: string;
-  repoId?: string;
-  repoPath?: string;
-  repoName?: string;
-  workspaceId?: string;
-  workspaceName?: string;
-  workspaceRepoName?: string;
-  archivedWorkspace?: {
-    id: string;
-    name?: string;
-    repoId?: string;
-    repoName?: string;
-    repoPath?: string;
-    branch?: string;
-    baseBranch?: string;
-    prNumber?: number;
-    prUrl?: string;
-    archivedAt?: string;
-  };
-  ownerUserId?: string | null;
-  ownerName?: string | null;
-  ownerEmail?: string | null;
-  activeAgent?: string | null;
+type SessionFilter = 'all' | 'running' | 'needs-you' | 'completed' | 'failed';
+type SpaceFilter = 'all' | TeamClassificationKey;
+
+function shortAge(value?: string) {
+  if (!value) return 'now';
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000));
+  if (minutes < 60) return `${Math.max(1, minutes)}m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
+  return `${Math.floor(minutes / 1440)}d`;
 }
 
-type ThreadItem =
-  {
-    id: string;
-    title: string;
-    runner: string;
-    messageCount: number;
-    href: string;
-    lastMessageAt?: string;
-    provider?: string;
-    model?: string;
-    context?: {
-      kind: 'workspace' | 'repo';
-      label: string;
-      detail?: string;
-    };
-  };
-
-function timeAgo(dateStr?: string): string {
-  if (!dateStr) return 'recently';
-  const ms = Date.now() - new Date(dateStr).getTime();
-  const min = Math.floor(ms / 60_000);
-  if (min < 1) return 'just now';
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  return `${day}d ago`;
+function sessionState(session: ChatSession): SessionFilter {
+  return session.status === 'archived' ? 'completed' : 'running';
 }
 
-function shortId(id?: string): string {
-  return id ? id.slice(0, 8) : '';
-}
-
-function pathName(path?: string): string {
-  if (!path) return '';
-  return path.split('/').filter(Boolean).pop() ?? path;
-}
-
-function sessionContext(session: ChatSessionItem): ThreadItem['context'] {
-  if (session.archivedWorkspace) {
-    const ws = session.archivedWorkspace;
-    return {
-      kind: 'workspace',
-      label: ws.name || ws.branch || `Workspace ${shortId(ws.id)}`,
-      detail: ws.repoName,
-    };
-  }
-  if (session.workspaceId) {
-    return {
-      kind: 'workspace',
-      label: session.workspaceName || `Workspace ${shortId(session.workspaceId)}`,
-      detail: session.workspaceRepoName,
-    };
-  }
-  if (session.repoName || session.repoPath || session.repoId) {
-    return {
-      kind: 'repo',
-      label: session.repoName || pathName(session.repoPath) || `Repository ${shortId(session.repoId)}`,
-    };
-  }
-  return undefined;
+function ModelMark({ provider }: { provider?: string }) {
+  const openAi = /codex|openai|gpt/i.test(provider ?? '');
+  return openAi ? (
+    <svg viewBox="0 0 16 16" fill="none" stroke="#10A37F" strokeWidth="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5.7"/><path d="M8 2.3v11.4M3.1 5.2l9.8 5.6M12.9 5.2 3.1 10.8"/></svg>
+  ) : (
+    <svg viewBox="0 0 16 16" fill="none" stroke="#D97757" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><path d="M8 1.6v2.7M8 11.7v2.7M1.6 8h2.7M11.7 8h2.7M3.5 3.5l1.9 1.9M10.6 10.6l1.9 1.9M12.5 3.5l-1.9 1.9M5.4 10.6l-1.9 1.9"/></svg>
+  );
 }
 
 export default function ThreadsPage() {
   const navigate = useNavigate();
-  const currentUser = useAuthStore((s) => s.user);
-  const [chatSessions, setChatSessions] = useState<ChatSessionItem[]>([]);
-  const [allUsers, setAllUsers] = useState<AuthUser[]>([]);
-  const [query, setQuery] = useState('');
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
-  const [importModalOpen, setImportModalOpen] = useState(false);
-  const [ownerMenuOpen, setOwnerMenuOpen] = useState(false);
-  const [ownerSearch, setOwnerSearch] = useState('');
-  const ownerMenuRef = useRef<HTMLDivElement | null>(null);
-  const ownerSearchRef = useRef<HTMLInputElement | null>(null);
-  // Sentinel values: 'all' = no filter, 'none' = unowned, otherwise userId.
-  // Defaults to the current logged-in user so people land on their own chats.
-  const [selectedOwner, setSelectedOwner] = useState<string>(() => currentUser?.id ?? 'all');
-
-  useEffect(() => {
-    // If the user hydrates from localStorage after mount, snap the filter to them.
-    if (currentUser?.id && selectedOwner === 'all') setSelectedOwner(currentUser.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.id]);
-
-  useEffect(() => {
-    usersApi.list().then(setAllUsers).catch(() => setAllUsers([]));
-  }, []);
-
-  useEffect(() => {
-    if (!ownerMenuOpen) return;
-    function onPointerDown(event: PointerEvent) {
-      if (ownerMenuRef.current?.contains(event.target as Node)) return;
-      setOwnerMenuOpen(false);
-    }
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [ownerMenuOpen]);
-
-  useEffect(() => {
-    if (!ownerMenuOpen) return;
-    ownerSearchRef.current?.focus();
-  }, [ownerMenuOpen]);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<SessionFilter>('all');
+  const [space, setSpace] = useState<SpaceFilter>('all');
 
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      setLoading(true);
-      try {
-        const params = selectedOwner === 'all' ? undefined : { ownerUserId: selectedOwner as 'none' | string };
-        const sessions = await chatApi.listSessions(params).catch(() => []);
-        if (!cancelled) setChatSessions(sessions ?? []);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    void load();
-    const interval = setInterval(load, 10000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [selectedOwner]);
-
-  const filteredSessions = useMemo(() => {
-    // Owner filter is applied server-side; only do client-side text search here.
-    return chatSessions
-      .filter(s => s.activeAgent !== 'design-assistant')
-      .filter((s) => {
-      if (!query.trim()) return true;
-      const q = query.toLowerCase();
-      return (
-        s._id.toLowerCase().includes(q) ||
-        (s.title?.toLowerCase().includes(q) ?? false) ||
-        (s.status?.toLowerCase().includes(q) ?? false) ||
-        (s.provider?.toLowerCase().includes(q) ?? false) ||
-        (s.model?.toLowerCase().includes(q) ?? false) ||
-        (s.ownerName?.toLowerCase().includes(q) ?? false) ||
-        (s.ownerEmail?.toLowerCase().includes(q) ?? false) ||
-        (s.repoName?.toLowerCase().includes(q) ?? false) ||
-        (s.repoPath?.toLowerCase().includes(q) ?? false) ||
-        (s.archivedWorkspace?.name?.toLowerCase().includes(q) ?? false) ||
-        (s.archivedWorkspace?.repoName?.toLowerCase().includes(q) ?? false)
-      );
+    chatApi.listSessions({ includeStudio: true }).then((items) => {
+      if (!cancelled) setSessions(items ?? []);
+    }).catch(() => {
+      if (!cancelled) setSessions([]);
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
     });
-  }, [chatSessions, query]);
+    return () => { cancelled = true; };
+  }, []);
 
-  const items = useMemo(() => {
-    const chatItems: ThreadItem[] = filteredSessions.map((session) => ({
-      id: session._id,
-      title: session.title || 'Untitled conversation',
-      runner: session.ownerEmail || session.ownerName || 'Automation / Unknown',
-      messageCount: session.messageCount ?? 0,
-      href: `/chat/${session._id}`,
-      lastMessageAt: session.lastMessageAt,
-      provider: session.provider,
-      model: session.model,
-      context: sessionContext(session),
-    }));
+  const visible = useMemo(() => sessions
+    .filter((session) => filter === 'all' || sessionState(session) === filter)
+    .filter((session) => space === 'all' || teamClassificationKey(session.teamClassification, session.studioWorkspaceId) === space)
+    .filter((session) => {
+      const value = `${session.title} ${session.repoName ?? ''} ${session.workspaceName ?? ''} ${session.provider ?? ''} ${session.model ?? ''} ${session.studioWorkspaceId ? 'studio design' : ''}`.toLowerCase();
+      return !query.trim() || value.includes(query.trim().toLowerCase());
+    })
+    .sort((a, b) => new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime()), [filter, query, sessions, space]);
 
-    return chatItems.sort((a, b) => new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime());
-  }, [filteredSessions]);
-
-  const ownerOptions = useMemo(() => [
-    { value: 'all', label: 'All users' },
-    { value: 'none', label: 'Automation / Unknown' },
-    ...allUsers.map((u) => ({
-      value: u.id,
-      label: `${u.name || u.email}${currentUser?.id === u.id ? ' (me)' : ''}`,
-    })),
-  ], [allUsers, currentUser?.id]);
-
-  const selectedOwnerLabel = ownerOptions.find((option) => option.value === selectedOwner)?.label ?? 'All users';
-  const filteredOwnerOptions = useMemo(() => {
-    const term = ownerSearch.trim().toLowerCase();
-    if (!term) return ownerOptions;
-    return ownerOptions.filter((option) => option.label.toLowerCase().includes(term));
-  }, [ownerOptions, ownerSearch]);
-
-  function handleImported(sessionId: string) {
-    setImportModalOpen(false);
-    navigate(`/chat/${sessionId}`, { replace: true });
-  }
+  const count = (value: SessionFilter) => value === 'all' ? sessions.length : sessions.filter((item) => sessionState(item) === value).length;
+  const spaceCount = (value: TeamClassificationKey) => sessions
+    .filter((item) => teamClassificationKey(item.teamClassification, item.studioWorkspaceId) === value).length;
 
   return (
-    <div className="content scroll-hide bg-app" data-screen-label="chats">
-      <div className="w-full px-8 py-8">
-        <div className="mb-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
-                <MessageSquare className="h-[18px] w-[18px]" />
-              </span>
-              <div>
-                <h1 className="text-[24px] font-semibold leading-tight text-theme-primary">History</h1>
-                <p className="mt-1 text-[13px] text-theme-muted">Pick up where conversations left off.</p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setImportModalOpen(true)}
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-app bg-app-card px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:bg-app-muted hover:text-theme-primary focus:border-accent focus:shadow-[var(--focus-ring)] focus:outline-none"
-              title="Import chat"
-              aria-label="Import chat"
-            >
-              <Download className="h-3.5 w-3.5" />
-              Import
-            </button>
+    <section className="v8-page v8-sessions" data-screen-label="sessions">
+      <div className="v8-page__wrap">
+        <header className="v8-pagehead">
+          <div>
+            <h1>Sessions</h1>
+            <p>Everything Allen is running, waiting on, or has finished for you.</p>
           </div>
+          <button type="button" className="v8-btn v8-btn--ink" onClick={() => navigate('/chat')}>New session</button>
+        </header>
+
+        <div className="v8-tabs">
+          {([
+            ['all', 'All'], ['running', 'Running'], ['needs-you', 'Needs you'], ['completed', 'Completed'], ['failed', 'Failed'],
+          ] as const).map(([value, label]) => (
+            <button key={value} type="button" className={filter === value ? 'on' : ''} onClick={() => setFilter(value)}>{label} <span>{count(value)}</span></button>
+          ))}
+          <span className="v8-tabs__spacer" />
+          <label className="v8-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search sessions…" /></label>
         </div>
 
-        <div className="mb-4 rounded-md border border-app bg-app-card px-4 py-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="relative min-w-[300px] flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search conversations, repositories, workspaces"
-                className="h-9 w-full rounded-md border border-app bg-app px-8 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
-              />
-            </label>
-            <div ref={ownerMenuRef} className="relative w-[250px]">
-              <button
-                type="button"
-                onClick={() => {
-                  setOwnerSearch('');
-                  setOwnerMenuOpen((open) => !open);
-                }}
-                className="flex h-9 w-full items-center rounded-md border border-app bg-app pl-8 pr-8 text-left text-[13px] text-theme-secondary outline-none transition-colors hover:border-app-strong focus:border-accent focus:shadow-[var(--focus-ring)]"
-                aria-haspopup="listbox"
-                aria-expanded={ownerMenuOpen}
-                aria-label="Filter by owner"
-              >
-                <UserRound className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
-                <span className="truncate">{selectedOwnerLabel}</span>
-                <ChevronDown className={`pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-subtle transition-transform ${ownerMenuOpen ? 'rotate-180' : ''}`} />
-              </button>
-              {ownerMenuOpen && (
-                <div
-                  role="listbox"
-                  className="absolute right-0 z-50 mt-2 w-[300px] rounded-md border border-app bg-app-card p-2 shadow-[0_18px_48px_rgba(0,0,0,0.22)]"
-                >
-                  <div className="relative mb-2">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
-                    <input
-                      ref={ownerSearchRef}
-                      value={ownerSearch}
-                      onChange={(event) => setOwnerSearch(event.target.value)}
-                      placeholder="Search users"
-                      className="h-9 w-full rounded-md border border-app bg-app px-8 text-[13px] text-theme-primary outline-none transition-colors placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
-                    />
+        <div className="v8-chips">
+          <button type="button" className={space === 'all' ? 'on' : ''} onClick={() => setSpace('all')}>All spaces</button>
+          {(Object.keys(TEAM_CLASSIFICATION_META) as TeamClassificationKey[]).map((value) => (
+            <button key={value} type="button" className={space === value ? `on ${value}` : value} onClick={() => setSpace(value)}><i />{TEAM_CLASSIFICATION_META[value].label} <span>{spaceCount(value)}</span></button>
+          ))}
+        </div>
+
+        {loading ? <div className="v8-filter-empty">Loading sessions…</div> : visible.length === 0 ? (
+          sessions.length === 0 ? (
+            <div className="v8-empty"><span className="glyph"><Inbox /></span><h2>No sessions yet</h2><p>Start your first session and it will show up here with live status, diffs, and checkpoints.</p><button className="v8-btn v8-btn--ink" type="button" onClick={() => navigate('/chat')}>New session</button></div>
+          ) : <div className="v8-filter-empty">No sessions match this filter.</div>
+        ) : (
+          <div className="v8-panel">
+            {visible.map((session) => {
+              const state = sessionState(session);
+              const itemSpace = teamClassificationKey(session.teamClassification, session.studioWorkspaceId);
+              const display = getModelDisplay(session.provider ?? '', session.model);
+              const model = display.modelLabel || display.providerLabel || 'Default model';
+              const context = session.workspaceName || session.repoName || `${session.messageCount ?? 0} messages`;
+              const destination = session.studioWorkspaceId
+                ? `/studio/sessions/${session._id}?ws=${encodeURIComponent(session.studioWorkspaceId)}`
+                : `/chat/${session._id}`;
+              return (
+                <Link className="v8-session-row" key={session._id} to={destination}>
+                  <span className={`v8-state-dot ${state}`} />
+                  <div className="v8-row-main">
+                    <h2>{session.title || 'Untitled conversation'}</h2>
+                    <p>
+                      <span className={`v8-space-tag ${itemSpace}`}><i />{TEAM_CLASSIFICATION_META[itemSpace].short}</span>
+                      {session.studioWorkspaceId && <><b>·</b><span className="v8-studio-tag">Studio</span></>}
+                      <b>·</b>{session.activeAgent || 'allen assistant'}<b>·</b>{context}
+                    </p>
                   </div>
-                  <div className="max-h-[252px] overflow-auto">
-                  {filteredOwnerOptions.map((option) => {
-                    const selected = option.value === selectedOwner;
-                    return (
-                      <button
-                        key={option.value}
-                        type="button"
-                        role="option"
-                        aria-selected={selected}
-                        onClick={() => {
-                          setSelectedOwner(option.value);
-                          setOwnerMenuOpen(false);
-                          setOwnerSearch('');
-                        }}
-                        className={`flex min-h-9 w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-[13px] transition-colors ${
-                          selected
-                            ? 'bg-app-muted text-theme-primary'
-                            : 'text-theme-secondary hover:bg-app-muted'
-                        }`}
-                      >
-                        <span className="truncate">{option.label}</span>
-                        {selected && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />}
-                      </button>
-                    );
-                  })}
-                  {filteredOwnerOptions.length === 0 && (
-                    <div className="px-3 py-3 text-[13px] text-theme-muted">No users found.</div>
-                  )}
+                  <div className="v8-row-cols">
+                    <span className="v8-model"><ModelMark provider={session.provider} />{model}</span>
+                    <span className={`v8-status ${state}`}>{state === 'completed' ? 'completed' : 'running'}</span>
+                    <time>{shortAge(session.lastMessageAt)}</time>
                   </div>
-                </div>
-              )}
-            </div>
-            <div className="flex shrink-0 items-center gap-2 font-mono text-[11px] text-theme-muted">
-              <ListFilter className="h-3.5 w-3.5" />
-              <span>{items.length} shown</span>
-            </div>
+                </Link>
+              );
+            })}
           </div>
-        </div>
-
-        <div className="space-y-2">
-          {loading && items.length === 0 && (
-            <div className="rounded-md border border-app bg-app-card px-5 py-10 text-center text-[13px] text-theme-muted">Loading history...</div>
-          )}
-          {!loading && items.length === 0 && (
-            <div className="rounded-md border border-dashed border-app bg-app-card px-5 py-10 text-center text-[13px] text-theme-muted">No conversations found.</div>
-          )}
-          {items.map((item) => {
-            const ContextIcon = item.context?.kind === 'workspace' ? GitBranch : FolderGit2;
-            const { providerLabel: displayProvider, modelLabel: displayModel } = getModelDisplay(item.provider ?? '', item.model);
-            const provider = displayModel ? `${displayProvider} · ${displayModel}` : displayProvider;
-            return (
-              <Link
-                key={`chat-${item.id}`}
-                to={item.href}
-                className="group block rounded-md border border-app bg-app-card px-4 py-3 transition-colors hover:border-app-strong hover:bg-app-muted/30"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <h2 className="truncate text-[14.5px] font-semibold text-theme-primary">{item.title}</h2>
-                      {provider && (
-                        <span className="hidden shrink-0 rounded-md border border-app bg-app px-2 py-0.5 font-mono text-[10px] text-theme-muted sm:inline-flex">
-                          {provider}
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-theme-muted">
-                      <span className="truncate">{item.runner}</span>
-                      {item.context && (
-                        <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-theme-secondary">
-                          <ContextIcon className="h-3 w-3 shrink-0 text-accent" />
-                          <span className="truncate">
-                            {item.context.kind === 'workspace' ? 'Workspace' : 'Repository'}: {item.context.label}
-                            {item.context.kind === 'workspace' && item.context.detail ? ` · ${item.context.detail}` : ''}
-                          </span>
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="ml-auto flex shrink-0 items-center gap-4 pt-0.5 font-mono text-[12px] text-theme-muted">
-                    <span>{item.messageCount} {item.messageCount === 1 ? 'message' : 'messages'}</span>
-                    <span>{timeAgo(item.lastMessageAt)}</span>
-                  </div>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
+        )}
+        {!loading && visible.length > 0 && <p className="v8-page-foot">Showing {visible.length} of {sessions.length} sessions</p>}
       </div>
-      <ChatImportPreviewModal
-        isOpen={importModalOpen}
-        onClose={() => setImportModalOpen(false)}
-        onImported={handleImported}
-      />
-    </div>
+    </section>
   );
 }

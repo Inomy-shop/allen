@@ -1,0 +1,151 @@
+---
+title: 'Environment Reference'
+description: 'Configure Allen web and desktop runtimes without exposing credentials or overriding managed values.'
+---
+
+:::info Media placeholders
+Before publishing, capture **Settings → Runtime**, **Settings → Models**, desktop diagnostics, and a redacted web `.env`. Never show credential values, connection strings, private paths, or capability URLs.
+:::
+
+Allen resolves configuration differently in web/server mode and packaged desktop:
+
+- **Web/server mode:** the server loads the repository-root `.env`. **Settings → Runtime** shows the active configuration but is read-only; edit the deployment environment and restart the server.
+- **Desktop mode:** Allen creates a desktop runtime configuration, managed paths, sticky ports, and JWT secrets. **Settings → Runtime** and **Settings → Models** expose supported changes and label any value that requires a restart.
+
+Do not copy a web `.env` over desktop-managed configuration. Use desktop diagnostics and the Settings pages as the source of truth for a packaged session.
+
+## Minimum web/server configuration
+
+Start from `.env.example` and replace every placeholder secret.
+
+| Variable | Behavior |
+| --- | --- |
+| `JWT_ACCESS_SECRET` | Required when Allen signs or verifies access tokens. Use a unique random value. |
+| `JWT_REFRESH_SECRET` | Required when Allen creates or verifies refresh tokens. Use a different unique random value. |
+| `MONGODB_URI` | Recommended explicit MongoDB connection string. If omitted, the server falls back to local MongoDB using Allen's default database name. |
+| `PORT` | API port. Defaults to `4023`. |
+| `TERMINAL_WS_PORT` | Terminal and file-watch WebSocket port. Defaults to `4024` in web mode. Set it explicitly when changing `PORT` so the UI proxy and server agree. |
+| `HOST` | Optional API listen host. Set it deliberately for the intended network boundary. |
+| `ACCESS_TOKEN_TTL` | Optional access-token lifetime. Defaults to `7d`. |
+| `REFRESH_TOKEN_TTL` | Optional refresh-token lifetime. Defaults to `30d`. |
+
+Rotate both JWT secrets if either is exposed. Existing sessions stop working after the corresponding secret changes.
+
+## Runtime URLs and local paths
+
+| Variable | Purpose |
+| --- | --- |
+| `ALLEN_API_URL` | API base URL used by Allen tools and subprocess integrations. Server startup fills it from the bound API address when unset. |
+| `ALLEN_INTERNAL_API_URL` | Internal API fallback used when a separate internal address is needed. |
+| `ALLEN_PUBLIC_URL` | Public base used for absolute artifact and uploaded-file links. Defaults to the runtime API URL. |
+| `ALLEN_APP_BASE_URL` | Browser-facing application base used for approval and intervention links. |
+| `ALLEN_PUBLIC_DOMAIN` | Domain used to build workspace service subdomains. If unset, workspace preview placeholders resolve to localhost ports. |
+| `ALLEN_HOME` | Allen-managed local state. The normal default is `~/.allen`. |
+| `WORKSPACE_BASE_DIR` | Base directory for Allen worktrees. Use a dedicated directory. |
+| `UPLOADS_DIR` | Local storage root for uploaded files and artifacts. Defaults to `~/.allen/uploads`. |
+| `MCP_BUNDLES_DIR` | Local storage for Allen-managed MCP bundles and related state. |
+| `ALLEN_TERMINAL_SHELL` | Optional executable used for workspace terminal sessions. |
+
+Use the URL that users can actually reach. An internal loopback URL is not a valid `ALLEN_PUBLIC_URL` for links sent to another machine.
+
+## Chat, agents, and models
+
+Prefer **Settings → Models** for supported desktop configuration.
+
+| Variable | Purpose |
+| --- | --- |
+| `ALLEN_DEFAULT_CHAT_PROVIDER` | Default provider for new chat sessions. |
+| `ALLEN_DEFAULT_CHAT_MODEL` | Default model for new chat sessions when the provider supports that model. |
+| `ALLEN_DEFAULT_AGENT_PROVIDER` | Provider used when new agents or seeded agents are created. Leaving it unset preserves the role-specific seeded provider mix. |
+| `ALLEN_DEFAULT_AGENT_MODEL` | Model fallback used with a configured default agent provider. |
+| `ALLEN_SYSTEM_PROMPT_MODE` | Claude system-prompt wiring: `append` by default, or `custom` where supported. |
+| `ALLEN_AGENT_SKIP_LEARNINGS` | Skips learned-context injection when enabled. |
+| `CLAUDE_BIN` | Optional path override for the Claude CLI. |
+
+Agent defaults are creation-time inputs. Existing agent records keep their stored provider and model unless a user changes them. Workflow-node, agent, chat-session, and model-recovery overrides can still select a different runtime model.
+
+Provider API keys, base URLs, and model identifiers vary by provider. Configure supported desktop providers in **Settings → Models** and use the exact variable names shown in `.env.example` for a web deployment. See [Models Reference](/reference/models) for selection and override behavior.
+
+## Repository context
+
+Repository context is optional until enabled.
+
+| Variable | Purpose |
+| --- | --- |
+| `ALLEN_CONTEXT_PROVIDER` | Enables context flows. Supported values are `allen`, `cognee`, and `cognee_memory`; legacy `graph` maps to `allen`. Empty, `off`, `none`, or `disabled` turns context off. |
+| `ALLEN_PYTHON` | Python interpreter used by Allen-owned context sidecars. |
+| `ALLEN_CONTEXT_LLM_PROVIDER` / `ALLEN_CONTEXT_LLM_MODEL` | Provider and model for context-engine LLM steps. |
+| `ALLEN_CONTEXT_MAX_FILE_CHARS` | Maximum characters selected from one context file. |
+| `ALLEN_CONTEXT_MAX_TOTAL_CHARS` | Total injected-context character budget. |
+| `ALLEN_CONTEXT_MAX_INJECTED_REFS` | Maximum number of injected references. |
+| `ALLEN_CONTEXT_RERANKER` / `ALLEN_CONTEXT_RERANKER_MODEL` | Optional semantic reranker and model. |
+| `ALLEN_COGNEE_DATA_DIR` | Local Cognee data directory. |
+| `ALLEN_COGNEE_TIMEOUT_MS` | Cognee ingest/search timeout. |
+
+Desktop users can enable **Cognee Context** and run its managed setup from **Settings → Runtime**. Web operators must prepare the Python environment and deployment variables themselves. A disabled provider returns `CONTEXT_PROVIDER_DISABLED`; it is not evidence that repository registration failed.
+
+## Integrations and MCP credentials
+
+Common integration secrets include:
+
+| Variable | Integration |
+| --- | --- |
+| `ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN` | GitHub actions used by Allen. |
+| `ALLEN_LINEAR_ACCESS_TOKEN` | Linear access. |
+| `ALLEN_SLACK_BOT_TOKEN` | Slack bot access. |
+| `ALLEN_SLACK_SIGNING_SECRET` | Slack request verification. |
+| `ALLEN_SLACK_TEAM_ID` | Slack workspace identity. |
+
+An MCP server declares the bare keys it needs. For a declared key such as `LINEAR_ACCESS_TOKEN`, configure `ALLEN_LINEAR_ACCESS_TOKEN`; Allen supplies the bare key only to that MCP process, together with a small baseline OS environment. It does not intentionally copy the full host environment into sourced MCP servers.
+
+In desktop mode, supported provider, integration, and MCP credential fields write through the runtime secret provider. In web mode, supply the matching deployment environment variables. See [MCP Reference](/reference/mcp) before granting a server access to sensitive systems.
+
+## Artifacts and upload storage
+
+Uploads and artifacts use local storage unless S3 is both enabled and given a bucket.
+
+| Variable | Purpose |
+| --- | --- |
+| `S3_UPLOAD_ENABLED` | Set to `true` to attempt S3 storage. |
+| `S3_UPLOAD_BUCKET` | Required bucket when S3 is enabled. |
+| `S3_UPLOAD_REGION` | AWS region; defaults to `us-east-1`. |
+| `S3_UPLOAD_PREFIX` | Optional object-key prefix. |
+| `S3_UPLOAD_ENDPOINT` | Optional compatible endpoint. |
+| `S3_UPLOAD_FORCE_PATH_STYLE` | Enables path-style requests for compatible services. |
+
+If an S3 write fails, Allen logs the failure and falls back to local storage. Monitor those logs: a successful user action does not prove that the object was stored in S3.
+
+## Desktop-managed values
+
+Packaged desktop creates or manages:
+
+- `ALLEN_HOME`, workspace, upload, and MCP directories;
+- JWT secrets in the desktop secret store;
+- a sticky API port from `48100–48199`;
+- a sticky managed MongoDB port from `48300–48399`;
+- terminal WebSocket handling on the desktop API server;
+- `ALLEN_API_URL` and `ALLEN_INTERNAL_API_URL` after the server binds.
+
+The desktop runtime removes inherited API URLs before startup and uses managed MongoDB rather than trusting a copied web `MONGODB_URI`. Do not edit `desktop-runtime.json` while Allen is running. Use the Settings UI and restart when the saved field says **Restart required**.
+
+## Validate a change
+
+After changing runtime configuration:
+
+1. Restart Allen if the field or deployment requires it.
+2. Check `GET /api/health` for API liveness and `GET /api/system/health` for coarse runtime readiness.
+3. Confirm the actual paths and ports in **Settings → Runtime** or desktop diagnostics.
+4. Create a low-risk chat or workspace using the changed provider, path, or integration.
+5. Test each affected MCP server separately.
+6. Open one non-sensitive artifact/upload link from the same network location as its intended recipient.
+
+:::caution
+Never paste `.env` values, JWT secrets, provider keys, OAuth credentials, connection strings, private paths, or capability URLs into chat, tickets, screenshots, artifacts, or public logs.
+:::
+
+## Related pages
+
+- [Ports Reference](/reference/ports)
+- [Security Reference](/reference/security)
+- [Models Reference](/reference/models)
+- [Context Engine](/concepts/context-engine)

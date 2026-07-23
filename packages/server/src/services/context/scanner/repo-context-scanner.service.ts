@@ -626,8 +626,7 @@ async function runCodexRepoScanner(opts: {
     args.push('-c', `model="${opts.model}"`);
   }
   if (opts.reasoningEffort && opts.reasoningEffort !== 'off') {
-    const effort = opts.reasoningEffort === 'max' ? 'high' : opts.reasoningEffort;
-    args.push('-c', `model_reasoning_effort="${effort}"`);
+    args.push('-c', `model_reasoning_effort="${opts.reasoningEffort}"`);
   }
 
   const mcpEnv = {

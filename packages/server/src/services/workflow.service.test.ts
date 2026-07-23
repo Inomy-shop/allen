@@ -49,6 +49,56 @@ describe('WorkflowService soft delete and restore', () => {
   beforeEach(async () => {
     await db.collection('workflows').deleteMany({});
     await db.collection('model_registry').deleteMany({});
+    await db.collection('executions').deleteMany({});
+    await db.collection('artifacts').deleteMany({});
+  });
+
+  it('persists fixed team classifications and propagates changes to inherited documents', async () => {
+    const created = await service.create({
+      yaml: 'name: classified-flow\ndescription: test\nversion: 1\nnodes: {}\nedges: []\n',
+      teamClassification: 'engineering',
+    });
+    expect(created).toMatchObject({
+      teamClassification: 'engineering',
+      teamClassificationSource: 'manual',
+    });
+
+    const workflowId = String(created._id);
+    await db.collection('executions').insertOne({
+      _id: new ObjectId(),
+      id: 'execution-classified',
+      workflowId,
+      workflowName: 'classified-flow',
+    });
+    await db.collection('artifacts').insertOne({
+      artifactId: 'inherited-doc',
+      rootType: 'workflow',
+      rootId: 'execution-classified',
+      teamClassification: 'engineering',
+      teamClassificationSource: 'inherited',
+    });
+    await db.collection('artifacts').insertOne({
+      artifactId: 'manual-doc',
+      rootType: 'workflow',
+      rootId: 'execution-classified',
+      teamClassification: 'design',
+      teamClassificationSource: 'manual',
+    });
+
+    await service.update(workflowId, { teamClassification: 'product' });
+
+    expect(await db.collection('workflows').findOne({ _id: new ObjectId(workflowId) })).toMatchObject({
+      teamClassification: 'product',
+      teamClassificationSource: 'manual',
+    });
+    expect(await db.collection('artifacts').findOne({ artifactId: 'inherited-doc' })).toMatchObject({
+      teamClassification: 'product',
+      teamClassificationSource: 'inherited',
+    });
+    expect(await db.collection('artifacts').findOne({ artifactId: 'manual-doc' })).toMatchObject({
+      teamClassification: 'design',
+      teamClassificationSource: 'manual',
+    });
   });
 
   // ── FR3-AC1: Delete workflow keeps the document, hides it from all lists ──

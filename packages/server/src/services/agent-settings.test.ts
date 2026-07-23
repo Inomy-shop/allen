@@ -98,21 +98,19 @@ describe('resolveAgentSettings — validation', () => {
     }
   });
 
-  it('rejects effort="max" on Codex', () => {
-    expect(() =>
-      resolveAgentSettings(codexAgent, [{ reasoningEffort: 'max' }]),
-    ).toThrow(/max.*only.*Claude/i);
-  });
-
-  it('rejects effort="max" on non-Opus Claude model', () => {
-    expect(() =>
-      resolveAgentSettings(claudeAgent, [{ reasoningEffort: 'max' }]),
-    ).toThrow(/max.*requires.*Opus/i);
-  });
-
-  it('accepts effort="max" on Opus', () => {
-    const r = resolveAgentSettings(opusAgent, [{ reasoningEffort: 'max' }]);
+  it('accepts effort="max" on Codex', () => {
+    const r = resolveAgentSettings(codexAgent, [{ reasoningEffort: 'max' }]);
     expect(r.reasoningEffort).toBe('max');
+  });
+
+  it('accepts effort="max" on non-Opus Claude models', () => {
+    const r = resolveAgentSettings(claudeAgent, [{ reasoningEffort: 'max' }]);
+    expect(r.reasoningEffort).toBe('max');
+  });
+
+  it('accepts the Codex-only ultra level at the settings boundary', () => {
+    const r = resolveAgentSettings(codexAgent, [{ reasoningEffort: 'ultra' }]);
+    expect(r.reasoningEffort).toBe('ultra');
   });
 
   it('agent with planMode=true default and Codex provider still throws', () => {
@@ -199,7 +197,9 @@ describe('toClaudeSdkOptions', () => {
       ['low', undefined],
       ['medium', 'think'],
       ['high', 'think hard'],
+      ['xhigh', 'ultrathink'],
       ['max', 'ultrathink'],
+      ['ultra', 'ultrathink'],
     ];
     for (const [effort, expected] of cases) {
       const opts = toClaudeSdkOptions(resolveAgentSettings({ ...opusAgent, reasoningEffort: effort }));
@@ -226,6 +226,13 @@ describe('toCodexArgs', () => {
     const r = resolveAgentSettings({ ...codexAgent, reasoningEffort: undefined });
     const args = toCodexArgs(r);
     expect(args.find((a) => a.includes('model_reasoning_effort'))).toBeUndefined();
+  });
+
+  it('preserves extended Codex effort levels', () => {
+    for (const reasoningEffort of ['xhigh', 'max', 'ultra'] as const) {
+      const args = toCodexArgs(resolveAgentSettings({ ...codexAgent, reasoningEffort }));
+      expect(args).toContain(`model_reasoning_effort="${reasoningEffort}"`);
+    }
   });
 
   it('does not emit model arg when model is "default"', () => {

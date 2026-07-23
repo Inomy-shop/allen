@@ -22,8 +22,13 @@ import { agents as agentsApi, teams as teamsApi, repos as reposApi } from '../..
 import { useToast } from '../common/Toast';
 import IconTooltipButton from '../common/IconTooltipButton';
 import Select from '../common/Select';
+import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
 import { useModelRegistry } from '../../hooks/useModelRegistry';
 import { buildModelOptionsForProvider } from '../../lib/model-catalog';
+import {
+  reasoningEffortOptionsFor,
+  type ReasoningEffortValue,
+} from '../../lib/reasoning-effort';
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -501,7 +506,7 @@ export function CreateTeamFromAgentsDialog({
   const [allTeams, setAllTeams] = useState<Team[]>([]);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [leadModel, setLeadModel] = useState(() => getDefaultModelForProvider('claude'));
-  const [leadEffort, setLeadEffort] = useState<'off' | 'low' | 'medium' | 'high'>('high');
+  const [leadEffort, setLeadEffort] = useState<ReasoningEffortValue>('high');
   const [isOtherLeadModel, setIsOtherLeadModel] = useState(false);
   const [customLeadModel, setCustomLeadModel] = useState('');
   const [working, setWorking] = useState(false);
@@ -699,7 +704,13 @@ export function CreateTeamFromAgentsDialog({
                     setLeadModel(val);
                   }}
                   searchable={false}
-                  options={buildModelOptionsForProvider('claude', [], registryGetModelsForProvider('claude'))}
+                  options={buildModelOptionsForProvider('claude', [], registryGetModelsForProvider('claude'))
+                    .map(option => ({
+                      ...option,
+                      icon: option.value === '__other__'
+                        ? undefined
+                        : <ProviderIcon provider="claude" className={`h-4 w-4 ${providerIconColor('claude')}`} />,
+                    }))}
                 />
               )}
             </div>
@@ -709,14 +720,16 @@ export function CreateTeamFromAgentsDialog({
               </label>
               <Select
                 value={leadEffort}
-                onChange={(value) => setLeadEffort(value as 'off' | 'low' | 'medium' | 'high')}
+                onChange={(value) => setLeadEffort(value as ReasoningEffortValue)}
                 searchable={false}
-                options={[
-                  { value: 'off', label: 'off' },
-                  { value: 'low', label: 'low' },
-                  { value: 'medium', label: 'medium' },
-                  { value: 'high', label: 'high' },
-                ]}
+                options={reasoningEffortOptionsFor(
+                  'claude',
+                  isOtherLeadModel ? customLeadModel : leadModel,
+                ).map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                  sublabel: option.description,
+                }))}
               />
             </div>
           </div>

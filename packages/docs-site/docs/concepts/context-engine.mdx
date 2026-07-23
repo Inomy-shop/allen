@@ -1,0 +1,124 @@
+---
+title: 'Context Engine'
+---
+
+The context engine helps Allen find repository-specific guidance without placing the entire codebase in every prompt. It is most useful when agents repeatedly need the same architecture decisions, conventions, or safety rules across chats and workflows.
+
+Context improves discovery; it does not replace source inspection. For code-changing work, the live files, tests, and current diff remain the source of truth.
+
+:::info Media placeholders
+Add as many screenshots, diagrams, or clips as needed before publishing. Suggested captures: `static/img/docs/concepts-context-engine-01.png` through `static/img/docs/concepts-context-engine-07.png`, plus `static/videos/docs/concepts-context-engine-short.mp4` if setup or diagnostics are clearer as motion. Capture **Settings → Runtime → Cognee Context**, the repository **Context** button, setup phases, each context-management tab, Playground results, and the **Context** tab from a real chat without exposing private source or credentials.
+:::
+
+## When to use it
+
+Use repository context when:
+
+- the same conventions are missed across multiple tasks;
+- a large repository makes manual file selection unreliable;
+- different agents need different always-load instructions;
+- you want to inspect why a chat or workflow received particular context;
+- you want to test retrieval before allowing repository changes.
+
+Do not add general knowledge that the model already knows, temporary task notes, secrets, or instructions that are no longer true. Context entries are most valuable when they are concise, source-backed, and stable enough to reuse.
+
+## Enable context
+
+The context engine is optional. When it is disabled, Allen still runs, but repository context setup, semantic retrieval, graph management, and context diagnostics are unavailable.
+
+In the desktop app:
+
+1. Open **Settings → Runtime**.
+2. Turn on **Cognee Context**.
+3. If Allen shows **Setup required**, select **Set up Cognee context** and wait for the managed Python environment check to complete.
+4. Save the runtime settings.
+
+The setting applies to future context builds without restarting Allen. Once enabled, each repository row shows a **Context** button. Operators who manage Allen outside the desktop settings surface can use the [Context management](/operator-guide/context-management) reference for provider and environment configuration.
+
+## Prepare a repository
+
+1. Open **Repositories**.
+2. Select **Context** on the repository you want to prepare.
+3. Select **Prepare repo context**.
+4. Follow the four phase chips: **Preflight**, **Curation**, **Mandatory**, and **Graph**.
+5. Use **Show details** to inspect changed or reused files, saved mandatory mappings, failures, and graph status.
+
+After a successful run, the card collapses and shows the last completion time. **Check for updates** prepares new or changed material after the repository advances. If curated material exists but the semantic graph is stale, the primary action changes to **Refresh stale context graph**.
+
+### Interrupted or incomplete setup
+
+A setup run can finish as completed, partial, failed, cancelled, or stopped. A server restart can leave a running record in the stopped state. For partial, failed, stopped, or cancelled work, use **Resume setup** so Allen can reconcile recorded progress and continue the remaining phases. Use **Cancel** only while a run is active or partially active.
+
+Advanced options are intentionally separate:
+
+- **Clean rebuild context graph** starts a fresh graph dataset instead of continuing the existing one.
+- **Force re-curation** reprocesses all files instead of reusing unchanged results.
+
+Use the normal update or resume path first. A clean rebuild or forced re-curation costs more time and should be reserved for stale, corrupted, or intentionally reworked context.
+
+## Understand the context layers
+
+Allen separates reusable knowledge from instructions that must always load.
+
+| Layer | Use it for | Runtime behavior |
+| --- | --- | --- |
+| Curated context | Concise, source-backed explanations and conventions that may be relevant to many tasks. | Considered during semantic retrieval and selected when the query matches. |
+| Mandatory context | Agent-specific rules that must be present for that agent's repository work. | Enabled mappings are added to matching new agent runs without relying on semantic similarity. |
+| Runtime context packet | The final selected material for one chat turn or agent attempt. | Records injected, selected, filtered, and provider-native references for review. |
+
+Use curated context for “how this repository works.” Use mandatory context for “this agent must always follow this rule.” If a requirement is safety-critical, do not depend on semantic recall alone.
+
+## Use the context-management tabs
+
+The repository context page has five tabs:
+
+| Tab | What to do there |
+| --- | --- |
+| **Context Graph** | Search and inspect graph nodes and relationships. Use **Refresh context** for normal updates, **Clean build context** only when a fresh dataset is required, and stop an active build when necessary. |
+| **Curated Context** | Search, create, edit, or archive reusable entries. Keep the injected text concise and verify its path or other source evidence before saving. |
+| **Mandatory Context** | Filter mappings by agent, add or edit agent-specific instructions, show inactive mappings, and deactivate obsolete mappings without deleting their history. |
+| **Playground** | Run a query for a selected agent and optional current files. Inspect candidates, selections, filtering, compression, and injection decisions before a real task. |
+| **Context Review** | Review context-quality tasks, findings, remediation records, and learning promotions. Use this advanced queue when Allen flags context that may need human judgment. |
+
+Edits to curated content can make semantic context stale until the graph is refreshed. Mandatory mapping changes apply when future agent attempts build context; they do not rewrite a packet already captured for an attempt.
+
+## Test retrieval before a risky task
+
+The **Playground** is the safest way to check whether an agent will receive useful repository knowledge.
+
+1. Select the agent that will perform the task.
+2. Enter a realistic request, not only keywords.
+3. Add relevant current file paths when the task targets known files.
+4. Select **Run pipeline**.
+5. Review the candidate, selected, injectable, and filtered references and their reasons.
+
+A Playground result is diagnostic, not a guarantee that every future run receives the same packet. Runtime selection also depends on the actual task, agent, files, provider, current context data, and injection budget. If a rule must always load for an agent, make it mandatory.
+
+## Verify what a run received
+
+Do not infer context use from the final answer alone.
+
+- In chat, open the run sidebar and select **Context**. Each turn can show injected, selected, and filtered counts, a skip reason, and expandable reference evidence.
+- In an execution, open the agent attempt's **Context injection** details to inspect the captured packet and usage evidence.
+
+“Selected” does not always mean “injected.” A reference may be filtered because it was already supplied, exceeded a runtime budget, duplicated other content, or was handled natively by the provider. Use the recorded evidence as the source of truth for that attempt.
+
+## Maintain and move context safely
+
+- Use **Check for updates** after the repository's default branch changes significantly.
+- Refresh the graph after editing or importing curated context before relying on semantic recall.
+- Show inactive mandatory mappings before recreating a rule so you can understand its history and avoid adding a conflicting replacement.
+- Use **Export** to download active curated entries and enabled mandatory mappings as JSON.
+- Use **Import** to preview additions, duplicates, clashes, repository-name mismatches, and mappings whose agents do not exist in the target Allen instance.
+
+Import is additive. It adds safe new records and skips duplicates, clashes, and missing-agent mappings instead of overwriting existing context. Importing into a differently named repository requires explicit confirmation. Review the preview carefully, then refresh semantic context after a successful import.
+
+:::caution
+Repository context can contain private implementation details. Do not add credentials, tokens, customer data, or copied secrets. Archive stale curated entries and deactivate obsolete mandatory mappings so future agents do not receive guidance that no longer matches the code.
+:::
+
+## Practical rule
+
+Use context to help Allen find where to look and which repository rules to remember. Still require source inspection, tests, and a reviewable diff before accepting code changes.
+
+Related operator page: [Context management](/operator-guide/context-management).

@@ -1,0 +1,137 @@
+---
+title: 'Workspaces'
+description: 'Use isolated Git worktrees to inspect, change, validate, and review repository work.'
+---
+
+A workspace is an isolated Git worktree for one repository task. It gives Allen a task-specific branch and filesystem path while keeping the registered repository checkout separate.
+
+Open **Workspaces** to see active work grouped by repository. Each row shows the workspace name, status, workspace branch, base branch, changed-file count, local path, port, and pull request when available.
+
+:::tip Use one workspace for one reviewable outcome
+Create a separate workspace for each feature, fix, review, or documentation change. A focused branch and diff are easier to validate, discuss, and archive.
+:::
+
+## Create a workspace
+
+You can start from **Workspaces → New workspace**, from a repository's **New workspace** action, or from a workflow that creates a workspace as one of its steps.
+
+For a manual workspace:
+
+1. Choose the registered repository.
+2. Enter a human-readable **Workspace Name**.
+3. Enter a new **Branch** for the task.
+4. Verify the **Base Branch**.
+5. Choose **Create workspace** and follow setup progress.
+
+The base branch defaults from the repository's detected or saved default branch. Allen fetches `origin` when possible, resolves the freshest matching base ref, records the starting commit, and creates the new branch as a Git worktree. If the requested base cannot be found, Allen checks common fallback branches and reports a failure if none exist.
+
+When creation completes, Allen opens a workspace-linked chat. The workspace name, repository, task branch, and base branch remain visible as chat context.
+
+## What isolation means
+
+| Registered repository | Workspace |
+| --- | --- |
+| Source checkout Allen has registered | Separate worktree for a particular task |
+| Supplies the canonical project and default branch | Supplies the task branch, base commit, and working changes |
+| Used for repository selection and new workspace creation | Used for edits, commands, diffs, validation, and review |
+
+Changes in a workspace do not directly modify the registered checkout's working tree. They still belong to the same Git repository, so branch names, commits, remotes, and pushed state are shared Git concerns.
+
+Workspace isolation is for clean task boundaries and reviewability. It is not a hardened security boundary.
+
+## Work from the linked chat
+
+Choose **Open** on a workspace to enter its linked chat. Allen scopes the workspace terminal and file tools to the worktree and shows workspace-backed code work in the run sidebar.
+
+From the chat and run sidebar, you can:
+
+- browse the workspace file tree and preview files;
+- inspect changed files as unified or side-by-side diffs;
+- open one or more terminals rooted in the workspace;
+- follow agent runs, child work, activity, and artifacts;
+- keep follow-up discussion attached to the same workspace.
+
+Tell Allen the outcome, allowed actions, validation commands, and whether Git operations are permitted. The workspace path is context; it does not by itself authorize a commit, push, pull request, or deployment.
+
+## Review changes
+
+A useful workspace review loop is:
+
+```text
+Create from the correct base branch
+  -> make one focused set of changes
+  -> inspect changed files and the full diff
+  -> run validation in the workspace terminal
+  -> review execution output and artifacts
+  -> explicitly decide whether to commit, push, or open a pull request
+  -> archive the workspace when it is no longer needed
+```
+
+The changed-file count and diff come from the current Git worktree, including untracked files where appropriate. Allen records the base commit at creation so review can stay anchored to the code the task started from even if the remote base later moves.
+
+Before accepting a result, check that the diff contains only the intended files, generated files are expected, and the validation was run from this workspace rather than another checkout.
+
+## Setup and services
+
+Repository **Workspace config** can prepare new workspaces with:
+
+- environment-file templates;
+- setup and cleanup commands;
+- named services and port offsets;
+- health-check paths and auto-start behavior;
+- commands that run before pull-request creation.
+
+During creation, Allen writes configured environment files, runs setup commands, and records progress. Configured services run from the worktree and can expose workspace-specific preview URLs and logs.
+
+Treat workspace configuration as executable project configuration. Review commands and environment content before enabling automatic setup or services, and do not put secrets into documentation or reusable templates.
+
+## Git and pull requests
+
+Workspace operations support committing all current changes with a message, pushing the workspace branch, pulling from the base branch, and creating a pull request. Pull-request creation can run configured pre-PR checks, push the branch, and then create the GitHub pull request.
+
+These actions change Git or external state. Use them only after you have:
+
+- reviewed the complete diff;
+- run the required tests, lint, build, or preview checks;
+- confirmed the intended branch and remote;
+- supplied an accurate commit message or pull-request title and body;
+- received any approval required by your team's process.
+
+A successful agent or workflow message does not prove that changes were committed, pushed, or opened as a pull request. Check the workspace row, execution, and linked pull request.
+
+## Pull request workspaces
+
+Allen can also create a workspace from an existing pull request. It fetches the pull-request branch, creates a worktree for that branch, and records the pull-request number, title, and URL.
+
+Use this path when you need to inspect, test, or update a pull request without switching the registered repository checkout. Review the base branch and remote head before making follow-up changes.
+
+## Delete and archive a workspace
+
+The **Delete workspace** action archives the workspace rather than deleting the repository or its Git history. Allen stops its services, runs configured cleanup commands, removes the worktree directory, and marks the workspace archived. Linked chats retain an archived workspace snapshot so the repository, branch, base branch, and pull-request context can still be understood later.
+
+The worktree's uncommitted files are removed during archive. Before confirming deletion:
+
+- inspect the diff for unsaved work;
+- commit or copy anything that must be retained;
+- confirm that services and terminals can stop;
+- preserve required artifacts outside the worktree;
+- verify whether a branch or pull request still needs follow-up.
+
+Deleting a workspace does not delete the registered repository.
+
+:::caution Workspaces are not security sandboxes
+A workspace isolates a Git working tree, not the machine, credentials, network, or every process an agent can access. Do not run untrusted code with sensitive credentials, and review tool access before execution.
+:::
+
+## Before approving workspace work
+
+- **Source:** correct registered repository and base branch.
+- **Scope:** one understandable outcome on one task branch.
+- **Diff:** only intended files and changes.
+- **Commands:** validation ran inside this workspace and passed.
+- **Runtime:** services and previews show the expected behavior.
+- **Evidence:** execution logs and artifacts support the result.
+- **Git state:** commit, push, and pull-request status match what was requested.
+- **Cleanup:** important work is preserved before archive.
+
+Related concept: [Repositories](/concepts/repositories). Related guide: [Create or open a workspace](/guides/create-or-open-a-workspace).

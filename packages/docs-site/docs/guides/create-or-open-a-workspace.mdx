@@ -1,0 +1,121 @@
+---
+title: 'Create or Open a Workspace'
+---
+
+A workspace is an isolated Git worktree for a repository task. Use one when Allen or an agent needs to inspect files, make changes, run checks, or prepare reviewable output without working in the registered repository checkout.
+
+:::info Media placeholders
+Add screenshots or clips before publishing. Suggested captures: `static/img/docs/guides-create-or-open-a-workspace-01.png` through `static/img/docs/guides-create-or-open-a-workspace-06.png`, plus `static/videos/docs/guides-create-or-open-a-workspace-short.mp4`. Show **New workspace**, repository and branch selection, setup progress, workspace chat, and the **Files**, **Code changes**, **Terminal**, and **Servers** surfaces.
+:::
+
+## When to use a workspace
+
+Create a workspace for repository tasks that may change files or need an isolated environment. A workspace gives the task:
+
+- its own branch and worktree;
+- a recorded base branch and base commit;
+- workspace-linked chat sessions;
+- reviewable files and code changes;
+- terminal access and configured development services;
+- a durable place to collect task, context, and pull-request links.
+
+A workspace is isolation for Git work, not a hardened security sandbox. Review commands, credentials, generated files, and external side effects just as you would in a normal local checkout.
+
+## Create a workspace
+
+Add the repository first if it is not already registered. Then:
+
+1. Open **Workspaces**.
+2. Choose **New workspace**.
+3. Select the registered repository.
+4. Enter a descriptive **Workspace name**.
+5. Enter the new **Branch** for the task.
+6. Review the **Base branch**. Allen starts with the repository's detected default branch, but you can choose another appropriate base.
+7. Choose **Create workspace**.
+8. Keep the setup dialog open until the workspace is ready or a clear error appears.
+
+During setup, Allen refreshes remote references when a remote is available, resolves the base branch, creates the worktree and task branch, allocates workspace resources, and starts configured services. Setup stops if required Git operations fail; it does not silently continue from a stale fetch.
+
+When setup succeeds, Allen opens the workspace-linked chat.
+
+## Open an existing workspace
+
+Open **Workspaces**, find the workspace by repository, branch, or status, and choose **Open**.
+
+The list shows useful review information such as:
+
+- workspace status;
+- repository;
+- task branch and base branch;
+- changed-file count;
+- local path and allocated port information;
+- a pull-request link when one has been recorded.
+
+Only active workspaces can be used as a live chat working directory. Archived or failed workspaces remain useful as historical evidence but are not selected for new workspace work.
+
+## Work inside the workspace
+
+The workspace opens in chat with workspace-specific tools and context. Use:
+
+- chat tabs to separate investigation, implementation, and review discussions;
+- **Previous chats** to reopen earlier workspace conversations;
+- **Tasks** to follow linked agents and workflows;
+- **Files** to inspect workspace files;
+- **Code changes** to review the current diff;
+- **Terminal** to run commands in the worktree;
+- **Servers** to inspect configured development services;
+- **Context** to see repository guidance used by the conversation;
+- the IDE action, when available, to open the worktree in your editor.
+
+Keep unrelated tasks in separate workspaces. Small, single-purpose branches are easier to review, validate, and recover.
+
+## Review and ship changes
+
+Before committing or sharing work:
+
+1. Inspect **Files** and **Code changes** for unintended or sensitive content.
+2. Run the repository's required tests, lint, build, or preview checks.
+3. Review command output and linked execution evidence.
+4. Confirm the task branch and base branch.
+5. Treat commit, push, and pull-request creation as separate actions. Verify each one and open the resulting link.
+
+An agent response saying the work is complete is not a substitute for reviewing the diff and validation results.
+
+## Delete a workspace
+
+Choosing **Delete workspace** archives its record, stops workspace services, captures a final snapshot, and removes the managed worktree. Workspace chat history can retain the archived snapshot for review, but the workspace can no longer be used as an active working directory.
+
+Before deleting:
+
+- commit, export, or otherwise preserve changes you need;
+- confirm that no required service or terminal process is still running;
+- save important artifacts and external links;
+- verify that any pushed branch or pull request contains the intended work.
+
+## Troubleshooting
+
+### Creation fails while fetching
+
+Check remote access and Git credentials for the registered repository. Allen stops creation when a required fetch fails so the workspace is not based on an unexpectedly stale remote.
+
+### The base branch is wrong
+
+Cancel creation, update the repository's default branch if necessary, then reopen **New workspace** and review **Base branch** again.
+
+### The branch cannot be created
+
+Use a unique task branch and check for an existing local or remote branch with the same name. Also confirm that the selected base branch resolves.
+
+### Services do not start
+
+Open **Servers** and the workspace terminal. Review setup commands, required environment files, port conflicts, and service logs before restarting anything.
+
+### Changes are missing from review
+
+Confirm that commands ran in the workspace terminal rather than another checkout. Then refresh **Files** and **Code changes**.
+
+## Related concepts
+
+- [Workspaces](../concepts/workspaces)
+- [Repositories](../concepts/repositories)
+- [Start a Chat](./start-a-chat)

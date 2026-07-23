@@ -1,5 +1,6 @@
 import { Crown, Play, Pencil, Trash2, Eye, ArrowRight, FolderGit2 } from 'lucide-react';
 import RoleIcon from '../common/RoleIcon';
+import ProviderIcon from '../common/ProviderIcon';
 import { registryDefaultModelForProvider, getModelDisplay } from '../../hooks/useModelRegistry';
 import { normalizeStringList } from '../../utils/stringList';
 
@@ -123,7 +124,8 @@ export function AgentCard({
           className={`shrink-0 rounded-lg border overflow-hidden text-center ${providerTone}`}
           style={{ minWidth: '7rem' }}
         >
-          <div className="overline px-3 py-1 border-b border-current/20 opacity-80">
+          <div className="overline flex items-center justify-center gap-1.5 px-3 py-1 border-b border-current/20 opacity-80">
+            <ProviderIcon provider={provider} className="h-3.5 w-3.5 shrink-0" />
             {cardProviderLabel}
           </div>
           <div className="text-[11px] font-mono px-3 py-1.5 text-theme-primary bg-app-muted/50">

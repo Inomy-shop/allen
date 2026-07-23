@@ -924,22 +924,6 @@ ${context}
       }
     }
 
-    // Map effort to Anthropic's documented prompt-keyword triggers. The
-    // Claude Code SDK's bundled cli.js doesn't accept --effort in any
-    // published version, so we inject the keyword into the prompt instead.
-    // See packages/server/src/services/agent-settings.ts for details.
-    let effectivePrompt = opts.promptText;
-    if (resolvedEffort) {
-      const keyword =
-        resolvedEffort === 'max' ? 'ultrathink' :
-        resolvedEffort === 'high' ? 'think hard' :
-        resolvedEffort === 'medium' ? 'think' :
-        undefined;
-      if (keyword) {
-        effectivePrompt = `${keyword}\n\n${effectivePrompt}`;
-      }
-    }
-
     // System-prompt wiring. `append` (default) layers the agent prompt on top
     // of Claude Code's built-in agentic scaffolding so the model keeps iterating
     // until the task is done. Set ALLEN_SYSTEM_PROMPT_MODE=custom to revert
@@ -955,6 +939,19 @@ ${context}
       explicitMode === 'cli' ? 'cli' :
       explicitMode === 'sdk' ? 'sdk' :
       'cli';
+
+    // The globally installed Claude CLI has a native --effort flag. The
+    // in-process SDK fallback does not, so only that path needs prompt
+    // keywords to request larger thinking budgets.
+    let effectivePrompt = opts.promptText;
+    if (executionMode === 'sdk' && resolvedEffort) {
+      const keyword =
+        resolvedEffort === 'max' || resolvedEffort === 'xhigh' || resolvedEffort === 'ultra' ? 'ultrathink' :
+        resolvedEffort === 'high' ? 'think hard' :
+        resolvedEffort === 'medium' ? 'think' :
+        undefined;
+      if (keyword) effectivePrompt = `${keyword}\n\n${effectivePrompt}`;
+    }
 
     let conv: AsyncIterable<any>;
     if (executionMode === 'cli') {
@@ -1004,6 +1001,7 @@ ${context}
         prompt: effectivePrompt,
         cwd,
         model: resolvedModel,
+        reasoningEffort: resolvedEffort === 'ultra' ? 'max' : resolvedEffort,
         resume: opts.resumeSession,
         permissionMode: resolvedPlanMode ? 'plan' : 'bypassPermissions',
         env: resolvedEnv,

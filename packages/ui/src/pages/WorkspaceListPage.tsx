@@ -98,6 +98,23 @@ type SplitDiffRow = {
   rightText?: string;
 };
 
+type WorkspaceFilter = 'all' | 'active' | 'idle';
+
+function isActiveWorkspace(workspace: Workspace): boolean {
+  const status = (workspace.status ?? 'active').toLowerCase();
+  return !['idle', 'stopped', 'archived', 'deleted', 'failed'].includes(status);
+}
+
+function workspaceRelativeTime(value?: string): string {
+  if (!value) return '—';
+  const diff = Math.max(0, Date.now() - new Date(value).getTime());
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  if (diff < 604_800_000) return `${Math.floor(diff / 86_400_000)}d ago`;
+  return `${Math.floor(diff / 604_800_000)}w ago`;
+}
+
 const STATUS_LETTER: Record<string, string> = {
   added: 'A',
   new: 'A',
@@ -429,6 +446,7 @@ export default function WorkspaceListPage() {
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [workspaceCreateRepo, setWorkspaceCreateRepo] = useState<WorkspaceCreateRepo | null>(null);
+  const [workspaceFilter, setWorkspaceFilter] = useState<WorkspaceFilter>('all');
   const createRequested = searchParams.get('create') === '1';
   const createRepoId = searchParams.get('repoId') ?? '';
 
@@ -452,6 +470,15 @@ export default function WorkspaceListPage() {
     }
     return Array.from(groups.values()).sort((a, b) => a.label.localeCompare(b.label));
   }, [repoById, workspaceList]);
+  const activeWorkspaceCount = useMemo(() => workspaceList.filter(isActiveWorkspace).length, [workspaceList]);
+  const idleWorkspaceCount = workspaceList.length - activeWorkspaceCount;
+  const filteredWorkspaceGroups = useMemo(() => workspaceGroups
+    .map(group => ({
+      ...group,
+      items: group.items.filter(workspace => workspaceFilter === 'all'
+        || (workspaceFilter === 'active' ? isActiveWorkspace(workspace) : !isActiveWorkspace(workspace))),
+    }))
+    .filter(group => group.items.length > 0), [workspaceFilter, workspaceGroups]);
 
   useEffect(() => {
     workspaceUiRef.current = workspaceUi;
@@ -816,156 +843,89 @@ export default function WorkspaceListPage() {
   const createRepos = repos.map(toWorkspaceCreateRepo);
 
   const listContent = (
-    <div className="content h-full overflow-y-auto !p-0 scroll-hide bg-app" data-screen-label="workspaces">
-      <div className="w-full px-8 py-8">
-        <div className="mb-6 flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
-              <FolderGit2 className="h-[18px] w-[18px]" />
-            </span>
-            <div>
-              <h1 className="text-[24px] font-semibold leading-tight text-theme-primary">Workspaces</h1>
-              <p className="mt-1 text-[13px] text-theme-muted">Isolated agent worktrees for active implementation work.</p>
-            </div>
+    <main className="v8-page" data-screen-label="workspaces">
+      <div className="v8-page__wrap">
+        <header className="v8-workspace-head">
+          <div>
+            <h1>Workspaces</h1>
+            <p>Isolated agent worktrees for active implementation work.</p>
           </div>
-          <div className="flex items-center gap-2">
-            <IconTooltipButton
-              label="Refresh workspaces"
-              onClick={loadWorkspaces}
-              className="h-9 w-9 border border-app bg-app-card hover:border-app-strong"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            </IconTooltipButton>
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
-              onClick={() => startCreateWorkspace()}
-              type="button"
-            >
-              <Plus className="h-3.5 w-3.5" /> New workspace
-            </button>
-          </div>
+          <span />
+          <button className="v8-btn v8-btn--ink" onClick={() => startCreateWorkspace()} type="button">New workspace</button>
+        </header>
+
+        <div className="v8-chips v8-workspace-chips" role="group" aria-label="Workspace filters">
+          <button className={workspaceFilter === 'all' ? 'on' : ''} onClick={() => setWorkspaceFilter('all')} type="button">All <span>{workspaceList.length}</span></button>
+          <button className={workspaceFilter === 'active' ? 'on' : ''} onClick={() => setWorkspaceFilter('active')} type="button">Active <span>{activeWorkspaceCount}</span></button>
+          <button className={workspaceFilter === 'idle' ? 'on' : ''} onClick={() => setWorkspaceFilter('idle')} type="button">Idle <span>{idleWorkspaceCount}</span></button>
         </div>
 
         {loading && workspaceList.length === 0 ? (
-          <div className="space-y-3">
-            {Array.from({ length: 3 }).map((_, index) => (
-              <div key={index} className="rounded-md border border-app bg-app-card px-5 py-4">
-                <div className="h-4 w-48 animate-pulse rounded-md bg-app-muted" />
-                <div className="mt-3 h-3 w-72 animate-pulse rounded-md bg-app-muted" />
-              </div>
-            ))}
-          </div>
+          <div className="v8-filter-empty"><Loader2 className="v8-inline-spinner animate-spin" /> Loading workspaces…</div>
         ) : workspaceList.length === 0 ? (
-          <div className="rounded-md border border-dashed border-app bg-app-card px-5 py-12 text-center">
-            <FolderGit2 className="mx-auto h-8 w-8 text-theme-subtle" />
-            <div className="mt-4 text-[15px] font-semibold text-theme-primary">No workspaces yet</div>
-            <p className="mt-1 text-[13px] text-theme-muted">Create an isolated worktree when Allen needs to edit code.</p>
-            <button
-              onClick={() => startCreateWorkspace()}
-              className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
-              type="button"
-            >
-              <Plus className="h-3.5 w-3.5" /> New workspace
-            </button>
+          <div className="v8-empty v8-workspace-empty">
+            <span className="glyph"><FolderGit2 /></span>
+            <h2>No workspaces yet</h2>
+            <p>Workspaces are isolated git worktrees Allen creates when it starts work on a repo — terminals, previews, and watchers included.</p>
+            <button className="v8-btn v8-btn--ink" onClick={() => startCreateWorkspace()} type="button">New workspace</button>
           </div>
+        ) : filteredWorkspaceGroups.length === 0 ? (
+          <div className="v8-filter-empty">No {workspaceFilter} workspaces — idle worktrees are pruned automatically.</div>
         ) : (
-          <div className="space-y-4">
-            {workspaceGroups.map(group => (
-              <section key={group.key} className="rounded-md border border-app bg-app-card">
-                <div className="flex items-center justify-between border-b border-app px-5 py-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-accent" />
-                    <h2 className="truncate text-[14px] font-semibold text-theme-primary">{group.label}</h2>
-                  </div>
-                  <span className="font-mono text-[11px] text-theme-muted">{group.items.length} workspace{group.items.length === 1 ? '' : 's'}</span>
-                </div>
-                <div className="divide-y divide-[rgb(var(--color-border))]">
-                  {group.items.map((ws) => {
-                    const status = (ws.status ?? 'active').toLowerCase();
-                    const changed = ws.changedFiles ?? 0;
-                    const workspacePath = ws.worktreePath ?? ws.repoPath ?? '';
-                    return (
-                      <div key={ws._id} className="flex items-start gap-2.5 px-3 py-1.5 transition-colors hover:bg-app-muted/30">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                            <span className="truncate text-[14px] font-semibold text-theme-primary">{ws.name}</span>
-                            <span className={`font-mono text-[11px] ${status === 'active' ? 'text-accent-green' : 'text-theme-muted'}`}>
-                              {ws.status ?? 'active'}
-                            </span>
-                            <span className="inline-flex items-center gap-1 font-mono text-[11px] text-theme-muted">
-                              <GitBranch className="h-3 w-3" />
-                              {ws.branch ?? 'branch unknown'} <span className="text-theme-subtle">-&gt;</span> {ws.baseBranch ?? 'base unknown'}
-                            </span>
-                            {changed > 0 && <span className="font-mono text-[11px] text-theme-muted">{changed} changed</span>}
-                            {ws.prNumber && <span className="font-mono text-[11px] text-theme-muted">PR #{ws.prNumber}</span>}
-                          </div>
-                          {workspacePath && (
-                            <div className="mt-1 flex max-w-full items-center gap-1 font-mono text-[10.5px] leading-4 text-theme-subtle">
-                              <span className="uppercase tracking-[0.12em] text-theme-subtle">local</span>
-                              <span className="truncate" title={workspacePath}>{compactPath(workspacePath)}</span>
-                              <IconTooltipButton
-                                label={copiedPath === workspacePath ? 'Copied' : 'Copy workspace path'}
-                                onClick={() => void copyWorkspacePath(workspacePath)}
-                                className="h-[18px] w-[18px] shrink-0 text-theme-muted hover:text-theme-primary"
-                              >
-                                {copiedPath === workspacePath ? <Check className="h-3 w-3 text-accent-green" /> : <Copy className="h-3 w-3" />}
-                              </IconTooltipButton>
-                              {ws.basePort ? <><span>·</span><span>port {ws.basePort}</span></> : null}
-                            </div>
-                          )}
-                        </div>
-                        <div className="ml-auto flex self-stretch shrink-0 flex-col items-end justify-between gap-1">
-                          <div className="flex items-center gap-1">
-                            {ws.prUrl ? (
-                              <IconTooltipButton
-                                label="Open pull request"
-                                onClick={() => window.open(ws.prUrl, '_blank', 'noopener,noreferrer')}
-                                className="h-[26px] w-[26px] border border-app bg-app hover:border-app-strong"
-                              >
-                                <GitPullRequest className="h-3 w-3" />
-                              </IconTooltipButton>
-                            ) : null}
-                            <button
-                              className="inline-flex h-[26px] items-center gap-1 rounded-md border border-app bg-app px-1.5 text-[11.5px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
-                              type="button"
-                              onClick={() => openWorkspace(ws._id)}
-                              title="Open workspace"
-                            >
-                              <ExternalLink className="h-3 w-3" /> Open
-                            </button>
-                            <IconTooltipButton
-                              label="Delete workspace"
-                              tone="danger"
-                              onClick={() => setDeletingWorkspace({ id: ws._id, name: ws.name })}
-                              className="h-[26px] w-[26px] border border-app bg-app hover:border-accent-red/50"
-                              disabled={gitBusy === `delete:${ws._id}`}
-                            >
-                              {gitBusy === `delete:${ws._id}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                            </IconTooltipButton>
-                          </div>
-                          {ws.updatedAt ? (
-                            <span className="font-mono text-[10px] leading-4 text-theme-subtle">
-                              updated {new Date(ws.updatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
-          </div>
+          filteredWorkspaceGroups.map(group => (
+            <section className="v8-workspace-section" key={group.key}>
+              <header className="v8-workspace-section-head">
+                <h2>{group.label}</h2>
+                <span>{group.items.length}</span>
+                <button onClick={() => setWorkspaceFilter('all')} type="button">All workspaces →</button>
+              </header>
+              <div className="v8-workspace-panel">
+                {group.items.map(workspace => {
+                  const activeWorkspace = isActiveWorkspace(workspace);
+                  return (
+                    <div className="v8-workspace-row" key={workspace._id}>
+                      <i className={activeWorkspace ? (workspace.status?.toLowerCase() === 'running' ? 'running' : 'active') : 'idle'} />
+                      <button className="v8-workspace-main" onClick={() => openWorkspace(workspace._id)} type="button">
+                        <b>{workspace.name}</b>
+                        <span>
+                          {group.label}
+                          <em>·</em>
+                          {workspace.source === 'chat' ? <><strong>this session</strong><em>·</em></> : null}
+                          {workspace.prNumber ? <><strong>PR #{workspace.prNumber}{workspace.status === 'merged' ? ' merged' : ''}</strong><em>·</em></> : null}
+                          {(workspace.changedFiles ?? 0) > 0 ? <><strong>{workspace.changedFiles} changed</strong><em>·</em></> : null}
+                          base <code>{workspace.baseBranch ?? 'main'}</code>
+                        </span>
+                      </button>
+                      <time>{workspaceRelativeTime(workspace.updatedAt ?? workspace.createdAt)}</time>
+                      <button className="v8-workspace-open" onClick={() => openWorkspace(workspace._id)} type="button">Open</button>
+                      <button
+                        className="v8-workspace-delete"
+                        onClick={() => setDeletingWorkspace({ id: workspace._id, name: workspace.name })}
+                        disabled={gitBusy === `delete:${workspace._id}`}
+                        aria-label="Delete workspace"
+                        title="Delete workspace"
+                        type="button"
+                      >
+                        {gitBusy === `delete:${workspace._id}` ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ))
         )}
-        <DeleteConfirmDialog
-          open={!!deletingWorkspace}
-          resourceType="workspace"
-          resourceName={deletingWorkspace?.name ?? ''}
-          onConfirm={() => deletingWorkspace && void deleteWorkspace(deletingWorkspace.id)}
-          onCancel={() => setDeletingWorkspace(null)}
-        />
+
+        <p className="v8-workspace-foot">Idle workspaces are pruned automatically · base branch resolves from the repo default</p>
       </div>
-    </div>
+      <DeleteConfirmDialog
+        open={!!deletingWorkspace}
+        resourceType="workspace"
+        resourceName={deletingWorkspace?.name ?? ''}
+        onConfirm={() => deletingWorkspace && void deleteWorkspace(deletingWorkspace.id)}
+        onCancel={() => setDeletingWorkspace(null)}
+      />
+    </main>
   );
 
   if (!showWorkspaceDetail) {
