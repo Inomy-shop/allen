@@ -1,16 +1,17 @@
 /**
  * Tests for ChatMessageList scroll behaviour after the tab-switch scroll fix.
  *
- * AC-1: When streaming=false, scrollIntoView is called with behavior:'instant'
- *       so switching between existing chat tabs produces no visible animation.
- * AC-2: When streaming=true, scrollIntoView is called with behavior:'smooth'
+ * AC-1: Initial historical messages start at the top without scrolling.
+ * AC-2: When a non-streaming view is pinned to the bottom, subsequent messages
+ *       use behavior:'instant' so updates produce no visible animation.
+ * AC-3: When streaming=true, scrollIntoView is called with behavior:'smooth'
  *       so live streaming still gets smooth scroll-to-bottom.
  *
  * The mock pattern here exactly mirrors ChatMessageList.hidden.test.tsx.
  */
 
 import React from 'react';
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, beforeAll } from 'vitest';
 
 // ─── jsdom stubs ────────────────────────────────────────────────────────────
@@ -91,14 +92,14 @@ describe('ChatMessageList scroll behaviour', () => {
   });
 
   it(
-    // AC-1: scroll is instant when not streaming
-    'AC-1: calls scrollIntoView with behavior "instant" when streaming=false',
+    // AC-1: loaded history starts at the beginning of the conversation
+    'AC-1: keeps initial non-streaming history at the top without scrolling',
     () => {
       const messages: ChatMessage[] = [
         makeMessage({ _id: 'm1', role: 'user', content: 'Hello' }),
       ];
 
-      render(
+      const { container } = render(
         <ChatMessageList
           messages={messages}
           streamText=""
@@ -106,19 +107,51 @@ describe('ChatMessageList scroll behaviour', () => {
         />,
       );
 
+      const messageList = container.querySelector<HTMLElement>('.chat-stream-v2');
+      expect(messageList?.scrollTop).toBe(0);
+      expect(capturedBehaviors()).toEqual([]);
+    },
+  );
+
+  it(
+    // AC-2: historical updates remain instant once the view is pinned
+    'AC-2: uses behavior "instant" for a non-streaming update when pinned',
+    () => {
+      const firstMessage = makeMessage({ _id: 'm1', role: 'user', content: 'Hello' });
+      const { container, rerender } = render(
+        <ChatMessageList
+          messages={[firstMessage]}
+          streamText=""
+          streaming={false}
+        />,
+      );
+
+      const messageList = container.querySelector<HTMLElement>('.chat-stream-v2');
+      expect(messageList).not.toBeNull();
+      fireEvent.scroll(messageList!);
+
+      rerender(
+        <ChatMessageList
+          messages={[
+            firstMessage,
+            makeMessage({ _id: 'm2', role: 'assistant', content: 'Hi there' }),
+          ]}
+          streamText=""
+          streaming={false}
+        />,
+      );
+
       const behaviors = capturedBehaviors();
-      // At least one scrollIntoView call must have occurred
       expect(behaviors.length).toBeGreaterThan(0);
-      // Every call must use 'instant', not 'smooth'
-      behaviors.forEach((b) => {
-        expect(b, `expected 'instant' but got '${b}'`).toBe('instant');
+      behaviors.forEach((behavior) => {
+        expect(behavior, `expected 'instant' but got '${behavior}'`).toBe('instant');
       });
     },
   );
 
   it(
-    // AC-2: scroll is smooth during streaming
-    'AC-2: calls scrollIntoView with behavior "smooth" when streaming=true',
+    // AC-3: scroll is smooth during streaming
+    'AC-3: calls scrollIntoView with behavior "smooth" when streaming=true',
     () => {
       const messages: ChatMessage[] = [
         makeMessage({ _id: 'm1', role: 'assistant', content: 'Streaming response' }),

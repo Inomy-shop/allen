@@ -9,12 +9,37 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+  cachedChatSessionValue,
   checkIsStreaming,
   consumeSessionEventStream,
+  isSameChatSession,
+  normalizeChatSessionId,
   sessionReconnectDelay,
   sleep,
   MAX_RECONNECT_ATTEMPTS,
 } from '../useChat';
+
+describe('chat tab memory', () => {
+  it('normalizes blank tab ids and preserves real session ids', () => {
+    expect(normalizeChatSessionId('')).toBeNull();
+    expect(normalizeChatSessionId(null)).toBeNull();
+    expect(normalizeChatSessionId('session-1')).toBe('session-1');
+  });
+
+  it('treats selecting the active session as a no-op', () => {
+    expect(isSameChatSession('session-1', 'session-1')).toBe(true);
+    expect(isSameChatSession(null, '')).toBe(true);
+    expect(isSameChatSession('session-1', 'session-2')).toBe(false);
+  });
+
+  it('restores the exact in-memory messages for a previously opened tab', () => {
+    const messages = [{ _id: 'message-1', content: 'Still here' }];
+    const cache = new Map([['session-1', messages]]);
+
+    expect(cachedChatSessionValue(cache, 'session-1', [])).toBe(messages);
+    expect(cachedChatSessionValue(cache, 'session-2', [])).toEqual([]);
+  });
+});
 
 // ─── checkIsStreaming ──────────────────────────────────────────────────────
 

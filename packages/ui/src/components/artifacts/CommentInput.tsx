@@ -7,17 +7,18 @@
 import { useState, useRef, useEffect } from 'react';
 import { MessageSquarePlus, X as XIcon, Send } from 'lucide-react';
 import { documents as documentsApi } from '../../services/api';
-import type { WriteAnchor } from '../../services/documents';
+import type { DocumentCommentDoc, WriteAnchor } from '../../services/documents';
 
 export interface CommentInputProps {
   documentId: string;
   /** The text anchor selected by the user. Undefined when no selection. */
   anchor?: WriteAnchor;
-  onSubmitted: () => void;
+  onSubmitted: (comment: DocumentCommentDoc) => void;
   onCancel: () => void;
+  variant?: 'default' | 'rail';
 }
 
-export default function CommentInput({ documentId, anchor, onSubmitted, onCancel }: CommentInputProps) {
+export default function CommentInput({ documentId, anchor, onSubmitted, onCancel, variant = 'default' }: CommentInputProps) {
   const [body, setBody] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,9 +35,9 @@ export default function CommentInput({ documentId, anchor, onSubmitted, onCancel
     setSubmitting(true);
     setError(null);
     try {
-      await documentsApi.createComment(documentId, { body: body.trim(), anchor });
+      const comment = await documentsApi.createComment(documentId, { body: body.trim(), anchor });
       setBody('');
-      onSubmitted();
+      onSubmitted(comment);
     } catch (err) {
       setError((err as Error).message ?? 'Failed to create comment');
     } finally {
@@ -55,8 +56,43 @@ export default function CommentInput({ documentId, anchor, onSubmitted, onCancel
     }
   }
 
+  if (variant === 'rail') {
+    const anchorText = anchor?.type === 'text_snippet'
+      ? 'Entire document'
+      : anchor?.snippet?.trim() || (
+        anchor?.type === 'range'
+          ? `Lines ${anchor.lineStart ?? 1}–${anchor.lineEnd ?? anchor.lineStart ?? 1}`
+          : `Line ${anchor?.lineStart ?? 1}`
+      );
+
+    return (
+      <div className="document-review-composer" onMouseUp={event => event.stopPropagation()}>
+        <span className="document-review-composer__anchor" title={anchor?.snippet || anchorText}>{anchorText}</span>
+        {error && <div className="document-review-composer__error">{error}</div>}
+        <textarea
+          ref={textRef}
+          value={body}
+          onChange={event => setBody(event.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Comment…"
+          rows={3}
+          disabled={submitting}
+        />
+        <div className="document-review-composer__actions">
+          <button type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
+          <button type="button" className="primary" onClick={handleSubmit} disabled={!canSubmit || submitting}>
+            {submitting ? 'Posting…' : 'Post'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="border-t border-app bg-app-card px-3 py-2.5">
+    <div
+      className="border-t border-app bg-app-card px-3 py-2.5"
+      onMouseUp={event => event.stopPropagation()}
+    >
       <div className="flex items-start gap-2 mb-2">
         <MessageSquarePlus className="w-3.5 h-3.5 text-accent-blue shrink-0 mt-1" />
         <div className="text-[11px] font-mono text-theme-secondary leading-relaxed">

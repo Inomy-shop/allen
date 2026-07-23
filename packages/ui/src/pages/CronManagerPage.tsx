@@ -5,7 +5,7 @@ import {
 } from '../services/api';
 import {
   Clock, Plus, Play, Trash2, Pencil, X, Loader2, RefreshCw,
-  AlertCircle, History,
+  AlertCircle, History, MoreHorizontal,
 } from 'lucide-react';
 import { useToast } from '../components/common/Toast';
 import IconTooltipButton from '../components/common/IconTooltipButton';
@@ -586,7 +586,7 @@ function ScheduleDeleteDialog({
 
 /* ── Main Page ──────────────────────────────────────────────────────────── */
 
-export default function CronManagerPage() {
+export default function CronManagerPage({ compact = false }: { compact?: boolean }) {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
@@ -650,7 +650,7 @@ export default function CronManagerPage() {
   const failedCount = jobs.filter(job => job.lastRunStatus === 'failed').length;
 
   return (
-    <div className="space-y-4">
+    <div className={`space-y-4 cron-manager-page ${compact ? 'cron-manager-page--compact' : ''}`}>
       <div className="rounded-lg border border-app bg-app-card">
         <div className="flex items-center justify-between gap-4 px-4 py-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -710,12 +710,12 @@ export default function CronManagerPage() {
             return (
               <div
                 key={job._id}
-                className={`border-b border-app px-4 py-3 transition-colors last:border-b-0 hover:bg-app-muted/25 ${!job.enabled ? 'opacity-60' : ''}`}
+                className={`cron-job-row border-b border-app px-4 py-3 transition-colors last:border-b-0 hover:bg-app-muted/25 ${!job.enabled ? 'opacity-60' : ''}`}
               >
-                <div className="grid items-center gap-4 lg:grid-cols-[minmax(340px,1fr)_150px_100px_64px_132px_52px]">
+                <div className="cron-job-grid grid items-center gap-4 lg:grid-cols-[minmax(340px,1fr)_150px_100px_64px_132px_52px]">
                   <div className="min-w-0">
                     <div className="flex min-w-0 items-start gap-3">
-                      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-app bg-app-muted text-theme-muted">
+                      <div className="cron-job-icon mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-app bg-app-muted text-theme-muted">
                         <Clock className="h-4 w-4" />
                       </div>
                       <div className="min-w-0 flex-1">
@@ -750,7 +750,7 @@ export default function CronManagerPage() {
                     <div className="text-[13px] font-medium text-theme-primary">{job.runCount}</div>
                   </div>
 
-                  <div className="flex items-center justify-end gap-1">
+                  <div className="cron-full-actions flex items-center justify-end gap-1">
                     <IconTooltipButton label="Run now" tone="accent" onClick={() => runNow(job)} disabled={isRunning}>
                       {isRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                     </IconTooltipButton>
@@ -766,6 +766,14 @@ export default function CronManagerPage() {
                       </IconTooltipButton>
                     )}
                   </div>
+
+                  {compact && (
+                    <div className="cron-compact-more flex justify-end">
+                      <IconTooltipButton label="Edit schedule" onClick={() => { setEditJob(job); setFormOpen(true); }}>
+                        <MoreHorizontal className="h-3.5 w-3.5" />
+                      </IconTooltipButton>
+                    </div>
+                  )}
 
                   <div className="flex justify-end">
                     <ToggleSwitch enabled={job.enabled} onChange={() => toggle(job)} />

@@ -37,13 +37,18 @@ import {
   existsSync, mkdirSync, unlinkSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
-import type { Db, Collection } from 'mongodb';
+import { ObjectId, type Db, type Collection } from 'mongodb';
 import {
   getUploadsDir,
   storeContent,
   readStoredContent,
   type StorageProvider,
 } from './upload-storage.js';
+import {
+  isTeamClassification,
+  type TeamClassification,
+  type TeamClassificationSource,
+} from '../types/team-classification.js';
 
 export type ArtifactRootType = 'chat' | 'workflow' | 'agent';
 export type ArtifactContentType = 'markdown' | 'json' | 'csv' | 'text' | 'code' | 'binary';
@@ -82,6 +87,13 @@ export interface ArtifactDoc {
   createdAt: Date;
   createdByAgent?: string;
   createdByUserId?: string;
+  /** Users who explicitly saved this artifact to the Documents library. */
+  savedByUserIds?: string[];
+  /** Users who explicitly marked this already-saved artifact as a favorite. */
+  favoriteByUserIds?: string[];
+  /** Fixed product-level classification. Missing/null is shown as Unknown. */
+  teamClassification?: TeamClassification | null;
+  teamClassificationSource?: TeamClassificationSource | null;
   /**
    * Where the content is physically stored.
    * - 'local'  → read from absolutePath (default / legacy behaviour)
@@ -217,7 +229,50 @@ export class ArtifactService {
       { key: { rootType: 1, rootId: 1, createdAt: -1 } },
       { key: { rootId: 1 } },
       { key: { createdAt: -1 } },
+      { key: { teamClassification: 1, createdAt: -1 } },
     ]);
+  }
+
+  private async resolveRootClassification(
+    rootType: ArtifactRootType,
+    rootId: string,
+  ): Promise<TeamClassification | null> {
+    if (rootType === 'chat' && ObjectId.isValid(rootId)) {
+      const session = await this.db.collection('chat_sessions').findOne(
+        { _id: new ObjectId(rootId) },
+        { projection: { teamClassification: 1, studioWorkspaceId: 1 } },
+      );
+      if (isTeamClassification(session?.teamClassification)) return session.teamClassification;
+      if (session?.studioWorkspaceId) return 'design';
+      return null;
+    }
+
+    if (rootType === 'workflow') {
+      const executionClauses: Record<string, unknown>[] = [{ id: rootId }];
+      if (ObjectId.isValid(rootId)) executionClauses.push({ _id: new ObjectId(rootId) });
+      const execution = await this.db.collection('executions').findOne(
+        { $or: executionClauses },
+        { projection: { workflowId: 1, workflowName: 1 } },
+      );
+      if (!execution) return null;
+
+      const workflowClauses: Record<string, unknown>[] = [];
+      const workflowId = typeof execution.workflowId === 'string' ? execution.workflowId : '';
+      const workflowName = typeof execution.workflowName === 'string' ? execution.workflowName : '';
+      if (workflowId && ObjectId.isValid(workflowId)) workflowClauses.push({ _id: new ObjectId(workflowId) });
+      if (workflowName) workflowClauses.push({ name: workflowName });
+      if (workflowClauses.length === 0) return null;
+
+      const workflow = await this.db.collection('workflows').findOne(
+        { $or: workflowClauses },
+        { projection: { teamClassification: 1 } },
+      );
+      return isTeamClassification(workflow?.teamClassification)
+        ? workflow.teamClassification
+        : null;
+    }
+
+    return null;
   }
 
   async save(input: SaveArtifactInput): Promise<SaveArtifactResult> {
@@ -265,6 +320,14 @@ export class ArtifactService {
 
     const artifactId = existing?.artifactId ?? randomUUID();
     const now = new Date();
+    const inheritedClassification = existing
+      ? existing.teamClassification ?? null
+      : await this.resolveRootClassification(input.rootType, input.rootId);
+    const inheritedClassificationSource = existing
+      ? existing.teamClassificationSource ?? null
+      : input.rootType === 'chat' || input.rootType === 'workflow'
+        ? 'inherited'
+        : null;
 
     const doc: ArtifactDoc = {
       artifactId,
@@ -289,6 +352,8 @@ export class ArtifactService {
       createdAt: existing?.createdAt ?? now,
       createdByAgent: input.createdByAgent,
       createdByUserId: input.createdByUserId,
+      teamClassification: inheritedClassification,
+      teamClassificationSource: inheritedClassificationSource,
       storageProvider: location.provider,
       s3Key: location.s3Key,
       s3Bucket: location.s3Bucket,
@@ -398,6 +463,100 @@ export class ArtifactService {
       .skip(filter.skip ?? 0)
       .limit(filter.limit ?? 200)
       .toArray();
+  }
+
+  async updateLibraryState(
+    artifactId: string,
+    userId: string,
+    patch: { saved?: boolean; favorite?: boolean },
+  ): Promise<ArtifactDoc | null> {
+    const existing = await this.col.findOne({ artifactId });
+    if (!existing) return null;
+
+    // Favoriting implies that the document remains in the saved library.
+    // Removing a document from the library also removes its favorite marker,
+    // while a plain Save operation never favorites it automatically.
+    const saved = patch.saved ?? (patch.favorite === true ? true : undefined);
+    const favorite = patch.saved === false ? false : patch.favorite;
+
+    if (saved !== undefined) {
+      await this.col.updateOne(
+        { artifactId },
+        saved
+          ? { $addToSet: { savedByUserIds: userId } }
+          : { $pull: { savedByUserIds: userId, favoriteByUserIds: userId } },
+      );
+    }
+    if (favorite !== undefined) {
+      await this.col.updateOne(
+        { artifactId },
+        favorite
+          ? { $addToSet: { favoriteByUserIds: userId } }
+          : { $pull: { favoriteByUserIds: userId } },
+      );
+    }
+
+    return this.col.findOne({ artifactId });
+  }
+
+  async updateClassification(
+    artifactId: string,
+    classification: TeamClassification | null,
+  ): Promise<ArtifactDoc | null> {
+    await this.col.updateOne(
+      { artifactId },
+      {
+        $set: {
+          teamClassification: classification,
+          teamClassificationSource: 'manual',
+        },
+      },
+    );
+    return this.col.findOne({ artifactId });
+  }
+
+  async propagateInheritedClassification(
+    rootType: ArtifactRootType,
+    rootIds: string[],
+    classification: TeamClassification | null,
+  ): Promise<number> {
+    if (rootIds.length === 0) return 0;
+    const result = await this.col.updateMany(
+      {
+        rootType,
+        rootId: { $in: rootIds },
+        teamClassificationSource: 'inherited',
+      },
+      { $set: { teamClassification: classification } },
+    );
+    return result.modifiedCount;
+  }
+
+  /** Backfill legacy documents after chat/workflow classifications are available. */
+  async backfillTeamClassifications(): Promise<{ scanned: number; updated: number }> {
+    const rows = await this.col.find(
+      { teamClassification: { $exists: false } },
+      { projection: { artifactId: 1, rootType: 1, rootId: 1 } },
+    ).toArray();
+    let updated = 0;
+    for (const row of rows) {
+      const rootType = row.rootType as ArtifactRootType;
+      const inherited = rootType === 'chat' || rootType === 'workflow';
+      const classification = inherited
+        ? await this.resolveRootClassification(rootType, String(row.rootId ?? ''))
+        : null;
+      const result = await this.col.updateOne(
+        { artifactId: row.artifactId, teamClassification: { $exists: false } },
+        {
+          $set: {
+            teamClassification: classification,
+            teamClassificationSource: inherited ? 'inherited' : null,
+          },
+        },
+      );
+      updated += result.modifiedCount;
+    }
+    return { scanned: rows.length, updated };
   }
 
   async delete(artifactId: string): Promise<boolean> {

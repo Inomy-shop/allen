@@ -1,22 +1,10 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowRight,
-  CheckCircle2,
   Circle,
   Clock3,
-  ExternalLink,
-  FileDiff,
-  FolderGit2,
-  GitBranch,
-  GitPullRequest,
-  Github,
-  MessageSquare,
-  PlayCircle,
-  TicketCheck,
-  UserRound,
 } from 'lucide-react';
-import { agents as agentsApi, chat as chatApi, executions, interventions, linear as linearApi, repos as reposApi, system as systemApi } from '../services/api';
+import { agents as agentsApi, chat as chatApi, executions, interventions, linear as linearApi, mcp as mcpApi, repos as reposApi, system as systemApi, workflows as workflowsApi } from '../services/api';
 import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import { chatCodeDiffs, pullRequests } from '../services/workspaceService';
 import { useAuthStore } from '../stores/authStore';
@@ -25,6 +13,15 @@ import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOp
 import { useSkillSlashCommands } from '../hooks/useSkillSlashCommands';
 import { useFileDropZone, FileDropOverlay } from '../hooks/useFileDropZone';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
+import {
+  V8SetupAgentsIcon,
+  V8SetupGithubIcon,
+  V8SetupLinearIcon,
+  V8SetupMcpIcon,
+  V8SetupModelsIcon,
+  V8SetupTickIcon,
+  V8SetupWorkflowIcon,
+} from '../components/common/V8SidebarIcons';
 
 interface ExecutionItem {
   id: string;
@@ -199,12 +196,24 @@ function timeAgo(dateStr?: string): string {
   return `${day}d ago`;
 }
 
-function localGreeting(date = new Date()): string {
-  const hour = date.getHours();
-  if (hour >= 5 && hour < 12) return 'Good morning';
-  if (hour >= 12 && hour < 17) return 'Good afternoon';
-  if (hour >= 17 && hour < 22) return 'Good evening';
-  return 'Good night';
+function compactAge(dateStr?: string): string {
+  if (!dateStr) return 'now';
+  const ms = Math.max(0, Date.now() - new Date(dateStr).getTime());
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return 'now';
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h`;
+  return `${Math.floor(hr / 24)}d`;
+}
+
+function waitingAge(dateStr?: string): string {
+  if (!dateStr) return 'now';
+  const min = Math.floor(Math.max(0, Date.now() - new Date(dateStr).getTime()) / 60_000);
+  if (min < 60) return min < 1 ? 'now' : `${min}m`;
+  const hr = Math.floor(min / 60);
+  const remainingMinutes = min % 60;
+  return remainingMinutes ? `${hr}h ${remainingMinutes}m` : `${hr}h`;
 }
 
 function isActiveRun(run: ExecutionItem): boolean {
@@ -267,24 +276,6 @@ function workStatus(run: ExecutionItem): { label: string; cls: string } {
   return { label: statusLabel(run.status), cls: 'badge-muted' };
 }
 
-function WorkStatusBadge({ run }: { run: ExecutionItem }) {
-  const status = workStatus(run);
-  if (run.pullRequest?.status === 'open' && run.pullRequest.url) {
-    return (
-      <a className={`badge ${status.cls}`} href={run.pullRequest.url} target="_blank" rel="noreferrer" title="Review pull request">
-        <span className="status-dot" />
-        {status.label}
-      </a>
-    );
-  }
-  return (
-    <span className={`badge ${status.cls}`}>
-      <span className="status-dot" />
-      {status.label}
-    </span>
-  );
-}
-
 function compactTitle(value?: string | null): string | null {
   const trimmed = value?.replace(/\s+/g, ' ').trim();
   if (!trimmed) return null;
@@ -307,11 +298,16 @@ function linearIdentifierForRun(run: ExecutionItem): string | null {
 }
 
 function approvalItemFromIntervention(item: InterventionItem, run?: ExecutionItem): HumanApprovalItem {
+  const context = [
+    run?.workflowName ?? item.workflow_name,
+    item.stage ? humanizeLabel(item.stage) : null,
+    compactTitle(item.context_summary),
+  ].filter(Boolean).join(' · ');
   return {
     id: `approval-${item.intervention_id}`,
     kind: item.severity === 'escalation' ? 'blocked' : item.severity === 'question' ? 'question' : 'approval',
     title: item.title || (run ? runTitle(run) : 'Execution approval'),
-    sub: run ? `${runTitle(run)} · ${humanizeLabel(item.stage ?? item.severity)}` : (item.workflow_name || 'Workflow execution'),
+    sub: context || 'Workflow execution',
     href: `/executions/${item.workflow_run_id}`,
     createdAt: item.created_at,
   };
@@ -337,11 +333,6 @@ function dedupeApprovals(items: HumanApprovalItem[]): HumanApprovalItem[] {
     result.push(item);
   }
   return result;
-}
-
-function isReviewNeededPr(pr: PullRequestReviewItem): boolean {
-  return pr.status === 'open'
-    && Boolean(pr.createdByWorkflow || pr.createdByAgent || pr.chatSessionId || pr.originatingExecutionId);
 }
 
 function isAssignedTask(run: ExecutionItem): boolean {
@@ -403,12 +394,12 @@ function sessionContextLabel(session?: ChatSessionItem | null): string | undefin
   if (!session) return undefined;
   const archived = session.archivedWorkspace;
   if (archived?.name || archived?.repoName) {
-    return ['Workspace', archived.name, archived.repoName].filter(Boolean).join(' · ');
+    return [archived.repoName, archived.name].filter(Boolean).join(' · ');
   }
   if (session.workspaceName || session.workspaceRepoName) {
-    return ['Workspace', session.workspaceName, session.workspaceRepoName].filter(Boolean).join(' · ');
+    return [session.workspaceRepoName, session.workspaceName].filter(Boolean).join(' · ');
   }
-  if (session.repoName) return `Repository · ${session.repoName}`;
+  if (session.repoName) return session.repoName;
   return undefined;
 }
 
@@ -619,19 +610,6 @@ function collapseTaskRuns(items: ExecutionItem[]): ExecutionItem[] {
   });
 }
 
-function prStatusClass(status?: string): string {
-  if (status === 'merged') return 'border-accent-purple/30 bg-accent-purple/10 text-accent-purple';
-  if (status === 'closed') return 'border-accent-red/30 bg-accent-red/10 text-accent-red';
-  return 'border-accent-green/30 bg-accent-green/10 text-accent-green';
-}
-
-function conversationContextIcon(label?: string) {
-  if (!label) return <MessageSquare className="h-3 w-3 shrink-0 text-theme-subtle" />;
-  if (label.startsWith('Workspace')) return <FolderGit2 className="h-3 w-3 shrink-0 text-accent" />;
-  if (label.startsWith('Repository')) return <GitBranch className="h-3 w-3 shrink-0 text-accent-blue" />;
-  return <GitBranch className="h-3 w-3 shrink-0 text-theme-subtle" />;
-}
-
 function ConversationMeta({ item }: { item: ChatConversationItem }) {
   const pr = item.pullRequest;
   const diff = item.diffSummary ?? null;
@@ -639,24 +617,14 @@ function ConversationMeta({ item }: { item: ChatConversationItem }) {
   const additions = pr?.additions ?? diff?.additions;
   const deletions = pr?.deletions ?? diff?.deletions;
   const hasDiff = Boolean(changedFiles != null || additions != null || deletions != null);
-  if (!item.ownerLabel && !item.contextLabel && !pr && !hasDiff) return null;
-  return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-theme-muted">
-      {item.ownerLabel && (
-        <span className="inline-flex min-w-0 max-w-[180px] items-center gap-1.5">
-          <UserRound className="h-3 w-3 shrink-0 text-theme-subtle" />
-          <span className="truncate">{item.ownerLabel}</span>
-        </span>
-      )}
-      {item.contextLabel && (
-        <span className="inline-flex min-w-0 max-w-[260px] items-center gap-1.5 text-theme-secondary">
-          {conversationContextIcon(item.contextLabel)}
-          <span className="truncate">{item.contextLabel}</span>
-        </span>
-      )}
-      {pr?.url ? (
+  if (!item.ownerLabel && !item.contextLabel && !item.sub && !pr && !hasDiff) return null;
+  const sections = [
+    item.ownerLabel ? <span key="owner">{item.ownerLabel}</span> : null,
+    item.contextLabel ? <span key="context">{item.contextLabel}</span> : null,
+    pr ? (
+      pr.url ? (
         <a
-          className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] transition-colors hover:border-app-strong hover:bg-app-muted ${prStatusClass(pr.status)}`}
+          key="pr"
           href={pr.url}
           target="_blank"
           rel="noreferrer"
@@ -664,24 +632,29 @@ function ConversationMeta({ item }: { item: ChatConversationItem }) {
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => event.stopPropagation()}
         >
-          <GitPullRequest className="h-3 w-3" />
           PR {pr.number ? `#${pr.number}` : ''}{pr.status ? ` · ${pr.status}` : ''}
-          <ExternalLink className="h-2.5 w-2.5" />
         </a>
-      ) : pr ? (
-        <span className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] ${prStatusClass(pr.status)}`}>
-          <GitPullRequest className="h-3 w-3" />
-          PR {pr.number ? `#${pr.number}` : ''}{pr.status ? ` · ${pr.status}` : ''}
+      ) : (
+        <span key="pr">PR {pr.number ? `#${pr.number}` : ''}{pr.status ? ` · ${pr.status}` : ''}</span>
+      )
+    ) : null,
+    hasDiff ? (
+      <span key="diff">
+        {changedFiles != null && `${changedFiles} file${changedFiles === 1 ? '' : 's'}`}
+        {additions != null && <span className="home-v8-diff-add"> +{additions}</span>}
+        {deletions != null && <span className="home-v8-diff-del"> -{deletions}</span>}
+      </span>
+    ) : null,
+    item.sub ? <span key="sub">{item.sub}</span> : null,
+  ].filter(Boolean);
+  return (
+    <div className="home-v8-row-meta">
+      {sections.map((section, index) => (
+        <span key={index}>
+          {index > 0 && <span className="home-v8-meta-sep"> · </span>}
+          {section}
         </span>
-      ) : null}
-      {hasDiff && (
-        <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-app bg-app px-1.5 py-0.5 font-mono text-[10.5px] text-theme-muted">
-          <FileDiff className="h-3 w-3 text-accent-blue" />
-          {changedFiles != null && <span>{changedFiles} file{changedFiles === 1 ? '' : 's'}</span>}
-          {additions != null && <span className="text-accent-green">+{additions}</span>}
-          {deletions != null && <span className="text-accent-red">-{deletions}</span>}
-        </span>
-      )}
+      ))}
     </div>
   );
 }
@@ -703,7 +676,6 @@ export default function DashboardPage() {
   const chatInputRef = useRef<ChatInputHandle>(null);
   const skillSlashCommands = useSkillSlashCommands();
   const [pendingInterventions, setPendingInterventions] = useState<InterventionItem[]>([]);
-  const [reviewPrs, setReviewPrs] = useState<PullRequestReviewItem[]>([]);
   const [allPullRequests, setAllPullRequests] = useState<PullRequestReviewItem[]>([]);
   const [runs, setRuns] = useState<ExecutionItem[]>([]);
   const executionRevisionClock = useExecutionStore(state => state.changeVersion);
@@ -721,6 +693,8 @@ export default function DashboardPage() {
   const [selectedRepo, setSelectedRepo] = useState<RepoOption | null>(null);
   const [githubConnected, setGithubConnected] = useState(false);
   const [linearConnected, setLinearConnected] = useState(false);
+  const [mcpServerCount, setMcpServerCount] = useState(0);
+  const [workflowCount, setWorkflowCount] = useState(0);
   const [connectPreset, setConnectPreset] = useState<'github' | 'linear' | null>(null);
   const [agentOverrides, setAgentOverrides] = useState<{
     reasoningEffort?: ReasoningEffortValue | null;
@@ -728,15 +702,13 @@ export default function DashboardPage() {
   }>({});
   async function load() {
     try {
-      const [pending, execs, openPrs, sessions, prs] = await Promise.all([
+      const [pending, execs, sessions, prs] = await Promise.all([
         interventions.list({ status: 'pending', limit: 20 }).catch(() => []),
         executions.listPaged({ limit: 40, offset: 0 }).catch(() => ({ items: [] })),
-        pullRequests.list({ status: 'open' }).catch(() => []),
         chatApi.listSessions(user?.id ? { ownerUserId: user.id } : undefined).catch(() => []),
         pullRequests.list().catch(() => []),
       ]);
       setPendingInterventions(pending ?? []);
-      setReviewPrs((openPrs ?? []).filter((pr) => isReviewNeededPr(pr) && Boolean(pr.chatSessionId)));
       setAllPullRequests(prs ?? []);
       for (const execution of execs.items ?? []) {
         useExecutionStore.getState().ingestExecution(execution as unknown as Record<string, unknown>);
@@ -808,7 +780,11 @@ export default function DashboardPage() {
       setAllAgents(list ?? []);
       setAgentsLoading(false);
     }).catch(() => { setAgentsLoading(false); });
-    reposApi.list().then((list: RepoOption[]) => setRepos(list ?? [])).catch(() => {});
+    reposApi.list().then((list: RepoOption[]) => {
+      const nextRepos = list ?? [];
+      setRepos(nextRepos);
+      setSelectedRepo((current) => current ?? nextRepos[0] ?? null);
+    }).catch(() => {});
     Promise.all([
       systemApi.desktopRuntime().catch(() => null),
       linearApi.status().catch(() => null),
@@ -822,6 +798,13 @@ export default function DashboardPage() {
 
       setGithubConnected(githubSecretReady);
       setLinearConnected(Boolean(linearStatus?.configured || linearSecretReady));
+    }).catch(() => {});
+    Promise.all([
+      mcpApi.list().catch(() => []),
+      workflowsApi.list().catch(() => []),
+    ]).then(([mcpServers, workflows]) => {
+      setMcpServerCount(mcpServers.length);
+      setWorkflowCount(workflows.length);
     }).catch(() => {});
   }, []);
 
@@ -844,7 +827,7 @@ export default function DashboardPage() {
         return {
           id: sessionId ?? run.id,
           title: sessionTitle(session, run),
-          sub: sessionSubline(session, run),
+          sub: sessionSubline(session, run, { includeTimestamp: false }),
           href: sessionId ? `/chat/${sessionId}` : `/executions/${run.id}`,
           timestamp: session ? sessionTimestamp(session) : run.startedAt,
           messageCount: session?.messageCount,
@@ -865,7 +848,7 @@ export default function DashboardPage() {
           undefined,
           chatDiffSummaries[session._id],
         );
-        const details = sessionSubline(session);
+        const details = sessionSubline(session, undefined, { includeTimestamp: false });
         return {
           id: session._id,
           title: sessionTitle(session),
@@ -958,8 +941,15 @@ export default function DashboardPage() {
     },
     [pendingInterventions, runs],
   );
-  const firstName = (user?.name || user?.email?.split('@')[0] || 'there').split(/\s+/)[0];
-  const greeting = localGreeting();
+  const homeMeta = useMemo(() => {
+    const date = new Intl.DateTimeFormat('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+    }).format(new Date());
+    const running = runningConversations.length;
+    return `${date} · ${running} session${running === 1 ? '' : 's'} running`;
+  }, [runningConversations.length]);
 
   const selectedAgentDoc = selectedAgent
     ? allAgents.find((agent) => agent.name === selectedAgent) ?? null
@@ -980,70 +970,116 @@ export default function DashboardPage() {
   }
 
   const hasDashboardActivity = humanApprovals.length > 0 || runningConversations.length > 0 || recentConversations.length > 0;
+  const configuredProviderNames = new Set(
+    providers.map((provider) => String(provider.provider ?? provider.name ?? provider.label ?? '').toLowerCase()),
+  );
+  const configuredTeamCount = new Set(allAgents.map((agent) => agent.teamName).filter(Boolean)).size;
   const setupCards = [
     {
-      title: 'GitHub',
+      title: 'Connect GitHub',
       desc: githubConnected
-        ? reviewPrs.length
-          ? `${reviewPrs.length} pull request${reviewPrs.length === 1 ? '' : 's'} need review. Open the GitHub queue to inspect diffs and follow-up work.`
-          : 'Open synced pull requests, repository activity, and GitHub-backed review loops from Allen.'
-        : 'Connect GitHub so Allen can sync pull requests and use repository activity during review workflows.',
-      icon: Github,
+        ? 'Agents can now open PRs, read review comments, and push branches.'
+        : 'A personal access token lets agents open pull requests, read review comments, and push branches.',
+      icon: V8SetupGithubIcon,
       done: githubConnected,
-      action: githubConnected ? (reviewPrs.length ? 'Review' : 'Open') : 'Connect',
+      action: githubConnected ? 'Manage' : 'Connect',
+      why: githubConnected ? 'connected' : 'unlocks PRs',
+      minis: [] as Array<{ label: string; ready?: boolean }>,
       href: githubConnected ? '/pull-requests' : null,
-      onAction: githubConnected ? undefined : () => setConnectPreset('github'),
+      onAction: githubConnected ? undefined : () => setConnectPreset('github' as const),
     },
     {
-      title: 'Linear',
+      title: 'Connect Linear',
       desc: linearConnected
-        ? 'Open assigned issues, read project context, and turn a ticket into a focused Allen task.'
-        : 'Connect Linear so Allen can read tickets, project context, and dispatch issue work.',
-      icon: TicketCheck,
+        ? 'Browse tickets in Allen and dispatch issues to agents — they come back as PRs.'
+        : 'Browse tickets inside Allen and dispatch an issue straight to an agent — it comes back as a PR.',
+      icon: V8SetupLinearIcon,
       done: linearConnected,
-      action: linearConnected ? 'Open' : 'Connect',
+      action: linearConnected ? 'Open tickets' : 'Connect',
+      why: linearConnected ? 'connected' : 'unlocks tickets',
+      minis: [] as Array<{ label: string; ready?: boolean }>,
       href: linearConnected ? '/tickets' : null,
-      onAction: linearConnected ? undefined : () => setConnectPreset('linear'),
+      onAction: linearConnected ? undefined : () => setConnectPreset('linear' as const),
     },
     {
-      title: 'Add repository',
-      desc: repos.length
-        ? `${repos.length} repository${repos.length === 1 ? '' : 'ies'} available for Allen. Open repositories to update codebase context before dispatching work.`
-        : 'Connect a repository so Allen can clone code, create isolated worktrees, and run checks against real project context.',
-      icon: FolderGit2,
-      done: repos.length > 0,
-      action: repos.length ? 'Open' : 'Add repository',
-      href: '/agents?section=repos',
+      title: 'Add model providers',
+      desc: 'Two are ready from setup. Add more coding LLMs and mix them per agent or workflow node.',
+      icon: V8SetupModelsIcon,
+      done: providers.length > 0,
+      action: providers.length ? 'Manage' : 'Add provider',
+      why: `${providers.length || 0} ready`,
+      minis: ['Claude', 'Codex', 'GLM', 'Kimi', 'DeepSeek', 'MiMo', 'OpenRouter'].map((label) => ({
+        label,
+        ready: configuredProviderNames.has(label.toLowerCase())
+          || (label === 'Claude' && configuredProviderNames.has('claude-cli'))
+          || (label === 'Codex' && configuredProviderNames.has('codex')),
+      })),
+      href: '/settings/models',
     },
     {
-      title: 'Dispatch work',
-      desc: 'Use the composer above to start a bug fix, feature build, test update, PR review, or Linear ticket handoff.',
-      icon: MessageSquare,
-      done: false,
-      action: 'Start',
-      href: null,
+      title: 'Add MCP servers',
+      desc: mcpServerCount
+        ? `${mcpServerCount} MCP server${mcpServerCount === 1 ? '' : 's'} connected. Give agents more tools anytime.`
+        : 'Give agents tools beyond the repo — docs, analytics, tickets, or any custom MCP server.',
+      icon: V8SetupMcpIcon,
+      done: mcpServerCount > 0,
+      action: mcpServerCount ? 'Manage servers' : 'Add server',
+      why: mcpServerCount ? `${mcpServerCount} connected` : 'unlocks tools',
+      minis: ['Google Workspace', 'PostHog', 'Notion', 'Custom…'].map((label) => ({ label })),
+      href: '/settings/mcp',
+    },
+    {
+      title: 'Your agent org is ready',
+      desc: allAgents.length
+        ? `${configuredTeamCount} team${configuredTeamCount === 1 ? '' : 's'} · ${allAgents.length} agent${allAgents.length === 1 ? '' : 's'} seeded — engineering, product, QA, design, and more. Browse them, or create your own.`
+        : 'Create or import agents with explicit roles, models, tools, and permissions.',
+      icon: V8SetupAgentsIcon,
+      done: allAgents.length > 0,
+      action: allAgents.length ? 'Meet the team' : 'Set up',
+      why: allAgents.length ? 'seeded' : 'required',
+      minis: [] as Array<{ label: string; ready?: boolean }>,
+      href: '/agents?section=teams-agents',
+    },
+    {
+      title: 'Build a workflow',
+      desc: workflowCount
+        ? `${workflowCount} workflow${workflowCount === 1 ? '' : 's'} ready. Describe another repeatable process whenever you need one.`
+        : <>Describe a repeatable process and <span className="home-v8-setup-mono">workflow-build-and-review</span> assembles it, review-gated, ready to run.</>,
+      icon: V8SetupWorkflowIcon,
+      done: workflowCount > 0,
+      action: workflowCount ? 'Open' : 'Build',
+      why: 'optional',
+      minis: [] as Array<{ label: string; ready?: boolean }>,
+      href: workflowCount ? '/workflows' : '/workflows/new',
     },
   ];
   const setupComplete = setupCards.filter((item) => item.done).length;
-  const runningRows = runningConversations.slice(0, 4);
-  const recentRows = recentConversations.slice(0, 4);
+  const starterPrompts = [
+    'Fix a small bug',
+    'Add a dark mode toggle',
+    'Explain this codebase to me',
+    'Draft a launch announcement',
+  ];
+  const runningRows = runningConversations.slice(0, 3);
+  const recentRows = recentConversations.slice(0, 3);
   const humanLoopRows = humanApprovals.slice(0, 4);
+  const activityRows = [
+    ...runningRows.map((item) => ({ ...item, activityState: 'running' as const })),
+    ...recentRows.map((item) => ({ ...item, activityState: 'recent' as const })),
+  ].slice(0, 8);
 
   const { dragActive, dropProps } = useFileDropZone(
     (files) => chatInputRef.current?.uploadFiles(files),
   );
 
   return (
-    <div className="content scroll-hide bg-app" data-screen-label="dashboard" {...dropProps}>
+    <div className="content scroll-hide bg-app home-v8" data-screen-label="home" data-design-version="v8" {...dropProps}>
       {dragActive && <FileDropOverlay />}
-      <div className="mx-auto max-w-[1180px] px-8 py-14">
+      <div className="home-v8-wrap">
         <section>
-          <div className="flex items-center gap-2 font-mono text-[11px] font-medium uppercase tracking-[0.16em] text-theme-subtle">
-            <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-            New chat
-          </div>
-          <h1 className="mt-3 text-[32px] font-semibold leading-[1.1] tracking-[-0.018em] text-theme-primary">{greeting}, <span className="text-accent">{firstName}</span></h1>
-          <div className="mt-8 [&_.chat-composer]:max-w-none [&_.chat-composer]:rounded-md [&_.chat-composer]:px-5 [&_.chat-composer]:py-4 [&_.chat-composer]:shadow-none [&_.chat-composer-field]:relative [&_.chat-composer-field_textarea]:h-[103px] [&_.chat-composer-field_textarea]:p-0 [&_.chat-composer-field_textarea]:pr-48 [&_.chat-composer-field_textarea]:text-[16px] [&_.chat-composer-field_textarea]:leading-[1.6]">
+          <p className="home-v8-greet">{homeMeta}</p>
+          <h1 className="home-v8-title">What should Allen take on?</h1>
+          <div className="home-v8-composer">
             <ChatInput
               ref={chatInputRef}
               onSend={sendPrompt}
@@ -1060,11 +1096,12 @@ export default function DashboardPage() {
               selectedRepoName={selectedRepo?.name ?? null}
               onRepoChange={setSelectedRepo}
               agentOverrides={agentOverrides}
-              inheritedEffort={selectedAgentDoc?.reasoningEffort ?? (selectedProvider === 'codex' ? 'high' : 'medium')}
+              inheritedEffort={selectedAgentDoc?.reasoningEffort ?? 'high'}
               inheritedPlanMode={selectedAgentDoc?.planMode ?? null}
               onAgentOverridesChanged={setAgentOverrides}
-              maxVisibleLines={4}
-              fixedVisibleLines
+              maxVisibleLines={2}
+              controlPresentation="v8-home"
+              placeholder="Ask Allen to fix a Linear ticket, update tests, or review a PR…"
               extraControls={(
                 <AgentChatDropdown
                   value={selectedAgent}
@@ -1075,6 +1112,7 @@ export default function DashboardPage() {
                   agents={allAgents}
                   loading={agentsLoading}
                   variant="composer"
+                  controlPresentation="v8-home"
                 />
               )}
             />
@@ -1082,14 +1120,29 @@ export default function DashboardPage() {
         </section>
 
         {!initialLoading && !hasDashboardActivity ? (
-          <section className="mt-10">
-            <div className="mb-3 flex items-center gap-2 font-mono text-[11px] font-medium uppercase tracking-[0.16em]">
-              <span className="text-theme-subtle">Start work</span>
-              <span className="text-theme-subtle">·</span>
-              <span className="font-semibold text-theme-primary">{setupComplete} of 4</span>
-              <span className="text-theme-subtle">complete</span>
+          <section>
+            <div className="home-v8-starters">
+              {starterPrompts.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => chatInputRef.current?.setValue(prompt)}
+                  className="home-v8-starter"
+                >
+                  {prompt}
+                </button>
+              ))}
             </div>
-            <div className="grid w-full grid-cols-1 gap-5 md:grid-cols-2">
+            <div className="home-v8-section-head">
+              <div>
+                <h2>Finish setting up</h2>
+                <span>{setupComplete} of {setupCards.length} done</span>
+              </div>
+              <Link to="/settings/general">
+                All settings →
+              </Link>
+            </div>
+            <div className="home-v8-setup-grid">
               {setupCards.map((item) => (
                 <Link
                   key={item.title}
@@ -1103,184 +1156,118 @@ export default function DashboardPage() {
                       chatInputRef.current?.focus();
                     }
                   }}
-                  className="group flex min-h-[148px] items-start gap-5 rounded-md border border-app bg-app-card p-5 transition-colors hover:border-app-strong hover:bg-app-muted/30"
+                  className={`home-v8-setup-card ${item.done ? 'done' : ''}`}
                 >
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-app bg-app text-theme-muted transition-colors group-hover:text-theme-secondary">
-                    <item.icon className="h-[18px] w-[18px]" />
+                  {item.done && <span className="home-v8-setup-tick"><V8SetupTickIcon /></span>}
+                  <span className="home-v8-setup-icon">
+                    <item.icon />
                   </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="truncate text-[14.5px] font-semibold text-theme-primary">{item.title}</span>
-                      {item.done && (
-                        <CheckCircle2 className="h-4 w-4 shrink-0 text-accent-green" />
-                      )}
-                    </div>
-                    <p className="mt-2 max-w-[38rem] text-[13px] leading-5 text-theme-muted">{item.desc}</p>
-                  </div>
-                  <span className={`mt-0.5 inline-flex h-8 shrink-0 items-center rounded-md border px-3 text-[13px] font-medium transition-colors ${
-                    item.done
-                      ? 'border-app bg-app text-theme-secondary group-hover:bg-app-muted'
-                      : 'border-accent/35 bg-accent-soft text-accent group-hover:border-accent/50'
-                  }`}>
-                    {item.action}
+                  <span className="home-v8-setup-title">{item.title}</span>
+                  <span className="home-v8-setup-description">{item.desc}</span>
+                  {item.minis.length > 0 && (
+                    <span className="home-v8-setup-minis">
+                      {item.minis.map((mini) => (
+                        <span
+                          key={mini.label}
+                          className={'ready' in mini && mini.ready ? 'ready' : ''}
+                        >
+                          {'ready' in mini && mini.ready ? '✓ ' : ''}{mini.label}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                  <span className="home-v8-setup-footer">
+                    <span className="home-v8-setup-why">{item.why}</span>
+                    <span className="home-v8-setup-action">{item.action} →</span>
                   </span>
                 </Link>
               ))}
             </div>
+            <div className="home-v8-receipt">
+              Setup: admin ✓ · machine ✓ · repository {repos.length ? '✓' : '—'} — from onboarding
+            </div>
           </section>
         ) : (
-          <>
-            <section className="mt-10 space-y-6">
-              <div>
-                <div className="flex items-center justify-between gap-4 pb-3">
+          <section>
+              <div className="home-v8-section">
+                <div className="home-v8-section-head">
                   <div>
-                    <div className="flex items-center gap-2 font-mono text-[10.5px] font-medium uppercase tracking-[0.16em] text-theme-subtle">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-accent-purple" />
-                      Needs You
-                    </div>
-                    <div className="mt-1 text-[13px] text-theme-muted">Approvals, questions, or blocked checkpoints.</div>
+                    <h2>Needs you</h2>
+                    <span>{humanApprovals.length}</span>
                   </div>
                   {humanApprovals.length > 0 ? (
-                    <Link to="/executions" className="inline-flex items-center gap-1 text-[12px] font-medium text-theme-muted hover:text-theme-primary">
-                      Review all <ArrowRight className="h-3 w-3" />
+                    <Link to="/chats">
+                      All sessions →
                     </Link>
                   ) : (
-                    <span className="font-mono text-[12px] text-theme-subtle">0 waiting</span>
+                    <span className="home-v8-zero">0 waiting</span>
                   )}
                 </div>
                 {humanLoopRows.length === 0 ? (
-                  <div className="flex h-12 items-center justify-center gap-2 px-5 text-[13px] text-theme-muted">
-                    <Circle className="h-2 w-2 fill-current" />
+                  <div className="home-v8-empty-row">
+                    <Circle />
                     No execution needs you
                   </div>
                 ) : (
-                  <div className="overflow-hidden rounded-md border border-app bg-app-card">
-                    <div className="divide-y divide-app">
+                    <div className="home-v8-list">
                       {humanLoopRows.map((item) => (
-                        <Link key={item.id} to={item.href} className="group grid min-h-[72px] grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 transition-colors hover:bg-app-muted/40">
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13.5px] font-semibold text-theme-primary group-hover:text-accent">{item.title}</span>
-                            <span className="mt-0.5 block truncate text-[12px] text-theme-muted">{item.sub}</span>
+                        <Link key={item.id} to={item.href} className="home-v8-row home-v8-row-attention">
+                          <span className={`home-v8-dot ${item.kind === 'blocked' ? 'error' : 'human'}`} />
+                          <span className="home-v8-row-main">
+                            <span className="home-v8-row-title">{item.title}</span>
+                            <span className="home-v8-row-meta">{item.sub}</span>
                           </span>
-                          <span className="flex shrink-0 items-center gap-2">
-                            <span className="hidden rounded-full border border-app bg-app px-2 py-0.5 font-mono text-[10px] text-theme-muted sm:inline-flex">
-                              {item.kind}
-                            </span>
-                            <span className="font-mono text-[10.5px] text-theme-subtle">{timeAgo(item.createdAt)}</span>
+                          <span className={`home-v8-attention-status ${item.kind === 'blocked' ? 'error' : ''}`}>
+                            {item.kind === 'blocked' ? 'paused' : `waiting ${waitingAge(item.createdAt)}`}
+                          </span>
+                          <span className={`home-v8-attention-action ${item.kind === 'blocked' ? 'secondary' : ''}`}>
+                            {item.kind === 'blocked' ? 'Resolve' : 'Review'}
                           </span>
                         </Link>
                       ))}
                     </div>
-                  </div>
                 )}
               </div>
 
-              <div className="space-y-6">
-                <section>
-                  <div className="flex items-center justify-between gap-4 pb-3">
-                    <div>
-                      <div className="flex items-center gap-2 font-mono text-[10.5px] font-medium uppercase tracking-[0.16em] text-theme-subtle">
-                        <PlayCircle className="h-3.5 w-3.5 text-accent-cyan" />
-                        Running Conversation
-                      </div>
-                      <div className="mt-1 text-[13px] text-theme-muted">Chat conversations with active agent or workflow work.</div>
-                    </div>
-                    <span className="font-mono text-[12px] text-theme-subtle">{runningConversations.length} running</span>
-                  </div>
+              <div className="home-v8-section">
+                <div className="home-v8-section-head">
                   <div>
-                    {runningRows.length === 0 ? (
-                      <div className="flex h-12 items-center justify-center gap-2 px-5 text-[13px] text-theme-muted">
-                        <Circle className="h-2 w-2 fill-current" />
-                        No running conversation
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {runningRows.map((item) => (
-                          <div
-                            key={item.id}
-                            role="link"
-                            tabIndex={0}
-                            onClick={() => navigate(item.href)}
-                            onKeyDown={(event) => activateConversationRow(event, item.href, navigate)}
-                            className="group grid min-h-[68px] cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-app bg-app-card px-4 py-3 transition-colors hover:border-app-strong hover:bg-app-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                          >
-                            <span className="min-w-0">
-                              <span className="block truncate text-[14px] font-semibold text-theme-primary">{item.title}</span>
-                              <ConversationMeta item={item} />
-                              {item.sub && <span className="mt-1 block truncate font-mono text-[11px] text-theme-muted">{item.sub}</span>}
-                            </span>
-                            <span className="flex shrink-0 items-center gap-3">
-                              {item.run ? (
-                                <WorkStatusBadge run={item.run} />
-                              ) : (
-                                <span className="badge badge-info">
-                                  <span className="status-dot" />
-                                  running
-                                </span>
-                              )}
-                              <ArrowRight className="h-3.5 w-3.5 text-theme-subtle opacity-0 transition-opacity group-hover:opacity-100" />
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <h2>Recent</h2>
+                    <span>{activityRows.length}</span>
                   </div>
-                </section>
-
-                <section>
-                  <div className="flex items-center justify-between gap-4 pb-3">
-                    <div>
-                      <div className="flex items-center gap-2 font-mono text-[10.5px] font-medium uppercase tracking-[0.16em] text-theme-subtle">
-                        <Clock3 className="h-3.5 w-3.5 text-theme-muted" />
-                        Recent Conversation
-                      </div>
-                      <div className="mt-1 text-[13px] text-theme-muted">Latest chat conversations.</div>
+                </div>
+                {activityRows.length === 0 ? (
+                  <div className="home-v8-empty-row">
+                    <Clock3 />
+                    No sessions yet
+                  </div>
+                ) : (
+                    <div className="home-v8-list">
+                      {activityRows.map((item) => (
+                        <div
+                          key={`${item.activityState}:${item.id}`}
+                          role="link"
+                          tabIndex={0}
+                          onClick={() => navigate(item.href)}
+                          onKeyDown={(event) => activateConversationRow(event, item.href, navigate)}
+                          className="home-v8-row"
+                        >
+                          <span className={`home-v8-dot ${item.activityState === 'running' ? 'running' : 'complete'}`} />
+                          <span className="home-v8-row-main">
+                            <span className="home-v8-row-title">{item.title}</span>
+                            <ConversationMeta item={item} />
+                          </span>
+                          <span className="home-v8-row-time">{compactAge(item.timestamp)}</span>
+                        </div>
+                      ))}
                     </div>
-                    <Link to="/chats" className="inline-flex items-center gap-1 text-[12px] font-medium text-theme-muted hover:text-theme-primary">
-                      View all <ArrowRight className="h-3 w-3" />
-                    </Link>
-                  </div>
-                  <div>
-                    {recentRows.length === 0 ? (
-                      <div className="flex h-12 items-center justify-center gap-2 px-5 text-[13px] text-theme-muted">
-                        <Clock3 className="h-3.5 w-3.5" />
-                        No recent conversation yet
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {recentRows.map((item) => (
-                          <div
-                            key={item.id}
-                            role="link"
-                            tabIndex={0}
-                            onClick={() => navigate(item.href)}
-                            onKeyDown={(event) => activateConversationRow(event, item.href, navigate)}
-                            className="group grid min-h-[68px] cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-app bg-app-card px-4 py-3 transition-colors hover:border-app-strong hover:bg-app-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                          >
-                            <span className="min-w-0">
-                              <span className="block truncate text-[14px] font-semibold text-theme-primary">{item.title}</span>
-                              <ConversationMeta item={item} />
-                              {item.sub && <span className="mt-1 block truncate font-mono text-[11px] text-theme-muted">{item.sub}</span>}
-                            </span>
-                            <span className="flex shrink-0 items-center gap-2">
-                              {messageCountLabel(item.messageCount) && (
-                                <span className="font-mono text-[11px] text-theme-muted">
-                                  {messageCountLabel(item.messageCount)}
-                                </span>
-                              )}
-                              <span className="font-mono text-[11px] text-theme-subtle">{timeAgo(item.timestamp)}</span>
-                              <ArrowRight className="h-3.5 w-3.5 text-theme-subtle opacity-0 transition-opacity group-hover:opacity-100" />
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </section>
+                )}
               </div>
-            </section>
-          </>
+          </section>
         )}
+        <footer className="home-v8-footer">
+          Allen · agentic operating system for software development
+        </footer>
       </div>
       {connectPreset && (
         <McpPresetConnectModal

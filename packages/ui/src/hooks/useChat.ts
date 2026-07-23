@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { chat as api, executions as executionsApi, interventions as interventionsApi, executionWatchers as executionWatchersApi, authHeaders, type RunStatus, type TokenUsageInfo, type WatcherUIDoc } from '../services/api';
 import { useAuthStore, type AuthUser } from '../stores/authStore';
 import { useExecutionStore } from '../stores/executionStore';
+import type { TeamClassification, TeamClassificationSource } from '../types/teamClassification';
 import {
   reconcileChildAgentsWithSnapshots,
   reconcileRunContextWithSnapshot,
@@ -67,6 +68,29 @@ export function sessionReconnectDelay(attempt: number): number {
   return Math.min(5_000, 500 * (2 ** Math.min(Math.max(attempt - 1, 0), 4)));
 }
 
+/** Normalize the blank-session sentinel used by tab handlers. */
+export function normalizeChatSessionId(sessionId: string | null | undefined): string | null {
+  return sessionId || null;
+}
+
+/** Tab selection is idempotent when it already targets the active session. */
+export function isSameChatSession(
+  activeSessionId: string | null | undefined,
+  targetSessionId: string | null | undefined,
+): boolean {
+  return normalizeChatSessionId(activeSessionId) === normalizeChatSessionId(targetSessionId);
+}
+
+/** Return a session's in-memory value without exposing the mutable cache. */
+export function cachedChatSessionValue<T>(
+  cache: ReadonlyMap<string, T>,
+  sessionId: string | null | undefined,
+  fallback: T,
+): T {
+  const normalizedSessionId = normalizeChatSessionId(sessionId);
+  return normalizedSessionId ? cache.get(normalizedSessionId) ?? fallback : fallback;
+}
+
 /** Consume one chat SSE response. Resolving means the server closed the
  * response, which the caller treats as a reconnect signal rather than a
  * terminal chat state. */
@@ -109,7 +133,7 @@ export interface ChatSession {
   agentOverrides?: {
     provider?: 'claude' | 'codex' | (string & {}) | null;
     model?: string | null;
-    reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max' | null;
+    reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
     planMode?: boolean | null;
   };
   /** Repo associated with this session (set at creation time, immutable). */
@@ -117,6 +141,9 @@ export interface ChatSession {
   repoPath?: string;
   repoName?: string;
   workspaceId?: string;
+  studioWorkspaceId?: string;
+  teamClassification?: TeamClassification | null;
+  teamClassificationSource?: TeamClassificationSource | null;
   archivedWorkspace?: {
     id: string;
     name?: string;
@@ -151,6 +178,8 @@ export interface ChatSession {
 
 export interface ToolCallRecord {
   tool: string;
+  /** Provider-normalized one-line description captured when the tool starts. */
+  description?: string;
   args: Record<string, unknown>;
   result: Record<string, unknown>;
   durationMs: number;
@@ -194,6 +223,7 @@ function currentSenderFields(user: AuthUser | null): Pick<ChatMessage, 'senderUs
 /** Active tool call being streamed */
 export interface ActiveToolCall {
   tool: string;
+  description?: string;
   args: Record<string, unknown>;
   status: 'running' | 'completed';
   result?: Record<string, unknown>;
@@ -205,6 +235,8 @@ export interface ActiveToolCall {
 /** Spawned agent execution — live tracking */
 export interface SpawnedAgent {
   executionId: string;
+  /** Chat that owns this run. Used to prevent resource leakage across chats. */
+  chatSessionId?: string;
   sourceMessageId?: string;
   parentExecutionId?: string | null;
   spawnDepth?: number | null;
@@ -250,6 +282,7 @@ function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>,
   if (!existing) {
     return [...prev, {
       executionId: run.executionId,
+      chatSessionId: run.chatSessionId,
       sourceMessageId: run.sourceMessageId,
       parentExecutionId: run.parentExecutionId,
       spawnDepth: run.spawnDepth,
@@ -269,6 +302,7 @@ function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>,
       ? {
           ...s,
           ...run,
+          chatSessionId: run.chatSessionId ?? s.chatSessionId,
           parentExecutionId: run.parentExecutionId ?? s.parentExecutionId,
           spawnDepth: run.spawnDepth ?? s.spawnDepth,
           activity: run.activity ?? s.activity,
@@ -313,6 +347,7 @@ function toolRunFromResult(tool: string, result: Record<string, unknown> | undef
 function activeToolCallsFromRecords(records?: ToolCallRecord[]): ActiveToolCall[] {
   return (records ?? []).map(record => ({
     tool: record.tool,
+    description: record.description,
     args: record.args ?? {},
     status: 'completed' as const,
     result: record.result,
@@ -323,10 +358,19 @@ function activeToolCallsFromRecords(records?: ToolCallRecord[]): ActiveToolCall[
 
 function mergeToolStart(prev: ActiveToolCall[], data: any): ActiveToolCall[] {
   const toolUseId = data.toolUseId ?? data.tool_use_id;
-  if (toolUseId && prev.some(tc => tc.toolUseId === toolUseId)) return prev;
+  if (toolUseId && prev.some(tc => tc.toolUseId === toolUseId)) {
+    return prev.map(tc => tc.toolUseId === toolUseId
+      ? {
+          ...tc,
+          tool: data.tool ?? tc.tool,
+          description: data.description ?? tc.description,
+          args: data.args && Object.keys(data.args).length > 0 ? data.args : tc.args,
+        }
+      : tc);
+  }
   return [
     ...prev,
-    { tool: data.tool, args: data.args ?? {}, status: 'running' as const, toolUseId },
+    { tool: data.tool, description: data.description, args: data.args ?? {}, status: 'running' as const, toolUseId },
   ];
 }
 
@@ -342,6 +386,7 @@ function mergeToolResult(prev: ActiveToolCall[], data: any): ActiveToolCall[] {
     return {
       ...tc,
       status: 'completed' as const,
+      description: data.description ?? tc.description,
       args: data.args ?? tc.args,
       result: data.result,
       durationMs: data.durationMs,
@@ -353,6 +398,7 @@ function mergeToolResult(prev: ActiveToolCall[], data: any): ActiveToolCall[] {
     ...next,
     {
       tool: data.tool,
+      description: data.description,
       args: data.args ?? {},
       status: 'completed' as const,
       result: data.result,
@@ -372,6 +418,7 @@ function runsFromMessages(messages: ChatMessage[]): SpawnedAgent[] {
       if (!run || seen.has(run.executionId)) continue;
       seen.add(run.executionId);
       run.sourceMessageId = message._id;
+      run.chatSessionId = message.sessionId;
       runs.push(run);
     }
   }
@@ -382,7 +429,12 @@ function mergeSpawnedRuns(primary: SpawnedAgent[], secondary: SpawnedAgent[]): S
   const byId = new Map<string, SpawnedAgent>();
   for (const run of [...primary, ...secondary]) {
     const existing = byId.get(run.executionId);
-    byId.set(run.executionId, existing ? { ...existing, ...run, activity: run.activity ?? existing.activity } : run);
+    byId.set(run.executionId, existing ? {
+      ...existing,
+      ...run,
+      chatSessionId: run.chatSessionId ?? existing.chatSessionId,
+      activity: run.activity ?? existing.activity,
+    } : run);
   }
   return [...byId.values()];
 }
@@ -395,11 +447,14 @@ function runsFromPersistedExecutions(items: Array<{
   status?: string | null;
   kind?: SpawnedAgent['kind'];
   runContext?: RunStatus | null;
-}>): SpawnedAgent[] {
+}>, chatSessionId?: string): SpawnedAgent[] {
   return items
     .filter(item => item.executionId)
     .map(item => ({
       executionId: item.executionId,
+      // The forChat endpoint itself establishes ownership even when an older
+      // execution record does not yet carry the chat id in its run context.
+      chatSessionId: item.runContext?.chat?.sessionId ?? chatSessionId,
       sourceMessageId: item.sourceMessageId ?? item.runContext?.chat?.parentMessageId ?? undefined,
       parentExecutionId: item.runContext?.execution?.parentExecutionId ?? undefined,
       spawnDepth: item.runContext?.execution?.spawnDepth ?? undefined,
@@ -432,8 +487,18 @@ export function useChat() {
   const abortRef = useRef<AbortController | null>(null);
   const sessionStreamAbortRef = useRef<AbortController | null>(null);
   const sessionsRef = useRef<ChatSession[]>([]);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const messagesBySessionRef = useRef<Map<string, ChatMessage[]>>(new Map());
   const clearRestoredDraft = useCallback(() => setRestoredDraft(null), []);
   const executionSnapshots = useExecutionStore(state => state.entities);
+
+  // Keep every opened conversation's messages in memory. Tab switches can
+  // restore this snapshot synchronously while the session stream reconnects
+  // and reconciles newer persisted events in the background.
+  activeSessionIdRef.current = activeSessionId;
+  messagesRef.current = messages;
+  if (activeSessionId) messagesBySessionRef.current.set(activeSessionId, messages);
 
   const spawnedRunIds = spawnedAgents
     .map(s => s.executionId)
@@ -483,7 +548,7 @@ export function useChat() {
       const knownIds = new Set(next.map(run => run.executionId));
       for (const snapshot of Object.values(executionSnapshots)) {
         if (snapshot.chatSessionId !== activeSessionId || knownIds.has(snapshot.executionId)) continue;
-        next = [...next, runSeedFromSnapshot(snapshot) as SpawnedAgent];
+        next = [...next, { ...runSeedFromSnapshot(snapshot), chatSessionId: snapshot.chatSessionId ?? undefined } as SpawnedAgent];
         knownIds.add(snapshot.executionId);
         changed = true;
       }
@@ -539,7 +604,9 @@ export function useChat() {
         if (cancelled) return;
         // Load execution watchers for this session
         executionWatchersApi.list(activeSessionId)
-          .then(incoming => setWatchers(prev => mergeWatcherDocuments(prev, incoming)))
+          .then(incoming => {
+            if (!cancelled) setWatchers(incoming);
+          })
           .catch(() => {/* best-effort */});
         const loadedMessages = (session.messages || []) as ChatMessage[];
         const { messages: _messages, ...sessionMeta } = session as ChatSession & { messages?: ChatMessage[] };
@@ -555,7 +622,10 @@ export function useChat() {
             useExecutionStore.getState().ingestExecution(run.runContext.execution as unknown as Record<string, unknown>);
           }
         }
-        setSpawnedAgents(mergeSpawnedRuns(runsFromMessages(loadedMessages), runsFromPersistedExecutions(persistedRuns)));
+        setSpawnedAgents(mergeSpawnedRuns(
+          runsFromMessages(loadedMessages),
+          runsFromPersistedExecutions(persistedRuns, activeSessionId),
+        ));
 
         // Re-surface a pending ask_user question on refresh. The tool
         // persists the question on chat_sessions.pendingUserQuestion while
@@ -618,7 +688,10 @@ export function useChat() {
                   useExecutionStore.getState().ingestExecution(run.runContext.execution as unknown as Record<string, unknown>);
                 }
               }
-              setSpawnedAgents(prev => mergeSpawnedRuns(prev, runsFromPersistedExecutions(latestRuns)));
+              setSpawnedAgents(prev => mergeSpawnedRuns(
+                prev,
+                runsFromPersistedExecutions(latestRuns, activeSessionId),
+              ));
               setWatchers(prev => mergeWatcherDocuments(prev, latestWatchers));
               setStreaming(latestStreaming);
             }
@@ -681,6 +754,7 @@ export function useChat() {
           const run = toolRunFromResult(data.tool, data.result);
           if (run) {
             run.sourceMessageId = data.messageId;
+            run.chatSessionId = sessionId;
             setSpawnedAgents(prev => upsertSpawnedRun(prev, run));
           }
         }
@@ -758,6 +832,7 @@ export function useChat() {
       case 'spawn_started':
         setSpawnedAgents(prev => upsertSpawnedRun(prev, {
           executionId: data.executionId as string,
+          chatSessionId: sessionId,
           sourceMessageId: data.messageId as string | undefined,
           parentExecutionId: data.parentExecutionId as string | null | undefined,
           spawnDepth: data.spawnDepth as number | null | undefined,
@@ -772,6 +847,7 @@ export function useChat() {
       case 'routed_run_started':
         setSpawnedAgents(prev => upsertSpawnedRun(prev, {
           executionId: data.executionId as string,
+          chatSessionId: sessionId,
           sourceMessageId: data.messageId as string | undefined,
           parentExecutionId: data.parentExecutionId as string | null | undefined,
           spawnDepth: data.spawnDepth as number | null | undefined,
@@ -847,8 +923,19 @@ export function useChat() {
         ? await createOverride({ provider, model, agentOverrides, repoId, workspaceId })
         : await api.createSession(provider, model, agentOverrides, repoId, workspaceId);
       setSessions(prev => [session, ...prev]);
+      activeSessionIdRef.current = session._id;
+      messagesRef.current = [];
+      messagesBySessionRef.current.set(session._id, []);
       setActiveSessionId(session._id);
       setMessages([]);
+      setStreamText('');
+      setThinkingText('');
+      setActiveToolCalls([]);
+      setAgentReports([]);
+      setPendingUserQuestion(null);
+      setSpawnedAgents([]);
+      setStreaming(false);
+      setWatchers([]);
       return session;
     },
     [],
@@ -856,8 +943,11 @@ export function useChat() {
 
   const deleteSession = useCallback(async (id: string) => {
     await api.deleteSession(id);
+    messagesBySessionRef.current.delete(id);
     setSessions(prev => prev.filter(s => s._id !== id));
     if (activeSessionId === id) {
+      activeSessionIdRef.current = null;
+      messagesRef.current = [];
       setActiveSessionId(null);
       setMessages([]);
     }
@@ -888,6 +978,18 @@ export function useChat() {
   }, []);
 
   const switchSession = useCallback((id: string) => {
+    const nextSessionId = normalizeChatSessionId(id);
+    const currentSessionId = activeSessionIdRef.current;
+
+    // Clicking an already-active tab used to clear its messages while React
+    // correctly skipped the unchanged activeSessionId update. Because the
+    // load effect did not rerun, the conversation then stayed blank.
+    if (isSameChatSession(currentSessionId, nextSessionId)) return;
+
+    if (currentSessionId) {
+      messagesBySessionRef.current.set(currentSessionId, messagesRef.current);
+    }
+
     // Detach from the current session's local SSE reader (if any). The server
     // keeps the query running independently in activeQueries — the agent
     // process continues, events are still broadcast, and our listener is
@@ -900,8 +1002,11 @@ export function useChat() {
     }
     sendingRef.current = false;
 
-    setActiveSessionId(id || null);
-    setMessages([]);
+    const cachedMessages = cachedChatSessionValue(messagesBySessionRef.current, nextSessionId, [] as ChatMessage[]);
+    activeSessionIdRef.current = nextSessionId;
+    messagesRef.current = cachedMessages;
+    setActiveSessionId(nextSessionId);
+    setMessages(cachedMessages);
     setStreamText('');
     setThinkingText('');
     setActiveToolCalls([]);
@@ -1031,6 +1136,7 @@ export function useChat() {
                   const toolUseId = data.toolUseId ?? data.tool_use_id;
                   const toolRecord: ToolCallRecord = {
                     tool: data.tool,
+                    description: data.description,
                     args: data.args ?? (toolUseId ? activeToolArgs.get(toolUseId) : undefined) ?? {},
                     result: data.result,
                     durationMs: data.durationMs,
@@ -1043,6 +1149,7 @@ export function useChat() {
                   const run = toolRunFromResult(data.tool, data.result);
                   if (run) {
                     run.sourceMessageId = data.messageId || assistantMsgId;
+                    run.chatSessionId = sessionId;
                     setSpawnedAgents(prev => upsertSpawnedRun(prev, run));
                   }
                   break;
@@ -1135,6 +1242,7 @@ export function useChat() {
                 case 'spawn_started':
                   setSpawnedAgents(prev => upsertSpawnedRun(prev, {
                     executionId: data.executionId as string,
+                    chatSessionId: sessionId,
                     sourceMessageId: (data.messageId || assistantMsgId) as string | undefined,
                     parentExecutionId: data.parentExecutionId as string | null | undefined,
                     spawnDepth: data.spawnDepth as number | null | undefined,
@@ -1149,6 +1257,7 @@ export function useChat() {
                 case 'routed_run_started':
                   setSpawnedAgents(prev => upsertSpawnedRun(prev, {
                     executionId: data.executionId as string,
+                    chatSessionId: sessionId,
                     sourceMessageId: (data.messageId || assistantMsgId) as string | undefined,
                     parentExecutionId: data.parentExecutionId as string | null | undefined,
                     spawnDepth: data.spawnDepth as number | null | undefined,

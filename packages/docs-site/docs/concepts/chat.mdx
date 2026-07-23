@@ -1,0 +1,207 @@
+---
+title: 'Chat'
+description: 'Use chat to ask grounded questions, plan work, reference Allen resources, and follow tasks from one conversation.'
+---
+
+Chat is the fastest way to ask Allen a question or begin a task. Start with the outcome you want, select the relevant repository, and keep the discussion in the same conversation so decisions, questions, execution progress, and results stay connected.
+
+Use chat when you want Allen to explain something, inspect available evidence, help refine a request, or coordinate work through an agent, workflow, or connected tool. Allen should show you the proposed route and ask for confirmation before it starts state-changing work.
+
+## What chat can do
+
+Use chat to:
+
+- ask product, project, or technical questions;
+- ground a request in a repository selected from the composer;
+- work inside a conversation already linked to an isolated workspace;
+- attach files that Allen should read with your request;
+- reference an available workflow, repository, or agent by typing `@` and choosing from the list;
+- type `@linear` to choose one of your active Linear tickets when Linear is connected;
+- use `/` to discover available quick commands and Allen Library skills;
+- ask Allen to route a task to an agent or workflow after you approve the route;
+- answer follow-up questions and supported workflow checkpoints without leaving the conversation;
+- follow task progress and open related task sequences, files, code changes, context, and saved artifacts;
+- return through **History** and continue a previous conversation.
+
+### Start with enough context
+
+1. Open **Dashboard** and use **New chat**, or open **History** and select an existing conversation.
+2. Describe one outcome and how you will judge success.
+3. Select a repository when your request depends on its code or documentation.
+4. Attach any screenshot, document, log, or example Allen needs to understand the request.
+5. Confirm the provider and model. Choose a specific agent only when you intend to work with that specialist.
+6. Send the request.
+
+A good first response either answers with evidence or explains the proposed next step. If Allen needs information, answer the question in the existing conversation. If it proposes an agent, workflow, or external action, review the target, expected output, and risks before confirming.
+
+If a repository, agent, workflow, skill, or Linear ticket does not appear, confirm that the resource is available in Allen and that its integration is connected. If no model can be selected, open **Settings → Models** and complete provider authentication.
+
+## Session model
+
+Treat each conversation as the working record for one outcome. Allen keeps its messages together with the selected model, agent settings, repository, and linked workspace so you can return without rebuilding the context.
+
+### Continue a conversation or start a new one
+
+| Situation | Best action |
+| --- | --- |
+| You have a follow-up, correction, or new evidence for the same outcome | Open **History**, search by conversation, repository, or workspace, and continue the existing conversation. |
+| You are starting a different task | Use **New chat** so unrelated decisions and task progress do not mix. |
+| You need to work in a different repository | Start a new chat and select the repository before sending the first message. The repository selector locks after the conversation is created. |
+| The conversation is linked to a workspace | Continue that conversation when the request concerns the same workspace and its changes. |
+
+### Manage follow-ups while Allen is responding
+
+If you send another message during an active response, Allen places it in the **Queued messages** panel. You can queue up to three messages, edit or remove a queued message, and let Allen process it after the current turn.
+
+Use **Steer** when the queued instruction should affect the response already in progress. Otherwise, leave it queued. Use **Stop** when the current response is no longer useful; after it stops, send a focused correction or change the model.
+
+### Know when a conversation is view-only
+
+- **Imported replays** are read-only. Review or export their history, then start a new chat if you need Allen to act on it.
+- **Slack-managed conversations** remain visible in Allen for continuity, but replies must be sent from the original Slack thread.
+
+## Runtime boundaries
+
+Chat can answer a request directly or coordinate a separate task. The conversation keeps the request and result together, while agents and workflows keep their own progress, inputs, and outputs. Knowing which path Allen chose helps you review the right evidence.
+
+| What Allen does | What you should expect |
+| --- | --- |
+| Answers or inspects read-only evidence | The result stays in the conversation. For repository-specific claims, expect Allen to identify the files, logs, traces, or other evidence it checked. |
+| Uses a connected tool | The conversation shows the tool activity and should link any ticket, pull request, message, or other resource it references. |
+| Starts an agent or workflow | A task sequence appears in **Tasks**. Follow its status, steps, requests for input, and saved artifacts there while continuing to use the conversation as the control point. |
+| Works in a linked workspace | Use **Files** and **Changes** to review the working copy. When available, use **Terminal** or **Open in IDE** for closer inspection. |
+| Produces a durable document or data file | Open the saved artifact from **Tasks** or its link in the final response instead of relying only on the chat transcript. |
+
+### Review before execution starts
+
+Allen can answer read-only questions after checking the relevant evidence. Before it starts a workflow, assigns a specialist, changes files, or takes another state-changing action, it should show the proposed route, required inputs, expected output, risks or unknowns, and the runtime model, then wait for your confirmation.
+
+After you confirm, the agent or workflow becomes a separate task with its own lifecycle. A chat response is not a substitute for task status: use **Tasks** to confirm whether the work is running, waiting for input, completed, failed, or cancelled.
+
+### Keep repository work in the right boundary
+
+Selecting a repository gives Allen context for questions and planning; it does not by itself create an editable working copy. File-changing work should run in an isolated workspace. When a conversation is linked to a workspace, Allen resolves work against that workspace so the related files and changes stay together.
+
+If the task produces a specification, report, query result, or other deliverable you will need later, ask Allen to save it as an artifact and link it from the final response.
+
+## Composer controls
+
+Set the controls that change Allen's context or behavior before you send the first message. Leave the defaults in place unless the request needs a specific repository, specialist, or planning mode.
+
+| Control | How to use it |
+| --- | --- |
+| **Assistant** | Keep **Assistant** for general chat and automatic routing. Select an agent only when you deliberately want to work with that specialist; the selection locks after that agent has participated in the conversation. |
+| **Select model** | Choose a model from a logged-in provider. If no suitable model appears, open **Settings → Models**, follow the provider's login guidance, and use **Check again**. |
+| **Reasoning effort** | Keep the inherited setting for most requests. Choose **Off**, **Low**, **Medium**, or **High** when you need to override it for this conversation. The picker labels **Max** as an Opus-only setting. |
+| **Plan** | Turn on **Plan** with the base Assistant when you want brainstorming or a product requirements document without code changes. Selecting a specific agent hides this control. |
+| **Repository** | Select the repository whose code or documentation should ground the request, or keep **Auto** when no specific repository is required. The selection locks after the conversation is created; start a new chat to change it. |
+| **Attach file** | Use the paperclip, drag files onto the composer, or paste a file. Check the attachment chips before sending and remove any file you added by mistake. |
+| `@` mentions | Type `@` to choose an available workflow, repository, or agent. Type `@linear` to search active Linear tickets when Linear is connected. |
+| `/` and **Quick commands** | Type `/` to search supported slash commands and Allen Library skills. Use the **Quick commands** button for common workflow, query, agent, and debugging prompts. |
+
+Press **Enter** to send and **Shift+Enter** to add a new line. While Allen is responding, use **Stop** before changing the model. A banner in the composer explains when the whole input is unavailable, such as in an imported replay or a Slack-managed conversation.
+
+## Session lifecycle
+
+A blank **New chat** becomes a saved conversation when you send the first message. Allen creates it with the selected model, Assistant or agent, reasoning and Plan settings, repository, and any workspace from which you started the chat. You can then find it in **History** and return to the same working record.
+
+| State | What to expect and do |
+| --- | --- |
+| **Responding** | Allen streams the answer and any visible status or tool activity. You can switch to another conversation without cancelling the turn; returning to this conversation reconnects to the active response. |
+| **Waiting for you** | Answer a question-style prompt in the conversation. If a linked workflow needs approval or another structured decision, open its task controls instead of sending a plain chat reply. |
+| **Follow-up queued** | Allen processes queued messages in order after the active turn. Edit or remove a queued message before it starts, or use **Steer** when it should affect the current response. |
+| **Completed** | The final response and supporting activity remain in the conversation. Open any linked task or artifact for its detailed status and durable output. |
+| **Failed** | The conversation shows the failure. Review the visible error, correct the request or provider setup, and send a focused retry in the same conversation when the outcome is unchanged. |
+
+**Stop** is an interrupt, not a pause. It cancels the active chat turn and any active agent or workflow tasks launched from that turn, then marks the response as cancelled so you can send another message. If you later ask Allen to continue interrupted work, choose whether to start fresh or resume the cancelled execution when a resumable session is available.
+
+## Chat context
+
+Allen builds each turn from the conversation and the resources you explicitly select or reference. Keep one outcome in one conversation, then add only the context needed for the next response.
+
+| Context source | How to use it |
+| --- | --- |
+| **Conversation history** | Continue the same conversation for follow-ups on the same outcome. State corrections and changed decisions directly so Allen does not rely on an outdated instruction. |
+| **Selected repository** | Select a repository before the first message when the answer depends on its code or documentation. This identifies the repository to inspect but does not create an editable workspace. |
+| **Linked workspace** | Continue the workspace's conversation when the request concerns its current branch or changes. Allen resolves repository work against the linked working copy rather than the registered repository path. |
+| **Attachments** | Attach a screenshot, document, log, or example, then name the file and say what Allen should extract or verify. The sent message includes a link to each uploaded file. |
+| `@` **mentions** | Mention an available workflow, repository, or agent to give Allen the exact resource metadata. Use `@linear` to select a ticket when Linear is connected. A mention adds context; it does not start a workflow or agent by itself. |
+| **Connected tools** | Ask Allen to inspect current data from an enabled integration or MCP server instead of pasting stale details. Tool availability depends on your Allen configuration and the selected agent's permissions. |
+| **Repository context recall** | When the context engine is configured, Allen can add relevant read-only repository guidance to the current turn. Use it to find likely evidence, not as proof of current behavior. |
+
+Seeing a file, diff, task, or artifact in a panel does not identify what matters for the next response. Name the exact item and the question you want answered. For repository-specific claims, ask Allen to identify the code, documentation, tests, logs, traces, or artifacts it inspected.
+
+## Evidence and visibility
+
+Treat the final answer as a summary, not the whole record. Review the conversation and its resource panel before accepting a result.
+
+| Where to look | What to review |
+| --- | --- |
+| Conversation | Expand **Tool calls** to inspect a tool's input, output, duration, or error. Follow any linked ticket, pull request, execution, message, or other external resource. |
+| **Tasks** | Check an agent or workflow's status, steps, activity, requests for input, child tasks, and artifacts. A final chat message does not replace the task's terminal status. |
+| **Files** | Open the repository or linked workspace tree and verify the exact file Allen referenced. |
+| **Changes** | Inspect the available diff before accepting file-changing work. Confirm that the changes match the requested scope. |
+| **Context** | Review which repository references were injected, selected, filtered, or skipped for each turn. Use this to understand grounding, not as proof that a claim is current. |
+| Imported replay banner | Treat the session as a read-only record. Its messages, tool calls, executions, and artifacts may refer to resources that are unavailable in the current environment. |
+
+For repository-specific claims, ask Allen to name the code, documentation, tests, logs, traces, or artifacts it checked. For state-changing work, also verify the linked task's final status, validation results, workspace changes, and durable output. A plausible answer without inspectable evidence is not a completed result.
+
+## Routing from chat
+
+Start with the outcome you need. Allen can answer directly, use a connected tool, assign a specialist agent, or propose a workflow depending on the task.
+
+| Your request | Likely route | What to review |
+| --- | --- | --- |
+| Explain, summarize, or look something up | Direct answer or read-only tool | Evidence and source links |
+| Give one specialist a bounded task | Agent task | Agent, target, expected output, and model |
+| Run a repeatable, multi-step process | Workflow | Inputs, checkpoints, expected outputs, and model |
+| Change repository files | Agent or workflow in an isolated workspace | File scope, validation, and Git boundary |
+| Update an external record | Connected tool or the specialist that owns the task | Exact resource and proposed change |
+
+Before state-changing work starts, Allen should show the selected route, a short plan, required inputs, expected outputs, risks or unknowns, and the model that will be used. Review those details before you confirm. Mentioning an agent, workflow, repository, or ticket adds context; it does not by itself approve execution.
+
+For repository work, state the Git boundary explicitly: edit only, commit locally, push, or open a pull request. These are separate actions. After execution begins, use **Tasks** to follow progress, answer input requests, and open the resulting workspace, artifact, or external resource.
+
+## Good chat requests
+
+Strong requests name the outcome, target, constraints, evidence to check, and definition of done. Include the action boundary whenever the task could change state.
+
+| Goal | Example request |
+| --- | --- |
+| Understand the product | "In the selected repository, verify how workspace creation works. Cite the routes, services, and tests you checked; do not edit files." |
+| Fix a bounded problem | "Reproduce the docs build failure in this workspace, fix only its root cause, and run the relevant checks. Do not commit or push." |
+| Update documentation | "Rewrite the next five sections for end users, verify every behavior claim in the current product, run the docs build, and commit locally. Do not push or open a pull request." |
+| Review a ticket | "Summarize LIN-123, check whether the repository already supports the requested behavior, and recommend the next route. Do not update the ticket." |
+| Explore a design | "Use Design Studio to create three navigation directions for the settings page. Keep the current design system and save a comparison I can review." |
+| Check active work | "Check the linked task, explain what is complete or blocked, and link the workspace and artifacts. Do not restart it." |
+
+## When chat is the wrong surface
+
+Chat is the command center, but some work is clearer in the surface designed for it.
+
+| Need | Use |
+| --- | --- |
+| Answer an ordinary clarification or decide what should happen next | The conversation |
+| Approve a workflow step, complete structured fields, retry a failed step, or recover with another model | **Tasks** or the execution page |
+| Inspect or change files, run commands, or use a preview | The linked workspace |
+| Compare visual directions or iterate on a prototype | **Design Studio** |
+| Review a durable deliverable | The linked artifact |
+
+Question-style pauses can appear in the conversation. For approvals, escalations, structured forms, retries, and model recovery, open the dedicated control from **Tasks** so your decision is recorded against the correct execution.
+
+Repository context in a conversation is for grounding, planning, and read-only inspection. When files may change, confirm that Allen will use an isolated workspace and review its **Changes** before any Git action.
+
+## Safety expectations
+
+Before you confirm a state-changing task:
+
+1. Check the exact repository, workspace, ticket, or external record.
+2. Confirm the file or record scope, validation, and expected output.
+3. Confirm whether Allen may only edit, may commit locally, may push, or may open a pull request.
+4. Review the selected agent or workflow and its model when those choices matter.
+
+Do not paste passwords, API keys, private credentials, or sensitive customer data into chat. Configure credentials through the appropriate Allen settings or integration flow, and grant only the access required for the task.
+
+While work is running, use **Tasks**, **Changes**, and linked execution pages to verify what happened. Keep durable plans, reports, exports, and other deliverables as artifacts rather than relying on the transcript alone.
+
+Related guides: [Start a chat](/guides/start-a-chat), [Use artifacts](/guides/use-artifacts), [Run a workflow](/guides/run-a-workflow), and [Security](/reference/security).

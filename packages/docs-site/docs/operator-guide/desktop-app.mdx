@@ -1,0 +1,126 @@
+---
+title: 'Use the Desktop App'
+description: 'Learn the fastest way to start work, monitor progress, review changes, and manage Allen from the desktop app.'
+---
+
+The Allen desktop app is your main place to start tasks, follow active work, answer questions, and review results. Use it to keep the conversation, execution record, workspace, and saved outputs for a task connected.
+
+## A practical daily workflow
+
+Most work in Allen follows the same path:
+
+1. Start from the **Dashboard**.
+2. Describe one clear outcome in **New chat**.
+3. Select the repository that Allen should use.
+4. Confirm the provider and model. Choose a specific agent only when you know that specialist owns the task.
+5. Send the request and review Allen's proposed route before approving any state-changing work.
+6. Return to the **Dashboard** to follow **Needs You**, **Running Conversation**, and **Recent Conversation** items.
+7. Open **Executions** when you need step-level status, logs, traces, or saved artifacts.
+8. Open the linked workspace to review files and code changes before approving a commit, pull request, or other external action.
+
+This path works for questions, repository investigations, workflow runs, and agent tasks. The exact review surface changes with the task, but the sequence remains: request, confirm, monitor, review, then approve.
+
+## Start and resume work
+
+### Start a task
+
+1. Open **Dashboard**.
+2. In **New chat**, enter the result you want and how you will judge success.
+3. Select a repository when the answer or change depends on project context.
+4. Keep the default provider and model unless the task requires another configured model.
+5. Send the request.
+
+A successful start opens a conversation that contains your request and Allen's response. If Allen needs to run a workflow, assign an agent, or change external state, review the route and confirm it before execution begins.
+
+If the repository is missing, open **Repositories**, add it, then return to the Dashboard. If no model is available, open **Settings → Models** and complete the provider setup shown there.
+
+### Resume something that needs attention
+
+The Dashboard groups current work by the action you need to take:
+
+- **Needs You** contains approvals, questions, and blocked checkpoints. Open the item, read the linked evidence, and respond there instead of starting a duplicate task.
+- **Running Conversation** contains conversations with active agent or workflow work. Open one to see its latest progress.
+- **Recent Conversation** contains your latest chats. Use it to continue a previous decision or request without losing context.
+
+For a complete list of runs, open **Executions**. Filter by **Running**, **Completed**, **Failed**, **Cancelled**, **Queued**, or **Waiting for input**.
+
+## Review repository work
+
+Code-changing tasks should use an isolated workspace. From a workspace-linked conversation, use the right-side controls to inspect:
+
+- **Files** for the workspace file tree;
+- **Code changes** for the current diff;
+- **Terminal** for commands and validation output;
+- **Servers** and **Preview** when the workspace defines a service you can run.
+
+In the packaged desktop app, choose **Open in IDE**, then **VS Code** or **Cursor**, to continue reviewing the workspace in a local editor. The action appears when the conversation is linked to an active workspace. Allen shows an error if it cannot open the selected editor.
+
+Before approving the result, confirm that:
+
+- every changed file belongs to the requested scope;
+- reported checks passed;
+- artifacts and summaries match the visible diff;
+- no credentials, customer data, generated clutter, or unrelated files were added;
+- any pull request is reviewed before it is merged.
+
+**Completed** means the run finished. It does not mean the result is automatically approved.
+
+## Use more than one window
+
+Choose **File → New Window** or press **⌘N** when you want to keep two views open. For example, keep the conversation in one window and the execution or workspace review in another.
+
+All windows show the same Allen data, so progress in one window is available from the others. Closing a window does not quit Allen or stop its active work. To close the app and its shared desktop session, quit Allen explicitly from the application menu or Dock.
+
+## Use desktop shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| **⌘K** | Open the command palette to navigate or run an app command. |
+| **⌘L** | Focus the chat input, or return to the Dashboard and focus it from another page. |
+| **⌘N** | Open a new Allen window. |
+| **⌘1** | Open Chat. |
+| **⌘2** | Open Workspaces. |
+| **⌘,** | Open Settings. |
+
+On a non-macOS keyboard, the app menu displays the equivalent Control-based shortcut where supported.
+
+## Manage desktop preferences and updates
+
+Open **Settings → General** for desktop-level preferences:
+
+- Under **Workspace behavior**, choose the system, light, or dark appearance and review the command-palette and chat-focus shortcuts.
+- Under **Application updates**, turn **Automatic checks** on or off.
+- Next to **Current version**, choose **Check for updates** to check manually.
+- Under **Release notes**, choose **View release notes** to see changes in published desktop releases.
+
+When a manual check succeeds, Allen tells you whether the current version is up to date or a newer installer is available. If the page says update checks are disabled for the build, use the installation source provided by your Allen administrator.
+
+Use the other Settings sections only when the task requires them—for example, **Models** for provider access, **MCP Servers** for integrations, and **Schedules** for recurring work.
+
+## Diagnose a desktop problem
+
+Use the **File** menu when Allen cannot start work, a page cannot connect, or support asks for desktop details:
+
+1. Choose **File → Show Diagnostics**. Copy the details if you need to include them in a support request.
+2. Choose **File → Open Logs Folder** when support needs the application logs.
+3. Choose **File → Export Support Bundle** to save a JSON support bundle.
+
+Review diagnostic text, logs, and the support bundle before sharing them. Remove anything that reveals private repository details, credentials, API keys, cookies, or customer data. Use **Open Data Folder** only when support explicitly asks you to inspect Allen's local application data.
+
+### Common recovery steps
+
+| Problem | What to do |
+| --- | --- |
+| A task is waiting | Open **Needs You** or filter Executions by **Waiting for input**, then answer the existing request. |
+| A run failed | Open the execution, inspect the failed step and first actionable error, then retry only after correcting the cause. |
+| A repository is unavailable | Add or reactivate it in **Repositories**, then return to the task. |
+| No model can be selected | Open **Settings → Models** and complete authentication for a supported provider. |
+| VS Code or Cursor does not open | Confirm the editor is installed and available to the desktop app, then try **Open in IDE** again. |
+| Allen still cannot proceed | Capture **Show Diagnostics**, open the logs, and export a reviewed support bundle. |
+
+## Continue learning
+
+- Learn how to make precise requests in [Chat](/concepts/chat).
+- Learn how isolated changes work in [Workspaces](/concepts/workspaces).
+- Learn how to follow active work in [Monitor an Execution](/guides/monitor-execution).
+- Learn how to review saved outputs in [Artifacts](/concepts/artifacts).

@@ -1,0 +1,113 @@
+---
+title: 'Run a Workflow'
+description: 'Start a validated workflow, respond to review points, and verify its result.'
+---
+
+:::info Media placeholders
+Before publishing, capture **Run Workflow**, an active execution, a human-input request, **Rerun from Saved State**, and final artifacts. Redact repository paths and external identifiers.
+:::
+
+Running a workflow creates an execution you can follow from input to final output. Review the workflow's side effects before starting it; a valid graph can still use repositories, credentials, MCP tools, or external systems.
+
+## Before you run
+
+Confirm that:
+
+- the workflow is marked valid;
+- you understand its required inputs;
+- referenced agents, providers, and MCP servers are available;
+- the selected repository and branch/workspace strategy are correct;
+- any required external credentials are configured;
+- high-impact actions have an appropriate human checkpoint.
+
+## Start the workflow
+
+1. Open **Workflows**.
+2. Find the workflow. You can run it from the list or open its detail page and select **Run workflow**.
+3. Complete the **Run Workflow** form.
+4. Recheck repository paths, ticket or pull-request identifiers, branch names, and deployment targets.
+5. Select **Run Workflow**.
+6. Allen opens the new execution so you can monitor it.
+
+The Run action is disabled for a workflow with validation errors.
+
+## Fill the generated form
+
+The form comes from the workflow's saved input schema. It can render text fields, textareas, checkboxes, numbers, selects, and repository pickers.
+
+- Required fields are marked and block submission when empty.
+- Optional blank values are omitted.
+- Boolean and number values are converted to their declared types.
+- Defaults are prefilled when the workflow defines them.
+- A repository picker lists registered repositories and also allows a manual path.
+
+The repository picker appears only for a matching path field when the workflow declares that it requires a repository. If the form is missing an expected field, edit the workflow input schema rather than inventing another input name.
+
+## Monitor the execution
+
+The execution detail page is the source of truth for the run. Use it to inspect:
+
+- overall status and current progress;
+- node status and child agent executions;
+- logs, tool calls, and traces;
+- model usage and estimated cost;
+- repository/workspace and linked chat context;
+- context selected for the run;
+- saved artifacts and final output.
+
+Do not treat a completed status alone as approval to ship. Review the output and any external changes the workflow made.
+
+## Respond to human input
+
+When the status is **waiting for input**, read the question, summary, evidence, and available actions before responding. The execution does not continue until the required input is submitted.
+
+If the requested decision is unclear or the evidence is insufficient, do not guess. Leave the run paused and investigate the linked logs, artifacts, or repository state first.
+
+## Cancel a run
+
+Use **Cancel** when the target is wrong, the input is unsafe, the workflow is repeating unproductive work, or an external prerequisite has changed.
+
+Cancellation stops future workflow progress, but it cannot undo side effects that already happened. Check for commits, tickets, messages, deployments, or child executions before assuming the system is unchanged.
+
+## Rerun from saved state
+
+Allen writes a saved state after each successfully completed workflow node. Open **Rerun from Saved State** to inspect those checkpoints.
+
+For a completed, failed, or cancelled run you can:
+
+- compare saved states;
+- add feedback for all agent nodes or selected agent nodes;
+- edit checkpoint state while the execution is not active;
+- **Run** from a checkpoint using the same execution lineage;
+- **Fork** a checkpoint into a new execution for comparison.
+
+Prefer a checkpoint rerun when earlier work is still valid. Start a fresh run when the original input, repository state, or intended path has materially changed.
+
+## Review the result
+
+Before using the result:
+
+1. Read the final response and any declared workflow outputs.
+2. Open saved artifacts and confirm they contain the expected evidence.
+3. Review linked repository or external-system changes.
+4. Confirm validation or test results rather than relying on an agent's claim that they passed.
+5. Record follow-up feedback if you plan to rerun from a checkpoint.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Run is disabled | Open the workflow, validate it, and resolve its errors. |
+| Expected input is missing | Check the saved INPUT schema and repository requirement. |
+| Repository is not listed | Register it under Repos, or use manual path entry only when the workflow expects that path. |
+| Run waits indefinitely | Check the current node, pending human input, child executions, logs, and provider/tool health. |
+| Node fails | Inspect the node trace and logs before retrying; fix input, credentials, model, MCP, or workflow logic as indicated. |
+| No saved states appear | A checkpoint is written only after a node completes successfully. |
+| Output exists only in logs | Update the workflow or agent instructions to return named output or save an artifact. |
+
+## Related pages
+
+- [Create a Workflow](/guides/create-a-workflow)
+- [Monitor an execution](/guides/monitor-execution)
+- [Workspaces](/concepts/workspaces)
+- [Artifacts](/concepts/artifacts)

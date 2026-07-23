@@ -1,0 +1,146 @@
+---
+title: 'Troubleshooting'
+description: 'Identify the failing Allen surface, collect safe evidence, and choose the smallest recovery action.'
+---
+
+:::info Media placeholders
+Before publishing, capture the onboarding health check, a failed execution with its node trace, **Settings → MCP Servers**, a model-recovery prompt, and the desktop **Show Diagnostics** and **Export Support Bundle** actions. Redact secrets, local paths, repository content, and external identifiers.
+:::
+
+Troubleshoot from the user-visible failure inward. Confirm which surface failed, preserve the evidence from that attempt, and change one thing at a time.
+
+## Start with two health checks
+
+1. Open the onboarding health page or request `GET /api/system/health`.
+2. If Allen itself is unreachable, request `GET /api/health` directly.
+3. Record the failing check and its guidance before restarting anything.
+
+`/api/health` proves only that the API process is responding. `/api/system/health` also checks Node.js, npm, MongoDB, Git, and the configured Claude or Codex CLI requirements. It returns coarse guidance without exposing environment values, secrets, absolute paths, or raw command output.
+
+A passing system health check does not prove that a repository, model account, MCP tool, or workflow will succeed.
+
+## Find the failing surface
+
+| Symptom | Open first | Check next |
+| --- | --- | --- |
+| Allen will not start | Onboarding health or server logs | Required runtime values, MongoDB, ports, Node.js, and configured CLI installation/authentication. |
+| A workflow cannot start | Workflow detail | Validation errors and the exact required fields shown by **Run Workflow**. |
+| An execution stopped | Execution detail | Current node, status, logs, trace, child executions, and pending input. |
+| A repository action failed | **Repos** | Registered path, Git state, default branch, credentials, and ownership. |
+| A workspace action failed | Workspace detail | Worktree path, base branch, terminal/service logs, assigned ports, and archived state. |
+| An agent used an unexpected model | Agent editor and execution trace | Workflow-node override, chat-session override, agent default, active registry entry, and recovery selection. |
+| A tool is missing | Agent editor and **Settings → MCP Servers** | Server enabled state, selected external servers, per-tool exclusions, and connection test. |
+| Retrieved context looks wrong | Repository context management and execution context usage | Curated entry state, mandatory mappings, graph freshness, selected agent, and Playground result. |
+
+Use the narrowest matching surface. For example, a workspace port failure is not evidence of a model problem, and a valid workflow graph is not evidence that its credentials are correct.
+
+## Investigate executions
+
+The execution detail page is the source of truth for a run. Inspect it before retrying.
+
+- **Waiting for input** means Allen needs a human response or a model-recovery choice. Read the question, evidence, and available actions before submitting anything.
+- **Failed** means the current attempt ended. Open the failed node's logs and trace, then inspect child executions if the node delegated work.
+- A run that appears idle may be waiting on a child agent, provider, tool, or external service. Check activity and traces rather than inferring from elapsed time alone.
+- Capture artifacts, context usage, and the failed attempt before using a checkpoint rerun.
+
+Choose recovery deliberately:
+
+| Goal | Action |
+| --- | --- |
+| Continue after answering a question | Submit the requested input. |
+| Continue the same saved lineage | Run from a checkpoint. |
+| Compare an alternate path without replacing the source run | Fork from a checkpoint. |
+| Stop future workflow progress | Cancel the run; then inspect already-created side effects. |
+| Retry with another model after a recoverable provider failure | Use the model-recovery prompt. |
+| Start over because inputs or repository state changed materially | Create a fresh run. |
+
+Cancellation and retries do not undo commits, tickets, messages, deployments, or other external actions that already completed.
+
+## Check repositories and workspaces
+
+For repository registration or clone failures, verify:
+
+- the local path or remote URL is correct;
+- Allen can access the directory;
+- the repository is a usable Git checkout;
+- the default branch is correct;
+- HTTPS or SSH credentials work outside Allen;
+- the target clone path is not already occupied.
+
+For workspace failures, open the workspace and inspect its Git state and service logs. Confirm the source repository, base branch, worktree path, assigned service command, and port. Do not repair an active workspace by editing MongoDB records manually; preserve the execution and workspace evidence first.
+
+## Check models and agents
+
+1. Open **Settings → Models** and confirm the model exists and is active.
+2. Confirm the provider is available and authenticated. Claude and Codex use their local CLI sessions; Claude-compatible providers use their configured API credentials and base URL.
+3. Open the agent editor and review its default provider, model, reasoning level, and plan mode.
+4. Inspect the workflow node or chat session for a higher-priority override.
+5. If execution is waiting on model recovery, verify the proposed provider/model before retrying.
+
+Do not assume that editing a registry row rewrites existing agents, workflow YAML, or chat sessions. Review the concrete surface that will run next.
+
+## Check MCP servers
+
+1. Open **Settings → MCP Servers**.
+2. Confirm the server is enabled.
+3. Select **Test connection** and read the persisted status and error.
+4. For a local server, verify its command, entry file, dependency installation, and declared credential keys.
+5. For an HTTP/SSE server, verify its URL, reachability, and authentication headers.
+6. In the agent editor, confirm the external server is selected and the required tools are not disabled.
+
+A successful test proves that the server starts or responds. It does not prove that every downstream API permission, database operation, or side effect will succeed.
+
+## Check repository context
+
+If repository context is unavailable, enable **Cognee Context** under **Settings → Runtime** and complete repository context preparation.
+
+If retrieval is unexpected:
+
+1. Reproduce the request in **Playground** with the same agent.
+2. Compare the selected and injected references with the execution's context-usage record.
+3. Check Curated Context inclusion, retrieval text, source path, and graph freshness.
+4. Check whether broad Mandatory Context mappings are displacing task-specific evidence.
+5. Refresh the graph only when provider-backed context is stale. Mandatory mapping changes apply to new runs without a graph rebuild.
+
+Context diagnostics explain what Allen selected; they do not replace reading the current source before making an implementation claim.
+
+## Desktop diagnostics
+
+In Allen Desktop, use the application menu actions:
+
+- **Show Diagnostics** for runtime paths, ports, and managed-service state;
+- **Export Support Bundle** for a JSON handoff containing diagnostics and coarse health snapshots.
+
+The desktop export uses its own save dialog. Review and redact the file before sharing it.
+
+## Collect evidence for handoff
+
+Include only what another operator or engineer needs:
+
+- exact reproduction steps;
+- timestamp and timezone;
+- affected page or action;
+- relevant execution, workspace, repository, incident, or chat-session identifier;
+- sanitized error text and the failing node/check;
+- a short log or trace excerpt;
+- configuration keys that changed, without values;
+- the recovery action attempted and its result.
+
+Stop blind retries when the same node fails with the same sanitized error after input, credentials, repository state, and provider/tool health have been checked. That is the point to open a code investigation or bug report.
+
+## Redaction checklist
+
+Before sharing logs, screenshots, artifacts, support bundles, or tickets, remove:
+
+- API keys, OAuth tokens, JWTs, cookies, signing secrets, and connection strings;
+- capability URLs and artifact links that grant access;
+- private repository paths or source content not needed for diagnosis;
+- customer data and proprietary prompts;
+- any token-like value, even when you are unsure whether it is live.
+
+## Related pages
+
+- [Monitor an execution](/guides/monitor-execution)
+- [Environment reference](/reference/environment)
+- [Security reference](/reference/security)
+- [Known limitations](/reference/known-limitations)

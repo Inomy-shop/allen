@@ -1,11 +1,25 @@
-import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle, type ReactNode, type RefObject, type SVGProps } from 'react';
+import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle, type ReactNode, type RefObject } from 'react';
 import { ArrowUp, Square, ChevronDown, Paperclip, Loader2, X, Sparkles, ShieldCheck, Plus, Check, FolderGit2, CornerDownLeft } from 'lucide-react';
 import MentionAutocomplete, { type MentionOption } from './MentionAutocomplete';
 import { authHeaders, linear, type LinearIssueSummary } from '../../services/api';
 import { getModelDisplay } from '../../hooks/useModelRegistry';
 import { CHAT_PLACEHOLDER } from '../../lib/brand';
+import {
+  V8ArrowUpIcon,
+  V8ChevronDownIcon,
+  V8PaperclipIcon,
+  V8PlanShieldIcon,
+  V8WorkspacesIcon,
+} from '../common/V8SidebarIcons';
+import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
+import {
+  isReasoningEffortSupported,
+  reasoningEffortLabel,
+  reasoningEffortOptionsFor,
+  type ReasoningEffortValue,
+} from '../../lib/reasoning-effort';
 
-export type ReasoningEffortValue = 'off' | 'low' | 'medium' | 'high' | 'max';
+export type { ReasoningEffortValue } from '../../lib/reasoning-effort';
 
 export interface RepoOption { _id: string; name: string; path: string; }
 
@@ -88,113 +102,9 @@ interface ChatInputProps {
   maxVisibleLines?: number;
   fixedVisibleLines?: boolean;
   placeholder?: string;
+  /** Mirrors the approved V8 composer control labels for the home or chat surface. */
+  controlPresentation?: 'default' | 'v8-home' | 'v8-chat';
 }
-
-const PROVIDER_COLORS: Record<string, string> = {
-  codex: 'text-accent-green',
-  claude: 'text-accent',
-  'claude-cli': 'text-accent', // legacy id on historical sessions
-  deepseek: 'text-accent-blue',
-  'xiaomi-mimo': 'text-accent-blue',
-  kimi: 'text-accent-blue',
-};
-
-function OpenAIIcon({ className }: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
-      <path
-        d="M12 3.4a4.1 4.1 0 0 1 3.9 2.8 4.1 4.1 0 0 1 4.2 4.1 4.2 4.2 0 0 1-1.8 3.4 4.1 4.1 0 0 1-5.9 5.5 4.1 4.1 0 0 1-6.3-2.3 4.1 4.1 0 0 1-2.2-7.5A4.1 4.1 0 0 1 8.6 4a4.1 4.1 0 0 1 3.4-.6Z"
-        stroke="currentColor"
-        strokeWidth="1.55"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M8.7 4.1 15 7.7v7.2l-6.3 3.6M4 9.4l6.3 3.6 6.2-3.6M6.1 16.9V9.8l6.2-3.6M18.3 13.7l-6.2-3.6-6.2 3.6M12.3 19.2v-7.1l6.2-3.6"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function ClaudeIcon({ className }: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
-      <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <circle cx="12" cy="12" r="2.4" fill="currentColor" />
-    </svg>
-  );
-}
-
-function DeepSeekIcon({ className }: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
-      <path
-        d="M4.2 12.3c0-4.3 3.4-7.8 7.7-7.8 3.1 0 5.8 1.8 7 4.4.5 1.1.8 2.3.8 3.5 0 4.3-3.4 7.7-7.8 7.7-1.8 0-3.5-.6-4.8-1.6l-2.8.8.8-2.7a7.6 7.6 0 0 1-.9-4.3Z"
-        stroke="currentColor"
-        strokeWidth="1.55"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M7.7 11.5c1.7 1.5 3.4 2.1 5.3 1.8 1.3-.2 2.4-.8 3.3-1.8M8.3 9.2c1.9-.9 3.8-.8 5.7.2M8.8 14.9c1.5.7 3.2.8 5 .2"
-        stroke="currentColor"
-        strokeWidth="1.45"
-        strokeLinecap="round"
-      />
-      <circle cx="8.4" cy="8.7" r="0.85" fill="currentColor" />
-    </svg>
-  );
-}
-
-function XiaomiMimoIcon({ className }: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
-      <rect x="3.8" y="4.6" width="16.4" height="14.8" rx="3.4" stroke="currentColor" strokeWidth="1.7" />
-      <path
-        d="M7.7 15.5V9.3h2.4l1.9 3.3 1.9-3.3h2.4v6.2M10.1 15.5v-3.2M13.9 15.5v-3.2"
-        stroke="currentColor"
-        strokeWidth="1.45"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function KimiIcon({ className }: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
-      <circle cx="12" cy="12" r="8.1" stroke="currentColor" strokeWidth="1.65" />
-      <path
-        d="M8.7 7.8v8.4M15.6 8.1l-6.2 5 6.7 3.1M13.2 10.6l3.2-2.8M13.5 13.9l3.1 2.5"
-        stroke="currentColor"
-        strokeWidth="1.55"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="M17.9 5.7 19.2 4.4M6.1 18.3l-1.3 1.3" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-export function ProviderIcon({ provider, className }: { provider?: string | null; className?: string }) {
-  if (provider === 'codex') return <OpenAIIcon className={className} />;
-  if (provider === 'claude' || provider === 'claude-cli') return <ClaudeIcon className={className} />;
-  if (provider === 'deepseek') return <DeepSeekIcon className={className} />;
-  if (provider === 'xiaomi-mimo') return <XiaomiMimoIcon className={className} />;
-  if (provider === 'kimi') return <KimiIcon className={className} />;
-  return <Sparkles className={className} />;
-}
-
-const EFFORT_OPTIONS: Array<{ value: ReasoningEffortValue; label: string; description: string }> = [
-  { value: 'off', label: 'Off', description: 'No extended thinking' },
-  { value: 'low', label: 'Low', description: 'Quick' },
-  { value: 'medium', label: 'Medium', description: 'Standard' },
-  { value: 'high', label: 'High', description: 'Deliberate' },
-  { value: 'max', label: 'Max', description: 'Opus only' },
-];
 
 const pickerPanelClass = 'fixed z-50 min-w-[220px] overflow-hidden rounded-md border border-app bg-app-card p-2 shadow-2xl';
 const pickerHeaderClass = 'px-3 pb-2 pt-1 text-[13px] font-medium text-theme-muted';
@@ -204,6 +114,7 @@ const effortPickerRowClass = 'flex min-h-9 w-full items-center gap-2 rounded-md 
 
 const TEXTAREA_MIN_HEIGHT = 76;
 const TEXTAREA_MAX_HEIGHT = 200;
+const V8_TEXTAREA_MIN_HEIGHT = 50;
 
 export function modelOptionsForProvider(provider: ProviderInfo, currentModel?: string | null): string[] {
   const fixedModels = Array.isArray(provider.models) ? provider.models : [];
@@ -216,6 +127,12 @@ export function modelOptionsForProvider(provider: ProviderInfo, currentModel?: s
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function compactModelLabel(provider?: string, model?: string): string {
+  if (!provider || !model) return model ?? 'Opus 4.8';
+  const display = getModelDisplay(provider, model);
+  return display.modelLabel.replace(new RegExp(`^${display.providerLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+`, 'i'), '');
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -260,8 +177,8 @@ function effortLabel(
   override: ReasoningEffortValue | null | undefined,
   inherited: ReasoningEffortValue | null | undefined,
 ): string {
-  if (override) return capitalize(override);
-  if (inherited) return `${capitalize(inherited)} (default)`;
+  if (override) return reasoningEffortLabel(override);
+  if (inherited) return `${reasoningEffortLabel(inherited)} (default)`;
   return 'Default';
 }
 
@@ -296,9 +213,13 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     maxVisibleLines,
     fixedVisibleLines,
     placeholder,
+    controlPresentation = 'default',
   },
   ref,
 ) {
+  const isV8Home = controlPresentation === 'v8-home';
+  const isV8Presentation = isV8Home || controlPresentation === 'v8-chat';
+  const textareaMinHeight = isV8Presentation ? V8_TEXTAREA_MIN_HEIGHT : TEXTAREA_MIN_HEIGHT;
   const [value, setValue] = useState('');
   const [mentionVisible, setMentionVisible] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -340,6 +261,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
   // Effective values: override wins, else inherited agent default
   const effectiveEffort = (agentOverrides?.reasoningEffort ?? inheritedEffort) ?? null;
+  const effortOptions = reasoningEffortOptionsFor(selectedProvider, selectedModel);
   const effectivePlanMode =
     agentOverrides?.planMode ?? inheritedPlanMode ?? false;
 
@@ -444,7 +366,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
     el.style.height = 'auto';
     const nextHeight = fixedVisibleLines && maxVisibleLines
       ? maxHeight
-      : Math.min(Math.max(el.scrollHeight, TEXTAREA_MIN_HEIGHT), maxHeight);
+      : Math.min(Math.max(el.scrollHeight, textareaMinHeight), maxHeight);
     el.style.height = `${nextHeight}px`;
     el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
     if (el.scrollHeight > maxHeight) {
@@ -817,7 +739,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
             rows={1}
             className="relative w-full resize-none bg-transparent px-2 py-1.5 text-sm placeholder-gray-600 font-body focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
-              minHeight: `${TEXTAREA_MIN_HEIGHT}px`,
+              minHeight: `${textareaMinHeight}px`,
               maxHeight: `${TEXTAREA_MAX_HEIGHT}px`,
               overflowY: 'hidden',
               ...(activeSlashCommand ? { color: 'transparent', caretColor: 'rgb(var(--color-text-primary))' } : {}),
@@ -845,7 +767,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
 
           {/* Model selector */}
           <div className="relative" ref={pickerRef}>
-            {providers && providers.length > 0 && (
+            {((providers && providers.length > 0) || isV8Presentation) && (
               <button
                 onClick={() => {
                   if (modelLocked) return;
@@ -853,20 +775,34 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   setShowModelPicker(!showModelPicker);
                 }}
                 disabled={modelLocked}
-                title={modelLocked ? (modelLockReason ?? 'Model locked for this conversation') : 'Select model'}
-                className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
+                title={modelLocked
+                  ? (modelLockReason ?? 'Model locked for this conversation')
+                  : isV8Presentation ? 'Model & reasoning effort' : 'Select model'}
+                className={`chat-model-control flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
                   modelLocked
                     ? 'text-theme-subtle cursor-default'
                     : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-100/50 cursor-pointer'
                 }`}
               >
-                <ProviderIcon provider={selectedProvider} className={`h-3 w-3 shrink-0 ${PROVIDER_COLORS[selectedProvider ?? ''] ?? 'text-theme-muted'}`} />
-                <span className={PROVIDER_COLORS[selectedProvider ?? ''] ?? 'text-theme-muted'}>
-                  {selectedProvider ? getModelDisplay(selectedProvider).providerLabel : currentProvider?.label}
-                </span>
-                <span className="text-theme-subtle">/</span>
-                <span>{selectedProvider && selectedModel ? getModelDisplay(selectedProvider, selectedModel).modelLabel : selectedModel}</span>
-                {!modelLocked && <ChevronDown className="w-2.5 h-2.5 text-theme-subtle ml-0.5" />}
+                <ProviderIcon
+                  provider={selectedProvider ?? currentProvider?.provider ?? (isV8Presentation ? 'claude' : undefined)}
+                  className={`h-3.5 w-3.5 shrink-0 ${providerIconColor(selectedProvider ?? currentProvider?.provider ?? (isV8Presentation ? 'claude' : undefined))}`}
+                />
+                {!isV8Presentation && (
+                  <>
+                    <span className={providerIconColor(selectedProvider ?? currentProvider?.provider)}>
+                      {selectedProvider ? getModelDisplay(selectedProvider).providerLabel : currentProvider?.label}
+                    </span>
+                    <span className="text-theme-subtle">/</span>
+                  </>
+                )}
+                <span className={isV8Presentation ? 'chat-model-label' : undefined}>{selectedProvider && selectedModel
+                  ? (isV8Presentation ? compactModelLabel(selectedProvider, selectedModel) : getModelDisplay(selectedProvider, selectedModel).modelLabel)
+                  : isV8Presentation ? 'Opus 4.8' : selectedModel}</span>
+                {isV8Presentation && <span className="chat-effort-label">· {reasoningEffortLabel(effectiveEffort ?? 'high')}</span>}
+                {!modelLocked && (isV8Presentation
+                  ? <V8ChevronDownIcon className="h-2.5 w-2.5 text-theme-subtle" />
+                  : <ChevronDown className="ml-0.5 h-2.5 w-2.5 text-theme-subtle" />)}
               </button>
             )}
 
@@ -884,7 +820,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                 {providers?.filter((p) => !p.authStatus || p.authStatus === 'logged_in').map((p, providerIndex) => (
                   <div key={p.provider} className={providerIndex > 0 ? 'mt-2 border-t border-app pt-2' : ''}>
                     <div className="flex items-center gap-2 px-2 pb-1.5 pt-0.5 text-[12px] font-medium text-theme-muted">
-                      <ProviderIcon provider={p.provider} className={`h-3.5 w-3.5 shrink-0 ${PROVIDER_COLORS[p.provider] ?? 'text-theme-muted'}`} />
+                      <ProviderIcon provider={p.provider} className={`h-3.5 w-3.5 shrink-0 ${providerIconColor(p.provider)}`} />
                       <span>{getModelDisplay(p.provider).providerLabel}</span>
                     </div>
                     {modelOptionsForProvider(p, selectedProvider === p.provider ? selectedModel : undefined).map((m) => {
@@ -892,7 +828,13 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                       return (
                       <button
                         key={`${p.provider}-${m}`}
-                        onClick={() => { onProviderChange?.(p.provider, m); setShowModelPicker(false); }}
+                        onClick={() => {
+                          onProviderChange?.(p.provider, m);
+                          if (!isReasoningEffortSupported(p.provider, m, effectiveEffort)) {
+                            setEffort('off');
+                          }
+                          setShowModelPicker(false);
+                        }}
                         className={`${modelPickerRowClass} ${
                           active ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary'
                         }`}
@@ -904,12 +846,41 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                     })}
                   </div>
                 ))}
+                {isV8Presentation && (
+                  <div className="mt-2 border-t border-app pt-2">
+                    <div className="px-2 pb-1.5 pt-0.5 text-[12px] font-medium text-theme-muted">Reasoning effort</div>
+                    <div className="grid grid-cols-2 gap-1.5 px-2 pb-2">
+                      {effortOptions.map((option, index) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          aria-pressed={effectiveEffort === option.value}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setEffort(option.value);
+                          }}
+                          className={`flex h-8 min-w-0 items-center justify-center rounded-md border px-2 text-center text-[12px] font-medium transition-colors ${
+                            effortOptions.length % 2 === 1 && index === effortOptions.length - 1
+                              ? 'col-span-2'
+                              : ''
+                          } ${
+                            effectiveEffort === option.value
+                              ? 'border-app-strong bg-app-muted text-theme-primary'
+                              : 'border-app bg-transparent text-theme-secondary hover:bg-app-muted'
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
 
           {/* Reasoning effort picker — same dropdown style as the model picker */}
-          <div className="relative" ref={effortPickerRef}>
+          {!isV8Presentation && <div className="relative" ref={effortPickerRef}>
             <button
               type="button"
               onClick={() => {
@@ -917,14 +888,18 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                 setShowEffortPicker((v) => !v);
               }}
               title="Reasoning effort"
-              className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
+              className={`chat-effort-control flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
                 agentOverrides?.reasoningEffort
                   ? 'text-accent-blue hover:bg-accent-blue/10'
                   : 'text-theme-muted hover:text-theme-secondary hover:bg-surface-100/50'
               }`}
             >
-              <Sparkles className="w-3 h-3" />
-              <span>{effortLabel(agentOverrides?.reasoningEffort, inheritedEffort)}</span>
+              {!isV8Home && <Sparkles className="w-3 h-3" />}
+              <span>
+                {isV8Home
+                  ? `· ${reasoningEffortLabel(effectiveEffort ?? 'medium')}`
+                  : effortLabel(agentOverrides?.reasoningEffort, inheritedEffort)}
+              </span>
               <ChevronDown className="w-2.5 h-2.5 text-theme-subtle" />
             </button>
 
@@ -938,7 +913,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                 }}
               >
                 <div className="px-2 pb-1.5 pt-0.5 text-[12px] font-medium text-theme-muted">Reasoning effort</div>
-                {EFFORT_OPTIONS.map((opt) => {
+                {effortOptions.map((opt) => {
                   const isActive = effectiveEffort === opt.value;
                   const isInheritedDefault =
                     !agentOverrides?.reasoningEffort && inheritedEffort === opt.value;
@@ -966,7 +941,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                 })}
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Plan (Planner) toggle — base assistant only, any provider.
               Hidden when a specific team agent is selected. */}
@@ -982,9 +957,11 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
               aria-pressed={effectivePlanMode}
               className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-md hover:bg-surface-100/50 transition-colors"
             >
-              <ShieldCheck
-                className={`w-3 h-3 ${effectivePlanMode ? 'text-accent-blue' : 'text-theme-muted'}`}
-              />
+              {isV8Presentation ? (
+                <V8PlanShieldIcon className={`h-3.5 w-3.5 ${effectivePlanMode ? 'text-accent-blue' : 'text-theme-secondary'}`} />
+              ) : (
+                <ShieldCheck className={`h-3 w-3 ${effectivePlanMode ? 'text-accent-blue' : 'text-theme-muted'}`} />
+              )}
               <span
                 className={`text-[11px] font-mono ${effectivePlanMode ? 'text-accent-blue' : 'text-theme-muted'}`}
               >
@@ -1007,7 +984,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           )}
 
           {/* Repo selector */}
-          {!hideRepoSelector && (repos && repos.length > 0) && (
+          {!hideRepoSelector && ((repos && repos.length > 0) || isV8Home) && (
             <div className="relative" ref={repoPickerRef}>
               <button
                 type="button"
@@ -1017,7 +994,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   setRepoPickerPos(pickerPositionFor(repoPickerRef, 360, 320));
                   setShowRepoPicker(v => !v);
                 }}
-                className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
+                className={`chat-repo-control flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono transition-all ${
                   repoLocked
                     ? 'text-theme-subtle cursor-default'
                     : selectedRepoName
@@ -1026,11 +1003,16 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                 }`}
                 title={repoLocked ? `Repo: ${selectedRepoName ?? 'none'}` : 'Select repository'}
               >
-                <FolderGit2 className="h-3 w-3 shrink-0" />
+                {isV8Home
+                  ? <V8WorkspacesIcon className="h-3.5 w-3.5 shrink-0" />
+                  : <FolderGit2 className="h-3 w-3 shrink-0" />}
                 <span className="max-w-[120px] truncate">
-                  {selectedRepoName ?? 'Auto'}
+                  {selectedRepoName ?? (isV8Home ? repos?.[0]?.name ?? 'allen-internal' : 'Auto')}
                 </span>
-                {!repoLocked && <ChevronDown className="w-2.5 h-2.5 text-theme-subtle" />}
+                {isV8Home && <span className="chat-repo-workspace-label">· auto</span>}
+                {!repoLocked && (isV8Home
+                  ? <V8ChevronDownIcon className="h-2.5 w-2.5 text-theme-subtle" />
+                  : <ChevronDown className="h-2.5 w-2.5 text-theme-subtle" />)}
               </button>
 
               {showRepoPicker && !repoLocked && (
@@ -1052,7 +1034,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                     <span className="min-w-0 flex-1 truncate">Auto</span>
                     {selectedRepoName == null && <Check className="h-4 w-4 shrink-0 text-theme-secondary" />}
                   </button>
-                  {repos.map(repo => (
+                  {(repos ?? []).map(repo => (
                     <button
                       key={repo._id}
                       className={`${pickerRowBaseClass} ${
@@ -1081,11 +1063,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading || disabled}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-theme-muted transition-colors hover:bg-surface-100/50 hover:text-theme-secondary disabled:cursor-not-allowed disabled:opacity-30"
-              title="Attach file"
-              aria-label="Attach file"
+              className="chat-attach-control flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-theme-muted transition-colors hover:bg-surface-100/50 hover:text-theme-secondary disabled:cursor-not-allowed disabled:opacity-30"
+              title={isV8Presentation ? 'Attach files' : 'Attach file'}
+              aria-label={isV8Presentation ? 'Attach files' : 'Attach file'}
             >
-              {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+              {uploading
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : isV8Presentation
+                  ? <V8PaperclipIcon className="h-3.5 w-3.5" />
+                  : <Paperclip className="h-3.5 w-3.5" />}
             </button>
             {/* Send / Stop button */}
             {streaming && (
@@ -1103,10 +1089,11 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                 type="button"
                 onClick={handleSend}
                 disabled={!value.trim() || disabled}
-                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-accent-blue text-white shadow-sm transition-colors hover:bg-accent-hover disabled:bg-surface-200 disabled:text-theme-subtle disabled:opacity-100 disabled:cursor-not-allowed"
-                title="Send"
+                className="chat-send-control shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-accent-blue text-white shadow-sm transition-colors hover:bg-accent-hover disabled:bg-surface-200 disabled:text-theme-subtle disabled:opacity-100 disabled:cursor-not-allowed"
+                title={isV8Home ? 'Start session (⏎)' : 'Send'}
+                aria-label={isV8Home ? 'Start session' : 'Send'}
               >
-                <ArrowUp className="w-4 h-4" />
+                {isV8Presentation ? <V8ArrowUpIcon className="h-[15px] w-[15px]" /> : <ArrowUp className="h-4 w-4" />}
               </button>
             )}
           </div>

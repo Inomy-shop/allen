@@ -36,12 +36,17 @@ export default function DirectMonacoEditor({
 
   useEffect(() => {
     let cancelled = false;
+    let timedOut = false;
     let resizeObserver: ResizeObserver | null = null;
+    const fallbackTimer = window.setTimeout(() => {
+      timedOut = true;
+      setFailed(true);
+    }, 6_000);
 
     async function mountEditor() {
       try {
         const monaco = await import('monaco-editor');
-        if (cancelled || !containerRef.current) return;
+        if (cancelled || timedOut || !containerRef.current) return;
 
         monacoRef.current = monaco;
         setupMonaco(monaco);
@@ -77,10 +82,12 @@ export default function DirectMonacoEditor({
         resizeObserver = new ResizeObserver(() => editor.layout());
         resizeObserver.observe(containerRef.current);
         requestAnimationFrame(() => editor.layout());
+        window.clearTimeout(fallbackTimer);
         setReady(true);
       } catch (error) {
         console.warn('[direct-monaco-editor] mount failed', error);
-        if (!cancelled) setFailed(true);
+        window.clearTimeout(fallbackTimer);
+        if (!cancelled && !timedOut) setFailed(true);
       }
     }
 
@@ -88,6 +95,7 @@ export default function DirectMonacoEditor({
 
     return () => {
       cancelled = true;
+      window.clearTimeout(fallbackTimer);
       resizeObserver?.disconnect();
       changeDisposableRef.current?.dispose();
       changeDisposableRef.current = null;

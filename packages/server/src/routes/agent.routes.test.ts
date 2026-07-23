@@ -160,39 +160,11 @@ describe('agentRoutes bulk model update', () => {
     expect('planMode' in planner!).toBe(false);
   });
 
-  it('skips reasoningEffort=max-incompatible agents when clearing is disabled', async () => {
+  it('preserves supported extended reasoning effort during bulk model updates', async () => {
     await insertAgent({
       name: 'thinker',
       provider: 'claude',
-      model: 'opus',
-      reasoningEffort: 'max',
-    });
-
-    const res = await request(app)
-      .post('/api/agents/bulk-model')
-      .send({ agentNames: ['thinker'], provider: 'claude', model: 'sonnet' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.updated).toEqual([]);
-    expect(res.body.skipped).toEqual([
-      expect.objectContaining({
-        name: 'thinker',
-        reason: 'incompatible-settings',
-        code: 'effort_max_requires_opus',
-      }),
-    ]);
-
-    const thinker = await db.collection('agents').findOne({ name: 'thinker' });
-    expect(thinker?.provider).toBe('claude');
-    expect(thinker?.model).toBe('opus');
-    expect(thinker?.reasoningEffort).toBe('max');
-  });
-
-  it('clears reasoningEffort=max and updates when clearing is enabled', async () => {
-    await insertAgent({
-      name: 'thinker',
-      provider: 'claude',
-      model: 'opus',
+      model: 'sonnet',
       reasoningEffort: 'max',
     });
 
@@ -200,18 +172,17 @@ describe('agentRoutes bulk model update', () => {
       .post('/api/agents/bulk-model')
       .send({
         agentNames: ['thinker'],
-        provider: 'claude',
-        model: 'sonnet',
-        clearIncompatibleSettings: true,
+        provider: 'codex',
+        model: 'gpt-5.6-sol',
       });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ updated: ['thinker'], skipped: [] });
 
     const thinker = await db.collection('agents').findOne({ name: 'thinker' });
-    expect(thinker?.provider).toBe('claude');
-    expect(thinker?.model).toBe('sonnet');
-    expect('reasoningEffort' in thinker!).toBe(false);
+    expect(thinker?.provider).toBe('codex');
+    expect(thinker?.model).toBe('gpt-5.6-sol');
+    expect(thinker?.reasoningEffort).toBe('max');
   });
 
   it('preserves protected fields when updating provider and model', async () => {

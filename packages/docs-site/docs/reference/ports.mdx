@@ -1,0 +1,82 @@
+---
+title: 'Ports Reference'
+description: 'Find the API, UI, terminal, database, and workspace service ports used by Allen.'
+---
+
+:::info Media placeholders
+Before publishing, capture desktop diagnostics, the web API/UI startup output, a terminal connection, a workspace service list, and an occupied-port error. Redact private paths and identifiers.
+:::
+
+Allen uses separate port behavior for source development, packaged desktop, and workspace services. Use the running instance's diagnostics or startup output rather than assuming an example port is active.
+
+## Port map
+
+| Surface | Default or allocation |
+| --- | --- |
+| Web API | `PORT`, default `4023`. |
+| Vite UI | `UI_PORT`, default `5173`. |
+| Web terminal and file-watch WebSocket | `TERMINAL_WS_PORT`, default `4024`. |
+| Local MongoDB | Commonly `27017`, as selected by `MONGODB_URI`; not owned by Allen in web mode. |
+| Desktop API | A free sticky port from `48100–48199`. |
+| Desktop managed MongoDB | A free sticky port from `48300–48399`. |
+| Desktop terminal WebSocket | Attached to the desktop API server rather than opening a second public port. |
+| Workspace services | Ten-port blocks from `15000` up to the range below `20000`. |
+
+## Web development
+
+`npm run dev:web` starts the engine, server, and Vite UI together.
+
+Vite sends:
+
+- `/api`, `/dstudio-preview`, and `/dstudio-site` to the API port;
+- `/ws` to `TERMINAL_WS_PORT`, or to `PORT + 1` when the WebSocket port is unset in the loaded environment.
+
+There is one important fallback mismatch: the API server defaults to `4023`, while Vite's proxy falls back to `4000` if it cannot load `PORT` from the root environment. Keep `PORT=4023` in the root `.env`, or set both sides explicitly. Otherwise the UI can load while API calls fail.
+
+When overriding the API port, also set `TERMINAL_WS_PORT` explicitly. This keeps the server and Vite's `/ws` proxy aligned.
+
+## Packaged desktop
+
+Desktop chooses an available API and managed-MongoDB port from its dedicated ranges, then saves the chosen values for reuse. If a saved port is occupied on the next launch, it selects another free port.
+
+The terminal and file-watch WebSocket handlers attach to the desktop API HTTP server. A desktop terminal URL can therefore use the same port as the application backend.
+
+Use **Show Diagnostics** or **Settings → Runtime** to identify the active desktop values. Do not troubleshoot desktop by assuming `4023`, `4024`, or `27017`.
+
+## Workspace service blocks
+
+Each active workspace receives a free ten-port block:
+
+- the base port starts at `15000` and advances in steps of ten;
+- Allen checks every port in the candidate block before assigning it;
+- a service uses `basePort + portOffset`;
+- placeholders such as `{port}`, `{port:N}`, and `{previewUrl:service}` resolve during workspace setup.
+
+Without `ALLEN_PUBLIC_DOMAIN`, a service preview placeholder becomes `http://localhost:<service-port>`. With a public domain, it becomes `https://<service>-<workspaceId>.<domain>`.
+
+The preview proxy forwards only to a service recorded for that workspace and marked `ready`. A `503` normally means the requested service is missing, starting, stopped, failed, or not yet healthy.
+
+## Troubleshoot a port
+
+| Symptom | Check |
+| --- | --- |
+| UI loads but API calls fail | Root `.env`, API startup port, and Vite proxy target. |
+| Terminal disconnects in web mode | `TERMINAL_WS_PORT`, Vite `/ws` target, and terminal-server startup output. |
+| Desktop opens on an unexpected port | Desktop diagnostics; a previously saved port may have been occupied. |
+| Desktop MongoDB does not start | Diagnostics and whether the selected `48300–48399` port is occupied. |
+| Workspace preview returns `503` | Workspace service state, health check, command, and assigned port. |
+| A workspace port stays occupied after a crash | Stop the service from Allen first, then identify the stale local process. |
+
+On macOS or Linux, replace the example with the active port:
+
+```bash
+lsof -nP -iTCP:4023 -sTCP:LISTEN
+```
+
+Do not terminate a process until you have identified it. A port may belong to another Allen window, workspace, database, or unrelated application.
+
+## Related pages
+
+- [Environment Reference](/reference/environment)
+- [Workspaces](/concepts/workspaces)
+- [Troubleshooting](/operator-guide/troubleshooting)

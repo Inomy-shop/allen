@@ -1,0 +1,160 @@
+---
+title: 'Run Your First Workflow'
+description: 'Start a focused task, follow its execution, respond to approval requests, and review the result.'
+---
+
+A workflow coordinates a repeatable sequence of work, checks, and approval points. Your first run should teach you how to start one safely, follow its progress, and decide whether the result is ready to use.
+
+For the simplest first experience, choose **Fix a bug** during onboarding and use Allen's test repository or another low-risk repository.
+
+:::warning Use a safe repository
+The starter bug-fix and feature workflows can create a workspace, change files, run checks, commit and push a branch, and open a pull request. Do not use a production-critical repository for your first run.
+:::
+
+## Before you start
+
+Confirm that:
+
+- you can open Allen and complete the setup screens;
+- a model provider is ready;
+- the repository you want to use appears in Allen;
+- you have permission to create a branch and pull request in that repository;
+- the task is small enough to review in one sitting.
+
+If you did not add a repository during onboarding, Allen may prepare a test repository for the first workflow. You can change the selection before starting.
+
+## Choose a focused task
+
+Pick one outcome with an observable success condition.
+
+### For a bug fix
+
+Include:
+
+- what you did before the problem appeared;
+- what happened;
+- what you expected instead;
+- reliable reproduction steps;
+- any error message, screenshot, or affected page.
+
+Example:
+
+> On the readiness page, a score of exactly 50 shows “Not ready.” It should show “Needs attention.” Reproduce with a score of 50, correct the boundary condition, and add a test for that value.
+
+### For a feature
+
+Include:
+
+- who needs the change and why;
+- the behavior that must be added;
+- acceptance criteria you can verify;
+- important exceptions or constraints;
+- anything that must not change.
+
+Feature workflows expect more complete requirements than bug-fix workflows. If the behavior is still unclear, refine it in chat before starting the workflow.
+
+## Start during onboarding
+
+On the **Start your first workflow** screen:
+
+1. Under **Task type**, choose **Fix a bug** or **Build a feature**.
+2. Under **Repository**, confirm the repository Allen should use.
+3. Enter the **Bug description** or **Feature request**. Describe the outcome, not the repository path.
+4. Review the summary and make sure the workflow is marked **available**.
+5. Choose **Start bug fix** or **Start feature build**.
+
+Allen takes you directly to the execution page. Keep that page open so you can review the investigation or plan before implementation continues.
+
+If the start button is unavailable, read the message above the description field. Common causes are a missing repository, an empty description, an unavailable starter workflow, or a model provider that still needs authentication.
+
+## Start from the Workflows page
+
+Use this path if you skipped onboarding or want to run another workflow:
+
+1. Open **Workflows** from the main navigation.
+2. Search for the workflow you need:
+   - **bug-fix-by-severity** for a reproducible defect;
+   - **feature-plan-and-implement** for a feature with complete requirements and acceptance criteria.
+3. Review the workflow description and required inputs.
+4. Choose **Run workflow**.
+5. Complete every required field in the **Run Workflow** dialog. Select the target repository and enter the requested task details.
+6. For your first feature run, leave **Trusted mode** off so you can review the plan before implementation.
+7. Choose **Run Workflow**.
+
+The fields differ by workflow. Follow the labels and descriptions shown in the dialog rather than reusing inputs from another workflow.
+
+## Follow the execution
+
+The execution page is the record of what Allen is doing. Start with the status beside the workflow name:
+
+- **Queued** means the run is waiting to start.
+- **Running** means work is in progress.
+- **Waiting for input** means Allen needs a decision or answer from you.
+- **Completed** means the workflow reached its final step.
+- **Failed** means a step could not finish.
+- **Cancelled** means the run stopped before completion.
+
+Use the page views for different levels of detail:
+
+- **Graph** shows which steps are complete, active, waiting, or failed.
+- **Trace** shows the ordered attempts and results for each step.
+- **Logs** provides detailed activity when you need to diagnose a problem.
+- **Artifacts** opens saved reports, plans, reviews, and other durable outputs.
+
+Select a step in the Graph or Trace to inspect its input, response, outputs, duration, and cost. You usually do not need to read every log line when the run is progressing normally.
+
+## Respond when Allen needs you
+
+Do not start a duplicate workflow when the status is **Waiting for input**.
+
+1. Choose **Approve** or **Respond to input** near the workflow status.
+2. Open the linked report or plan and review the evidence.
+3. Approve only if the proposed scope matches your request.
+4. If something is wrong, request changes and explain exactly what must be corrected.
+5. Reject or cancel the run when the task should not continue.
+
+The bug-fix workflow normally asks you to approve the diagnosed root cause, severity, and fix scope before files are changed. The feature workflow normally asks you to approve its plan unless **Trusted mode** was enabled.
+
+If a model-recovery prompt appears, choose an available provider and model, then retry. Change the model only after checking whether the failure came from the model or from missing task context.
+
+## Review the completed result
+
+Do not treat **Completed** as automatic approval. Before using or merging the result:
+
+1. Open **Artifacts** and read the investigation, plan, validation, and review outputs.
+2. Open the linked workspace and inspect every changed file and diff.
+3. Confirm the reported checks passed.
+4. Confirm the implementation matches the approved scope and acceptance criteria.
+5. Open the pull-request link, when present, and review it before merging.
+6. Check that no unrelated files, credentials, generated data, or temporary files were included.
+
+A successful first run leaves you with a reviewable execution, clear artifacts, an isolated workspace, validated changes, and—when the workflow reaches its publishing step—a pull request.
+
+## Recover from a problem
+
+### The workflow is waiting
+
+Open the execution and look for **Approve** or **Respond to input**. Answer the pending request there instead of launching another run.
+
+### The workflow failed
+
+Open the failed step and read the first actionable error. Correct the underlying problem, then use **Retry** or **Continue from _step name_**. Rewinding to an earlier step can repeat work, so use it only when an earlier output must be regenerated.
+
+### No repository appears
+
+Open **Repositories**, add or activate the repository, then return to the workflow. Confirm that your GitHub account has the permissions needed if the workflow will open a pull request.
+
+### No model provider is ready
+
+Complete provider authentication, return to the workflow, and refresh. During onboarding, Allen reports when neither Claude Code nor Codex is ready.
+
+### The result is too broad
+
+Cancel before approval if possible. Start again with one behavior, explicit acceptance criteria, and clear scope boundaries. A narrower request is usually faster than correcting a workflow that began with ambiguous requirements.
+
+## Continue learning
+
+- Learn how workflows coordinate work in [Workflows](/concepts/workflows).
+- Learn how to inspect a run in [Monitor an Execution](/guides/monitor-execution).
+- Learn how to review saved outputs in [Artifacts](/concepts/artifacts).
+- Learn how to inspect changed files in [Workspaces](/concepts/workspaces).

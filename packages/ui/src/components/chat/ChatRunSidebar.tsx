@@ -22,6 +22,7 @@ import {
   PlayCircle,
   RefreshCw,
   Rows3,
+  SkipForward,
   StopCircle,
   Terminal,
   Timer,
@@ -32,7 +33,7 @@ import type { SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useCh
 import { artifacts as artifactsApi, repos as reposApi, type ArtifactDoc, type RunStatus } from '../../services/api';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { workspaceChatPath } from '../../lib/workspace-routes';
-import ArtifactViewer from '../artifacts/ArtifactViewer';
+import { resourceScopeKey, useDocumentTabStore } from '../../stores/documentTabStore';
 import { WorkflowInterventionAction, type WorkflowInterventionLike } from '../execution/WorkflowInterventionAction';
 import { XTerminal } from '../workspace/XTerminal';
 import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
@@ -45,11 +46,12 @@ import { getModelDisplay } from '../../hooks/useModelRegistry';
 const FAILED_STATUSES = new Set(['failed', 'failure', 'error', 'errored']);
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 const TERMINAL_STATUSES = new Set(['completed', 'merged', 'failed', 'failure', 'error', 'errored', 'cancelled', 'canceled', 'closed']);
+const SUCCESSFUL_TERMINAL_STATUSES = new Set(['completed', 'merged']);
 const PROGRESS_COUNTED_STEP_STATUSES = new Set(['completed', 'skipped']);
-const CHAT_RUN_SIDEBAR_MIN_WIDTH = 400;
+const CHAT_RUN_SIDEBAR_MIN_WIDTH = 340;
 
-export type ChatRunPanelTab = 'tasks' | 'executions' | 'files' | 'changes' | 'context';
-type FilePanelView = 'files' | 'changes';
+export type ChatRunPanelTab = 'tasks' | 'executions' | 'documents' | 'files' | 'changes' | 'context';
+export type FilePanelView = 'files' | 'changes';
 
 type RepoBrowseSource = {
   id?: string | null;
@@ -76,6 +78,12 @@ function timeAgo(dateStr?: string | null): string {
   const hr = Math.floor(min / 60);
   if (hr < 24) return `${hr}h ago`;
   return `${Math.floor(hr / 24)}d ago`;
+}
+
+function shortTimeAgo(dateStr?: string | null): string {
+  const value = timeAgo(dateStr);
+  if (value === 'just now' || value === 'recently') return 'now';
+  return value.replace(/ ago$/, '');
 }
 
 function formatClock(dateStr?: string | null): string {
@@ -335,7 +343,7 @@ function workflowStepStatusFromState(state: ReturnType<typeof compactSteps>[numb
 
 function workflowStepsForContext(context: RunStatus | null): SidebarWorkflowStep[] {
   const hydratedSteps = context?.workflowSteps ?? [];
-  if (hydratedSteps.length > 0) return normalizeWorkflowStepStatuses(hydratedSteps);
+  if (hydratedSteps.length > 0) return normalizeWorkflowStepStatuses(hydratedSteps, context?.status);
   if (context?.runType !== 'workflow') return [];
   return compactSteps(context).map((step, index): SidebarWorkflowStep => ({
     id: step.id,
@@ -352,7 +360,8 @@ function workflowStepHasRunData(step: SidebarWorkflowStep): boolean {
     || Boolean(step.startedAt || step.completedAt || step.durationMs || step.io?.input || step.io?.output);
 }
 
-function normalizeWorkflowStepStatuses(steps: SidebarWorkflowStep[]): SidebarWorkflowStep[] {
+function normalizeWorkflowStepStatuses(steps: SidebarWorkflowStep[], runStatus?: string | null): SidebarWorkflowStep[] {
+  const successfulTerminalRun = SUCCESSFUL_TERMINAL_STATUSES.has(String(runStatus ?? '').toLowerCase());
   const progressedIndexes = steps
     .map((step, index) => {
       const status = String(step.status ?? '').toLowerCase();
@@ -365,7 +374,11 @@ function normalizeWorkflowStepStatuses(steps: SidebarWorkflowStep[]): SidebarWor
   return steps.map((step, index) => {
     const normalized = String(step.status ?? '').toLowerCase();
     const hasRunData = workflowStepHasRunData(step);
-    if ((normalized === 'pending' || normalized === 'not_started') && !hasRunData && index < lastProgressedIndex) {
+    if (
+      (normalized === 'pending' || normalized === 'not_started' || normalized === 'queued')
+      && !hasRunData
+      && (successfulTerminalRun || index < lastProgressedIndex)
+    ) {
       return { ...step, status: 'skipped' };
     }
     return step;
@@ -374,9 +387,22 @@ function normalizeWorkflowStepStatuses(steps: SidebarWorkflowStep[]): SidebarWor
 
 function workflowProgressLabel(context: RunStatus | null, steps: SidebarWorkflowStep[]): string {
   const total = context?.progress.total ?? steps.length;
+  if (SUCCESSFUL_TERMINAL_STATUSES.has(String(context?.status ?? '').toLowerCase()) && total > 0) {
+    return `${total}/${total}`;
+  }
   if (steps.length === 0) return `${context?.progress.completed ?? 0}/${total}`;
   const counted = steps.filter(step => PROGRESS_COUNTED_STEP_STATUSES.has(String(step.status ?? '').toLowerCase())).length;
   return `${counted}/${total}`;
+}
+
+function workflowProgressPercent(
+  context: RunStatus | null,
+  fallbackStatus?: string | null,
+  fallbackPercent = 0,
+): number {
+  const status = String(context?.status ?? fallbackStatus ?? '').toLowerCase();
+  if (SUCCESSFUL_TERMINAL_STATUSES.has(status)) return 100;
+  return Math.max(0, Math.min(100, context?.progress.percent ?? fallbackPercent));
 }
 
 function runState(context: RunStatus | null, run: SpawnedAgent): 'ok' | 'run' | 'wait-you' | 'fail' | 'wait' {
@@ -445,9 +471,10 @@ function StepDot({ state }: { state: 'ok' | 'run' | 'wait-you' | 'fail' | 'wait'
   return <span className={`${base} border-app bg-app-muted text-theme-subtle`} />;
 }
 
-function nodeStepState(status?: string | null): 'ok' | 'run' | 'wait-you' | 'fail' | 'wait' {
+function nodeStepState(status?: string | null): 'ok' | 'skip' | 'run' | 'wait-you' | 'fail' | 'wait' {
   const normalized = (status ?? '').toLowerCase();
   if (normalized === 'completed') return 'ok';
+  if (normalized === 'skipped') return 'skip';
   if (normalized === 'running') return 'run';
   if (normalized === 'waiting_for_input' || normalized === 'waiting') return 'wait-you';
   if (FAILED_STATUSES.has(normalized) || CANCELLED_STATUSES.has(normalized)) return 'fail';
@@ -511,6 +538,7 @@ function WorkflowNodeStep({
     <div className={`step ${state}`}>
       <div className="step-dot">
         {state === 'ok' && '✓'}
+        {state === 'skip' && <SkipForward className="h-3 w-3" aria-label="Skipped" />}
         {state === 'run' && <span className="spin">●</span>}
         {state === 'wait' && '○'}
         {state === 'wait-you' && '?'}
@@ -599,7 +627,7 @@ function AttemptRow({
   const state = runState(context, run);
   const status = context?.status ?? run.status;
   const cost = formatCost(context?.execution.cost);
-  const percent = Math.max(0, Math.min(100, context?.progress.percent ?? (state === 'ok' ? 100 : 0)));
+  const percent = workflowProgressPercent(context, run.status, state === 'ok' ? 100 : 0);
   const kind = runDisplayName(context, run);
   const workflowSteps = workflowStepsForContext(context);
   const isWorkflow = context?.runType === 'workflow';
@@ -816,15 +844,18 @@ function WorkContextSection({ runs }: { runs: SpawnedAgent[] }) {
 function ArtifactLinks({ run, context }: { run: SpawnedAgent; context: RunStatus | null }) {
   const artifacts = artifactsForRun(run, context);
   const [expanded, setExpanded] = useState(false);
-  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactDoc | null>(null);
   const [loadingArtifactId, setLoadingArtifactId] = useState<string | null>(null);
+  const openDocument = useDocumentTabStore(state => state.openDocument);
 
   async function openArtifact(artifact: RunStatus['artifacts'][number]) {
+    const scopeKey = run.runContext?.chat?.sessionId
+      ? resourceScopeKey('chat', run.runContext.chat.sessionId)
+      : resourceScopeKey('execution', run.executionId);
     setLoadingArtifactId(artifact.artifactId);
     try {
-      setSelectedArtifact(await artifactsApi.get(artifact.artifactId));
+      openDocument(await artifactsApi.get(artifact.artifactId), { sourceLabel: 'Chat', scopeKey });
     } catch {
-      setSelectedArtifact(fallbackArtifactDoc(artifact, run));
+      openDocument(fallbackArtifactDoc(artifact, run), { sourceLabel: 'Chat', scopeKey });
     } finally {
       setLoadingArtifactId(null);
     }
@@ -866,16 +897,6 @@ function ArtifactLinks({ run, context }: { run: SpawnedAgent; context: RunStatus
           })}
         </div>
       )}
-      {selectedArtifact && (
-        <div className="artifact-modal-backdrop" role="dialog" aria-modal="true" aria-label="Artifact viewer">
-          <div className="artifact-modal">
-            <ArtifactViewer
-              artifact={selectedArtifact}
-              onClose={() => setSelectedArtifact(null)}
-            />
-          </div>
-        </div>
-      )}
     </section>
   );
 }
@@ -893,7 +914,7 @@ function ExecutionStep({
 }) {
   const context = run.runContext ?? null;
   const state = runState(context, run);
-  const percent = Math.max(0, Math.min(100, context?.progress.percent ?? 0));
+  const percent = workflowProgressPercent(context, run.status);
   const title = context?.title ?? run.agent;
   const currentStep = context?.progress.currentStep ?? context?.progress.label ?? run.prompt ?? 'Waiting for activity';
   const childSteps = compactSteps(context).slice(-3);
@@ -983,7 +1004,19 @@ function usePanelArtifactItems({
   runs: SpawnedAgent[];
   refreshKey?: string | number;
 }) {
-  const [items, setItems] = useState<PanelArtifactItem[]>([]);
+  const [loadedItems, setLoadedItems] = useState<{ scopeKey: string; items: PanelArtifactItem[] }>({
+    scopeKey: '',
+    items: [],
+  });
+
+  // In a chat panel, execution artifacts are only valid when the run carries
+  // explicit ownership for the active chat. Never infer ownership from stale
+  // React state or from whichever conversation happened to be open before it.
+  const scopedRuns = useMemo(() => {
+    if (rootType === 'chat' && !rootId) return [];
+    if (rootType !== 'chat') return runs;
+    return runs.filter(run => run.chatSessionId === rootId);
+  }, [rootType, rootId, runs]);
 
   const artifactRoots = useMemo(() => {
     const roots = new Map<string, ArtifactRootRef>();
@@ -993,16 +1026,16 @@ function usePanelArtifactItems({
     };
 
     addRoot(rootType, rootId);
-    for (const run of runs) {
+    for (const run of scopedRuns) {
       const runRootType = run.kind === 'workflow' || run.runContext?.runType === 'workflow' ? 'workflow' : 'agent';
       addRoot(runRootType, run.executionId);
     }
     return [...roots.values()];
-  }, [rootType, rootId, runs]);
+  }, [rootType, rootId, scopedRuns]);
 
   const runtimeItems = useMemo(() => {
     const next: PanelArtifactItem[] = [];
-    for (const run of runs) {
+    for (const run of scopedRuns) {
       for (const artifact of artifactsForRun(run, run.runContext ?? null)) {
         next.push({
           artifactId: artifact.artifactId,
@@ -1016,33 +1049,45 @@ function usePanelArtifactItems({
       }
     }
     return next;
-  }, [runs]);
+  }, [scopedRuns]);
+
+  const scopeKey = useMemo(
+    () => artifactRoots.map(root => `${root.rootType}:${root.rootId}`).join('|'),
+    [artifactRoots],
+  );
+  const items = loadedItems.scopeKey === scopeKey ? loadedItems.items : [];
 
   useEffect(() => {
     if (artifactRoots.length === 0) {
-      setItems([]);
+      setLoadedItems({ scopeKey, items: [] });
       return;
     }
     let cancelled = false;
+    // Do not render results retained from the previously selected chat while
+    // the newly scoped artifact requests are in flight.
+    setLoadedItems({ scopeKey, items: [] });
     Promise.all(artifactRoots.map(root => artifactsApi.list({ ...root, limit: 50 })))
       .then(lists => {
         if (cancelled) return;
-        setItems(lists.flat().map(item => ({
-          artifactId: item.artifactId,
-          filename: item.filename,
-          relativePath: item.relativePath,
-          contentType: item.contentType,
-          createdAt: item.createdAt,
-        })));
+        setLoadedItems({
+          scopeKey,
+          items: lists.flat().map(item => ({
+            artifactId: item.artifactId,
+            filename: item.filename,
+            relativePath: item.relativePath,
+            contentType: item.contentType,
+            createdAt: item.createdAt,
+          })),
+        });
       })
       .catch(() => {
-        if (!cancelled) setItems([]);
+        if (!cancelled) setLoadedItems({ scopeKey, items: [] });
       });
 
     return () => {
       cancelled = true;
     };
-  }, [artifactRoots, refreshKey]);
+  }, [artifactRoots, refreshKey, scopeKey]);
 
   return useMemo(() => {
     const seen = new Set<string>();
@@ -1072,16 +1117,17 @@ function ChatArtifactsSummarySection({
 }) {
   const artifacts = usePanelArtifactItems({ rootType, rootId, runs, refreshKey });
   const [expanded, setExpanded] = useState(false);
-  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactDoc | null>(null);
   const [loadingArtifactId, setLoadingArtifactId] = useState<string | null>(null);
+  const openDocument = useDocumentTabStore(state => state.openDocument);
 
   async function openArtifact(item: PanelArtifactItem) {
+    const scopeKey = rootType === 'chat' && rootId ? resourceScopeKey('chat', rootId) : undefined;
     setLoadingArtifactId(item.artifactId);
     try {
-      setSelectedArtifact(await artifactsApi.get(item.artifactId));
+      openDocument(await artifactsApi.get(item.artifactId), { sourceLabel: 'Chat', scopeKey });
     } catch {
       if (item.runtimeArtifact && item.sourceRun) {
-        setSelectedArtifact(fallbackArtifactDoc(item.runtimeArtifact, item.sourceRun));
+        openDocument(fallbackArtifactDoc(item.runtimeArtifact, item.sourceRun), { sourceLabel: 'Chat', scopeKey });
       }
     } finally {
       setLoadingArtifactId(null);
@@ -1122,13 +1168,6 @@ function ChatArtifactsSummarySection({
               )}
             </button>
           ))}
-        </div>
-      )}
-      {selectedArtifact && (
-        <div className="artifact-modal-backdrop" onClick={() => setSelectedArtifact(null)}>
-          <div className="artifact-modal" onClick={event => event.stopPropagation()}>
-            <ArtifactViewer artifact={selectedArtifact} onClose={() => setSelectedArtifact(null)} />
-          </div>
         </div>
       )}
     </section>
@@ -1688,6 +1727,7 @@ function PanelTabs({
 }) {
   const tabs: Array<{ id: ChatRunPanelTab; label: string; icon: React.ElementType }> = [
     { id: 'tasks', label: 'Tasks', icon: ListTree },
+    { id: 'documents', label: 'Docs', icon: FileText },
     { id: 'files', label: 'Files', icon: FileText },
     { id: 'changes', label: 'Changes', icon: Code2 },
     { id: 'context', label: 'Context', icon: BookOpen },
@@ -1727,27 +1767,23 @@ function ChatArtifactsPanel({
   runs: SpawnedAgent[];
 }) {
   const merged = usePanelArtifactItems({ rootType, rootId, runs });
-  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactDoc | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
-  const [listOpen, setListOpen] = useState(false);
+  const [listOpen, setListOpen] = useState(true);
+  const openDocument = useDocumentTabStore(state => state.openDocument);
 
   async function openArtifact(item: PanelArtifactItem) {
+    const scopeKey = rootType === 'chat' && rootId ? resourceScopeKey('chat', rootId) : undefined;
     setLoadingId(item.artifactId);
     try {
-      setSelectedArtifact(await artifactsApi.get(item.artifactId));
+      openDocument(await artifactsApi.get(item.artifactId), { sourceLabel: 'Chat', scopeKey });
     } catch {
       if (item.runtimeArtifact && item.sourceRun) {
-        setSelectedArtifact(fallbackArtifactDoc(item.runtimeArtifact, item.sourceRun));
+        openDocument(fallbackArtifactDoc(item.runtimeArtifact, item.sourceRun), { sourceLabel: 'Chat', scopeKey });
       }
     } finally {
       setLoadingId(null);
     }
   }
-
-  useEffect(() => {
-    if (selectedArtifact || merged.length === 0) return;
-    void openArtifact(merged[0]);
-  }, [merged, selectedArtifact]);
 
   if (merged.length === 0) {
     return <div className="cr-empty">No artifacts have been saved for this chat yet.</div>;
@@ -1768,7 +1804,7 @@ function ChatArtifactsPanel({
               <button
                 key={item.artifactId}
                 type="button"
-                className={`cr-list-row ${selectedArtifact?.artifactId === item.artifactId ? 'active' : ''}`}
+                className="cr-list-row"
                 onClick={() => openArtifact(item)}
               >
                 <span className="cr-ref-ic repo"><FileText className="h-3 w-3" /></span>
@@ -1781,18 +1817,222 @@ function ChatArtifactsPanel({
             ))}
           </div>
         )}
-        <div className="cr-inline-viewer">
-          {selectedArtifact ? (
-            <ArtifactViewer
-              artifact={selectedArtifact}
-              onClose={() => setSelectedArtifact(null)}
-            />
-          ) : (
-            <div className="cr-empty">Select an artifact to preview it here.</div>
-          )}
-        </div>
+        <div className="cr-inline-viewer"><div className="cr-empty">Select an artifact to open it as a document tab.</div></div>
       </div>
     </div>
+  );
+}
+
+function ChatDocumentsPanel({
+  rootType,
+  rootId,
+  runs,
+  refreshKey,
+  onClose,
+  onDocumentOpened,
+}: {
+  rootType?: 'chat' | 'workflow' | 'agent';
+  rootId?: string | null;
+  runs: SpawnedAgent[];
+  refreshKey?: string | number;
+  onClose: () => void;
+  onDocumentOpened?: () => void;
+}) {
+  const items = usePanelArtifactItems({ rootType, rootId, runs, refreshKey });
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const openDocument = useDocumentTabStore(state => state.openDocument);
+  const documents = items.filter(item => /markdown|document|text|json|csv|html/i.test(item.contentType ?? '') || /\.(md|mdx|txt|json|csv|html?)$/i.test(item.filename ?? item.relativePath ?? ''));
+  const other = items.filter(item => !documents.includes(item));
+
+  async function openArtifact(item: PanelArtifactItem) {
+    const scopeKey = rootType === 'chat' && rootId ? resourceScopeKey('chat', rootId) : undefined;
+    setLoadingId(item.artifactId);
+    let opened = false;
+    try {
+      openDocument(await artifactsApi.get(item.artifactId), { sourceLabel: 'Chat', scopeKey });
+      opened = true;
+    } catch {
+      if (item.runtimeArtifact && item.sourceRun) {
+        openDocument(fallbackArtifactDoc(item.runtimeArtifact, item.sourceRun), { sourceLabel: 'Chat', scopeKey });
+        opened = true;
+      }
+    } finally {
+      setLoadingId(null);
+    }
+    if (opened) onDocumentOpened?.();
+  }
+
+  const renderRows = (rows: PanelArtifactItem[]) => rows.map(item => (
+    <button key={item.artifactId} type="button" className="chat-docs-row" onClick={() => openArtifact(item)}>
+      <FileText aria-hidden="true" />
+      <b>{item.filename ?? item.relativePath ?? 'Artifact'}</b>
+      <em>v1</em>
+      <time>{shortTimeAgo(item.createdAt)}</time>
+      {loadingId === item.artifactId ? <Loader2 className="animate-spin" /> : <ChevronRight />}
+    </button>
+  ));
+
+  return (
+    <div className="chat-docs-panel">
+      <header>
+        <b>Docs</b><span>· {items.length}</span>
+        <button type="button" onClick={onClose} title="Close panel" aria-label="Close panel"><X /></button>
+      </header>
+      <div className="chat-docs-scroll">
+        <section>
+          <h6>documents <span>· {documents.length}</span></h6>
+          {documents.length ? renderRows(documents) : <p>No documents saved yet.</p>}
+        </section>
+        {other.length > 0 && <section><h6>read <span>· {other.length}</span></h6>{renderRows(other)}</section>}
+      </div>
+      <footer><Link to="/documents">All documents <span>→</span></Link></footer>
+    </div>
+  );
+}
+
+function CompactPanelShell({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="chat-compact-panel">
+      <header>
+        <b>{title}</b>
+        <button type="button" onClick={onClose} title="Close panel" aria-label="Close panel"><X /></button>
+      </header>
+      <div className="chat-compact-panel__scroll">{children}</div>
+    </div>
+  );
+}
+
+function CompactTaskState({ status }: { status?: string | null }) {
+  const state = nodeStepState(status);
+  if (state === 'ok') return <CheckCircle2 className="ok" aria-hidden="true" />;
+  if (state === 'skip') return <SkipForward className="skip" role="img" aria-label="Skipped" />;
+  if (state === 'run') return <Loader2 className="run animate-spin" aria-hidden="true" />;
+  if (state === 'fail') return <AlertTriangle className="fail" aria-hidden="true" />;
+  if (state === 'wait-you') return <HelpCircle className="wait-you" aria-hidden="true" />;
+  return <span className="todo" aria-hidden="true" />;
+}
+
+function compactTaskStatus(status?: string | null): string {
+  const normalized = (status ?? '').toLowerCase();
+  if (normalized === 'completed') return 'completed';
+  if (normalized === 'running') return 'running';
+  if (normalized === 'waiting_for_input' || normalized === 'waiting') return 'waiting for you';
+  if (normalized === 'skipped') return 'skipped';
+  if (FAILED_STATUSES.has(normalized)) return 'failed';
+  if (CANCELLED_STATUSES.has(normalized)) return 'cancelled';
+  return 'pending';
+}
+
+function CompactTasksPanel({ run }: { run: SpawnedAgent | null }) {
+  const context = run?.runContext ?? null;
+  const workflowSteps = workflowStepsForContext(context);
+  const steps = workflowSteps.length > 0
+    ? workflowSteps.map(step => ({ id: step.id, name: humanLabel(step.name), status: step.status }))
+    : run
+      ? [{ id: run.executionId, name: humanLabel(context?.progress.currentStep ?? context?.progress.label ?? run.prompt ?? run.agent), status: context?.status ?? run.status }]
+      : [];
+  return (
+    <section className="chat-compact-section">
+      <h6>tasks · {steps.length}</h6>
+      {steps.length ? steps.map(step => {
+        const state = nodeStepState(step.status);
+        const status = compactTaskStatus(step.status);
+        const isCurrent = state === 'run' || state === 'wait-you';
+        return (
+          <div
+            className={`chat-compact-task ${state} ${status.replaceAll(' ', '-')}`}
+            key={step.id}
+            data-status={status}
+            aria-current={isCurrent ? 'step' : undefined}
+          >
+            <CompactTaskState status={step.status} />
+            <span className="chat-compact-task__name">{step.name}</span>
+            <span className="chat-compact-task__status">{status}</span>
+          </div>
+        );
+      }) : <p>No task sequence is linked to this chat yet.</p>}
+    </section>
+  );
+}
+
+function CompactExecutionsPanel({ runs }: { runs: SpawnedAgent[] }) {
+  return (
+    <section className="chat-compact-section">
+      <h6>executions · {runs.length}</h6>
+      {runs.length ? runs.map((run, index) => {
+        const context = run.runContext ?? null;
+        const steps = workflowStepsForContext(context);
+        const progress = workflowProgressPercent(context, run.status, run.status === 'completed' ? 100 : 0);
+        const model = context?.execution.costByModel?.[0];
+        return (
+          <div className="chat-compact-execution" key={run.executionId}>
+            <div className="chat-compact-execution__head">
+              <b>#{index + 1} · {runDisplayName(context, run)}</b>
+              <span>{humanLabel(context?.status ?? run.status)} · {workflowProgressLabel(context, steps)}</span>
+              <Link to={`/executions/${run.executionId}`} aria-label="Open execution"><ExternalLink /></Link>
+            </div>
+            <div className="chat-compact-progress"><i style={{ width: `${progress}%` }} /></div>
+            <div className="chat-compact-execution__meta">
+              {[model ? getModelDisplay(model.provider, model.model).modelLabel : null, formatCost(context?.execution.cost), formatDuration(context?.execution.durationMs ?? run.durationMs)].filter(Boolean).join(' · ')}
+            </div>
+            {steps.map(step => (
+              <div className="chat-compact-execution__step" key={step.id}>
+                <CompactTaskState status={step.status} />
+                <span>{step.name}</span>
+                <em>{formatDuration(step.durationMs)}</em>
+              </div>
+            ))}
+          </div>
+        );
+      }) : <p>No executions are linked to this chat yet.</p>}
+    </section>
+  );
+}
+
+function CompactRunReferences({ runs }: { runs: SpawnedAgent[] }) {
+  const items = new Map<string, { key: string; label: string; meta: string; url?: string | null; kind: 'linear' | 'pr' }>();
+  for (const run of runs) {
+    const linear = run.runContext?.linear;
+    if (linear) {
+      const key = linear.issueId ?? linear.identifier ?? linear.url ?? `linear-${items.size}`;
+      items.set(key, {
+        key,
+        label: linear.identifier ?? linear.title ?? 'Linear issue',
+        meta: humanLabel(String(linear.assignment?.status ?? 'linked')),
+        url: linear.url,
+        kind: 'linear',
+      });
+    }
+    const pr = run.runContext?.pullRequest;
+    if (pr) {
+      const key = pr.id ?? pr.url ?? `pr-${pr.number ?? items.size}`;
+      items.set(key, {
+        key,
+        label: `PR ${pr.number ? `#${pr.number}` : ''}`.trim(),
+        meta: humanLabel(pr.status ?? 'open'),
+        url: pr.url,
+        kind: 'pr',
+      });
+    }
+  }
+  const references = [...items.values()];
+  if (!references.length) return null;
+  return (
+    <section className="chat-compact-context chat-compact-references">
+      <h6>references</h6>
+      {references.map(item => {
+        const content = (
+          <>
+            {item.kind === 'linear' ? <span className="linear-mark">L</span> : <GitBranch aria-hidden="true" />}
+            <span>{item.label} · {item.meta}</span>
+            <ChevronRight aria-hidden="true" />
+          </>
+        );
+        return item.url
+          ? <a key={item.key} className="chat-compact-context__row" href={item.url} target="_blank" rel="noreferrer">{content}</a>
+          : <div key={item.key} className="chat-compact-context__row">{content}</div>;
+      })}
+    </section>
   );
 }
 
@@ -2111,7 +2351,7 @@ function FileTreeNodeView({
   );
 }
 
-function FileChangesPanel({
+export function FileChangesPanel({
   runs,
   rootType,
   rootId,
@@ -2119,6 +2359,7 @@ function FileChangesPanel({
   repoBrowseSource,
   activeView,
   viewRequest,
+  presentation = 'sidebar',
 }: {
   runs: SpawnedAgent[];
   rootType?: 'chat' | 'workflow' | 'agent';
@@ -2127,6 +2368,7 @@ function FileChangesPanel({
   repoBrowseSource?: RepoBrowseSource | null;
   activeView: FilePanelView;
   viewRequest?: { view: FilePanelView; nonce: number };
+  presentation?: 'sidebar' | 'tab';
 }) {
   const withTimeout = async <T,>(label: string, promise: Promise<T>, ms = 15_000): Promise<T> => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -2683,7 +2925,7 @@ function FileChangesPanel({
   };
 
   return (
-    <div className="cr-files-panel">
+    <div className={`cr-files-panel ${presentation === 'tab' ? 'cr-files-panel--tab' : ''}`}>
       {view === 'changes' && (
         <div className="cr-files-summary">
           <span className="inline-flex items-center gap-1.5"><Code2 className="h-3.5 w-3.5" />{files.length} changed</span>
@@ -2726,7 +2968,7 @@ function FileChangesPanel({
             </div>
           </aside>
         </div>
-        {activeDiff && renderDiffPreview(activeDiff)}
+        {(activeDiff || presentation === 'tab') && renderDiffPreview(activeDiff)}
         </>
         )
       ) : (
@@ -2771,7 +3013,7 @@ function FileChangesPanel({
           </aside>
           {renderTerminalDock()}
         </div>
-        {browserPath && renderFilePreview()}
+        {(browserPath || presentation === 'tab') && renderFilePreview()}
         </>
       )}
     </div>
@@ -2879,7 +3121,7 @@ export default function ChatRunSidebar({
   onTabChange,
   filesViewRequest,
   artifactRefreshKey,
-  onAnswerWorkflowIntervention,
+  onDocumentOpened,
   onClose,
 }: {
   runs: SpawnedAgent[];
@@ -2892,12 +3134,13 @@ export default function ChatRunSidebar({
   onTabChange: (tab: ChatRunPanelTab) => void;
   filesViewRequest?: { view: FilePanelView; nonce: number };
   artifactRefreshKey?: string | number;
+  onDocumentOpened?: () => void;
   onAnswerWorkflowIntervention?: (input: WorkflowInterventionAnswer) => Promise<void> | void;
   onClose: () => void;
 }) {
   const allRuns = useMemo(() => [...runs], [runs]);
   const sortedRuns = useMemo(() => allRuns.filter(run => !isChildExecutionRun(run)), [allRuns]);
-  const visibleTab: Exclude<ChatRunPanelTab, 'executions'> = activeTab === 'executions' ? 'tasks' : activeTab;
+  const visibleTab = activeTab;
   const [width, setWidth] = useState(() => {
     return CHAT_RUN_SIDEBAR_MIN_WIDTH;
   });
@@ -2906,8 +3149,6 @@ export default function ChatRunSidebar({
     const status = (run.runContext?.status ?? run.status ?? '').toLowerCase();
     return !['completed', 'failed', 'cancelled', 'canceled'].includes(status);
   }) ?? sortedRuns[sortedRuns.length - 1] ?? null;
-  const activeContext = activeRun?.runContext ?? null;
-
   useEffect(() => {
     if (typeof window === 'undefined') return;
     if (!open) return;
@@ -2945,59 +3186,56 @@ export default function ChatRunSidebar({
 
   return (
     <aside
-      className={`chat-rail relative flex h-full flex-none flex-col gap-3 overflow-visible border-l border-app bg-app-muted px-3.5 pt-2.5 ${visibleTab === 'files' || visibleTab === 'changes' ? 'pb-0' : 'pb-8'} ${
+      className={`chat-rail ${visibleTab !== 'files' ? 'chat-rail--compact' : ''} ${visibleTab === 'documents' ? 'chat-rail--documents' : ''} relative flex h-full flex-none flex-col gap-3 overflow-visible border-l border-app bg-app-muted px-3.5 pt-2.5 ${visibleTab === 'files' || visibleTab === 'changes' || visibleTab === 'documents' ? 'pb-0' : 'pb-8'} ${
         fullScreen ? 'fullscreen absolute inset-0 z-[80] h-full w-full max-w-none border-l-0 px-5' : ''
       }`}
       style={fullScreen ? undefined : ({ width, '--chat-run-sidebar-width': `${width}px` } as CSSProperties)}
     >
-      {!fullScreen && <div className="chat-rail-resize" onMouseDown={startResize} title="Drag to resize" />}
-      <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between gap-2 border-b border-app-strong bg-app-muted pb-2">
+      {!fullScreen && visibleTab === 'files' && <div className="chat-rail-resize" onMouseDown={startResize} title="Drag to resize" />}
+      {visibleTab === 'files' && <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between gap-2 border-b border-app-strong bg-app-muted pb-2">
         <PanelTabs activeTab={visibleTab} onTabChange={onTabChange} />
         <div className="inline-flex shrink-0 items-center">
           <button type="button" className="rounded p-1.5 text-theme-muted transition-colors hover:bg-app-card hover:text-theme-primary" onClick={onClose} title="Close side panel" aria-label="Close side panel">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
-      </div>
+      </div>}
 
       <div className="relative min-h-0 w-full flex-1 overflow-visible">
-        <div className={`h-full w-full min-h-0 ${visibleTab === 'files' || visibleTab === 'changes' ? 'flex flex-col overflow-visible' : 'scroll-hide overflow-y-auto overflow-x-hidden pr-1'} ${visibleTab}`}>
-        {visibleTab === 'tasks' && (
-          activeRun
-            ? (
-              <TasksPanel
-                activeRun={activeRun}
-                activeContext={activeContext}
-                sortedRuns={sortedRuns}
-                contextRuns={allRuns}
-                rootType={rootType}
-                rootId={rootId}
-                expanded={fullScreen}
-                onOpenNode={() => undefined}
-                onOpenExecution={() => undefined}
-                onAnswerWorkflowIntervention={onAnswerWorkflowIntervention}
-                refreshKey={artifactRefreshKey}
-              />
-            )
-            : (
-              <div className="cr-task-panel compact">
-                <ChatArtifactsSummarySection rootType={rootType} rootId={rootId} runs={allRuns} refreshKey={artifactRefreshKey} />
-                <div className="cr-empty">No task sequence is linked to this chat yet.</div>
-              </div>
-            )
-        )}
-        {(visibleTab === 'files' || visibleTab === 'changes') && (
+        <div className={`h-full w-full min-h-0 ${visibleTab === 'files' || visibleTab === 'changes' || visibleTab === 'documents' ? 'flex flex-col overflow-visible' : 'scroll-hide overflow-y-auto overflow-x-hidden pr-1'} ${visibleTab}`}>
+        {visibleTab === 'documents' && <ChatDocumentsPanel rootType={rootType} rootId={rootId} runs={allRuns} refreshKey={artifactRefreshKey} onClose={onClose} onDocumentOpened={onDocumentOpened} />}
+        {visibleTab === 'tasks' && <CompactPanelShell title="Tasks" onClose={onClose}><CompactTasksPanel run={activeRun} /></CompactPanelShell>}
+        {visibleTab === 'executions' && <CompactPanelShell title="Executions" onClose={onClose}><CompactExecutionsPanel runs={sortedRuns} /></CompactPanelShell>}
+        {visibleTab === 'files' && (
           <FileChangesPanel
             runs={allRuns}
             rootType={rootType}
             rootId={rootId}
             workspaceBrowseSource={workspaceBrowseSource}
             repoBrowseSource={repoBrowseSource}
-            activeView={visibleTab}
+            activeView="files"
             viewRequest={filesViewRequest}
           />
         )}
-        {visibleTab === 'context' && <ChatContextPanel sessionId={rootType === 'chat' ? rootId : null} />}
+        {visibleTab === 'changes' && (
+          <CompactPanelShell title="Changes" onClose={onClose}>
+            <FileChangesPanel
+              runs={allRuns}
+              rootType={rootType}
+              rootId={rootId}
+              workspaceBrowseSource={workspaceBrowseSource}
+              repoBrowseSource={repoBrowseSource}
+              activeView="changes"
+              viewRequest={filesViewRequest}
+            />
+          </CompactPanelShell>
+        )}
+        {visibleTab === 'context' && (
+          <CompactPanelShell title="Context" onClose={onClose}>
+            <ChatContextPanel sessionId={rootType === 'chat' ? rootId : null} compact />
+            <CompactRunReferences runs={allRuns} />
+          </CompactPanelShell>
+        )}
         </div>
       </div>
     </aside>

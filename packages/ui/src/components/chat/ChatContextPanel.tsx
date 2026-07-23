@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileText } from 'lucide-react';
 import { chat as chatApi } from '../../services/api';
 import { RepoContextInjectionPanel } from '../execution/NodeInspector';
 
-export default function ChatContextPanel({ sessionId }: { sessionId?: string | null }) {
+export default function ChatContextPanel({ sessionId, compact = false }: { sessionId?: string | null; compact?: boolean }) {
   const [report, setReport] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +41,25 @@ export default function ChatContextPanel({ sessionId }: { sessionId?: string | n
   if (loading && !report) return <div className="cr-empty">Loading chat context...</div>;
   if (error) return <div className="cr-empty">Failed to load chat context: {error}</div>;
   if (!attempts.length) return <div className="cr-empty">No chat context has been captured for this session yet.</div>;
+
+  if (compact) {
+    const latestAttempt = attempts[attempts.length - 1] ?? {};
+    const refs = Array.isArray(latestAttempt.refs) ? latestAttempt.refs : [];
+    const injectedRefs = refs.filter((ref: any) => ref?.isInjected || ['injected', 'loaded', 'applied', 'provider_native'].includes(String(ref?.lifecycleStatus ?? '')));
+    return (
+      <section className="chat-compact-context">
+        <h6>injected · {injectedRefs.length}</h6>
+        {injectedRefs.length ? injectedRefs.map((ref: any, index: number) => (
+          <div className="chat-compact-context__row" key={String(ref?.id ?? ref?.contextRefId ?? ref?.path ?? index)}>
+            <FileText aria-hidden="true" />
+            <span>{ref?.title ?? ref?.name ?? ref?.path ?? ref?.filename ?? `Context document ${index + 1}`}</span>
+            <em>{String(ref?.kind ?? ref?.itemType ?? 'doc').replace(/_/g, ' ')}</em>
+            <ChevronRight aria-hidden="true" />
+          </div>
+        )) : <p>No context documents were injected for the latest turn.</p>}
+      </section>
+    );
+  }
 
   return (
     <div className="space-y-3 pb-6">

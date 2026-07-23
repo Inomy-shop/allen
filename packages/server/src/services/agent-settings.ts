@@ -8,13 +8,13 @@
  *
  * This module is the ONLY place that:
  *   1. Decides the effective model/effort/planMode for a spawn
- *   2. Enforces validation (plan mode claude-only, effort=max opus-only)
+ *   2. Enforces validation (plan mode is Claude-only)
  *   3. Translates the result to CLI flags
  */
 
 import { PROVIDERS, type ChatProvider } from './chat-providers.js';
 
-export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 /** Fields every agent owns as its default identity. */
 export interface AgentLike {
@@ -56,12 +56,6 @@ function isClaudeProvider(p: string | undefined): p is 'claude' {
   // input boundary forever so old env values, MCP calls, and hand-written
   // workflow YAML keep resolving.
   return p === 'claude' || p === 'claude-cli';
-}
-
-function looksLikeOpus(model: string | undefined): boolean {
-  if (!model) return false;
-  const m = model.toLowerCase();
-  return m.includes('opus') || m === 'opus';
 }
 
 function normalizeProvider(p: string | undefined): ChatProvider {
@@ -120,20 +114,6 @@ export function resolveAgentSettings(
     );
   }
 
-  if (reasoningEffort === 'max' && provider !== 'claude') {
-    throw new AgentSettingsValidationError(
-      'effort_max_claude_only',
-      `reasoningEffort="max" is only supported for Claude agents (got provider=${provider}).`,
-    );
-  }
-
-  if (reasoningEffort === 'max' && !looksLikeOpus(model)) {
-    throw new AgentSettingsValidationError(
-      'effort_max_requires_opus',
-      `reasoningEffort="max" requires a Claude Opus model (got model="${model || '(none)'}").`,
-    );
-  }
-
   return { provider, model, reasoningEffort, planMode };
 }
 
@@ -175,7 +155,9 @@ function effortToKeyword(effort: ReasoningEffort): string | undefined {
     case 'low': return undefined;       // CLI default is already low-ish
     case 'medium': return 'think';
     case 'high': return 'think hard';
+    case 'xhigh':
     case 'max': return 'ultrathink';
+    case 'ultra': return 'ultrathink';
   }
 }
 
@@ -200,9 +182,7 @@ export function toCodexArgs(resolved: ResolvedSettings): string[] {
     args.push('-c', `model="${resolved.model}"`);
   }
   if (resolved.reasoningEffort && resolved.reasoningEffort !== 'off') {
-    // Codex doesn't support 'max' — clamp to 'high'.
-    const effort = resolved.reasoningEffort === 'max' ? 'high' : resolved.reasoningEffort;
-    args.push('-c', `model_reasoning_effort="${effort}"`);
+    args.push('-c', `model_reasoning_effort="${resolved.reasoningEffort}"`);
   }
   // planMode is not supported by Codex — silently ignored (validation already
   // rejected it at resolve time for anyone setting it explicitly).

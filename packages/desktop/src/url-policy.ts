@@ -66,6 +66,8 @@ export function isLocalPreviewUrl(raw: string): boolean {
 export function isAllowedExternalUrl(raw: string): boolean {
   const url = parseUrl(raw);
   if (!url) return false;
+  // Delegate user-addressed communication links to the operating system.
+  if ((url.protocol === 'mailto:' || url.protocol === 'tel:') && url.pathname.trim() !== '') return true;
   // Safe external HTTPS (non-loopback)
   if (url.protocol === 'https:' && !isLoopbackHostname(url.hostname)) return true;
   // Local preview server (loopback + explicit port)

@@ -1,0 +1,120 @@
+---
+title: 'Known Limitations'
+description: 'Understand Allen’s current alpha constraints and the review steps operators must keep in the loop.'
+---
+
+:::info Media placeholders
+Before publishing, capture context-disabled guidance, a workspace diff, a capability-link warning, an MCP connection failure, an occupied workspace port, and Playwright prerequisites. Redact private identifiers and repository content.
+:::
+
+Allen is early alpha. Treat it as local or operator-managed developer infrastructure, not a hardened multi-tenant service.
+
+## Current constraints
+
+| Area | Current limitation | Safer operating response |
+| --- | --- | --- |
+| Desktop platform | The packaged desktop release targets Apple silicon macOS. | Use the supported package and approved update channel. |
+| Source setup | macOS is the most exercised setup path. Linux setup is less exercised and requires operator-managed MongoDB; native Windows is unsupported. | Use WSL2-style environments when a Windows host is unavoidable, and record platform-specific setup changes. |
+| First-run example | Allen does not include a sample repository. | Connect a disposable Git repository before using important code. |
+| Sandboxing | Workspaces isolate Git working copies but not hostile code at the operating-system level. | Run only trusted workflows and tools on a controlled machine; review every code-changing result. |
+| Deployment | There is no one-command production deployment or container stack. | Design TLS, domains, persistence, supervision, backups, and secret rotation explicitly. |
+| Context | Repository context is disabled until a supported provider is configured and prepared. | Use direct source inspection, enable context deliberately, and review context-usage evidence. |
+| Models | A registry entry does not guarantee provider access, model availability, compatibility, or price accuracy. | Validate the provider, CLI/API authentication, exact model, and current provider terms before important runs. |
+| Agent output | Provider trust prompts, model-recovery pauses, and structured-output failures can still require human action. | Monitor executions and keep a reviewer available for code-changing work. |
+| Workspace services | Local port blocks and child processes can remain occupied after hard crashes. | Stop services through Allen first, then identify and clean only confirmed stale processes. |
+| Capability links | Artifacts, uploads, execution streams, workspace logs, and previews have unauthenticated content paths. | Treat working URLs as sensitive and never store secrets in shareable outputs. |
+| Integrations | GitHub, Linear, Slack, Google Workspace, MCP, and model flows depend on external credentials, service state, and local commands. | Use least privilege and test each connection separately before agent use. |
+| Validation | Build, typecheck, unit tests, system health, and workflow validation each cover only part of the product. | Record exactly which checks ran and which live paths were not exercised. |
+| Documentation media | Several pages still contain media placeholders and the deployment/API reference is not comprehensive. | Capture current UI media and verify procedures against the running version before publication. |
+
+## Setup and deployment boundaries
+
+The source setup script checks Node.js 22+, npm, Git, MongoDB, and model CLIs. It can install MongoDB through Homebrew on macOS; on Linux it expects the operator to install and run MongoDB. The desktop package instead manages its own local runtime and MongoDB.
+
+Allen does not provide a complete production deployment path for:
+
+- TLS termination and public-domain routing;
+- MongoDB durability, upgrades, and backup/restore;
+- object-storage lifecycle and recovery;
+- process supervision and host monitoring;
+- multi-user hardening for untrusted tenants;
+- credential rotation and incident response;
+- private update-feed hosting.
+
+Do not expose a source installation to untrusted users or networks without a dedicated deployment and security review.
+
+## Workspaces are not a security sandbox
+
+A workspace provides a separate Git working copy, assigned service ports, file and terminal surfaces, preview routing, and cleanup hooks. It does not constrain arbitrary code with containers, virtual machines, or a kernel-level policy.
+
+An agent command, package script, provider CLI, or MCP server may still reach resources available to the Allen host process. Use dedicated workspace directories, repositories without committed secrets, and low-privilege credentials. Review the diff and validation output before commit, push, pull request, deployment, or external handoff.
+
+Workspace services receive ten-port blocks beginning at `15000`. Allen checks port availability and attempts stale-PID cleanup on startup, but a hard crash or externally spawned process can leave a port occupied. Manual process cleanup can still be necessary.
+
+## Context must be enabled and reviewed
+
+If `ALLEN_CONTEXT_PROVIDER` is empty, invalid, `off`, `none`, or `disabled`, context-backed actions return disabled-provider behavior. Configure `allen`, `cognee`, or `cognee_memory` before expecting indexing or retrieval.
+
+Even when context is enabled:
+
+- an index can be stale;
+- optional results can be filtered by scoring and budget limits;
+- mandatory mappings can be too broad;
+- injected context can be insufficient for the task.
+
+Use context diagnostics to understand selection, but inspect current source before making implementation or security claims.
+
+## Models, CLIs, and external systems
+
+The model registry stores Allen's selectable model records. It cannot prove that an account is authorized to use a model or that a provider still accepts the identifier. Claude and Codex paths depend on installed and authenticated local CLIs; Claude-compatible providers depend on configured API credentials and compatible endpoints.
+
+MCP health checks prove startup or reachability, not every downstream permission or tool action. Repository-hosted MCP servers can also depend on Node, Python, package installation, local files, and network access.
+
+For a new provider or integration:
+
+1. configure the minimum credential scope;
+2. run its dedicated health or connection test;
+3. perform a read-only action against non-production data;
+4. inspect logs and output for unintended disclosure;
+5. grant write access only when the workflow requires it.
+
+## Public content links
+
+Artifact content, uploaded files, execution event streams, workspace service logs, and previews include public routes that support browsers and external sharing without bearer headers. Random names or resource IDs reduce guessing; they do not make the content private after a URL is shared.
+
+Do not include `.env` values, OAuth tokens, SSH keys, provider credentials, private source, proprietary prompts, customer data, or production logs in content that can be opened through a capability link.
+
+## What a passing check proves
+
+| Passing check | What it supports | What it does not prove |
+| --- | --- | --- |
+| `npm run docs:build` | The Docusaurus site can compile and its checked links resolve. | Product behavior or screenshots are current. |
+| `npm run build` | Engine, server, UI, and desktop production builds compile. | Live auth, repositories, workspaces, CLIs, or integrations work. |
+| `npm run lint` | Package TypeScript no-emit checks pass. | Runtime side effects and external systems are safe. |
+| `npm test` | The current Vitest suites pass. | Playwright journeys and local/external dependencies work. |
+| `GET /api/system/health` | Coarse Node, npm, MongoDB, Git, and required-CLI readiness checks pass. | Every model, MCP server, workflow, or repository can run. |
+| Workflow validation | The workflow structure and declared inputs satisfy validator rules. | Prompts, credentials, branch state, retries, and side effects are safe. |
+
+The default CI workflow runs build, typecheck, and Vitest. Playwright is separate and needs a browser, running UI/API services, MongoDB, filesystem state, and additional runtime dependencies for some scenarios.
+
+State validation precisely. Prefer “docs build and Vitest passed; Playwright and live integrations were not run” over “all tests passed.”
+
+## Assumptions to avoid
+
+Do not assume that:
+
+- a prompt instruction creates an operating-system sandbox;
+- cancelling a run reverses completed commits or external actions;
+- a healthy MCP connection proves every tool is authorized or safe;
+- a configured model is available to the current account;
+- a public artifact, upload, stream, log, or preview URL is safe to repost;
+- desktop runtime values match a source `.env`;
+- a context refresh replaces direct source verification;
+- structural workflow validation proves a run is safe for an important repository.
+
+## Related pages
+
+- [Security Reference](/reference/security)
+- [Environment Reference](/reference/environment)
+- [Troubleshooting](/operator-guide/troubleshooting)
+- [Context Management](/operator-guide/context-management)

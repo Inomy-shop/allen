@@ -41,6 +41,11 @@ function formatTime(d: Date) {
   });
 }
 
+function truncateNodeLabel(value: string, maxLength = 15): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 1)}…`;
+}
+
 interface TimelineProps {
   logs: ExecutionLog[];
   nodeFilter: string | null;
@@ -277,6 +282,9 @@ export default function Timeline({
             const logData = (log.data as Record<string, unknown> | undefined) ?? {};
             const logArgs = (logData.args as Record<string, unknown> | undefined) ?? undefined;
             const logCmd = logData.command as string | undefined;
+            const nodeLabel = child
+              ? `${log.node ?? child.childParentCaller ?? 'node'}:${child.childAgentName}`
+              : (log.node ?? '');
 
             const toggle = () => {
               setOpenRows(prev => {
@@ -289,7 +297,7 @@ export default function Timeline({
             return (
               <div key={rowKey} className={`${isError ? 'bg-accent-red/5' : ''} ${child ? 'bg-accent-purple/[0.03]' : ''}`}>
                 <div
-                  className={`grid grid-cols-[14px_112px_58px_172px_minmax(0,1fr)] items-start gap-x-2 gap-y-1 px-2 py-0.5 hover:bg-accent-blue/5 text-xs transition-colors ${isToolRow ? 'cursor-pointer' : ''}`}
+                  className={`grid grid-cols-[14px_112px_58px_126px_minmax(0,1fr)] items-start gap-x-2 gap-y-1 px-2 py-0.5 hover:bg-accent-blue/5 text-xs transition-colors ${isToolRow ? 'cursor-pointer' : ''}`}
                   onClick={isToolRow ? toggle : undefined}
                 >
                   {/* Chevron column — only shown for expandable tool rows */}
@@ -320,12 +328,15 @@ export default function Timeline({
                       className="inline-flex min-w-0 items-center gap-0.5 truncate text-[10px] font-mono text-accent-purple transition-colors hover:text-accent-purple/80"
                       title={`${log.node ?? child.childParentCaller ?? 'node'}:${child.childAgentName} — spawned by ${child.childParentCaller ?? 'unknown'}`}
                     >
-                      <span className="truncate">{log.node ?? child.childParentCaller ?? 'node'}:{child.childAgentName}</span>
+                      <span className="truncate">{truncateNodeLabel(nodeLabel)}</span>
                       <ExternalLink className="w-2.5 h-2.5 shrink-0 opacity-60" />
                     </Link>
                   ) : log.node ? (
-                    <span className="truncate text-[10px] font-mono text-accent-blue/60">
-                      {log.node}
+                    <span
+                      className="truncate text-[10px] font-mono text-accent-blue/60"
+                      title={log.node}
+                    >
+                      {truncateNodeLabel(nodeLabel)}
                     </span>
                   ) : (
                     <span />
@@ -344,7 +355,7 @@ export default function Timeline({
                     matching ToolCallRecord, falling back to what the log
                     itself carries. */}
                 {isToolRow && isOpen && (
-                  <div className="space-y-1.5 bg-app-muted/40 py-1.5 pl-[374px] pr-3">
+                  <div className="space-y-1.5 bg-app-muted/40 py-1.5 pl-[328px] pr-3">
                     {(() => {
                       const argsObj = toolCall?.args ?? logArgs;
                       if (argsObj && Object.keys(argsObj).length > 0) {

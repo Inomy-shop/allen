@@ -3,6 +3,7 @@ import type { Node } from '@xyflow/react';
 import { Trash2, Plus, X, ChevronDown, SlidersHorizontal } from 'lucide-react';
 import { agents as agentsApi, mcp as mcpApi, type McpToolGroup } from '../../services/api';
 import Select from '../common/Select';
+import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
 import { outputsAsMap } from '../../utils/outputs';
 import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
 import { useEnabledProviders, isProviderSelectable } from '../../hooks/useEnabledProviders';
@@ -12,6 +13,11 @@ import HumanNodeEditor from './HumanNodeEditor';
 import KeyValueEditor from './KeyValueEditor';
 import JsonField from './JsonField';
 import InputSchemaEditor from './InputSchemaEditor';
+import {
+  isReasoningEffortSupported,
+  reasoningEffortOptionsFor,
+  type ReasoningEffortValue as EffortValue,
+} from '../../lib/reasoning-effort';
 
 interface ConditionRow {
   name: string;
@@ -565,7 +571,6 @@ function SectionLabel({ children, divider = true }: { children: ReactNode; divid
 
 /* ── Agent override sub-component ─────────────────────────────────────── */
 
-type EffortValue = 'off' | 'low' | 'medium' | 'high' | 'max';
 type ProviderValue = string;
 
 interface AgentOverridesValue {
@@ -684,6 +689,7 @@ function AgentNodeOverrides({
 
   // Effective resolved values (override wins, else agent default).
   const effectiveProvider: ProviderValue = overrides.provider ?? agentProvider;
+  const effectiveModel = overrides.model ?? agentModel;
   const effectiveIsClaude = effectiveProvider === 'claude' || effectiveProvider === 'claude-cli';
   const openModelSuggestions = openProviderModelSuggestions[effectiveProvider];
   const isOpenModelProvider = Boolean(openModelSuggestions);
@@ -695,6 +701,7 @@ function AgentNodeOverrides({
         value: encodeModelOption(provider.provider, option.value),
         label: option.label,
         sublabel: getModelDisplay(provider.provider).providerLabel,
+        icon: <ProviderIcon provider={provider.provider} className={`h-4 w-4 ${providerIconColor(provider.provider)}`} />,
       }));
       // Ensure the current override model is visible even when it's not
       // in the active registry list (e.g. an inactive/inaccessible model).
@@ -705,6 +712,7 @@ function AgentNodeOverrides({
             value: encoded,
             label: getModelDisplay(effectiveProvider, overrides.model).modelLabel,
             sublabel: getModelDisplay(effectiveProvider).providerLabel,
+            icon: <ProviderIcon provider={effectiveProvider} className={`h-4 w-4 ${providerIconColor(effectiveProvider)}`} />,
           });
         }
       }
@@ -723,6 +731,7 @@ function AgentNodeOverrides({
       value: encodeModelOption(provider.provider, model),
       label: getModelDisplay(provider.provider, model).modelLabel,
       sublabel: getModelDisplay(provider.provider).providerLabel,
+      icon: <ProviderIcon provider={provider.provider} className={`h-4 w-4 ${providerIconColor(provider.provider)}`} />,
     }));
   });
 
@@ -772,6 +781,10 @@ function AgentNodeOverrides({
       provider: decoded.provider,
       model: decoded.model,
     };
+    const currentEffort = overrides.reasoningEffort ?? agentEffort;
+    if (!isReasoningEffortSupported(decoded.provider, decoded.model, currentEffort)) {
+      next.reasoningEffort = 'high';
+    }
     // Moving away from Claude? Drop any explicit plan-mode override.
     if (decoded.provider !== 'claude' && next.planMode === true) next.planMode = null;
     update(next);
@@ -883,11 +896,11 @@ function AgentNodeOverrides({
               searchable={false}
               options={[
                 { value: '', label: 'Inherit', sublabel: inheritedEffortLabel },
-                { value: 'off', label: 'Off' },
-                { value: 'low', label: 'Low' },
-                { value: 'medium', label: 'Medium' },
-                { value: 'high', label: 'High' },
-                { value: 'max', label: 'Max', sublabel: 'Claude Opus only' },
+                ...reasoningEffortOptionsFor(effectiveProvider, effectiveModel).map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                  sublabel: option.description,
+                })),
               ]}
             />
           </div>

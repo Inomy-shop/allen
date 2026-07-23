@@ -50,7 +50,7 @@ When sources disagree, use this order:
 4. `README.md` for brand, voice, and broader rules.
 5. `preview/*.html` for individual specimens.
 
-Notable token difference: the README describes an earlier blue accent `#2A76E2`, while `colors_and_type.css` currently defines the import-ready accent as `#4763CF` in light mode and `#8A9CEC` in dark mode. Prefer the CSS token values when building UI.
+The V8 implementation uses a single restrained indigo accent: `#5E6AD2` in light mode and `#828BE0` in dark mode. Prefer the CSS token values when building UI.
 
 ## Core Tokens
 
@@ -58,31 +58,31 @@ Use CSS variables from `colors_and_type.css` rather than hard-coded colors where
 
 ### Light Theme
 
-- Page surface: `rgb(var(--color-surface))`, currently `#FCFDFF`.
+- Sidebar surface: `rgb(var(--color-sidebar))`, currently `#F7FAFD`.
+- Page surface: `rgb(var(--color-surface))`, currently `#FBFCFE`.
 - Panel/card: `rgb(var(--color-surface-100))`, currently `#FFFFFF`.
-- Muted strip: `rgb(var(--color-surface-200))`, currently `#F4F6FB`.
-- Alternate panel: `rgb(var(--color-surface-300))`, currently `#F8FAFE`.
-- Border: `rgb(var(--color-border))`, currently `#E2E5ED`.
-- Strong border: `rgb(var(--color-border-strong))`, currently `#CDD3E0`.
-- Primary text: `rgb(var(--color-text-primary))`, currently `#0B1730`.
-- Secondary text: `rgb(var(--color-text-secondary))`, currently `#354158`.
-- Muted text: `rgb(var(--color-text-muted))`, currently `#6E778A`.
-- Subtle text: `rgb(var(--color-text-subtle))`, currently `#9CA5B8`.
-- Accent: `rgb(var(--color-accent))`, currently `#4763CF`.
-- Accent soft: `rgb(var(--color-accent-soft))`, currently `#DFE2F7`.
+- Muted strip: `rgb(var(--color-surface-200))`, currently `#EEF2F7`.
+- Hairline: `var(--line)`, currently `rgba(13, 30, 47, 0.07)`.
+- Card hairline: `var(--card-line)`, currently `rgba(13, 30, 47, 0.10)`.
+- Primary text: `rgb(var(--color-text-primary))`, currently `#16181D`.
+- Secondary text: `rgb(var(--color-text-secondary))`, currently `#3C4654`.
+- Muted text: `rgb(var(--color-text-muted))`, currently `#64748B`.
+- Subtle text: `rgb(var(--color-text-subtle))`, currently `#98A4B3`.
+- Accent: `rgb(var(--color-accent))`, currently `#5E6AD2`.
+- Accent soft: `rgb(var(--color-accent-soft))`, currently `#EDEFFB`.
 
 ### Dark Theme
 
 The dark theme is activated by adding `.dark` to `<html>`.
 
-- Page surface: `#070910`.
-- Panel/card: `#0E121C`.
-- Muted strip: `#0B0F18`.
-- Alternate panel: `#141925`.
-- Border: `#202534`.
-- Strong border: `#2E354A`.
-- Accent: `#8A9CEC`.
-- Accent soft: `#202652`.
+- Sidebar surface: `#0C0D10`.
+- Page surface: `#131418`.
+- Panel/card: `#1A1C21`.
+- Muted strip: `#1D2026`.
+- Hairline: `rgba(235, 238, 245, 0.07)`.
+- Card hairline: `rgba(235, 238, 245, 0.11)`.
+- Accent: `#828BE0`.
+- Accent soft: `#23264A`.
 
 ### Status Colors
 
@@ -94,27 +94,30 @@ Reserve these colors for status, not decoration:
 - Running/info: `--color-accent-cyan`.
 - Human checkpoint/agent: `--color-accent-purple`.
 
-Badge fills use low alpha, typically `0.12` to `0.15`.
+Status badges use a small semantic dot plus lowercase mono text. Do not use tinted pill fills for status.
 
 ## Typography
 
 Fonts:
 
-- Sans: `Inter Tight`, fallback `Inter`, then system sans.
-- Mono: `JetBrains Mono`, fallback `Geist Mono`, then system mono.
+- Sans: `Inter`, fallback `SF Pro Text`, then system sans.
+- Mono: `SF Mono`, fallback `JetBrains Mono`, then system mono.
 
 Use sans for normal UI text. Use mono for identifiers, workflow names, file paths, badges, counts, metadata, keyboard shortcuts, group labels, command hints, and terminal/code snippets.
 
 Scale from `colors_and_type.css`:
 
-- `2xs`: 11px / 1.5.
-- `meta`: 11px / 1.5.
-- `caption`: 12px / 1.5.
-- `body`: 13px / 1.55.
-- `title`: 14px / 1.4.
-- `h2`: 18px / 1.3.
-- `h1`: 24px / 1.25.
-- `display`: 44px / 1.05, for true hero moments only.
+- `2xs`: 9.5px.
+- `meta`: 10.5px.
+- `caption`: 11.5px.
+- `body-sm`: 12.5px.
+- `body`: 13.5px.
+- `title-sm`: 14px.
+- `title`: 15px.
+- `section`: 15.5px.
+- `h2`: 17px.
+- `h1`: 19px.
+- `display`: 24px.
 
 Rules:
 
@@ -143,7 +146,7 @@ Radii:
 Shadows:
 
 - Resting cards use borders, not shadows.
-- Hover cards may use `--shadow-sm`.
+- Hover cards may strengthen their border but do not lift or translate.
 - Popovers, command palette, dialogs, and dropdowns use `--shadow-popover`.
 - Do not use colored shadows or glows.
 
@@ -152,7 +155,7 @@ Shadows:
 App shell:
 
 - `.app-shell`: full viewport flex shell.
-- `.sidebar`: fixed 220px width, left side, `border-right`.
+- `.sidebar`: fixed 236px width, left side, `border-right`.
 - `.topbar`: fixed 52px height, `border-bottom`.
 - `.main-col`: flex column.
 - `.main-body`: scroll area.
@@ -178,59 +181,46 @@ Two-pane surfaces:
 Default product mark:
 
 ```html
-<div class="brand-mark">[a]</div>
+<div class="brand-mark"><Sparkles /></div>
 ```
 
-Use the `[a]` capsule in chrome and most product surfaces. Use `assets/allen-mark.svg` for favicon, tile, or dark-background logomark needs.
+Use the compact four-point Sparkles mark in app chrome. Use `assets/allen-mark.svg` for favicon, tile, or dark-background logomark needs.
 
 Wordmark:
 
 - Text is `allen`.
 - All lowercase.
-- Inter Tight 600.
+- Inter 600.
 - `letter-spacing: 0`.
 
 ### Sidebar
 
-Source: `packages/ui/src/App.tsx` (the sidebar carousel lives in the `App` component).
+Source: `packages/ui/src/App.tsx`.
 
-Structure — the expanded sidebar is a three-panel **carousel** with a dot selector at the bottom:
+The expanded sidebar has a fixed vertical hierarchy:
 
-| Dot | Panel | Contents |
-| --- | --- | --- |
-| Left | Design Studio | Compact list of Design Studio workspaces with status badges, search input, and a + button to create new design workspaces |
-| Center | App navigation | Original nav groups: dashboard, chat, executions, tickets, PRs, workspaces, design, design studio, teams & agents, workflows, settings |
-| Right | Workspaces | Workspace list grouped by repo, with collapse/expand toggles, per-workspace chat links, and per-repo create buttons |
+| Area | Contents |
+| --- | --- |
+| Brand | Product mark, Allen wordmark, current workspace/repo context, notifications, and collapse control |
+| Core | Home, Sessions, Executions, and Workspaces; always visible |
+| Library | Persisted collapsible group for Linear, pull requests, repos, agents, and workflows |
+| Pane selector | Two dots switch between app navigation and the structured Workspaces pane |
+| Product block | Allen Design, Settings, then the current user |
 
-The active panel is controlled by `sidebarPanel` state and changes are animated via `translate3d` with a 300ms cubic-bezier transition. Users switch between panels by:
+The navigation and Workspaces panes form a two-panel carousel controlled by `sidebarPanel`. Changes animate via `translate3d` with a 300ms cubic-bezier transition. Users switch panes by:
 
-- Clicking one of the three dots at the bottom of the sidebar.
+- Clicking one of the two dots above the bottom product block.
 - Horizontal scroll (trackpad or mouse wheel) inside the carousel area.
 - Touch swipe (mobile/tablet).
+- Opening `#workspaces` directly.
 
-When the sidebar is **collapsed** (icon-only mode), the carousel is hidden and only nav icons are shown with `data-sidebar-tooltip` labels.
+Inactive panes are `aria-hidden` and inert so off-canvas controls cannot receive focus. The Library state persists in `allen-nav-lib` and automatically opens on a Library route.
 
-When the user is on a `/design` route and the sidebar is expanded, the carousel is replaced with a `DesignNavPanel` that lists design sessions with search and delete.
+When the sidebar is **collapsed** (icon-only mode), the carousel is hidden and core, Library, Allen Design, and Settings icons remain available with `data-sidebar-tooltip` labels.
 
-Brand row with `[a]`, `allen`, and mono version like `v0.2`.
+Only destinations with working routes belong in the sidebar. For example, Documents should not appear until Allen has a dedicated document-library route, even though document identity/version/comment APIs already exist.
 
-Navigation groups in the center panel:
-
-- `Primary`: `new chat`, `executions`, `chats`.
-- `Sources`: `tickets`, `pull requests`, `workspaces`.
-- `Design`: `design`, `design studio`.
-- `Org`: `library`, `workflows`.
-- `Personal`: `settings`. (Other org/admin items appear in the studio group below.)
-- `Settings` (when on a settings route): `general`, `runtime`, `models`, `usage`, `mcp servers`, plus an `Allen` sub-group for integrations, auth, users, and cron.
-
-Footer with avatar, user name, email, sign-out icon.
-
-Rules:
-
-- Nav labels are lowercase.
-- Group titles are Title Case text rendered as uppercase mono overlines.
-- Active nav uses accent-soft background, accent text, and subtle accent border.
-- Count badges are mono, small, and border-backed.
+Settings routes replace the standard sidebar with the dedicated settings navigation. The bottom product block stays fixed in normal app navigation.
 
 ### Topbar
 
@@ -250,6 +240,17 @@ Rules:
 - Topbar height is 52px.
 - Search width is `min(340px, 24vw)`.
 - Chips are compact, border-backed, and mono.
+
+### Home
+
+Source: `packages/ui/src/pages/DashboardPage.tsx`.
+
+- Lead with date plus running-session metadata and the prompt `What should Allen take on?`.
+- Keep the working composer as the primary surface, including assistant, model/effort, plan mode, repo/workspace, attachment, and send controls.
+- First-run state shows four working starter prompts and six setup cards backed by live GitHub, Linear, provider, MCP, agent-org, and workflow data.
+- Active state groups approvals under `Needs you` and puts running sessions first in the bounded `Recent` list.
+- Completed setup cards remain visible with a check; every setup action must navigate to or open a working configuration flow.
+- End with the onboarding setup receipt and the quiet Allen product footer.
 
 ### Command Palette
 
@@ -459,7 +460,7 @@ Before building an Allen UI:
 
 - Import or mirror `colors_and_type.css`.
 - Use Inter Tight and JetBrains Mono.
-- Use the app shell dimensions: 220px sidebar, 52px topbar.
+- Use the app shell dimensions: 236px expanded sidebar, 62px collapsed sidebar, 52px topbar.
 - Keep the page background quiet and panel-based.
 - Use 1px borders as the primary separator.
 - Keep cards at 12px radius or less.

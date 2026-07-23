@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import {
-  ArrowLeft, ExternalLink, FileText, GitBranch, Layers, MessageSquare, Pencil, Play, RefreshCw, Shield,
-} from 'lucide-react';
-import { executions as executionsApi, users as usersApi, workflows as workflowsApi } from '../services/api';
-import type { AuthUser } from '../stores/authStore';
-import StatusBadge from '../components/common/StatusBadge';
-import Select from '../components/common/Select';
-import IconTooltipButton from '../components/common/IconTooltipButton';
+import { Check, Inbox, Play } from 'lucide-react';
+import { executions as executionsApi, workflows as workflowsApi } from '../services/api';
 import { mergeExecutionSnapshot, snapshotFromExecution, useExecutionStore } from '../stores/executionStore';
 import WorkflowRunDialog from '../components/workflow/WorkflowRunDialog';
 import WorkflowBuilderPage from './WorkflowBuilderPage';
@@ -19,452 +13,431 @@ import {
   workflowNodes,
 } from '../utils/workflowShape';
 
-type WorkflowTab = 'runs' | 'description' | 'edit';
-type ChatFilter = 'all' | 'linked' | 'unlinked';
+type WorkflowTab = 'description' | 'visual' | 'runs' | 'edit';
 
-function shortDuration(ms: number | null | undefined): string {
-  if (ms == null) return '-';
-  const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(1)}s`;
-  const m = Math.floor(s / 60);
-  return `${m}m ${Math.floor(s % 60)}s`;
+type NormalizedEdge = { from: string; to: string; condition?: string; parallel?: boolean };
+
+function DetailIcon({ name }: { name: 'back' | 'refresh' }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      {name === 'back'
+        ? <><path d="M19 12H5" /><path d="m12 19-7-7 7-7" /></>
+        : <><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></>}
+    </svg>
+  );
 }
 
-function runUserLabel(run: any): string {
-  return run?.user?.email
-    ?? run?.chat?.userEmail
-    ?? run?.meta?.startedByUserEmail
-    ?? run?.user?.name
-    ?? run?.chat?.userName
-    ?? run?.meta?.startedByUserName
-    ?? '—';
+function normalizedEdges(workflow: any): NormalizedEdge[] {
+  return workflowEdges(workflow).flatMap((edge: any) => {
+    const from = Array.isArray(edge?.from ?? edge?.source) ? (edge.from ?? edge.source) : [edge?.from ?? edge?.source];
+    const to = Array.isArray(edge?.to ?? edge?.target) ? (edge.to ?? edge.target) : [edge?.to ?? edge?.target];
+    return from.flatMap((source: unknown) => to.map((target: unknown) => ({
+      from: String(source ?? ''),
+      to: String(target ?? ''),
+      condition: edge?.condition ?? edge?.when ?? edge?.label,
+      parallel: Boolean(edge?.parallel),
+    }))).filter((item: NormalizedEdge) => item.from && item.to);
+  });
 }
 
-function runUserId(run: any): string | null {
-  return run?.user?.userId
-    ?? run?.chat?.userId
-    ?? run?.meta?.startedByUserId
-    ?? null;
+function conditionLabel(condition?: string): string {
+  if (!condition) return '';
+  const values = Array.from(condition.matchAll(/(?:==|===)\s*['"]([^'"]+)['"]/g)).map(match => match[1]);
+  if (values.length > 0) return Array.from(new Set(values)).join(' · ');
+  return condition
+    .replace(/human\.([^.]+)\.latest\.decision\s*==\s*/g, '')
+    .replace(/__retry_exhausted_from\s*==\s*/g, 'retry exhausted: ')
+    .replace(/["']/g, '')
+    .replace(/\s+(AND|OR)\s+/gi, ' · ')
+    .slice(0, 46);
 }
 
-function runHasLinkedChat(run: any): boolean {
-  return Boolean(runChatSessionId(run));
+function orderedNodeEntries(workflow: any): Array<[string, any]> {
+  const nodes = workflowNodes(workflow);
+  const entries = Object.entries(nodes) as Array<[string, any]>;
+  const order = new Map(entries.map(([key], index) => [key, index]));
+  const incoming = new Map(entries.map(([key]) => [key, 0]));
+  const outgoing = new Map(entries.map(([key]) => [key, [] as string[]]));
+  for (const edge of normalizedEdges(workflow)) {
+    if (!nodes[edge.from] || !nodes[edge.to] || edge.from === edge.to) continue;
+    outgoing.get(edge.from)?.push(edge.to);
+    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1);
+  }
+  const queue = entries.filter(([key]) => incoming.get(key) === 0).map(([key]) => key);
+  const result: string[] = [];
+  while (queue.length) {
+    queue.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+    const key = queue.shift()!;
+    result.push(key);
+    for (const next of outgoing.get(key) ?? []) {
+      incoming.set(next, (incoming.get(next) ?? 1) - 1);
+      if (incoming.get(next) === 0) queue.push(next);
+    }
+  }
+  for (const [key] of entries) if (!result.includes(key)) result.push(key);
+  return result.map(key => [key, nodes[key]]);
 }
 
-function runChatSessionId(run: any): string | null {
-  return run?.chat?.sessionId
-    ?? run?.meta?.chatSessionId
-    ?? null;
+function routeLanes(workflow: any): Array<{ label: string; path: string; note: string }> {
+  const nodes = workflowNodes(workflow);
+  const edges = normalizedEdges(workflow);
+  const values = Array.from(new Set(edges.flatMap(edge =>
+    Array.from((edge.condition ?? '').matchAll(/(?:==|===)\s*['"]([^'"]+)['"]/g)).map(match => match[1]),
+  ))).filter(value => !['approve', 'reject', 'request_changes', 'pass', 'fail', 'true', 'false'].includes(value));
+  return values.slice(0, 6).map(value => {
+    const relevant = edges.filter(edge => !edge.condition || edge.condition.includes(`'${value}'`) || edge.condition.includes(`"${value}"`));
+    const next = new Map<string, string[]>();
+    for (const edge of relevant) next.set(edge.from, [...(next.get(edge.from) ?? []), edge.to]);
+    const starts = next.get('START') ?? orderedNodeEntries(workflow).slice(0, 1).map(([key]) => key);
+    const seen = new Set<string>();
+    const queue = [...starts];
+    while (queue.length && seen.size < Object.keys(nodes).length) {
+      const key = queue.shift()!;
+      if (key === 'END' || seen.has(key) || !nodes[key]) continue;
+      seen.add(key);
+      queue.push(...(next.get(key) ?? []));
+    }
+    const ordered = orderedNodeEntries(workflow).map(([key]) => key);
+    const path = ordered.filter(key => seen.has(key)).map(key => nodeTitle(key, nodes[key]).toLowerCase()).join(' → ');
+    const skipped = ordered.filter(key => !seen.has(key));
+    return { label: value, path: path || 'evaluated at runtime', note: skipped.length ? `skips ${skipped.slice(0, 4).map(key => nodeTitle(key, nodes[key]).toLowerCase()).join(', ')}${skipped.length > 4 ? ', …' : ''}` : 'every node runs' };
+  });
 }
 
 function runId(run: any): string {
   return String(run?.id ?? run?._id ?? '');
 }
 
-function runTitle(run: any, fallback: string): string {
-  return run?.workflowName
-    ?? run?.name
-    ?? fallback;
+function runStatus(run: any): string {
+  return String(run?.status ?? 'queued').toLowerCase();
 }
 
-function runStartedAt(run: any): string {
-  const value = run?.startedAt ?? run?.createdAt;
-  if (!value) return 'Not started';
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return 'Not started';
-  return date.toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
+function runSummary(run: any, fallback: string): string {
+  return String(
+    run?.title
+    ?? run?.summary
+    ?? run?.input?.title
+    ?? run?.input?.task
+    ?? run?.meta?.title
+    ?? run?.workflowName
+    ?? fallback,
+  );
+}
+
+function runSource(run: any): string {
+  if (run?.chat?.sessionId ?? run?.meta?.chatSessionId) return 'chat';
+  if (run?.linearIssueId ?? run?.meta?.linearIssueId) return 'linear';
+  return String(run?.source ?? run?.meta?.source ?? 'manual');
+}
+
+function runTokens(run: any): string {
+  const tokens = Number(
+    run?.tokenUsage?.totalTokens
+    ?? run?.usage?.totalTokens
+    ?? run?.tokens
+    ?? 0,
+  );
+  if (!Number.isFinite(tokens) || tokens <= 0) return '—';
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tok`;
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k tok` : `${tokens} tok`;
+}
+
+function runDate(run: any): string {
+  const date = new Date(run?.startedAt ?? run?.createdAt ?? 0);
+  if (!Number.isFinite(date.getTime()) || date.getTime() === 0) return '—';
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function nodeActor(node: any): string {
+  return String(node?.agent ?? node?.agentName ?? node?.config?.agent ?? (node?.type === 'human' ? 'you' : node?.provider ?? 'engine'));
+}
+
+function nodeModel(node: any): string | null {
+  const model = node?.model ?? node?.runtime_model ?? node?.config?.model ?? node?.config?.runtime_model;
+  return model ? String(model) : null;
+}
+
+function nodeTitle(key: string, node: any): string {
+  return String(node?.label ?? node?.title ?? node?.name ?? key)
+    .replace(/[-_]+/g, ' ')
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function nodeType(node: any): 'agent' | 'human' | 'cond' | 'code' {
+  const type = String(node?.type ?? 'agent').toLowerCase();
+  if (type === 'human') return 'human';
+  if (type === 'condition' || type === 'conditional' || type === 'branch') return 'cond';
+  if (type === 'code' || type === 'script') return 'code';
+  return 'agent';
+}
+
+function WorkflowVisual({ workflow, id }: { workflow: any; id: string }) {
+  const entries = orderedNodeEntries(workflow);
+  const nodes = workflowNodes(workflow);
+  const edges = normalizedEdges(workflow).filter(edge => nodes[edge.from] && nodes[edge.to]);
+  const dense = entries.length > 10;
+  const cardWidth = 220;
+  const cardHeight = 52;
+  const colGap = dense ? 70 : 54;
+  const rowGap = 62;
+  const rank = new Map<string, number>();
+  const visiting = new Set<string>();
+  const incoming = new Map(entries.map(([key]) => [key, edges.filter(edge => edge.to === key).map(edge => edge.from)]));
+  const getRank = (key: string): number => {
+    if (rank.has(key)) return rank.get(key)!;
+    if (visiting.has(key)) return 0;
+    visiting.add(key);
+    const predecessors = incoming.get(key) ?? [];
+    const value = predecessors.length ? Math.max(...predecessors.map(getRank)) + 1 : 0;
+    visiting.delete(key);
+    rank.set(key, Math.min(value, entries.length));
+    return rank.get(key)!;
+  };
+  entries.forEach(([key]) => getRank(key));
+  const layers = new Map<number, string[]>();
+  entries.forEach(([key]) => layers.set(rank.get(key) ?? 0, [...(layers.get(rank.get(key) ?? 0) ?? []), key]));
+  const renderLayers = Array.from(layers.entries()).sort(([a], [b]) => a - b).flatMap(([layerRank, keys]) => {
+    const maxPerRow = dense ? 3 : Math.max(1, keys.length);
+    return Array.from({ length: Math.ceil(keys.length / maxPerRow) }, (_, index) => [layerRank, keys.slice(index * maxPerRow, (index + 1) * maxPerRow)] as const);
   });
+  const maxCols = Math.max(1, ...renderLayers.map(([, layer]) => layer.length));
+  const width = dense ? 856 : Math.max(640, 48 * 2 + maxCols * cardWidth + (maxCols - 1) * colGap);
+  const height = Math.max(160, 30 * 2 + renderLayers.length * cardHeight + (renderLayers.length - 1) * rowGap);
+  const markerId = `v8-flow-arrow-${id.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const positions = new Map<string, { x: number; y: number; row: number }>();
+  renderLayers.forEach(([, keys], row) => {
+    const rowWidth = keys.length * cardWidth + (keys.length - 1) * colGap;
+    keys.forEach((key, column) => positions.set(key, { x: (width - rowWidth) / 2 + column * (cardWidth + colGap), y: 30 + row * (cardHeight + rowGap), row }));
+  });
+
+  return (
+    <div className={`v8-workflow-visual ${dense ? 'ensemble' : ''}`}>
+      {entries.length === 0 ? <div className="v8-filter-empty">No nodes are defined.</div> : (
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${workflowName(workflow)} flow`}>
+          <defs>
+            <marker id={markerId} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+              <path className="v8-flow-arrow" d="M0 0 L8 4 L0 8 z" />
+            </marker>
+          </defs>
+          {edges.map((edge, index) => {
+            const from = positions.get(edge.from)!;
+            const to = positions.get(edge.to)!;
+            const down = to.y > from.y;
+            const startX = from.x + cardWidth / 2;
+            const startY = down ? from.y + cardHeight : from.y + cardHeight / 2;
+            const endX = to.x + cardWidth / 2;
+            const endY = down ? to.y - 4 : to.y + cardHeight / 2;
+            const isSkipPath = Math.abs(to.row - from.row) > 1;
+            if (isSkipPath) {
+              const useRight = index % 2 === 0;
+              const gutterX = useRight ? width - 38 - (index % 3) * 10 : 38 + (index % 3) * 10;
+              const branchStartX = useRight ? from.x + cardWidth : from.x;
+              const branchEndX = useRight ? to.x + cardWidth + 4 : to.x - 4;
+              const branchStartY = from.y + cardHeight / 2;
+              const branchEndY = to.y + cardHeight / 2;
+              const label = conditionLabel(edge.condition);
+              const labelX = useRight ? gutterX - 8 : gutterX + 8;
+              const labelY = branchStartY + (branchEndY - branchStartY) / 2;
+              return <g key={`${edge.from}-${edge.to}-${index}`}><path className="v8-flow-edge conditional branch" d={`M${branchStartX} ${branchStartY} H${gutterX} V${branchEndY} H${branchEndX}`} markerEnd={`url(#${markerId})`} />{label && <text className={`v8-flow-edge-label ${useRight ? 'right' : 'left'}`} x={labelX} y={labelY}>{label}</text>}</g>;
+            }
+            const midY = down ? startY + (endY - startY) / 2 : startY - 18 - (index % 3) * 9;
+            const d = `M${startX} ${startY} V${midY} H${endX} V${endY}`;
+            const label = conditionLabel(edge.condition);
+            return <g key={`${edge.from}-${edge.to}-${index}`}><path className={`v8-flow-edge ${edge.condition ? 'conditional' : ''}`} d={d} markerEnd={`url(#${markerId})`} />{label && <text className="v8-flow-edge-label" x={(startX + endX) / 2 + 4} y={midY - 5}>{label}</text>}</g>;
+          })}
+          {entries.map(([key, node], index) => {
+            const position = positions.get(key)!;
+            const type = nodeType(node);
+            return (
+              <g key={key} className={`v8-flow-node ${type}`} transform={`translate(${position.x},${position.y})`}>
+                <rect width={cardWidth} height={cardHeight} rx="10" />
+                <text className="kind" x="12" y="15">{type === 'cond' ? 'condition' : type}</text>
+                <text className="title" x="12" y="31">{nodeTitle(key, node).slice(0, 29)}</text>
+                <text className="actor" x="12" y="44">{nodeActor(node).slice(0, 34)}</text>
+              </g>
+            );
+          })}
+        </svg>
+      )}
+      <div className="v8-workflow-legend">
+        <span><i className="agent" />agent</span><span><i className="human" />human gate</span>
+        <span><i className="cond" />condition</span><span><i className="code" />code / conditional path</span>
+      </div>
+    </div>
+  );
 }
 
 export default function WorkflowDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id = '' } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('tab');
-  const tab: WorkflowTab = requestedTab === 'description' || requestedTab === 'edit' ? requestedTab : 'runs';
-
+  const tab: WorkflowTab = requestedTab === 'visual' || requestedTab === 'runs' || requestedTab === 'edit'
+    ? requestedTab
+    : 'description';
   const [workflow, setWorkflow] = useState<any | null>(null);
   const [runs, setRuns] = useState<any[]>([]);
   const [runsTotal, setRunsTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [runsLoading, setRunsLoading] = useState(true);
   const [runDialogOpen, setRunDialogOpen] = useState(false);
-  const [allUsers, setAllUsers] = useState<AuthUser[]>([]);
-  const [selectedUserId, setSelectedUserId] = useState('all');
-  const [chatFilter, setChatFilter] = useState<ChatFilter>('all');
-  const snapshots = useExecutionStore((state) => state.entities);
+  const snapshots = useExecutionStore(state => state.entities);
 
   const loadWorkflow = useCallback(async () => {
     if (!id) return;
     setLoading(true);
-    try {
-      setWorkflow(await workflowsApi.get(id));
-    } finally {
-      setLoading(false);
-    }
+    try { setWorkflow(await workflowsApi.get(id)); setLoadError(null); }
+    catch (error) { setWorkflow(null); setLoadError(error instanceof Error ? error.message : 'Failed to load workflow'); }
+    finally { setLoading(false); }
   }, [id]);
 
-  const loadRuns = useCallback(async (wf = workflow) => {
+  const loadRuns = useCallback(async () => {
     if (!id) return;
     setRunsLoading(true);
     try {
-      const result = await executionsApi.listPaged({
-        workflowId: id,
-        type: 'workflow',
-        limit: 100,
-        offset: 0,
-        includeTotal: true,
-        enrich: true,
-      });
-
+      const result = await executionsApi.listPaged({ workflowId: id, type: 'workflow', limit: 100, offset: 0, includeTotal: true, enrich: true });
       setRuns(result.items);
-      useExecutionStore.getState().ingestMany(
-        result.items.map((item) => snapshotFromExecution(item)).filter((item): item is NonNullable<typeof item> => Boolean(item)),
-      );
       setRunsTotal(result.total ?? result.items.length);
-    } finally {
-      setRunsLoading(false);
-    }
-  }, [id, workflow]);
+      useExecutionStore.getState().ingestMany(result.items.map(item => snapshotFromExecution(item)).filter(Boolean) as any[]);
+    } finally { setRunsLoading(false); }
+  }, [id]);
 
   useEffect(() => { void loadWorkflow(); }, [loadWorkflow]);
-  useEffect(() => {
-    usersApi.list().then(setAllUsers).catch(() => setAllUsers([]));
-  }, []);
-  useEffect(() => {
-    if (workflow) void loadRuns(workflow);
-  }, [workflow, loadRuns]);
+  useEffect(() => { void loadRuns(); }, [loadRuns]);
 
+  const liveRuns = useMemo(() => runs.map(run => mergeExecutionSnapshot(run, snapshots[runId(run)])), [runs, snapshots]);
   const nodes = useMemo(() => workflowNodes(workflow), [workflow]);
   const edges = useMemo(() => workflowEdges(workflow), [workflow]);
   const input = useMemo(() => workflowInput(workflow), [workflow]);
-  const inputKeys = Object.keys(input);
+  const nodeEntries = orderedNodeEntries(workflow);
+  const inputs = Object.keys(input);
+  const agents = Array.from(new Set(nodeEntries.filter(([, node]) => nodeType(node) === 'agent').map(([, node]) => nodeActor(node))));
+  const humanGates = nodeEntries.filter(([, node]) => nodeType(node) === 'human').length;
   const name = workflow ? workflowName(workflow) : 'Workflow';
   const description = workflow ? workflowDescription(workflow) : '';
-  const isValid = Boolean(workflow?.validation?.valid);
-  const isEditing = tab === 'edit';
-  const liveRuns = useMemo(
-    () => runs.map((run) => mergeExecutionSnapshot(run, snapshots[runId(run)])),
-    [runs, snapshots],
-  );
-  const filteredRuns = useMemo(() => {
-    return liveRuns.filter((run) => {
-      const userId = runUserId(run);
-      const matchesUser = selectedUserId === 'all'
-        || !userId
-        || userId === selectedUserId;
-      const linkedToChat = runHasLinkedChat(run);
-      const matchesChat = chatFilter === 'all'
-        || (chatFilter === 'linked' && linkedToChat)
-        || (chatFilter === 'unlinked' && !linkedToChat);
-      return matchesUser && matchesChat;
-    });
-  }, [liveRuns, selectedUserId, chatFilter]);
-  const hasRunFilters = selectedUserId !== 'all' || chatFilter !== 'all';
+  const isValid = workflow?.validation?.valid !== false;
+  const isEnsemble = nodeEntries.length > 10 || /ensemble|multi-model/i.test(name);
+  const isReviewedGrowthEnsemble = name === 'growth-strategy-reviewed-ensemble';
+  const models = Array.from(new Set(nodeEntries.map(([, node]) => nodeModel(node)).filter((model): model is string => Boolean(model))));
+  const lanes = routeLanes(workflow);
+  const ensembleStages = isEnsemble
+    ? [
+      { title: 'Stage 1 — ground it in research', nodes: nodeEntries.slice(0, Math.ceil(nodeEntries.length / 3)) },
+      { title: 'Stage 2 — parallel drafts and cross-model reviews', nodes: nodeEntries.slice(Math.ceil(nodeEntries.length / 3), Math.ceil(nodeEntries.length * 2 / 3)) },
+      { title: 'Stage 3 — synthesize and approve', nodes: nodeEntries.slice(Math.ceil(nodeEntries.length * 2 / 3)) },
+    ]
+    : [];
 
   function setTab(next: WorkflowTab) {
     const params = new URLSearchParams(searchParams);
-    if (next === 'runs') params.delete('tab');
-    else params.set('tab', next);
+    if (next === 'description') params.delete('tab'); else params.set('tab', next);
     setSearchParams(params);
   }
 
-  // Edit mode is a full-bleed surface: the embedded builder (which carries its
-  // own toolbar + back button) fills the entire content area with no
-  // detail-page chrome or padding around it. Returned before the loading guard
-  // so the builder — which fetches its own workflow by id — shows immediately.
-  if (isEditing) {
-    return (
-      <div className="h-full w-full overflow-hidden">
-        <WorkflowBuilderPage embedded onBack={() => setTab('runs')} />
-      </div>
-    );
+  async function downloadYaml() {
+    const yaml = await workflowsApi.exportYaml(id);
+    const url = URL.createObjectURL(new Blob([yaml], { type: 'text/yaml' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${name}.yaml`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
-  if (loading) {
-    return (
-      <div className="page-shell">
-        <div className="h-8 w-52 rounded bg-app-muted animate-pulse" />
-        <div className="card mt-4 h-72 animate-pulse bg-app-muted" />
-      </div>
-    );
-  }
+  if (tab === 'edit') return <div className="h-full w-full overflow-hidden"><WorkflowBuilderPage embedded onBack={() => setTab('description')} /></div>;
 
-  if (!workflow) {
-    return (
-      <div className="page-shell">
-        <button className="btn btn-secondary btn-sm" onClick={() => navigate('/workflows')}>
-          <ArrowLeft className="w-3 h-3" /> Back
-        </button>
-        <div className="card mt-4 p-6 text-theme-muted">Workflow not found.</div>
-      </div>
-    );
-  }
+  if (loading) return <div className="v8-page"><div className="v8-page__wrap v8-workflow-detail__loading">Loading workflow…</div></div>;
+  if (!workflow) return (
+    <div className="v8-page"><div className="v8-page__wrap"><Link className="v8-workflow-detail__crumb" to="/workflows"><DetailIcon name="back" />Workflows</Link><div className="v8-empty v8-empty--visible"><span className="glyph"><Inbox /></span><h2>{loadError ? 'Couldn’t load workflow' : 'Workflow not found'}</h2>{loadError && <p>{loadError}</p>}<button className="v8-btn v8-btn--ghost" type="button" onClick={() => void loadWorkflow()}>Try again</button></div></div></div>
+  );
 
   return (
-    <div className="w-full px-8 py-8">
-      <div className="page-crumb">
-        <Link to="/workflows">Workflows</Link>
-        <span className="text-theme-subtle">/</span>
-        <span>{name}</span>
-      </div>
-
-      <div className="page-head">
-        <div className="min-w-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <h1 className="page-title truncate">{name}</h1>
-            <span className={`badge ${isValid ? 'badge-ok' : 'badge-err'}`}>
-              <Shield className="w-3 h-3" /> {isValid ? 'valid' : 'invalid'}
-            </span>
+    <div className={`v8-page v8-workflow-detail ${isEnsemble ? 'ensemble' : ''}`} data-screen-label="workflow-detail">
+      <div className="v8-page__wrap">
+        <Link className="v8-workflow-detail__crumb" to="/workflows"><DetailIcon name="back" />Workflows</Link>
+        <header className="v8-pagehead v8-workflow-detail__head">
+          <div>
+            <h1>{name} <span className={isValid ? 'valid' : 'invalid'}><Check />{isValid ? 'valid' : 'invalid'}</span></h1>
+            <p>{nodeEntries.length} nodes · {edges.length} edges · v{workflow.version ?? 1} · {runsTotal} runs{isEnsemble && humanGates === 1 ? ' · one human gate' : ''}</p>
           </div>
-          <p className="text-[13px] text-theme-muted font-body mt-1">
-            {Object.keys(nodes).length} nodes · {edges.length} edges · v{workflow.version ?? 1}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <IconTooltipButton
-            label="Refresh workflow"
-            onClick={() => { void loadWorkflow(); void loadRuns(); }}
-            className="h-9 w-9 rounded-md border border-app bg-app-card"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </IconTooltipButton>
-          <IconTooltipButton
-            label="Run workflow"
-            tone="accent"
-            onClick={() => setRunDialogOpen(true)}
-            disabled={!isValid}
-            className="h-9 w-9 rounded-md border border-app bg-app-card"
-          >
-            <Play className="h-3.5 w-3.5" />
-          </IconTooltipButton>
-          <IconTooltipButton
-            label={isEditing ? 'View runs' : 'Edit workflow'}
-            onClick={() => setTab(isEditing ? 'runs' : 'edit')}
-            className="h-9 w-9 rounded-md border border-app bg-app-card"
-          >
-            {isEditing ? <ArrowLeft className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
-          </IconTooltipButton>
-        </div>
-      </div>
+          <button className="v8-icon-chip" type="button" aria-label="Refresh" onClick={() => { void loadWorkflow(); void loadRuns(); }}><DetailIcon name="refresh" /></button>
+          <button className="v8-btn v8-btn--ghost" type="button" onClick={() => void downloadYaml()}>YAML</button>
+          <button className="v8-btn v8-btn--ghost" type="button" onClick={() => setTab('edit')}>Edit</button>
+          <button className="v8-btn v8-btn--ink" type="button" disabled={!isValid} onClick={() => setRunDialogOpen(true)}>Run</button>
+        </header>
 
-      {!isEditing && (
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-          <nav className="topfilter-tabs">
-            {[
-              { key: 'runs', label: 'runs', count: runsTotal },
-              { key: 'description', label: 'description', count: null },
-            ].map(item => (
-              <button
-                key={item.key}
-                type="button"
-                className={`tft ${tab === item.key ? 'active' : ''}`}
-                onClick={() => setTab(item.key as WorkflowTab)}
-              >
-                {item.label}
-                {item.key === 'runs' && hasRunFilters ? (
-                  <span className="tft-ct">{filteredRuns.length}/{runsTotal}</span>
-                ) : item.count != null && <span className="tft-ct">{item.count}</span>}
-              </button>
-            ))}
-          </nav>
-          {tab === 'runs' && (
-            <div className="flex flex-wrap items-center gap-2">
-              <Select
-                value={selectedUserId}
-                onChange={setSelectedUserId}
-                className="min-w-[190px]"
-                searchable={allUsers.length > 6}
-                options={[
-                  { value: 'all', label: 'All users' },
-                  ...allUsers.map((user) => ({
-                    value: user.id,
-                    label: user.name || user.email,
-                    sublabel: user.email,
-                  })),
-                ]}
-              />
-              <Select
-                value={chatFilter}
-                onChange={(value) => setChatFilter(value as ChatFilter)}
-                className="min-w-[150px]"
-                searchable={false}
-                options={[
-                  { value: 'all', label: 'All chat links' },
-                  { value: 'linked', label: 'Linked to chat' },
-                  { value: 'unlinked', label: 'Not linked to chat' },
-                ]}
-              />
-              {hasRunFilters && (
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm !h-8"
-                  onClick={() => {
-                    setSelectedUserId('all');
-                    setChatFilter('all');
-                  }}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+        <nav className="v8-tabs v8-workflow-detail__tabs">
+          <button type="button" className={tab === 'description' ? 'on' : ''} onClick={() => setTab('description')}>Description</button>
+          <button type="button" className={tab === 'visual' ? 'on' : ''} onClick={() => setTab('visual')}>Visual</button>
+          <button type="button" className={tab === 'runs' ? 'on' : ''} onClick={() => setTab('runs')}>Runs <span>{runsTotal}</span></button>
+        </nav>
 
-      {tab === 'runs' && (
-        <div className="mt-4">
-          <div className="overflow-hidden rounded-md border border-app bg-app-card">
-            <div className="flex items-center justify-between gap-4 border-b border-app bg-app-muted/25 px-4 py-3">
-              <div>
-                <div className="text-[13px] font-semibold text-theme-primary">Workflow runs</div>
-                <div className="mt-0.5 font-mono text-[11px] text-theme-muted">
-                  {filteredRuns.length} shown{hasRunFilters ? ` · ${runsTotal} total` : ''}
-                </div>
-              </div>
-              <IconTooltipButton
-                label="Refresh workflow runs"
-                onClick={() => { void loadRuns(); }}
-                className="h-8 w-8 rounded-md border border-app"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${runsLoading ? 'animate-spin' : ''}`} />
-              </IconTooltipButton>
-            </div>
-            {runsLoading ? (
-              Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="border-b border-app px-4 py-3 last:border-b-0">
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 animate-pulse rounded-md bg-app-muted" />
-                    <div className="min-w-0 flex-1">
-                      <div className="h-4 w-56 animate-pulse rounded-md bg-app-muted" />
-                      <div className="mt-2 h-3 w-72 animate-pulse rounded-md bg-app-muted" />
-                    </div>
-                    <div className="h-7 w-24 animate-pulse rounded-md bg-app-muted" />
+        {tab === 'description' && (
+          <div className="v8-workflow-detail__description">
+            <section className="v8-workflow-detail__copy">
+              {isReviewedGrowthEnsemble ? (
+                <>
+                  <p><b>What it does:</b> turns one growth objective into a single reviewed strategy — by making three models compete on the same brief and letting a different model criticize each draft. You approve exactly once, at the end.</p>
+                  <div className="v8-workflow-stage-copy">
+                    <h2>Stage 1 — ground it in research</h2>
+                    <p>It loads your growth briefs from Drive, runs live market research (<b>market-intelligence-analyst</b>), and fact-checks it (<b>marketing-analyst</b>). At most one revision — must-fix items only.</p>
                   </div>
-                </div>
-              ))
-            ) : runs.length === 0 ? (
-              <div className="px-5 py-12 text-center">
-                <Play className="mx-auto h-8 w-8 text-theme-subtle" />
-                <div className="mt-4 text-[15px] font-semibold text-theme-primary">No runs yet</div>
-                <p className="mt-1 text-[13px] text-theme-muted">Run this workflow to see execution history here.</p>
-              </div>
-            ) : filteredRuns.length === 0 ? (
-              <div className="p-10 text-center text-[13px] text-theme-muted">No runs match these filters.</div>
-            ) : filteredRuns.map((run) => (
-              <div
-                key={runId(run)}
-                role="button"
-                tabIndex={0}
-                onClick={() => navigate(`/executions/${runId(run)}`)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    navigate(`/executions/${runId(run)}`);
-                  }
-                }}
-                className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_120px_132px_112px_104px] items-center gap-4 border-b border-app px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-app-muted/35"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-app bg-app text-theme-muted">
-                    <Play className="h-3.5 w-3.5" />
+                  <div className="v8-workflow-stage-copy">
+                    <h2>Stage 2 — three drafts, cross-model reviews</h2>
+                    <p>Three <b>strategy-brainstormers</b> draft the identical brief in parallel on <span className="v8-provider-dot claude">●</span> Opus 4.8, <span className="v8-provider-dot openai">●</span> GPT-5.5, and <span className="v8-provider-dot glm">●</span> GLM-5.2. Each draft is reviewed by a <i>different</i> model than wrote it — GLM judges the Opus draft, Claude judges GPT, GPT judges GLM — so no model grades its own homework. Each branch gets at most one revision, then marks itself complete.</p>
                   </div>
-                  <div className="min-w-0">
-                    <div className="truncate text-[13.5px] font-semibold text-theme-primary">{runTitle(run, name)}</div>
-                    <div className="mt-1 flex min-w-0 items-center gap-2">
-                      <span className="truncate font-mono text-[11px] text-theme-muted" title={runUserLabel(run)}>{runUserLabel(run)}</span>
-                      {runChatSessionId(run) && (
-                        <>
-                          <span className="text-theme-subtle">·</span>
-                          <span className="inline-flex items-center gap-1 font-mono text-[11px] text-accent-green">
-                            <MessageSquare className="h-3 w-3" /> chat
-                          </span>
-                        </>
-                      )}
-                    </div>
+                  <div className="v8-workflow-stage-copy">
+                    <h2>Stage 3 — synthesize &amp; approve</h2>
+                    <p>A consistency check audits the surviving drafts, the <b>marketing-lead</b> merges them into one strategy, the <b>ceo</b> agent gives an executive review, and then it waits for <b>you</b>. &quot;Request changes&quot; loops back to the marketing-lead without re-triggering the AI critics.</p>
                   </div>
-                </div>
-                <span
-                  className="min-w-0 truncate font-mono text-[11px] text-theme-secondary"
-                  title={runUserId(run) ? `${runUserLabel(run)} · ${runUserId(run)}` : runUserLabel(run)}
-                >
-                  {runStartedAt(run)}
-                </span>
-                <span><StatusBadge status={run.status} /></span>
-                <span className="font-mono text-[11px] text-theme-muted">{shortDuration(run.durationMs)}</span>
-                <div className="flex items-center justify-end gap-1.5">
-                  {runChatSessionId(run) ? (
-                    <IconTooltipButton
-                      label={run.chat?.title ? `Open chat: ${run.chat.title}` : 'Open linked chat'}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        const sessionId = runChatSessionId(run);
-                        if (sessionId) navigate(`/chat/${sessionId}`);
-                      }}
-                      className="h-8 w-8 rounded-md border border-app"
-                    >
-                      <MessageSquare className="h-3.5 w-3.5" />
-                    </IconTooltipButton>
-                  ) : null}
-                  <span className="flex h-8 w-8 items-center justify-center rounded-md text-theme-muted">
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {tab === 'description' && (
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 mt-4">
-          <section className="card p-5">
-            <div className="overline mb-2">Description</div>
-            <p className="text-[14px] text-theme-primary font-body leading-relaxed whitespace-pre-wrap">
-              {description || 'No description provided.'}
-            </p>
-          </section>
-          <aside className="card p-5 space-y-5">
-            <div>
-              <div className="overline mb-2">Structure</div>
-              <div className="flex flex-col gap-2 text-[12px] text-theme-secondary">
-                <span className="flex items-center gap-2"><Layers className="w-3 h-3" /> {Object.keys(nodes).length} nodes</span>
-                <span className="flex items-center gap-2"><GitBranch className="w-3 h-3" /> {edges.length} edges</span>
-                <span className="flex items-center gap-2"><FileText className="w-3 h-3" /> {inputKeys.length} inputs</span>
-              </div>
-            </div>
-            <div>
-              <div className="overline mb-2">Inputs</div>
-              {inputKeys.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {inputKeys.map(key => (
-                    <span key={key} className="badge">
-                      {key}{input[key]?.required === true ? ' *' : ''}
-                    </span>
-                  ))}
-                </div>
+                  <div className="v8-workflow-stage-copy">
+                    <h2>If things fail</h2>
+                    <p>Every draft branch tolerates failure — a crashed or timed-out model never blocks the others. The guard needs only <b>one usable draft</b> to proceed; if all three die, the run ends cleanly instead of synthesizing from nothing. Unresolved review feedback is carried forward into synthesis rather than looping forever.</p>
+                  </div>
+                </>
               ) : (
-                <span className="text-[12px] text-theme-muted">No inputs defined.</span>
+                <p><b>What it does:</b> {description || 'No description provided.'}</p>
               )}
-            </div>
-          </aside>
-        </div>
-      )}
+              {!isReviewedGrowthEnsemble && (isEnsemble ? ensembleStages.map(stage => (
+                <div className="v8-workflow-stage-copy" key={stage.title}>
+                  <h2>{stage.title}</h2>
+                  <p>{stage.nodes.map(([key, node]) => `${nodeTitle(key, node)} (${nodeActor(node)}${nodeModel(node) ? ` · ${nodeModel(node)}` : ''})`).join(' · ')}</p>
+                </div>
+              )) : nodeEntries.length > 0 && <><h2>The flow</h2><ol>{nodeEntries.map(([key, node]) => <li key={key}><b>{nodeActor(node)}</b> — {nodeTitle(key, node)}</li>)}</ol></>)}
+              {!isEnsemble && lanes.length > 0 && <><h2>Routing by condition</h2>{lanes.map(lane => <div className="v8-workflow-lane" key={lane.label}><span><i />{lane.label}</span><b>{lane.path}</b><em>{lane.note}</em></div>)}</>}
+            </section>
+            <aside className="v8-workflow-detail__aside">
+              <section><h3>structure</h3><dl><div><dt>nodes</dt><dd>{nodeEntries.length}</dd></div><div><dt>edges</dt><dd>{edges.length}</dd></div>{!isEnsemble && <div><dt>inputs</dt><dd>{inputs.length}</dd></div>}<div><dt>human gates</dt><dd>{humanGates}</dd></div><div><dt>version</dt><dd>v{workflow.version ?? 1}</dd></div>{isEnsemble && <><div><dt>runs</dt><dd>{runsTotal}</dd></div><div><dt>parallel branches</dt><dd>3</dd></div></>}</dl></section>
+              {isEnsemble && <section><h3>models</h3>{isReviewedGrowthEnsemble ? (
+                <>
+                  <p className="model model-0">claude-opus-4.8 · draft + synth</p>
+                  <p className="model model-1">gpt-5.5 · draft + review</p>
+                  <p className="model model-2">glm-5.2 · draft + review</p>
+                </>
+              ) : models.length > 0 ? models.map((model, index) => <p className={`model model-${index % 3}`} key={model}>{model}</p>) : <p className="muted">runtime defaults</p>}</section>}
+              <section><h3>inputs</h3>{inputs.length > 0 ? inputs.map(key => <p key={key}>{key}{input[key]?.required === true ? ' *' : ''}</p>) : <p className="muted">none</p>}</section>
+              {isReviewedGrowthEnsemble && <section><h3>limits</h3><dl><div><dt>draft timeout</dt><dd>8 min</dd></div><div><dt>review timeout</dt><dd>5 min</dd></div><div><dt>revisions / review</dt><dd>≤ 1</dd></div></dl></section>}
+              {!isEnsemble && <section><h3>agents · {agents.length}</h3>{agents.length > 0 ? agents.map(agent => <p key={agent}>{agent}</p>) : <p className="muted">none</p>}</section>}
+              {!isEnsemble && <section><h3>recent runs</h3>{liveRuns.slice(0, 3).map(run => <button key={runId(run)} type="button" onClick={() => navigate(`/executions/${runId(run)}`)}>{runId(run).slice(0, 12)} · {runStatus(run)}</button>)}{!runsLoading && liveRuns.length === 0 && <p className="muted">none yet</p>}</section>}
+            </aside>
+          </div>
+        )}
 
-      {runDialogOpen && (
-        <WorkflowRunDialog
-          workflow={workflow}
-          onClose={() => setRunDialogOpen(false)}
-          onStarted={(exec) => {
-            setRunDialogOpen(false);
-            navigate(`/executions/${exec.id}`);
-          }}
-        />
-      )}
+        {tab === 'visual' && <WorkflowVisual workflow={workflow} id={id} />}
+
+        {tab === 'runs' && (
+          <div className="v8-workflow-runs">
+            {runsLoading ? <div className="v8-filter-empty">Loading runs…</div> : liveRuns.length > 0 ? liveRuns.map(run => {
+              const status = runStatus(run);
+              return <button className={`v8-workflow-run ${status}`} key={runId(run)} type="button" onClick={() => navigate(`/executions/${runId(run)}`)}><i /><code>{runId(run).slice(0, 12)}</code><span className="status">{status}</span><span className="summary">{runSummary(run, name)}</span><span className="source">{runSource(run)}</span><span className="tokens">{runTokens(run)}</span><time>{runDate(run)}</time></button>;
+            }) : <div className="v8-empty"><span className="glyph"><Inbox /></span><h2>No runs yet</h2><p>Run this workflow and every execution lands here with tokens, cost, and checkpoints.</p><button className="v8-btn v8-btn--ink" type="button" onClick={() => setRunDialogOpen(true)}><Play />Run workflow</button></div>}
+            <p className="v8-page-foot">{liveRuns.length} most recent of {runsTotal} · from live executions</p>
+          </div>
+        )}
+      </div>
+
+      {runDialogOpen && <WorkflowRunDialog workflow={workflow} onClose={() => setRunDialogOpen(false)} onStarted={execution => { setRunDialogOpen(false); navigate(`/executions/${execution.id}`); }} />}
     </div>
   );
 }

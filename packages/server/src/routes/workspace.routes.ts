@@ -10,6 +10,15 @@ function p(req: Request, name: string): string {
   return Array.isArray(v) ? v[0] : v;
 }
 
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'svg'];
+const VIDEO_MIME_TYPES: Record<string, string> = {
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  m4v: 'video/x-m4v',
+  ogv: 'video/ogg',
+};
+
 export function workspaceRoutes(db: Db): Router {
   const router = Router();
   const manager = new WorkspaceManager(db);
@@ -156,14 +165,14 @@ export function workspaceRoutes(db: Db): Router {
 
       // Check if file is an image based on extension (case-insensitive)
       const ext = normalizedPath.split('.').pop()?.toLowerCase() ?? '';
-      const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'svg'];
-      const isImage = imageExtensions.includes(ext);
+      const isImage = IMAGE_EXTENSIONS.includes(ext);
+      const isVideo = Boolean(VIDEO_MIME_TYPES[ext]);
 
-      if (isImage) {
-        // File size limit for images: 50MB to prevent memory exhaustion
-        const maxImageSize = 50 * 1024 * 1024; // 50MB in bytes
-        if (stats.size > maxImageSize) {
-          return res.status(413).json({ error: 'Image file too large (max 50MB)' });
+      if (isImage || isVideo) {
+        // Base64 responses are intentionally bounded to prevent memory exhaustion.
+        const maxMediaSize = (isVideo ? 100 : 50) * 1024 * 1024;
+        if (stats.size > maxMediaSize) {
+          return res.status(413).json({ error: `${isVideo ? 'Video' : 'Image'} file too large (max ${isVideo ? 100 : 50}MB)` });
         }
 
         const buffer = readFileSync(fullPath);
@@ -171,8 +180,11 @@ export function workspaceRoutes(db: Db): Router {
         res.json({
           path: rawFilePath,
           content: base64,
-          isImage: true,
-          mimeType: `image/${ext === 'jpg' ? 'jpeg' : ext === 'svg' ? 'svg+xml' : ext}`
+          isImage,
+          isVideo,
+          mimeType: isVideo
+            ? VIDEO_MIME_TYPES[ext]
+            : `image/${ext === 'jpg' ? 'jpeg' : ext === 'svg' ? 'svg+xml' : ext}`
         });
       } else {
         // File size limit for text files: 10MB to prevent memory issues

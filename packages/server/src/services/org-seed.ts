@@ -72,7 +72,7 @@ interface AgentSeed {
   spawnTargets: string[];
   system: string;
   /** Default reasoning effort. See docs/plans/agent-reasoning-assignments.md. */
-  reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'max';
+  reasoningEffort?: 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
   /** Default plan-mode flag. Claude-only — pure planners/researchers should set this true. */
   planMode?: boolean;
   /**
@@ -3240,7 +3240,7 @@ A workflow is a YAML document with:
 Per-node agentOverrides (optional, on AGENT nodes only):
 - provider: required whenever model is set. Must be the provider that owns the model, e.g. "claude" for Claude models/aliases, "codex" for GPT/Codex models, "deepseek" for DeepSeek models. Never set only model without provider.
 - model: pick the smallest model that can do the job. "haiku" for cheap classifiers and lookups; "sonnet" for normal reasoning; "opus" reserved for hard multi-step planning, hard code review, or anything where being wrong is expensive.
-- reasoningEffort: off | low | medium | high | max. Default "off" for shallow tasks; "high" for planning/architecture/review; "max" only on opus, only when the step is a real bottleneck.
+- reasoningEffort: off | low | medium | high | xhigh | max | ultra. Available levels depend on the selected provider/model. Default "off" for shallow tasks; "high" for planning/architecture/review; use higher levels only when the step is a real bottleneck.
 - planMode: true only for pure planners/researchers. Specialists who execute should not use plan mode.
 
 DESIGN PROCESS:

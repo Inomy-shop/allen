@@ -1,0 +1,147 @@
+---
+title: 'Self-Healing and Monitoring'
+description: 'Configure and operate Allen’s agent-led incident scan, ticketing, and repair dispatch.'
+---
+
+:::info Media placeholders
+Before publishing, capture the built-in schedule, a redacted monitoring incident response, its linked Linear issue, and the linked repair execution. Allen does not currently expose monitoring incidents as a navigable app page.
+:::
+
+Allen's self-healing monitor scans runtime evidence, groups recurring failures into incidents, creates or updates Linear issues, and can dispatch Allen-owned problems to the `bug-fix-by-severity` workflow.
+
+This is an operational safety net, not autonomous proof that a defect exists or that a repair is correct. Operators must review incident evidence, external changes, and repair validation.
+
+## Current operator surfaces
+
+There is no monitoring page in the current app navigation. Opening `/monitoring` redirects to **Settings → Runtime**.
+
+Use:
+
+- **Settings → Schedules** to inspect the built-in **Allen Self-Healing Monitor** job and its last run;
+- **Executions** to inspect the monitoring workflow and any dispatched repair;
+- the authenticated monitoring API or Allen monitoring MCP tools to list and act on incidents;
+- Linear to review the created or updated issue.
+
+## Configure the monitor
+
+The monitor requires all three Linear destination settings:
+
+```bash
+ALLEN_SELF_HEALING_LINEAR_TEAM_KEY=...
+ALLEN_SELF_HEALING_LINEAR_PROJECT_NAME=...
+ALLEN_SELF_HEALING_ASSIGNEE_EMAIL=...
+```
+
+It also needs a working Linear MCP integration, available model/provider credentials for the monitoring agents, and the seeded `allen-self-healing-monitor-hourly` workflow.
+
+For repair dispatch, register the Allen repository. If automatic resolution cannot find it, set `ALLEN_SELF_HEALING_REPO_PATH` to the registered repository path used by the repair workflow.
+
+The default built-in schedule runs at minute 17 of every hour in UTC and starts with automatic dispatch enabled. Existing schedule records are not overwritten on normal startup, so inspect the installed job rather than assuming it still has seed defaults.
+
+If the Linear destination variables are missing, scheduled and manual scans do not launch the monitoring workflow; the schedule can still be present and show a skipped run.
+
+## What a scan does
+
+A scan starts a normal Allen workflow execution. Monitoring agents query bounded runtime evidence such as chats, executions, logs, traces, context/memory audits, learnings, dispatch records, and monitoring events.
+
+For a candidate problem, the workflow should:
+
+1. collect and redact relevant evidence;
+2. decide whether the behavior is actionable and Allen-owned;
+3. compute a stable fingerprint so recurrences update the same incident;
+4. assign severity and confidence;
+5. create or update a Linear issue when warranted;
+6. dispatch a repair workflow only when routing is safe;
+7. record links to the ticket and repair execution.
+
+Expected cancellations, unsupported requests, ordinary input errors, and external outages that Allen handled correctly should not become Allen defect tickets.
+
+## Run a manual scan
+
+Send an authenticated request:
+
+```text
+POST /api/monitoring/scan
+```
+
+The response indicates that the agent-led workflow started and provides its execution identifier. Open that execution and review its nodes, logs, tool calls, and final result.
+
+Manual scan arguments can narrow the lookback, evidence surfaces, record limits, ticket limit, or automatic-dispatch behavior. Prefer a narrow manual run when investigating one time window; broad scans increase cost and review load.
+
+## Review incidents
+
+List incidents with:
+
+```text
+GET /api/monitoring/incidents
+GET /api/monitoring/incidents/:id
+```
+
+The list accepts an optional status filter and limit. For each incident, review:
+
+- title, summary, severity, and confidence;
+- fingerprint and last-seen time;
+- source type, root-cause area, and related record identifiers;
+- redacted evidence;
+- Linear identifier and URL, if ticketing succeeded;
+- dispatch execution identifier, if repair work started.
+
+An incident is a triage record, not proof. Confirm that related records describe the same failure and that the root cause is within Allen's control.
+
+## Ticket, dispatch, and triage
+
+Target an incident through these authenticated actions:
+
+| Action | Route | Result |
+| --- | --- | --- |
+| Ticket | `POST /api/monitoring/incidents/:id/ticket` | Starts the monitoring workflow in targeted ticket mode. |
+| Dispatch | `POST /api/monitoring/incidents/:id/dispatch` | Starts the monitoring workflow in targeted dispatch mode. |
+| Ignore | `POST /api/monitoring/incidents/:id/ignored` | Records a decision not to act. |
+| Suppress | `POST /api/monitoring/incidents/:id/suppressed` | Records that recurrence should be suppressed. |
+| Resolve | `POST /api/monitoring/incidents/:id/resolved` | Marks the incident resolved. |
+
+The ticket and dispatch endpoints start workflow executions; the route handler does not directly create a ticket or edit a repository. Follow the resulting execution to learn whether the action succeeded.
+
+Use **resolved** only after validation shows the underlying problem is fixed. **Ignored** and **suppressed** are triage decisions, not resolutions.
+
+## Understand statuses
+
+Common incident states are:
+
+- `new` or `analyzed` — evidence is being assessed or awaits action;
+- `ticketed` or `updated_existing` — Linear was created or an existing issue updated;
+- `dispatched` or `in_progress` — repair work was launched or is underway;
+- `resolved`, `ignored`, or `suppressed` — an operator/workflow made a terminal triage decision;
+- `failed_to_ticket` or `failed_to_dispatch` — the targeted action failed and needs investigation.
+
+## Safe operating procedure
+
+1. Verify destination configuration and provider/MCP health.
+2. Inspect the installed schedule or start a narrow manual scan.
+3. Open the monitoring workflow execution and confirm it completed.
+4. Review incident evidence and ownership before ticketing.
+5. Open the Linear issue and check that it contains enough redacted evidence for another engineer.
+6. Before dispatch, verify repository targeting and the repair workflow's human checkpoints.
+7. Follow the repair execution through tests and review.
+8. Resolve the incident only after the fix is demonstrated.
+
+Monitoring and repair executions can use external tools, create workspaces, edit code, and create pull requests. Keep credentials out of evidence and retain human review before externally visible or repository-changing actions.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Schedule exists but runs are skipped | All three required self-healing Linear variables. |
+| Manual scan fails immediately | Linear destination settings, seeded workflow, provider credentials, and Linear MCP health. |
+| No incident or ticket appears | Monitoring execution result, evidence window/surfaces, ticket limit, ownership decision, and deduplication. |
+| Existing problem creates duplicates | Fingerprint inputs and whether the evidence truly represents the same root cause. |
+| Dispatch fails | Registered Allen repo or `ALLEN_SELF_HEALING_REPO_PATH`, repair workflow availability, and workspace creation. |
+| Incident says dispatched but no fix is visible | Open the linked execution and inspect its actual status, input wait, logs, and artifacts. |
+| A resolved incident returns | Treat it as a recurrence and re-evaluate the prior fix and fingerprint. |
+
+## Related pages
+
+- [Troubleshooting](/operator-guide/troubleshooting)
+- [Monitor an execution](/guides/monitor-execution)
+- [Environment reference](/reference/environment)
+- [Security reference](/reference/security)

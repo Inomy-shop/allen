@@ -1,6 +1,6 @@
 {
   "name": "allen-desktop",
-  "version": "0.1.20",
+  "version": "0.1.22",
   "private": true,
   "description": "An agentic operating system for software development — assign, coordinate, observe, and improve AI agents across real engineering workflows.",
   "license": "MIT",
@@ -21,7 +21,11 @@
     "lint": "npm --workspace @allen/engine run lint && npm --workspace @allen/server run lint && npm --workspace @allen/ui run lint && npm --workspace @allen/desktop run lint",
     "test": "npm --workspace @allen/engine run test && npm --workspace @allen/server run test && npm --workspace @allen/ui run test && npm --workspace @allen/desktop run test",
     "release:mac:local": "bash scripts/release-mac-local.sh",
-    "dev:web": "concurrently -k -n engine,server,ui -c blue,green,magenta \"npm --workspace @allen/engine run dev\" \"npm --workspace @allen/server run dev\" \"npm --workspace @allen/ui run dev -- --host 127.0.0.1\""
+    "dev:web": "concurrently -k -n engine,server,ui -c blue,green,magenta \"npm --workspace @allen/engine run dev\" \"npm --workspace @allen/server run dev\" \"npm --workspace @allen/ui run dev -- --host 127.0.0.1\"",
+    "docs:dev": "npm --workspace @allen/docs-site run start",
+    "docs:build": "npm --workspace @allen/docs-site run build",
+    "docs:serve": "npm --workspace @allen/docs-site run serve",
+    "docs:export": "npm --workspace @allen/docs-site run export:askallen"
   },
   "packageManager": "npm@10.0.0",
   "workspaces": [

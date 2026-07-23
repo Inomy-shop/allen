@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { FileText } from 'lucide-react';
-import { artifacts as artifactsApi, type ArtifactDoc } from '../../services/api';
+import type { ArtifactDoc } from '../../services/api';
 import { useResizable } from '../../hooks/useResizable';
 import ArtifactsPanel from './ArtifactsPanel';
-import ArtifactViewer from './ArtifactViewer';
+import { resourceScopeKey, useDocumentTabStore } from '../../stores/documentTabStore';
 
 interface Props {
   rootType: 'chat' | 'workflow' | 'agent';
@@ -14,8 +14,7 @@ interface Props {
 }
 
 export default function ArtifactsDrawer({ rootType, rootId, open, onClose }: Props) {
-  const [selected, setSelected] = useState<ArtifactDoc | null>(null);
-  const [panelKey, setPanelKey] = useState(0);
+  const openDocument = useDocumentTabStore(state => state.openDocument);
 
   const { size: listWidth, handleMouseDown: listResizeStart } = useResizable({
     direction: 'horizontal',
@@ -24,8 +23,6 @@ export default function ArtifactsDrawer({ rootType, rootId, open, onClose }: Pro
     maxSize: 520,
     side: 'start',
   });
-
-  useEffect(() => { if (!open) setSelected(null); }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -42,28 +39,6 @@ export default function ArtifactsDrawer({ rootType, rootId, open, onClose }: Pro
     };
   }, [open, onClose]);
 
-  function syncSelection(artifacts: ArtifactDoc[]) {
-    if (artifacts.length === 0) {
-      setSelected(null);
-      return;
-    }
-    setSelected(current => {
-      if (current && artifacts.some(item => item.artifactId === current.artifactId)) return current;
-      return artifacts[0];
-    });
-  }
-
-  async function handleDelete(id: string) {
-    if (!confirm('Delete this artifact? The file is removed from disk.')) return;
-    try {
-      await artifactsApi.delete(id);
-      setSelected(null);
-      setPanelKey(value => value + 1);
-    } catch (err) {
-      alert(`Failed to delete: ${(err as Error).message}`);
-    }
-  }
-
   if (!open) return null;
 
   return createPortal(
@@ -79,12 +54,17 @@ export default function ArtifactsDrawer({ rootType, rootId, open, onClose }: Pro
           style={{ width: listWidth }}
         >
           <ArtifactsPanel
-            key={panelKey}
             rootType={rootType}
             rootId={rootId}
-            selectedId={selected?.artifactId}
-            onSelect={setSelected}
-            onItemsChange={syncSelection}
+            onSelect={(artifact: ArtifactDoc) => {
+              openDocument(artifact, {
+                sourceLabel: rootType === 'chat' ? 'Chat' : 'Execution',
+                scopeKey: rootType === 'chat'
+                  ? resourceScopeKey('chat', rootId)
+                  : resourceScopeKey('execution', rootId),
+              });
+              onClose();
+            }}
             onClose={onClose}
           />
 
@@ -98,25 +78,17 @@ export default function ArtifactsDrawer({ rootType, rootId, open, onClose }: Pro
         </div>
 
         <div className="flex h-full min-w-0 flex-1 flex-col border-l border-app bg-app-card">
-          {selected ? (
-            <ArtifactViewer
-              artifact={selected}
-              onClose={() => setSelected(null)}
-              onDelete={() => handleDelete(selected.artifactId)}
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center p-8 text-center">
-              <div className="max-w-sm">
-                <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-md border border-app bg-app-muted text-theme-subtle">
-                  <FileText className="h-5 w-5" />
-                </div>
-                <div className="text-sm font-semibold text-theme-primary">No artifact selected</div>
-                <div className="mt-1 text-xs leading-relaxed text-theme-muted">
-                  Select a saved file from the list to preview its content here.
-                </div>
+          <div className="flex h-full items-center justify-center p-8 text-center">
+            <div className="max-w-sm">
+              <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-md border border-app bg-app-muted text-theme-subtle">
+                <FileText className="h-5 w-5" />
+              </div>
+              <div className="text-sm font-semibold text-theme-primary">Open a document</div>
+              <div className="mt-1 text-xs leading-relaxed text-theme-muted">
+                Select a saved file to open it as a document tab with comments and history.
               </div>
             </div>
-          )}
+          </div>
         </div>
       </aside>
     </div>,

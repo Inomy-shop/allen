@@ -1,0 +1,81 @@
+---
+title: 'Install Allen Desktop'
+description: 'Download Allen for macOS, complete onboarding, and get ready for your first task.'
+---
+
+Install the Allen desktop app, complete the guided setup, and connect the first repository you want to work on. Everything in this guide happens in the app.
+
+## Install on macOS
+
+The current Allen desktop release supports Apple silicon Macs.
+
+1. Download the latest Allen `.dmg` from the [Allen website](https://askallen.build/) or your organization's approved distribution channel.
+2. Open the downloaded disk image.
+3. Drag **Allen** into the **Applications** folder shown in the installer window.
+4. Open **Applications**, then open **Allen**.
+5. Follow the onboarding steps shown in the app.
+
+Installation is complete when Allen opens to onboarding or, if your account is already configured, the **Dashboard**.
+
+After installation, Allen can check for new releases automatically. Open **Settings → General** to turn automatic checks on or off, select **Check for updates**, or read release notes.
+
+## Complete setup in Allen
+
+On first launch, onboarding takes you through the minimum setup needed for a useful task:
+
+1. **Create the first account.** Enter the name, email, and password for the first administrator.
+2. **Confirm readiness.** Let Allen run its setup check. Continue when the screen reports that the required checks are ready.
+3. **Choose model defaults.** Select the providers and models Allen should use for chat and agent work.
+4. **Connect a repository.** Choose **Local path** or **GitHub URL**, validate the repository, and select **Connect repository**.
+5. **Start a first workflow.** Choose **Bug fix** or **Feature build**, describe one focused task, and start the run.
+
+You can select **Skip for now** on optional onboarding steps, but chat and workflows need a usable model, and repository-based work needs a connected repository.
+
+After onboarding, use these **Settings** pages as needed:
+
+| Setting | Use it for |
+| --- | --- |
+| **General** | Appearance, keyboard shortcuts, updates, and release notes. |
+| **Models** | Model defaults, available models, and provider credentials. |
+| **MCP Servers** | External tools and data sources Allen is allowed to use. |
+| **Schedules** | Recurring Allen jobs and scheduled automation. |
+| **Team** | Users, roles, and workspace access. This page is available to administrators. |
+| **Account** | Your signed-in profile and session. |
+
+When a saved option needs Allen to restart, the app labels that change **Restart required after save**. Restart before testing the new setting.
+
+## Add only what your work needs
+
+You do not need to configure every Allen feature before starting. Begin with a model and repository, then add other capabilities when a task requires them.
+
+| Need | What to do in Allen |
+| --- | --- |
+| Use a different model | Open **Settings → Models**. Add or activate the model, provide the approved provider credentials, and choose the default used by chat or agents. See [Add a Model](/guides/add-a-model) and [Change Models](/guides/change-models). |
+| Work on another project | Open **Repositories**, select **Add repository**, and connect a local checkout or GitHub URL. See [Add a Repository](/guides/add-a-repository). |
+| Use GitHub or Linear | Open **Pull requests** or **Linear** and select **Connect GitHub** or **Connect Linear**. You can also use the matching setup card when it appears on the **Dashboard**. Provide the requested credentials and wait for the connection check to succeed. |
+| Use an external tool or data source | Open **Settings → MCP Servers**, select **Add**, choose a preset or repository-hosted server, enter the requested values, and select **Connect**. See [Add an MCP Server](/guides/add-an-mcp-server). |
+| Create a specialist | Open **Teams & Agents**, select **New agent**, and define its responsibility, model, instructions, and allowed tools. See [Create an Agent](/guides/create-an-agent). |
+| Organize specialists | Open **Teams & Agents**, select **New team**, and give the team a clear mission before adding agents. |
+| Make a process reusable | Open **Workflows**, select **New workflow**, define its inputs and steps, validate it, and test it with a low-risk task. See [Create a Workflow](/guides/create-a-workflow). |
+| Run work on a schedule | Open **Settings → Schedules**, select **New schedule**, choose when it runs and whether it starts an agent, workflow, or system action, then select **Create schedule**. |
+
+For credentials and external connections, use the fields Allen provides. Do not paste secrets into chat messages, workflow descriptions, screenshots, or artifacts.
+
+## If setup needs attention
+
+Use the message on the current screen to fix only the blocked step:
+
+- **The readiness check does not pass:** review the failed item, apply the suggested action, and select **Refresh**. If Allen was installed by your organization, contact the person who manages your Allen installation rather than changing system software yourself.
+- **No model is ready:** open **Settings → Models**, confirm that the intended provider has valid credentials, choose a default model, and save. Restart Allen if the setting is marked as restart-required.
+- **A local repository does not validate:** confirm that you selected the repository's folder and that it is accessible on this Mac, then select **Validate** again.
+- **A GitHub repository does not validate:** confirm the URL and branch, complete **Verify SSH** if Allen asks for it, and make sure your account can access the repository.
+- **An MCP connection fails:** reopen the server in **Settings → MCP Servers**, correct the requested values, and use **Test connection** before using the tool in a task.
+- **An execution starts but cannot continue:** open **Executions**, read the latest status and logs, and answer any question or approval request shown there.
+
+## Next: complete a first task
+
+Once Allen reaches the **Dashboard**, connect a small test repository or a low-risk project and follow [First Workflow](/getting-started/first-workflow). The first run should teach you how to select a repository, describe a bounded task, follow the execution, and review the result before taking another action.
+
+:::caution
+Never paste secrets, API keys, OAuth tokens, SSH keys, customer data, private repository content, or proprietary prompts into chats, screenshots, tickets, or artifacts.
+:::

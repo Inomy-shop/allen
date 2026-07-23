@@ -537,7 +537,7 @@ function EditRepoDialog({ repo, open, onClose, onUpdated }: { repo: Repo | null;
 
 function formatRepoDate(value?: string): string {
   if (!value) return 'Never';
-  return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return new Date(value).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 function compactPath(path?: string): string {
@@ -787,185 +787,132 @@ export default function RepoManagerPage() {
   };
 
   return (
-    <div className="content scroll-hide !p-0 bg-app" data-screen-label="repositories">
-      <div className="w-full px-8 py-8">
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
-              <FolderGit2 className="h-[18px] w-[18px]" />
-            </span>
-            <div>
-              <h1 className="text-[24px] font-semibold leading-tight text-theme-primary">Repositories</h1>
-              <p className="mt-1 text-[13px] text-theme-muted">Local codebases Allen can inspect, scan, and dispatch work against.</p>
-            </div>
+    <section className="v8-page v8-repositories" data-screen-label="repositories">
+      <div className="v8-page__wrap">
+        <header className="v8-pagehead">
+          <div>
+            <h1>Repositories</h1>
+            <p>Local codebases Allen can inspect, scan, and dispatch work against.</p>
           </div>
-          <div className="flex items-center gap-2">
-            <IconTooltipButton
-              label="Refresh repositories"
-              onClick={refresh}
-              className="h-9 w-9 border border-app bg-app-card hover:border-app-strong"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            </IconTooltipButton>
-            <button
-              onClick={() => setAddOpen(true)}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
-              type="button"
-            >
-              <Plus className="w-3.5 h-3.5" /> Add repository
-            </button>
-          </div>
-        </div>
+          <button type="button" className="v8-icon-chip" aria-label="Refresh" onClick={refresh}>
+            <RefreshCw className={loading ? 'animate-spin' : ''} />
+          </button>
+          <button type="button" className="v8-btn v8-btn--ink" onClick={() => setAddOpen(true)}>+ Add repository</button>
+        </header>
 
-        <section className="overflow-hidden rounded-md border border-app bg-app-card">
-          {repoList.length > 0 && (
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-app bg-app-muted/25 px-4 py-2 font-mono text-[10.5px] uppercase tracking-[0.14em] text-theme-muted">
-              <span>Repository</span>
-              <span>Actions</span>
-            </div>
-          )}
-
-          {loading ? (
-            <div>
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="border-t border-app px-4 py-3 first:border-t-0">
-                  <div className="flex items-center gap-4">
-                    <div className="h-9 w-9 animate-pulse rounded-md bg-app-muted" />
-                    <div className="min-w-0 flex-1">
-                      <div className="h-4 w-48 animate-pulse rounded-md bg-app-muted" />
-                      <div className="mt-2 h-3 w-80 animate-pulse rounded-md bg-app-muted" />
-                    </div>
-                    <div className="h-8 w-36 animate-pulse rounded-md bg-app-muted" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : repoList.length === 0 ? (
-            <div className="px-5 py-12 text-center">
-              <FolderGit2 className="mx-auto h-8 w-8 text-theme-subtle" />
-              <div className="mt-4 text-[15px] font-semibold text-theme-primary">No repositories yet</div>
-              <p className="mt-1 text-[13px] text-theme-muted">Add a repository before creating workspaces or dispatching code tasks.</p>
-              <button
-                onClick={() => setAddOpen(true)}
-                className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
-                type="button"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add repository
-              </button>
-            </div>
-          ) : (
-            <div className="divide-y divide-app">
+        {loading ? (
+          <div className="v8-filter-empty">Loading repositories…</div>
+        ) : repoList.length === 0 ? (
+          <div className="v8-empty"><span className="glyph"><FolderGit2 /></span><h2>No repositories connected</h2><p>Add a repo so Allen can build its context graph and start taking on work.</p><button className="v8-btn v8-btn--ink" type="button" onClick={() => setAddOpen(true)}>Add repository</button></div>
+        ) : (
+          <div className="v8-panel v8-repo-panel">
             {repoList.map((repo) => {
-              const hasRunningScan = repo.contextScan?.status === 'scanning';
-              const isScanning = scanningId === repo._id;
-              const isCancelingScan = cancelingScanId === repo._id;
-              const isArchived = repo.status === 'archived';
-              const cogneeStatus = contextConfig.cogneeEnabled ? cogneeStatusByRepo[repo._id] : undefined;
               const remote = repoRemote(repo);
+              const branch = repo.detected?.defaultBranch?.trim() || repo.defaultBranch?.trim() || repo.branch?.trim() || 'main';
+              const scan = repo.contextScan?.status;
+              const needsRetry = scan === 'error' || scan === 'cancelled';
+              const health = scan === 'scanning'
+                ? 'Scanning repository'
+                : needsRetry
+                  ? 'Scan interrupted'
+                  : repo.context
+                    ? null
+                    : scan === 'pending' || !scan
+                      ? 'First scan pending'
+                      : 'No context docs yet';
               return (
-                <div key={repo._id} className={`px-4 py-3 transition-colors hover:bg-app-muted/30 ${isArchived ? 'opacity-60' : ''}`}>
-                  <div className="grid min-h-[76px] grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                        <span className="truncate text-[14px] font-semibold text-theme-primary">{repo.name}</span>
-                        {isArchived && <span className="rounded-md border border-app bg-app px-2 py-0.5 font-mono text-[10.5px] text-theme-muted">archived</span>}
-                      </div>
-                      {repo.description && <p className="mt-0.5 text-[12px] text-theme-muted">{repo.description}</p>}
-                      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] leading-4 text-theme-muted">
-                        <span className="inline-flex items-center gap-1">
-                          <GitBranch className="h-3 w-3 shrink-0" />
-                          {repo.detected?.defaultBranch?.trim()
-  || repo.defaultBranch?.trim()
-  || repo.branch?.trim()
-  || 'main'}
-                        </span>
-                        {remote && (
-                          <a href={remote.href} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="inline-flex max-w-[360px] items-center gap-1 truncate transition-colors hover:text-accent">
-                            <Github className="h-3 w-3 shrink-0" />
-                            <span className="truncate">{remote.label}</span>
-                            <ExternalLink className="h-3 w-3 shrink-0 text-theme-subtle" />
-                          </a>
-                        )}
-                        <span className="inline-flex min-w-[180px] max-w-[340px] items-center gap-1.5 truncate text-[10.5px] text-theme-subtle">
-                          <span className="min-w-0 truncate text-theme-muted" title={repo.path}>{compactPath(repo.path)}</span>
-                        </span>
-                        <IconTooltipButton
-                          label={copiedPath === repo.path ? 'Copied' : 'Copy repository path'}
-                          side="top"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void copyRepoPath(repo.path);
-                          }}
-                          className="h-[18px] w-[18px] shrink-0 text-theme-muted hover:text-theme-primary"
-                        >
-                          {copiedPath === repo.path ? <Check className="h-3 w-3 text-accent-green" /> : <Copy className="h-3 w-3" />}
-                        </IconTooltipButton>
-                      </div>
-                      {contextConfig.cogneeEnabled && (
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10.5px] leading-4 text-theme-muted" title={cogneeStatusTitle(cogneeStatus)}>
-                          <span className="inline-flex items-center gap-1 text-theme-secondary">
-                            <Sparkles className="h-3 w-3 text-accent" />{contextStatusLabel(cogneeStatus)}
-                          </span>
-                          <CogneeProgress status={cogneeStatus} />
-                        </div>
-                      )}
+                <div key={repo._id} className="v8-repo-row">
+                  <div className="v8-repo-who">
+                    <span className="v8-repo-name">{repo.name} <span>{branch}</span></span>
+                    <div className="v8-repo-source">
+                      {remote ? <a href={remote.href} target="_blank" rel="noreferrer"><Github /> {remote.label}</a> : <span>local</span>}
                     </div>
-                    <div className="flex shrink-0 flex-col items-end gap-2">
-                      <div className="flex items-center gap-1">
-                        {contextConfig.enabled && (
-                          <button onClick={(e) => { e.stopPropagation(); navigate(`/repos/${repo._id}/context-management`); }} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-app bg-app px-2 text-[12px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:bg-app-muted hover:text-theme-primary" title="Open context management" type="button">
-                            <FileText className="w-3 h-3" />
-                            Context
-                          </button>
-                        )}
-                        <IconTooltipButton label="New workspace" onClick={(e) => { e.stopPropagation(); setWsCreateRepo(repo); }} className={ROW_ICON_BUTTON_CLASS}>
-                          <Monitor className="w-3 h-3" />
-                        </IconTooltipButton>
-                        <IconTooltipButton label="Pull latest" onClick={(e) => handlePull(e, repo._id)} disabled={pullingId === repo._id} className={ROW_ICON_BUTTON_CLASS}>
-                          {pullingId === repo._id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
-                        </IconTooltipButton>
-                        {hasRunningScan ? (
-                          <IconTooltipButton label="Cancel scan" tone="danger" onClick={(e) => handleCancelScan(e, repo._id)} disabled={isCancelingScan} className={ROW_DANGER_ICON_BUTTON_CLASS}>
-                            {isCancelingScan ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
-                          </IconTooltipButton>
-                        ) : (
-                          <IconTooltipButton label="Scan repository" onClick={(e) => handleScan(e, repo._id)} disabled={isScanning} className={ROW_ICON_BUTTON_CLASS}>
-                            {isScanning ? <Loader2 className="w-3 h-3 animate-spin" /> : <ScanSearch className="w-3 h-3" />}
-                          </IconTooltipButton>
-                        )}
-                        <IconTooltipButton label="Workspace config" onClick={(e) => { e.stopPropagation(); setConfigRepoId(repo._id); }} className={ROW_ICON_BUTTON_CLASS}>
-                          <Settings className="w-3 h-3" />
-                        </IconTooltipButton>
-                        <IconTooltipButton label="Edit repository" onClick={(e) => { e.stopPropagation(); setEditRepo(repo); }} className={ROW_ICON_BUTTON_CLASS}>
-                          <Pencil className="w-3 h-3" />
-                        </IconTooltipButton>
-                        <IconTooltipButton label="Delete repository" tone="danger" onClick={(e) => { e.stopPropagation(); setDeletingRepo({ id: repo._id, name: repo.name }); }} className={ROW_DANGER_ICON_BUTTON_CLASS}>
-                          <Trash2 className="w-3 h-3" />
-                        </IconTooltipButton>
-                      </div>
-                      <span className="font-mono text-[10px] leading-4 text-theme-subtle">updated {formatRepoDate(repo.updatedAt)}</span>
+                    {health && <div className={`v8-repo-health ${needsRetry ? 'warning' : scan === 'scanning' ? 'running' : ''}`}><i />{health}{needsRetry && <>&nbsp;—&nbsp;<button type="button" onClick={(event) => handleScan(event, repo._id)}>Retry</button></>}</div>}
+                  </div>
+                  <div className="v8-repo-actions" role="group" aria-label="Repository actions">
+                    <div className="v8-repo-action-list">
+                      <button
+                        className="v8-repo-action"
+                        type="button"
+                        aria-label="Open repository context"
+                        data-tip="Context"
+                        onClick={() => navigate(`/repos/${repo._id}/context-management`)}
+                      >
+                        <FileText />
+                      </button>
+                      <button
+                        className="v8-repo-action"
+                        type="button"
+                        aria-label="Open repository workspace"
+                        data-tip="Workspace"
+                        onClick={() => setWsCreateRepo(repo)}
+                      >
+                        <Monitor />
+                      </button>
+                      <button
+                        className="v8-repo-action"
+                        type="button"
+                        aria-label="Pull latest changes"
+                        data-tip="Pull latest"
+                        disabled={pullingId === repo._id}
+                        onClick={(event) => void handlePull(event, repo._id)}
+                      >
+                        {pullingId === repo._id ? <Loader2 className="animate-spin" /> : <Download />}
+                      </button>
+                      <button
+                        className="v8-repo-action"
+                        type="button"
+                        aria-label="Rescan repository context"
+                        data-tip="Rescan context"
+                        disabled={scanningId === repo._id || cancelingScanId === repo._id}
+                        onClick={(event) => void handleScan(event, repo._id)}
+                      >
+                        {scanningId === repo._id ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                      </button>
+                      <button
+                        className="v8-repo-action"
+                        type="button"
+                        aria-label="Repository settings"
+                        data-tip="Settings"
+                        onClick={() => setConfigRepoId(repo._id)}
+                      >
+                        <Settings />
+                      </button>
+                      <button
+                        className="v8-repo-action"
+                        type="button"
+                        aria-label="Edit repository"
+                        data-tip="Edit"
+                        onClick={() => setEditRepo(repo)}
+                      >
+                        <Pencil />
+                      </button>
+                      <button
+                        className="v8-repo-action v8-repo-action--danger"
+                        type="button"
+                        aria-label="Remove repository"
+                        data-tip="Remove"
+                        onClick={() => setDeletingRepo({ id: repo._id, name: repo.name })}
+                      >
+                        <Trash2 />
+                      </button>
                     </div>
+                    <span className="v8-repo-updated">updated {formatRepoDate(repo.updatedAt)}</span>
                   </div>
                 </div>
               );
             })}
-            </div>
-          )}
-        </section>
+          </div>
+        )}
+        {!loading && repoList.length > 0 && <p className="v8-page-foot v8-page-foot--center">{repoList.length} repositories · status appears only when something needs attention · Context is the door in</p>}
 
         <AddRepoDialog open={addOpen} onClose={() => setAddOpen(false)} onCreated={refresh} />
         <EditRepoDialog repo={editRepo} open={!!editRepo} onClose={() => setEditRepo(null)} onUpdated={refresh} />
-        <DeleteConfirmDialog
-          open={!!deletingRepo}
-          resourceType="repo"
-          resourceName={deletingRepo?.name ?? ''}
-          onConfirm={handleDelete}
-          onCancel={() => setDeletingRepo(null)}
-        />
+        <DeleteConfirmDialog open={!!deletingRepo} resourceType="repo" resourceName={deletingRepo?.name ?? ''} onConfirm={handleDelete} onCancel={() => setDeletingRepo(null)} />
         {configRepoId && <WorkspaceConfigEditor repoId={configRepoId} onClose={() => setConfigRepoId(null)} />}
         {wsCreateRepo && <QuickWorkspaceDialog repo={wsCreateRepo} onClose={() => setWsCreateRepo(null)} onCreated={(id) => { setWsCreateRepo(null); navigate(workspaceChatPath(id)); }} />}
       </div>
-    </div>
+    </section>
   );
 }
 

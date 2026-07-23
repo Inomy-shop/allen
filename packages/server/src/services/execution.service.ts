@@ -451,7 +451,7 @@ function executionDisplayTitle(input: Record<string, unknown>, meta: Record<stri
     ?? fallback;
 }
 
-type RuntimeReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
+type RuntimeReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 type RuntimeModelField = 'provider' | 'model' | 'reasoningEffort' | 'planMode';
 
 export interface RuntimeModelChoice {
@@ -472,7 +472,15 @@ export interface RuntimeModelOverrides extends RuntimeModelChoice {
   descendants?: 'agent_defaults' | 'inherit_parent' | 'explicit_only';
 }
 
-const RUNTIME_REASONING_EFFORTS = new Set<RuntimeReasoningEffort>(['off', 'low', 'medium', 'high', 'max']);
+const RUNTIME_REASONING_EFFORTS = new Set<RuntimeReasoningEffort>([
+  'off',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+]);
 
 function cleanRuntimeModelChoice(value: unknown): RuntimeModelChoice | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;

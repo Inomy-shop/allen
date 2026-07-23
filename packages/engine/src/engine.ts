@@ -2099,7 +2099,7 @@ ${lines.join('\n')}
             // Parse the recovery selection
             const selectedProvider = String(humanData.provider ?? effectiveProvider);
             const selectedModel = String(humanData.model ?? effectiveModel);
-            const selectedEffort = humanData.reasoning_effort as 'off' | 'low' | 'medium' | 'high' | 'max' | undefined;
+            const selectedEffort = humanData.reasoning_effort as 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | undefined;
 
             // Build and store NodeModelOverride
             const nodeOverride: import('./model-recovery.js').NodeModelOverride = {
@@ -2637,7 +2637,7 @@ ${lines.join('\n')}
 
               const selectedProvider = String(humanData.provider ?? effectiveProvider);
               const selectedModel = String(humanData.model ?? effectiveModel);
-              const selectedEffort = humanData.reasoning_effort as 'off' | 'low' | 'medium' | 'high' | 'max' | undefined;
+              const selectedEffort = humanData.reasoning_effort as 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | undefined;
 
               const nodeOverride: import('./model-recovery.js').NodeModelOverride = {
                 nodeName: brName,

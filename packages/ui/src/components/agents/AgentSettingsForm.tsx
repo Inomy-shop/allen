@@ -15,13 +15,19 @@
  */
 import { ShieldCheck, Sparkles, AlertTriangle } from 'lucide-react';
 import Select from '../common/Select';
+import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
 import { useModelRegistry } from '../../hooks/useModelRegistry';
 import {
   isNonClaudeOpenRouterModel,
   OPENROUTER_NON_CLAUDE_WARNING,
 } from '../../lib/openrouter-warning';
+import {
+  isReasoningEffortSupported,
+  reasoningEffortOptionsFor,
+  type ReasoningEffortValue as ReasoningEffort,
+} from '../../lib/reasoning-effort';
 
-export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
+export type { ReasoningEffortValue as ReasoningEffort } from '../../lib/reasoning-effort';
 export type Provider = 'claude' | 'codex' | (string & {});
 
 export interface AgentSettingsValue {
@@ -43,14 +49,6 @@ interface Props {
   modelOptions: Array<{ value: string; label: string }>;
   onChange: (next: AgentSettingsValue) => void;
 }
-
-const EFFORT_OPTIONS: Array<{ value: ReasoningEffort; label: string; description: string }> = [
-  { value: 'off', label: 'Off', description: 'No extended thinking' },
-  { value: 'low', label: 'Low', description: 'Quick thinking' },
-  { value: 'medium', label: 'Medium', description: 'Standard' },
-  { value: 'high', label: 'High', description: 'Deliberate' },
-  { value: 'max', label: 'Max', description: 'Deepest (Opus only)' },
-];
 
 export default function AgentSettingsForm({
   mode,
@@ -93,9 +91,19 @@ export default function AgentSettingsForm({
     onChange({ ...value, [key]: v });
   }
 
-  // Disable 'max' unless the effective model looks like Opus.
+  function setModel(nextModel: string | null): void {
+    const currentEffort = value.reasoningEffort ?? inheritedFrom?.reasoningEffort;
+    onChange({
+      ...value,
+      model: nextModel,
+      ...(!isReasoningEffortSupported(provider, nextModel || modelInherited, currentEffort)
+        ? { reasoningEffort: null }
+        : {}),
+    });
+  }
+
   const effectiveModel = modelValue || modelInherited || '';
-  const opusLike = /opus/i.test(effectiveModel);
+  const effortOptions = reasoningEffortOptionsFor(provider, effectiveModel);
   const openModelOptions = [
     ...(isOverrideMode
       ? [{ value: '', label: 'Inherit', sublabel: modelInherited }]
@@ -105,9 +113,15 @@ export default function AgentSettingsForm({
       label: isNonClaudeOpenRouterModel(provider, model)
         ? `${model} (experimental)`
         : model,
+      icon: <ProviderIcon provider={provider} className={`h-4 w-4 ${providerIconColor(provider)}`} />,
     })),
     ...(isOpenModelProvider && modelValue && !(openModelSuggestions ?? []).includes(modelValue)
-      ? [{ value: modelValue, label: modelValue, sublabel: 'Custom model ID' }]
+      ? [{
+          value: modelValue,
+          label: modelValue,
+          sublabel: 'Custom model ID',
+          icon: <ProviderIcon provider={provider} className={`h-4 w-4 ${providerIconColor(provider)}`} />,
+        }]
       : []),
   ];
 
@@ -121,7 +135,7 @@ export default function AgentSettingsForm({
         {isOpenModelProvider ? (
           <Select
             value={modelValue}
-            onChange={(next) => setField('model', next || null)}
+            onChange={(next) => setModel(next || null)}
             searchPlaceholder="Search or enter model ID..."
             placeholder={`e.g. ${openModelSuggestions?.[0] ?? 'provider-model'}`}
             options={openModelOptions}
@@ -130,7 +144,7 @@ export default function AgentSettingsForm({
         ) : (
           <Select
             value={modelValue}
-            onChange={(next) => setField('model', next || null)}
+            onChange={(next) => setModel(next || null)}
             searchPlaceholder="Search models..."
             options={[
               ...(isOverrideMode
@@ -139,6 +153,7 @@ export default function AgentSettingsForm({
               ...modelOptions.map((option) => ({
                 value: option.value,
                 label: option.label,
+                icon: <ProviderIcon provider={provider} className={`h-4 w-4 ${providerIconColor(provider)}`} />,
               })),
             ]}
           />
@@ -170,11 +185,10 @@ export default function AgentSettingsForm({
             ...(isOverrideMode
               ? [{ value: '', label: 'Inherit', sublabel: effortInherited }]
               : []),
-            ...EFFORT_OPTIONS.map((option) => ({
+            ...effortOptions.map((option) => ({
               value: option.value,
               label: option.label,
-              sublabel: `${option.description}${option.value === 'max' && !opusLike ? ' · Opus only' : ''}`,
-              disabled: option.value === 'max' && !opusLike,
+              sublabel: option.description,
             })),
           ]}
         />

@@ -26,7 +26,7 @@ function renderPage() {
   return render(
     <MemoryRouter initialEntries={['/studio/workspaces/w1']}>
       <Routes>
-        <Route path="/studio" element={<div>Design Studio list</div>} />
+        <Route path="/studio" element={<div>Allen Design list</div>} />
         <Route path="/studio/workspaces/:id" element={<DesignStudioWorkspacePage />} />
       </Routes>
     </MemoryRouter>,
@@ -89,7 +89,7 @@ describe('DesignStudioWorkspacePage', () => {
     await waitFor(() => expect(screen.getByText(/repository changed since the profile/i)).toBeTruthy());
   });
 
-  it('lets a repo Design Studio workspace be deleted from the detail page', async () => {
+  it('lets an Allen Design repository workspace be deleted from the detail page', async () => {
     vi.mocked(designStudio.getWorkspace).mockResolvedValue({
       _id: 'w1',
       kind: 'repo',
@@ -105,13 +105,13 @@ describe('DesignStudioWorkspacePage', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /^Delete$/i })).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
 
-    expect(screen.getByText('Delete Design Studio repository')).toBeTruthy();
+    expect(screen.getByText('Delete Allen Design repository')).toBeTruthy();
     fireEvent.change(screen.getByPlaceholderText('Acme'), { target: { value: 'Acme' } });
     fireEvent.click(screen.getByRole('button', { name: /Delete repository/i }));
 
     await waitFor(() => {
       expect(designStudio.deleteWorkspace).toHaveBeenCalledWith('w1');
-      expect(screen.getByText('Design Studio list')).toBeTruthy();
+      expect(screen.getByText('Allen Design list')).toBeTruthy();
     });
   });
 });

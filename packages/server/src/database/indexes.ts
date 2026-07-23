@@ -4,6 +4,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // Workflows
   await db.collection('workflows').createIndex({ name: 1 }, { unique: true });
   await db.collection('workflows').createIndex({ tags: 1 });
+  await db.collection('workflows').createIndex({ teamClassification: 1, updatedAt: -1 });
 
   // Skills — reusable routing/playbook knowledge used by the chat assistant.
   await db.collection('skills').createIndex({ name: 1 }, { unique: true });
@@ -285,6 +286,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
   );
   // Workspace-linked chat lookups and tab ordering (REQ-04, REQ-13)
   await db.collection('chat_sessions').createIndex({ workspaceId: 1, lastMessageAt: -1 });
+  await db.collection('chat_sessions').createIndex({ teamClassification: 1, lastMessageAt: -1 });
 
   // Chat Messages
   await db.collection('chat_messages').createIndex({ sessionId: 1, createdAt: 1 });

@@ -23,6 +23,7 @@ import {
 } from './agent-settings.js';
 import { resolveClaudeCodeExecutable } from './claude-code-executable.js';
 import { applyClaudeChatNativeToolPolicyToSdkOptions } from './claude-chat-tool-policy.js';
+import { parseClaudeToolResult } from './chat-tool-normalization.js';
 import { persistentChatRuntimeEnabled, runPersistentChatTurn } from './chat-runtime-manager.js';
 
 // ── Types ──
@@ -236,11 +237,7 @@ async function runClaudeCLI(
             const pending = activeMcpToolCalls.get(block.tool_use_id);
             if (pending) {
               const durationMs = Date.now() - pending.startMs;
-              let resultData: Record<string, unknown> = {};
-              try {
-                const rc = Array.isArray(block.content) ? block.content.map((c: any) => c.text || '').join('') : typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
-                resultData = JSON.parse(rc);
-              } catch { resultData = { raw: String(block.content) }; }
+              const resultData = parseClaudeToolResult(block.content);
               trace.push({ timestamp: new Date(), type: 'tool_result', tool: pending.tool, toolUseId: block.tool_use_id, result: resultData, durationMs });
               callbacks.onToolResult(pending.tool, resultData, block.tool_use_id, durationMs);
               activeMcpToolCalls.delete(block.tool_use_id);

@@ -12,13 +12,9 @@ import { executeChatTool } from '../services/chat-tools.js';
 import { getAgentDefaults } from '../services/llm-defaults.js';
 import { PROVIDERS, getOpenRouterNonClaudeWarning, type ChatProvider } from '../services/chat-providers.js';
 
-const ALLOWED_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'max']);
+const ALLOWED_EFFORTS = new Set(['off', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 const PROVIDER_IDS = new Set(PROVIDERS.map((provider) => provider.provider));
-const BULK_MODEL_CLEARABLE_CODES = new Set([
-  'plan_mode_claude_only',
-  'effort_max_claude_only',
-  'effort_max_requires_opus',
-]);
+const BULK_MODEL_CLEARABLE_CODES = new Set(['plan_mode_claude_only']);
 
 type BulkModelSkipped = {
   name: string;
@@ -96,7 +92,7 @@ function validateAgentSettingsFields(body: Record<string, unknown>): void {
   if (body.planMode !== undefined && body.planMode !== null && typeof body.planMode !== 'boolean') {
     throw new AgentSettingsValidationError('invalid_plan_mode', 'planMode must be a boolean');
   }
-  // Semantic validation (planMode+provider, effort=max+model) runs via resolve on the merged agent.
+  // Semantic validation (currently planMode+provider) runs via resolve on the merged agent.
   const probe: AgentLike = {
     name: (body.name as string) ?? 'probe',
     provider: body.provider as string | undefined,
@@ -183,15 +179,6 @@ function markClearableBulkModelField(
 
   if (err.code === 'plan_mode_claude_only' && !unsetFields.has('planMode')) {
     unsetFields.add('planMode');
-    return true;
-  }
-
-  if (
-    (err.code === 'effort_max_claude_only' || err.code === 'effort_max_requires_opus') &&
-    existing.reasoningEffort === 'max' &&
-    !unsetFields.has('reasoningEffort')
-  ) {
-    unsetFields.add('reasoningEffort');
     return true;
   }
 

@@ -3,12 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import { pullRequests } from '../services/workspaceService';
 import {
-  AlertCircle, ArrowRight, Bot, Clock, ExternalLink, FileDiff, FolderGit2,
-  GitPullRequest, KeyRound, Minus, Plus, RefreshCw,
+  AlertCircle, GitPullRequest, KeyRound, RefreshCw,
 } from 'lucide-react';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 import { system as systemApi } from '../services/api';
-import IconTooltipButton from '../components/common/IconTooltipButton';
 import { workspaceChatPath } from '../lib/workspace-routes';
 
 const STATUS_FILTERS = [
@@ -18,21 +16,12 @@ const STATUS_FILTERS = [
   { id: '', label: 'All' },
 ];
 
-function statusBadge(status: string) {
-  const cls = status === 'merged'
-    ? 'border-accent-purple/30 bg-accent-purple/10 text-accent-purple'
-    : status === 'closed'
-      ? 'border-accent-red/30 bg-accent-red/10 text-accent-red'
-      : 'border-accent-green/30 bg-accent-green/10 text-accent-green';
-  return <span className={`rounded-md border px-2 py-0.5 font-mono text-[10.5px] ${cls}`}>{status}</span>;
-}
-
 function timeAgo(date: string) {
   const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
-  if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
+  if (seconds < 60) return 'now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86400)}d`;
 }
 
 function integrationErrorMessage(err: unknown, fallback: string): string {
@@ -178,171 +167,71 @@ export default function PullRequestListPage() {
   }
 
   return (
-    <div className="content scroll-hide bg-app" data-screen-label="pull-requests">
-      <div className="w-full px-8 py-8">
-        <div className="mb-6 flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md border border-app bg-app-card text-theme-muted">
-              <GitPullRequest className="h-[18px] w-[18px]" />
-            </span>
-            <div>
-              <h1 className="text-[24px] font-semibold leading-tight text-theme-primary">Pull requests</h1>
-              <p className="mt-1 text-[13px] text-theme-muted">Review GitHub pull requests, open workspaces, and resolve review feedback.</p>
-            </div>
+    <section className="v8-page v8-prs" data-screen-label="pull-requests" aria-labelledby="pull-requests-title">
+      <div className="v8-page__wrap">
+        <header className="v8-pagehead">
+          <div>
+            <h1 id="pull-requests-title">Pull requests</h1>
+            <p>Review GitHub pull requests, open workspaces, and resolve review feedback.</p>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleSync}
-              disabled={syncing}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-              type="button"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Syncing' : 'Sync'}
-            </button>
-          </div>
-        </div>
+        </header>
 
         {connectionError && (
-          <div className="mb-4 rounded-md border border-accent-red/30 bg-accent-red/5 px-5 py-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-accent-red" />
+          <div className="v8-prs-error">
+            <div>
+              <div>
+                <AlertCircle />
                 <div>
-                  <div className="text-[14px] font-semibold text-theme-primary">Could not reach GitHub</div>
-                  <p className="mt-1 text-[13px] text-theme-muted">{connectionError}</p>
+                  <b>Could not reach GitHub</b>
+                  <p>{connectionError}</p>
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  onClick={handleSync}
-                  disabled={syncing}
-                  className="inline-flex h-8 items-center gap-2 rounded-md border border-app bg-app px-3 text-[12px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary disabled:cursor-not-allowed disabled:opacity-50"
-                  type="button"
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} /> Retry
-                </button>
-              </div>
+              <button onClick={handleSync} disabled={syncing} className="btn btn-secondary btn-sm" type="button"><RefreshCw className={syncing ? 'animate-spin' : ''} /> Retry</button>
             </div>
           </div>
         )}
 
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-app bg-app-card px-3 py-2">
-          <div className="flex items-center gap-1">
-            {STATUS_FILTERS.map(filter => (
-              <button
-                key={filter.id}
-                onClick={() => setStatusFilter(filter.id)}
-                className={`h-8 rounded-md px-3 text-[12px] font-medium transition-colors ${
-                  statusFilter === filter.id
-                    ? 'bg-app-muted text-theme-primary shadow-sm'
-                    : 'text-theme-muted hover:text-theme-primary'
-                }`}
-                type="button"
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
-          <span className="font-mono text-[11px] text-theme-muted">{prs.length} result{prs.length === 1 ? '' : 's'}</span>
+        <div className="v8-chips v8-prs-filters">
+          {STATUS_FILTERS.map(filter => (
+            <button key={filter.id || 'all'} onClick={() => setStatusFilter(filter.id)} className={statusFilter === filter.id ? 'on' : ''} type="button">
+              {filter.label}{filter.id === 'open' && <span>{prs.length}</span>}
+            </button>
+          ))}
         </div>
 
         {loading ? (
-          <div className="space-y-3">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <div key={index} className="rounded-md border border-app bg-app-card px-5 py-4">
-                <div className="h-4 w-64 animate-pulse rounded-md bg-app-muted" />
-                <div className="mt-3 h-3 w-96 animate-pulse rounded-md bg-app-muted" />
-              </div>
-            ))}
-          </div>
+          <div className="v8-prs-loading">Loading pull requests…</div>
         ) : prs.length === 0 ? (
-          <div className="rounded-md border border-dashed border-app bg-app-card px-5 py-12 text-center">
-            <GitPullRequest className="mx-auto h-8 w-8 text-theme-subtle" />
-            <div className="mt-4 text-[15px] font-semibold text-theme-primary">{emptyState.title}</div>
-            <p className="mt-1 text-[13px] text-theme-muted">{emptyState.description}</p>
-            <button
-              onClick={handleSync}
-              className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
-              type="button"
-            >
-              <RefreshCw className="h-3.5 w-3.5" /> Sync pull requests
-            </button>
+          <div className="v8-empty">
+            <span className="glyph"><GitPullRequest /></span>
+            <h2>{statusFilter ? emptyState.title : 'No pull requests'}</h2>
+            <p>{statusFilter ? emptyState.description : 'PRs opened by Allen sessions appear here after each sync (every 30 minutes).'}</p>
+            <button onClick={handleSync} className="v8-btn v8-btn--ink" type="button">Sync now</button>
           </div>
         ) : (
-          <div className="space-y-2.5">
+          <div className="v8-prs-panel">
             {prs.map(pr => (
               <div
                 key={pr._id}
-                className="cursor-pointer rounded-md border border-app bg-app-card px-4 py-3 transition-colors hover:border-app-strong hover:bg-app-muted/20"
+                className="v8-prs-row"
                 onClick={() => navigate(`/pull-requests/${pr._id}`)}
+                onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') navigate(`/pull-requests/${pr._id}`); }}
+                role="link"
+                tabIndex={0}
               >
-                <div className="flex items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="shrink-0 font-mono text-[12px] text-theme-muted">#{pr.number}</span>
-                      <span className="min-w-0 truncate text-[14px] font-semibold leading-5 text-theme-primary">{pr.title}</span>
-                      {statusBadge(pr.status)}
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[11px] leading-4 text-theme-muted">
-                      <span>{pr.repoName}</span>
-                      <span className="text-theme-subtle">·</span>
-                      <span className="inline-flex items-center gap-1">
-                        {pr.branch}
-                        <ArrowRight className="h-3 w-3" />
-                        {pr.baseBranch}
-                      </span>
-                      <span className="text-theme-subtle">·</span>
-                      <span>by {pr.author}</span>
-                      {pr.createdByAgent && (
-                        <>
-                        <span className="text-theme-subtle">·</span>
-                        <span className="inline-flex items-center gap-1 text-theme-secondary">
-                          <Bot className="h-3 w-3" /> {pr.createdByAgent}
-                        </span>
-                        </>
-                      )}
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10.5px] leading-4 text-theme-muted">
-                      <span className="inline-flex items-center gap-1">
-                        <Clock className="h-3 w-3" /> updated {timeAgo(pr.updatedAt)}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <FileDiff className="h-3 w-3" /> {pr.changedFiles} files
-                      </span>
-                      <span className="inline-flex items-center gap-0.5 text-accent-green">
-                        <Plus className="h-3 w-3" />{pr.additions}
-                      </span>
-                      <span className="inline-flex items-center gap-0.5 text-accent-red">
-                        <Minus className="h-3 w-3" />{pr.deletions}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="ml-auto flex shrink-0 items-center gap-2" onClick={event => event.stopPropagation()}>
-                    {pr.status === 'open' && (
-                      <button
-                        onClick={() => handleCreateWorkspace(pr._id)}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-app bg-app px-2.5 text-[12px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
-                        type="button"
-                      >
-                        <FolderGit2 className="h-3.5 w-3.5" /> Workspace
-                      </button>
-                    )}
-                    {pr.url && (
-                      <IconTooltipButton
-                        label="Open on GitHub"
-                        onClick={() => window.open(pr.url, '_blank', 'noopener,noreferrer')}
-                        className="h-8 w-8 border border-app bg-app hover:border-app-strong"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </IconTooltipButton>
-                    )}
-                  </div>
+                <span className={`v8-status-dot ${pr.status === 'merged' ? 'ok' : pr.status === 'closed' ? 'error' : pr.reviewDecision === 'CHANGES_REQUESTED' ? 'human' : 'ok'}`} />
+                <div className="v8-prs-copy">
+                  <b>#{pr.number} · {pr.title}</b>
+                  <small>{pr.repoName} <i>·</i> <code>{pr.branch} → {pr.baseBranch}</code> <i>·</i> by {pr.author}</small>
                 </div>
+                <time dateTime={pr.updatedAt}>{timeAgo(pr.updatedAt)}</time>
+                {pr.status === 'open' && <button onClick={event => { event.stopPropagation(); void handleCreateWorkspace(pr._id); }} className="btn btn-secondary" type="button">Workspace</button>}
               </div>
             ))}
           </div>
         )}
+
+        <p className="v8-prs-foot">PRs sync every 30 minutes · merged PRs free their workspace</p>
 
         {pendingWsId && (
           <SetupProgressDialog
@@ -353,6 +242,6 @@ export default function PullRequestListPage() {
           />
         )}
       </div>
-    </div>
+    </section>
   );
 }

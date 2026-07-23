@@ -1,0 +1,168 @@
+---
+title: 'Agents'
+description: 'Choose specialist agents by responsibility, review their configuration, and follow their executions.'
+---
+
+An agent is a specialist Allen can assign to a task. Each agent combines a defined responsibility with instructions, a provider and model, tool access, team ownership, and optional delegation targets.
+
+Start with the base Assistant when you want Allen to choose the best route. Request a specific agent when the task clearly belongs to that specialist—for example product requirements, implementation, QA, design, documentation, review, or operations.
+
+Open **Teams & Agents** to browse agents by team, search by name or capability, and inspect an agent's responsibilities and settings. You can also add an agent, import agent definitions, export selected agents, or run an agent directly. A direct run opens an execution where you can follow its status and results.
+
+:::tip Choose by responsibility first
+Pick the agent whose role matches the outcome you need. Then review its model, tools, team role, and delegation targets when those settings affect the task. If you are unsure which specialist owns the work, ask the base Assistant to route it.
+:::
+
+## What an agent record controls
+
+Open an agent in **Teams & Agents** to understand what it will do before you run or edit it.
+
+| Review | Why it matters |
+| --- | --- |
+| **Identity and type** | The display name is for people. The stable name is used by chat, workflows, and delegation links and cannot be changed after creation. A Team Agent coordinates work; a Technical Agent handles a specific task. |
+| **Agent instructions** | The instructions define the agent's responsibility, constraints, process, and expected outputs. Read them before assigning a task that can change files or external data. |
+| **Model** | Provider, model, reasoning effort, and plan mode set the agent's default runtime. Allen validates incompatible combinations when you save them. |
+| **Tools and MCP** | Files, Terminal, Git, web, database, Allen tools, and connected MCP servers determine what the agent can access. External MCP servers are available only when selected. |
+| **Team and delegation** | Team placement shows ownership. **Can spawn** lists the specialists this agent can delegate to when it coordinates work. |
+| **Import source** | A repository badge identifies an imported agent. **Sync from repo** refreshes its prompt, tools, model, and source version from the registered repository. |
+
+Editing an agent changes its defaults for future runs. A workflow or chat session can still apply a temporary runtime override without rewriting the saved agent.
+
+:::caution Review access with the instructions
+A capable prompt does not grant a tool, and an enabled tool does not explain when it should be used. Check both before saving or running an agent.
+:::
+
+## Where users see agents
+
+| Surface | How to use the agent there |
+| --- | --- |
+| **Chat** | Keep **Assistant** selected when you want Allen to choose the route, or choose a named agent before the first message in a new conversation. The selected agent stays attached to that conversation after messaging begins. |
+| **Teams & Agents** | Browse by team, search names or capabilities, inspect instructions and access, edit defaults, run an agent directly, or manage imports and team assignment. |
+| **Workflows** | Select an agent for an agent node. The node can inherit the agent's runtime or temporarily override its model, reasoning, plan mode, and MCP access. |
+| **Executions** | Follow run status, activity, logs, input requests, context, child work, and artifacts. Use this view when a run needs intervention or deeper investigation. |
+| **Workspaces** | For repository work, open the linked workspace to inspect files, commands, previews, and changes before any Git action. |
+
+## Where agent definitions come from
+
+Choose the source that matches how you want to maintain the agent.
+
+| Source | Best for | What to expect |
+| --- | --- | --- |
+| **Built in** | Starting with Allen's ready-made specialists and leads | You can inspect and edit their configuration, but you cannot delete them. |
+| **Add agent** | Creating a specialist for this Allen instance | Choose its team, stable name, type, instructions, provider and model, tools, and MCP access. |
+| **Import JSON** | Moving Allen agents and their team definitions between Allen instances | Export selected agents or all agents, then import the bundle. Active existing names are skipped rather than overwritten. |
+| **Import from repo** | Keeping agent definitions alongside repository code | Select a registered repository, preview compatible files under `.claude/agents/`, and choose which agents to import. New imports start in **Unassigned**. |
+
+A repository agent file is Markdown with YAML frontmatter. It needs a lowercase slug in `name`; `description`, `tools`, and `model` are optional; the Markdown body becomes the agent instructions. The import preview identifies parse errors, name collisions, and agents already imported from that repository.
+
+Use **Sync from repo** when a repository-backed definition changes. Sync updates the imported instructions, tools, and model while keeping the agent's Allen identity and assignment visible.
+
+## How agents run
+
+Agents have three common entry points.
+
+| Start from | Use it when | What happens |
+| --- | --- | --- |
+| **Chat** | You want a conversation with one specialist or want Assistant to assign the task | Choose the agent before the first message, or review and confirm the route Assistant proposes. Conversation-level model settings can override the saved default for that session. |
+| **Teams & Agents → Run agent** | You have one bounded task for a known specialist | Enter the prompt and optionally select a registered repository. Allen starts the run and opens its execution page. |
+| **Workflows** | The agent is one step in a repeatable process | The workflow supplies the task and can inherit or override the agent's runtime settings for that node. |
+
+When several settings are available, a workflow-node override wins over a chat-session override, and a session override wins over the saved agent default. Overrides affect that run or session only.
+
+Before starting a direct run, make the prompt explicit about the outcome, repository, allowed actions, validation, and whether Git operations are permitted. Selecting a repository in **Run agent** gives the agent that registered repository as its working directory; it does not create a new isolated workspace. When files may change, route the task through chat or a workflow that creates a workspace, then review the linked workspace before any Git action.
+
+## Teams, leads, and spawn targets
+
+Teams make ownership and delegation visible. Each team has a lead, a mission, and member specialists; a team can also sit under a parent team. Open a team to review its lead, members, provider and model mix, and delegation graph.
+
+The lead coordinates work that belongs to the team. Members handle narrower tasks. An agent's **Can spawn** list is the delegation boundary: it shows which specialists that agent can start during orchestration. Team membership alone does not guarantee that the lead can delegate to a member.
+
+When you assign selected agents to a team, keep **Also allow the team lead to spawn these agents** enabled if the lead should be able to hand work to them. Disable it when you want organizational grouping without delegation access.
+
+**Create team** can create a lead and place selected agents under it in one step. Review the generated lead's model and reasoning settings, then inspect its **Can spawn** list before using the team for real work.
+
+## Editing and protection rules
+
+Use the action that matches the change you want to make:
+
+- Open **Edit** to change the display name, type, instructions, runtime defaults, appearance, tools, or MCP access. The stable **Name** is locked after creation because chats, workflows, and delegation links use it.
+- Use the team assignment and team editing actions to move an agent, change a lead, or update delegation. These relationships are not changed from the agent edit form.
+- Use **Sync from repo** only for an imported agent. Sync refreshes the instructions, tools, model, and source version from its original registered repository.
+- Select multiple agents and choose **Change model** for a bulk runtime update. Allen can skip agents with incompatible settings, or you can choose **Clear incompatible settings when needed** before applying the change.
+- Delete only user-created or imported agents that are no longer needed. Built-in agents do not offer a delete action, and an active team lead must be replaced or its team removed first.
+
+Editing an agent does not rewrite completed executions or an existing chat's temporary override. Review the saved agent again before its next run when you change instructions, access, or delegation.
+
+:::caution Team deletion includes its agents
+The **Delete team and agents** confirmation removes the team and soft-deletes its assigned non-built-in agents. Read the member count in the confirmation before continuing.
+:::
+
+## Common agent types
+
+Choose the specialist by the result you need, not only by its model or tool list.
+
+| Agent type | Good request examples |
+| --- | --- |
+| Product | Clarify requirements, acceptance criteria, scope, or rollout decisions. |
+| Engineering | Implement or investigate backend, frontend, infrastructure, security, or integration work. |
+| QA | Create a test plan, run validation, or verify acceptance criteria. |
+| Design | Explore interface directions, evaluate options, or refine a product flow. |
+| Documentation | Create or update tutorials, how-to guides, references, and release notes. |
+| Review | Inspect a change for correctness, risk, usability, or quality without owning the implementation. |
+| Operations | Investigate failures, triage incidents, monitor a system, or route repair work. |
+
+Use a team lead when a request needs coordination across several specialists. Use a technical agent when the task is narrow enough for one owner.
+
+## What an agent receives at runtime
+
+The saved agent record is the starting point, not the whole task. When a run begins, Allen combines the agent's instructions and access with the request supplied by chat, **Run agent**, or a workflow.
+
+Depending on the entry point, the run can also receive:
+
+- a registered repository or linked workspace;
+- repository guidance and retrieved context relevant to the request;
+- a chat-session or workflow-node runtime override;
+- workflow requirements such as validation gates, artifacts, and human-input checkpoints;
+- the tools and MCP servers allowed for that agent and run.
+
+Open the execution to see what actually ran: status, activity, logs, context, child work, input requests, and artifacts. For repository changes, also inspect the linked workspace and its diff. Do not assume that a successful agent message means a change was validated or committed; check the requested evidence.
+
+## Choosing models and run modes
+
+The agent edit form shows providers currently available to Allen and the models available for the selected provider. The saved selection becomes the default for future runs.
+
+- **Reasoning** ranges from the provider default through Off, Low, Medium, High, and Max. **Max** is available only with a Claude Opus model.
+- **Plan Mode** is available for Claude. **On — read & plan only** prevents file edits; **Off — may edit files** allows editing when the selected tools and task also permit it.
+- A chat session or workflow node can inherit the saved default or apply a temporary override. A workflow-node override takes priority over a session override, and a session override takes priority over the saved agent setting.
+- Temporary overrides do not change the agent record. Edit the agent itself when the new model or mode should become its normal default.
+
+For a bulk model change, leave **Clear incompatible settings when needed** off when you would rather skip affected agents. Turn it on when Allen should clear incompatible Plan Mode or Max reasoning settings so the selected provider and model can be applied. Review the updated and skipped counts after the operation.
+
+## Moving and maintaining agent definitions
+
+Use JSON when you want to move Allen-managed definitions between Allen instances:
+
+1. In **Teams & Agents**, select the agents you want or export all agents.
+2. Save the JSON bundle. Allen includes the referenced team definitions and removes instance-specific IDs, timestamps, source links, and built-in protection from the portable copy.
+3. On the destination Allen instance, choose **Import JSON** and select the bundle.
+4. Review the created and skipped results. An active agent or team with the same stable name is skipped rather than overwritten.
+
+Use **Import from repo** when the repository should remain the source of the agent definition. Select a registered repository, review every importable file, parse error, name collision, and already-imported result, then import only the selected agents. New repository imports start in **Unassigned**, where you can review and assign them before use.
+
+Repository imports never silently overwrite an active agent. When an already-imported definition changes, choose **Sync from repo** for that agent and review its instructions, tools, and model afterward.
+
+## Before you save or run an agent
+
+Check the following before using an agent for consequential work:
+
+- **Outcome:** the responsibility and instructions match the request.
+- **Runtime:** the provider, model, reasoning level, and Plan Mode fit the task.
+- **Access:** system tools, MCP servers, and individual MCP tools are limited to what the agent needs.
+- **Ownership:** the team, lead or member role, and **Can spawn** targets are intentional.
+- **Repository safety:** file-changing work uses the correct repository and, when isolation is needed, a workspace-backed chat or workflow.
+- **Source:** a repository badge points to the expected definition, and any needed sync has been reviewed.
+- **Evidence:** the request names the validation, artifact, diff, or checkpoint you expect to inspect.
+
+After the run, check the execution and any workspace rather than relying only on the final message. Confirm validation results and required artifacts before approving follow-up actions such as commits, pushes, pull requests, deployments, or external updates.
+
+Related guides: [Start a chat](/guides/start-a-chat), [Create or open a workspace](/guides/create-or-open-a-workspace), [Create an agent](/guides/create-an-agent), [Run a workflow](/guides/run-a-workflow).

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, AlertTriangle, Check, Loader2, Settings, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Check, Loader2, X } from 'lucide-react';
 import { agents as agentsApi, type BulkModelSkipped, type BulkUpdateModelResponse } from '../../services/api';
 import { useEnabledProvidersStatus, isProviderSelectable, type EnabledProvider } from '../../hooks/useEnabledProviders';
 import { useModelRegistry } from '../../hooks/useModelRegistry';
@@ -10,6 +10,7 @@ import {
   OPENROUTER_NON_CLAUDE_WARNING,
 } from '../../lib/openrouter-warning';
 import Select from '../common/Select';
+import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
 import IconTooltipButton from '../common/IconTooltipButton';
 import { useToast } from '../common/Toast';
 
@@ -52,6 +53,7 @@ export default function BulkAgentModelDialog({
     .map((p) => ({
       value: p,
       label: getModelDisplay(p).providerLabel,
+      icon: <ProviderIcon provider={p} className={`h-4 w-4 ${providerIconColor(p)}`} />,
     })), [selectableProviders]);
 
   const registryModelsForProvider = useMemo(
@@ -59,7 +61,13 @@ export default function BulkAgentModelDialog({
     [registryGetModelsForProvider, provider],
   );
   const modelOptions = useMemo(
-    () => buildModelOptionsForProvider(provider, enabledProviders, registryModelsForProvider, model),
+    () => buildModelOptionsForProvider(provider, enabledProviders, registryModelsForProvider, model)
+      .map(option => ({
+        ...option,
+        icon: option.value === '__other__'
+          ? undefined
+          : <ProviderIcon provider={provider} className={`h-4 w-4 ${providerIconColor(provider)}`} />,
+      })),
     [enabledProviders, provider, registryModelsForProvider, model],
   );
 
@@ -139,8 +147,8 @@ export default function BulkAgentModelDialog({
       >
         <div className="flex items-start justify-between gap-4 border-b border-app px-6 py-5">
           <div className="flex min-w-0 items-start gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app bg-app text-accent">
-              <Settings className="h-[18px] w-[18px]" />
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-app bg-app">
+              <ProviderIcon provider={provider} className={`h-5 w-5 ${providerIconColor(provider)}`} />
             </span>
             <div className="min-w-0">
               <h3 className="text-[17px] font-semibold tracking-tight text-theme-primary">Change model</h3>

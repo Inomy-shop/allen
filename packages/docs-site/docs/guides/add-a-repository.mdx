@@ -1,0 +1,102 @@
+---
+title: 'Add a Repository'
+---
+
+Register a repository when you want Allen to inspect its code, ground conversations, create workspaces, or run repository-aware agents and workflows.
+
+:::info Media placeholders
+Add screenshots or clips before publishing. Suggested captures: `static/img/docs/guides-add-a-repository-01.png` through `static/img/docs/guides-add-a-repository-05.png`, plus `static/videos/docs/guides-add-a-repository-short.mp4`. Show the **Existing local repo** and **Clone from GitHub** tabs, validation results, the saved repository, and its actions.
+:::
+
+## Choose how to add the repository
+
+Open **Repositories**, then choose **Add repository**. Allen offers two paths:
+
+- **Existing local repo** registers a Git repository already on this computer. Allen keeps it at its current path.
+- **Clone from GitHub** creates an Allen-managed local clone from a GitHub URL.
+
+Use a local repository when the correct checkout already exists. Use clone when you want Allen to create and manage a fresh local copy.
+
+## Register an existing local repository
+
+1. Select **Existing local repo**.
+2. Enter the absolute **Repository path**. In the desktop app, you can use **Browse** to select it.
+3. Enter a clear **Name**.
+4. Optionally add a **Description** and **Tags** to make the repository easier to identify and route.
+5. Choose **Validate** and review the checks.
+6. Resolve errors, then choose **Onboard repository**.
+
+Validation checks that the path exists, is a directory, is accessible, points to a Git work tree, and is not already registered. It also reports useful warnings such as a detached `HEAD` or uncommitted changes.
+
+Registration does not copy or relocate the repository. Allen records the path, reads repository metadata, and starts background context processing.
+
+## Clone from GitHub
+
+1. Select **Clone from GitHub**.
+2. Enter the GitHub **Repository URL**. HTTPS and SSH GitHub forms are supported.
+3. Enter the branch to check out. The field defaults to `main`, but you should use the repository's actual branch.
+4. Enter a **Name** and optionally a **Description** and **Tags**.
+5. Choose **Validate** and review repository access and destination checks.
+6. Choose **Clone repository**.
+
+Private repositories require Git credentials that already work on the machine. Allen can try HTTPS and SSH access, but it does not ask you to paste credentials into the form.
+
+The clone can still fail if the requested branch does not exist or authentication changes after validation. Read the returned error, correct the URL, branch, or credentials, and try again.
+
+## Review validation results
+
+Treat **Validate** as a recommended preflight step. A successful result confirms the checks Allen can perform before registration or cloning; it does not guarantee that later network or filesystem operations cannot fail.
+
+Do not continue when validation reports:
+
+- a missing or non-Git local path;
+- insufficient read or write access;
+- a duplicate registered path or clone destination;
+- an inaccessible GitHub repository;
+- a destination directory that already exists.
+
+Warnings such as a dirty working tree may be acceptable for read-only use, but review them before asking an agent to work with the checkout.
+
+## After the repository is added
+
+The repository appears in **Repositories**. From there you can:
+
+- edit its name, description, tags, or default branch;
+- choose **Pull latest** to update from the detected default branch;
+- choose **Scan repository** to refresh metadata and context;
+- open **Context** to inspect or manage repository context;
+- use it in chat, Design Studio, workspaces, agents, and workflows.
+
+Changing the default branch verifies the remote branch and switches the registered checkout. Pulling or scanning can change the local repository state or the context Allen uses, so review the target repository first.
+
+## Delete safely
+
+:::danger Repository deletion removes local files
+Deleting a registered repository removes its Allen record and recursively removes the registered repository path. This applies to Allen-managed clones and repositories registered from an existing local path. Back up or move anything you need before confirming deletion.
+:::
+
+If you only want to stop using a repository temporarily, do not use **Delete** as a harmless disconnect action.
+
+## Troubleshooting
+
+### Local validation says the path is not a Git repository
+
+Select the repository root and verify that `git rev-parse --is-inside-work-tree` succeeds there.
+
+### GitHub access fails
+
+Confirm the URL and test your normal Git authentication outside Allen. For private repositories, make sure either HTTPS credentials or SSH keys are available to the Allen process.
+
+### Clone fails after validation
+
+Check that the requested branch exists and that the destination was not created by another process. Remove or choose a different destination only after confirming it contains no needed files.
+
+### Repository context looks stale
+
+Choose **Pull latest** if the checkout is behind, then choose **Scan repository**. Background context processing may continue after the repository first appears.
+
+## Related guides
+
+- [Create or Open a Workspace](./create-or-open-a-workspace)
+- [Start a Chat](./start-a-chat)
+- [Repositories](../concepts/repositories)

@@ -194,6 +194,11 @@ export interface ReopenCommentResponse {
   lastReopenAt: string;
 }
 
+export interface ResolveAllCommentsResponse {
+  resolvedCount: number;
+  comments: DocumentCommentDoc[];
+}
+
 // ── Timeline Types ────────────────────────────────────────────────────────────
 
 export type TimelineEventType =
@@ -367,7 +372,7 @@ export const documents = {
     documentId: string,
     body: { body: string; anchor: WriteAnchor },
   ) =>
-    request<CreateCommentResponse>(`/documents/${documentId}/comments`, {
+    request<DocumentCommentDoc>(`/documents/${documentId}/comments`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
@@ -381,14 +386,21 @@ export const documents = {
 
   // ── D11: Resolve comment ────────────────────────────────────────────────
   resolveComment: (documentId: string, commentId: string, body: { resolutionNote: string }) =>
-    request<ResolveCommentResponse>(`/documents/${documentId}/comments/${commentId}/resolve`, {
+    request<DocumentCommentDoc>(`/documents/${documentId}/comments/${commentId}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  // ── D11a: Resolve every open thread ──────────────────────────────────
+  resolveAllComments: (documentId: string, body: { resolutionNote: string }) =>
+    request<ResolveAllCommentsResponse>(`/documents/${documentId}/comments/resolve-all`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
 
   // ── D12: Reopen comment ─────────────────────────────────────────────────
   reopenComment: (documentId: string, commentId: string) =>
-    request<ReopenCommentResponse>(`/documents/${documentId}/comments/${commentId}/reopen`, {
+    request<DocumentCommentDoc>(`/documents/${documentId}/comments/${commentId}/reopen`, {
       method: 'POST',
     }),
 

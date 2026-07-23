@@ -143,7 +143,7 @@ export function renderModelRecoveryIntervention(
       name: 'reasoning_effort',
       type: 'select',
       label: 'Reasoning Effort',
-      options: ['off', 'low', 'medium', 'high', 'max'],
+      options: ['off', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
       required: false,
     },
   ];
@@ -578,7 +578,7 @@ function fieldsForWidget(widget: HumanWidget | undefined, kind: HumanInterventio
         name: 'reasoning_effort',
         label: 'Reasoning Effort',
         type: 'select',
-        options: ['off', 'low', 'medium', 'high', 'max'],
+        options: ['off', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
         required: false,
       },
     ];

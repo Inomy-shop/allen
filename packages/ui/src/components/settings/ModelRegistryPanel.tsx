@@ -8,6 +8,7 @@ import {
   X,
 } from 'lucide-react';
 import Select from '../common/Select';
+import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
 import { useEnabledProviders } from '../../hooks/useEnabledProviders';
 import {
   useModelRegistry,
@@ -346,9 +347,14 @@ export function ProviderModelRegistrySection({
   return (
     <div className="model-registry-provider-section">
       <div className="model-registry-provider-head">
-        <div>
-          <h4>Provider Models</h4>
-          <p>{providerModels.length} {providerModels.length === 1 ? 'model' : 'models'} shown</p>
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-app bg-app">
+            <ProviderIcon provider={provider} className={`h-4 w-4 ${providerIconColor(provider)}`} />
+          </span>
+          <div className="min-w-0">
+            <h4>{providerLabel} Models</h4>
+            <p>{providerModels.length} {providerModels.length === 1 ? 'model' : 'models'} shown</p>
+          </div>
         </div>
         <div className="model-registry-provider-actions">
           <label className="model-registry-inactive-toggle">
@@ -387,13 +393,16 @@ export function ProviderModelRegistrySection({
         <div className="model-registry-list">
           {providerModels.map((entry) => (
             <div key={entry._id} className={`model-registry-row ${entry.isActive ? '' : 'inactive'}`}>
-              <div className="model-registry-row-main">
-                <span className="model-registry-row-title">
-                  {entry.displayName || entry.fullId}
-                  {entry.tier && <span className="model-registry-tier">{entry.tier}</span>}
-                  {!entry.isActive && <span className="model-registry-status">inactive</span>}
-                </span>
-                <span className="model-registry-row-id">{entry.fullId}</span>
+              <div className="model-registry-row-identity">
+                <ProviderIcon provider={provider} className={`h-4 w-4 shrink-0 ${providerIconColor(provider)}`} />
+                <div className="model-registry-row-main">
+                  <span className="model-registry-row-title">
+                    {entry.displayName || entry.fullId}
+                    {entry.tier && <span className="model-registry-tier">{entry.tier}</span>}
+                    {!entry.isActive && <span className="model-registry-status">inactive</span>}
+                  </span>
+                  <span className="model-registry-row-id">{entry.fullId}</span>
+                </div>
               </div>
               <div className="model-registry-row-costs">
                 <span>In {formatCost(entry.costInputPerMTok)}</span>

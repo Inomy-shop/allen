@@ -8,6 +8,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createRequire } from 'module';
 import { statSync, constants as fsConstants, accessSync, chmodSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { resolveAllenHome } from '@allen/engine';
 
 // node-pty is a native C++ addon — must use require() not import()
 let pty: typeof import('node-pty') | null = null;
@@ -93,6 +94,25 @@ export interface TerminalWebSocketServerHandle {
   stop(): Promise<void>;
 }
 
+export type TerminalWebSocketRoute = {
+  sourceType: 'workspace' | 'repo' | 'allen';
+  sourceId: string;
+  terminalId: string;
+};
+
+export function matchTerminalWebSocketRoute(url: string): TerminalWebSocketRoute | null {
+  const workspaceMatch = url.match(/^\/ws\/workspaces\/([a-f0-9]+)\/terminal\/([a-zA-Z0-9_-]+)/);
+  if (workspaceMatch) return { sourceType: 'workspace', sourceId: workspaceMatch[1], terminalId: workspaceMatch[2] };
+
+  const repoMatch = url.match(/^\/ws\/repos\/([a-f0-9]+)\/terminal\/([a-zA-Z0-9_-]+)/);
+  if (repoMatch) return { sourceType: 'repo', sourceId: repoMatch[1], terminalId: repoMatch[2] };
+
+  const allenMatch = url.match(/^\/ws\/allen\/terminal\/([a-zA-Z0-9_-]+)/);
+  if (allenMatch) return { sourceType: 'allen', sourceId: 'home', terminalId: allenMatch[1] };
+
+  return null;
+}
+
 /**
  * Resolve a shell binary that actually exists on this machine. Walks
  * a fallback chain so that a missing $SHELL doesn't break the terminal.
@@ -161,6 +181,7 @@ function killAllTerminalSessions(): void {
  * URL patterns:
  *   /ws/workspaces/:workspaceId/terminal/:terminalId
  *   /ws/repos/:repoId/terminal/:terminalId
+ *   /ws/allen/terminal/:terminalId
  */
 export function startTerminalWebSocketServer(
   getWorkspacePath: (workspaceId: string) => Promise<string | null>,
@@ -190,18 +211,24 @@ export function startTerminalWebSocketServer(
     const url = request.url ?? '';
 
     // Terminal WebSocket
-    const termMatch = url.match(/^\/ws\/workspaces\/([a-f0-9]+)\/terminal\/([a-zA-Z0-9_-]+)/);
-    if (termMatch) {
+    const terminalRoute = matchTerminalWebSocketRoute(url);
+    if (terminalRoute?.sourceType === 'workspace') {
       wss.handleUpgrade(request, socket, head, (ws) => {
-        handleConnection(ws, 'workspace', termMatch[1], termMatch[2], getWorkspacePath);
+        handleConnection(ws, terminalRoute.sourceType, terminalRoute.sourceId, terminalRoute.terminalId, getWorkspacePath);
       });
       return;
     }
 
-    const repoTermMatch = url.match(/^\/ws\/repos\/([a-f0-9]+)\/terminal\/([a-zA-Z0-9_-]+)/);
-    if (repoTermMatch && getRepoPath) {
+    if (terminalRoute?.sourceType === 'repo' && getRepoPath) {
       wss.handleUpgrade(request, socket, head, (ws) => {
-        handleConnection(ws, 'repo', repoTermMatch[1], repoTermMatch[2], getRepoPath);
+        handleConnection(ws, terminalRoute.sourceType, terminalRoute.sourceId, terminalRoute.terminalId, getRepoPath);
+      });
+      return;
+    }
+
+    if (terminalRoute?.sourceType === 'allen') {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        handleConnection(ws, terminalRoute.sourceType, terminalRoute.sourceId, terminalRoute.terminalId, async () => resolveAllenHome());
       });
       return;
     }
@@ -272,12 +299,12 @@ export function startTerminalWebSocketServer(
 
 async function handleConnection(
   ws: WebSocket,
-  sourceType: 'workspace' | 'repo',
+  sourceType: 'workspace' | 'repo' | 'allen',
   sourceId: string,
   terminalId: string,
   getPath: (id: string) => Promise<string | null>,
 ): Promise<void> {
-  const sourceLabel = sourceType === 'repo' ? 'Repository' : 'Workspace';
+  const sourceLabel = sourceType === 'repo' ? 'Repository' : sourceType === 'allen' ? 'Allen home' : 'Workspace';
   const key = `${sourceType}:${sourceId}:${terminalId}`;
 
   // Reuse existing session or create new

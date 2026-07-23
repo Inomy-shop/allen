@@ -1,0 +1,113 @@
+---
+title: 'Repositories'
+description: 'Register codebases, verify their branch and context state, and create isolated workspaces for changes.'
+---
+
+A repository is a codebase registered with Allen. Registration gives chats, workflows, context tools, and workspaces an explicit project target.
+
+Open **Repositories** to add a local checkout or clone a GitHub repository, then review its path, detected metadata, default branch, scan state, and available actions.
+
+:::tip Register once, work in workspaces
+Treat the registered repository as the source checkout Allen knows about. For task-specific file changes, create a workspace so the branch, diff, commands, and review state stay isolated.
+:::
+
+## Add a repository
+
+Choose **Add repository**, then select the source that matches your setup.
+
+| Option | Use it when | What Allen does |
+| --- | --- | --- |
+| **Clone from GitHub** | Allen should create a new local checkout from a GitHub HTTPS or SSH URL | Clones into Allen's managed repositories directory, checks out the requested branch, records detected metadata, and schedules a context scan |
+| **Existing local repo** | A Git checkout already exists on the Allen machine | Registers that checkout in place; Allen does not move its files into the managed repositories directory |
+
+For either option, you can set a readable name, description, and tags. Clone mode also asks for the branch to check out. In the desktop app, **Browse** can select a local directory.
+
+Choose **Validate** before onboarding when you want to inspect preflight checks. Local validation reports path and directory access, Git status, duplicate registration, current branch, and whether the working tree is clean. Clone validation checks the GitHub URL, access method, repository name, and destination path.
+
+For private GitHub repositories, the Allen host must already have working HTTPS or SSH credentials. If HTTPS access is unavailable, Allen uses the SSH form of the repository URL.
+
+## What registration stores
+
+The repository record keeps the information Allen needs to present and route the project, including:
+
+- the registered name and filesystem path;
+- description, tags, active or archived status, and optional default workflow;
+- detected language, framework, package manager, remote URL, and default branch;
+- brief operator-written context;
+- scan status and timestamps;
+- usage information such as execution count and last-used time.
+
+Registration does not create a task branch or isolated working copy. That happens when you create a workspace or run a workflow with a workspace-creation step.
+
+## Keep the default branch correct
+
+The saved default branch is used when Allen creates workspaces and by repository actions such as **Pull latest**. Verify it before starting code-changing work.
+
+To change it:
+
+1. Choose **Edit repository**.
+2. Enter the new **Default branch**.
+3. Choose **Save changes**.
+
+Allen fetches and prunes `origin`, verifies `origin/<branch>`, switches the registered checkout to track that remote branch, and then saves the setting. If local changes would be overwritten, Git blocks the switch and Allen leaves the saved branch unchanged.
+
+This action changes the checked-out branch in the registered repository. Review uncommitted local work before changing it.
+
+## Repository actions
+
+Each repository row provides actions for common maintenance and task entry points.
+
+| Action | What to expect |
+| --- | --- |
+| **Context** | Opens context management for curated context, mandatory mappings, and scan evidence when the context engine is enabled |
+| **New workspace** | Creates an isolated worktree from a chosen base branch and opens its workspace chat |
+| **Pull latest** | Fetches, checks out the saved default branch, and pulls it from `origin`; new commits trigger a rescan from the UI |
+| **Scan repository** | Refreshes detected metadata and schedules the deeper repository scan; progress is visible in the repository row and execution surfaces |
+| **Cancel scan** | Cancels or clears the current scan so you can start again |
+| **Workspace config** | Configures setup, environment files, services, health checks, cleanup, and pre-PR commands used by new workspaces |
+| **Edit repository** | Changes name, description, tags, default branch, brief context, default workflow, or active/archived status |
+| **Delete repository** | Permanently removes the registration and deletes the registered directory from disk |
+
+Use **Pull latest** only when the registered checkout is ready to switch to and update its default branch. The action operates on the repository path itself, not on a workspace.
+
+## Scans and repository context
+
+When a repository is added or explicitly scanned, Allen first refreshes inexpensive detected metadata and then schedules deeper context work in the background. A completed registration therefore does not necessarily mean semantic repository context is ready.
+
+Check the repository's scan state or open **Context** before depending on retrieved repository knowledge. If a scan is running, you can monitor its execution or cancel it. If context is disabled in your Allen environment, the repository remains available for file browsing, chats, and workspaces, but context-management and semantic recall features are unavailable.
+
+Repository context is supporting evidence, not a replacement for current source inspection. For claims about implementation or behavior, ask Allen to inspect the relevant code and tests when freshness matters.
+
+## Repository versus workspace
+
+| Repository | Workspace |
+| --- | --- |
+| Registered source checkout | Task-specific Git worktree |
+| Holds project metadata, context state, and default branch | Holds a branch, base commit, changes, commands, services, and linked chat |
+| Used to select the project for chat, scans, workflows, and workspace creation | Used to implement, validate, and review a particular change |
+| May be updated by branch, pull, scan, edit, and delete actions | Can be committed, pushed, turned into a pull request, or archived |
+
+Selecting a repository for a direct agent run gives that run the registered path; it does not create a workspace automatically. When the task may edit files, prefer a workspace-backed chat or a workflow that explicitly creates a workspace.
+
+## Archive or delete
+
+Set **Status** to **archived** when you want to keep the repository record but remove it from normal active routing and selection. You can change the status back to active later.
+
+:::danger Repository deletion removes files
+**Delete repository** is not an unregister-only action. After you type the repository name to confirm, Allen deletes the database record, removes its stored deep-context record, and recursively removes the registered path from disk. This applies to both Allen-managed clones and repositories registered from an existing local path.
+:::
+
+Before deleting, verify the displayed path, preserve any uncommitted work, check dependent workspaces and executions, and make an external backup if the checkout is needed elsewhere. Use archiving instead when you only want to stop routing new work to the repository.
+
+## Before starting repository work
+
+- **Target:** the registered path and remote belong to the intended project.
+- **Branch:** the saved default branch is current and correct.
+- **Local state:** the source checkout has no unreviewed changes that branch or pull actions could affect.
+- **Credentials:** the host can fetch and push only where intended.
+- **Context:** the scan is fresh enough for the request, or the task requires direct source inspection.
+- **Isolation:** file-changing work will use a workspace unless direct access is intentional.
+- **Validation:** the repository or workspace configuration identifies the commands that prove the change.
+- **Git permissions:** commits, pushes, and pull requests are requested and reviewed separately from file edits.
+
+Related concept: [Workspaces](/concepts/workspaces). Related guides: [Add a repository](/guides/add-a-repository), [Create or open a workspace](/guides/create-or-open-a-workspace).

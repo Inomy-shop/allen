@@ -6,6 +6,7 @@ import { AGENT_FALLBACK_CWD, type ChatProvider } from './chat-providers.js';
 import { toCodexArgs } from './agent-settings.js';
 import { buildControlledMcpConfig } from './chat-controlled-mcp.js';
 import { logRuntimeEvent } from './chat-runtime-logs.js';
+import { codexFileChanges } from './chat-tool-normalization.js';
 import type { PersistentChatRuntime, RuntimeCreateInput, RuntimeSlashCommand, RuntimeTurnInput, RuntimeTurnResult } from './chat-runtime-types.js';
 import type { ChatTraceEvent } from './chat-llm.js';
 
@@ -613,6 +614,25 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
         data: { tool: 'Bash', args, toolUseId: id },
       });
       turn.input.callbacks.onToolStart('Bash', args, id);
+      return;
+    }
+    if (type === 'fileChange') {
+      const files = codexFileChanges(item);
+      const args: Record<string, unknown> = { files };
+      const diff = files.map(file => file.diff).filter(Boolean).join('\n');
+      if (diff) args.diff = diff;
+      turn.pendingTools.set(id, { tool: 'Edit', args, startMs: Date.now() });
+      turn.trace.push({ timestamp: new Date(), type: 'tool_call', tool: 'Edit', toolUseId: id, args });
+      logRuntimeEvent({
+        db: turn.input.db,
+        sessionId: turn.input.chatSessionId,
+        provider: this.provider,
+        runtimeId: this.id,
+        eventType: 'normalized',
+        event: 'tool_start',
+        data: { tool: 'Edit', args, toolUseId: id },
+      });
+      turn.input.callbacks.onToolStart('Edit', args, id);
     }
   }
 
@@ -666,6 +686,27 @@ export class CodexAppServerRuntime implements PersistentChatRuntime {
         data: { tool: 'Bash', result, toolUseId: id, durationMs, isError: item.status !== 'completed' },
       });
       turn.input.callbacks.onToolResult('Bash', result, id, durationMs);
+      turn.pendingTools.delete(id);
+      return;
+    }
+    if (type === 'fileChange') {
+      const started = turn.pendingTools.get(id);
+      const durationMs = started ? Date.now() - started.startMs : 0;
+      const files = codexFileChanges(item);
+      const status = String(item.status ?? 'completed');
+      const result: Record<string, unknown> = { files, status };
+      if (status === 'failed' || status === 'declined') result.error = `File change ${status}`;
+      turn.trace.push({ timestamp: new Date(), type: 'tool_result', tool: 'Edit', toolUseId: id, result, durationMs, isError: Boolean(result.error) });
+      logRuntimeEvent({
+        db: turn.input.db,
+        sessionId: turn.input.chatSessionId,
+        provider: this.provider,
+        runtimeId: this.id,
+        eventType: 'normalized',
+        event: 'tool_result',
+        data: { tool: 'Edit', result, toolUseId: id, durationMs, isError: Boolean(result.error) },
+      });
+      turn.input.callbacks.onToolResult('Edit', result, id, durationMs);
       turn.pendingTools.delete(id);
     }
   }
@@ -1031,7 +1072,8 @@ function mcpResult(item: Record<string, unknown>): Record<string, unknown> {
 }
 
 function codexEffort(input: RuntimeTurnInput): string | undefined {
-  return input.resolvedSettings?.reasoningEffort === 'max' ? 'high' : input.resolvedSettings?.reasoningEffort;
+  const effort = input.resolvedSettings?.reasoningEffort;
+  return effort && effort !== 'off' ? effort : undefined;
 }
 
 function codexReasoningSummary(): string {

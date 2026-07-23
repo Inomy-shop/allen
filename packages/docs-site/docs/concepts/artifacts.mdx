@@ -1,0 +1,128 @@
+---
+title: 'Artifacts'
+description: 'Review, comment on, download, and reuse durable files produced by Allen chats, agents, and workflows.'
+---
+
+Artifacts are durable files saved by Allen, an agent, a workflow, or a connected tool. Use them for work that should remain reviewable after a response or execution finishes: plans, specifications, reports, research, generated code or data, validation evidence, and handoff notes.
+
+A concise final response can explain the result while the artifact preserves the full deliverable. Artifacts stay attached to the chat or task that produced them, so you can reopen the file without searching through the transcript or node logs.
+
+:::info Media placeholders
+Before publishing, capture the chat **Artifacts** tab, workflow and agent artifact lists, the type-aware viewer, a text selection with an anchored comment, **Version history**, a version comparison, and the copy/download controls. Suggested files: `static/img/docs/concepts-artifacts-01.png` through `static/img/docs/concepts-artifacts-07.png`, plus `static/videos/docs/concepts-artifacts-short.mp4` for the review flow.
+:::
+
+## When to ask for an artifact
+
+Ask Allen to save an artifact when the output should be:
+
+- reviewed or downloaded as a file;
+- linked from a summary, ticket, pull request, or handoff;
+- revised through comments and versions;
+- consumed by another agent or workflow step;
+- preserved as structured data or validation evidence.
+
+Routine status updates, short explanations, and transient reasoning belong in chat. Do not turn every response into a file.
+
+Examples of useful requests:
+
+- “Save the implementation plan as a Markdown artifact.”
+- “Export these query results as CSV and link the artifact.”
+- “Put the validation evidence in a report I can comment on.”
+- “Revise the artifact using its unresolved comments.”
+
+## Where artifacts appear
+
+Artifacts are filed under the root that owns the work:
+
+| Root | Where to review it |
+| --- | --- |
+| Chat | Open the conversation's task sidebar and select **Artifacts**. Artifacts from agents spawned by that chat remain with the chat. |
+| Workflow | Open the workflow execution and select **Artifacts** in the execution detail view. Workflow-node agents save to the root workflow execution. |
+| Agent | Open the standalone agent execution and use its **Artifacts** section. |
+
+Artifact lists show the filename, type, size, creation time, description, and producing node or agent when available. Use the filter to search filenames, paths, descriptions, node names, or agent names. Active workflow views refresh the artifact list while the run is queued, running, or waiting for input.
+
+## Review an artifact
+
+1. Open the conversation, workflow execution, or agent execution that produced the file.
+2. Open **Artifacts** and select a filename from the list.
+3. Review the rendered content and metadata. Markdown, JSON, CSV, code, and text use type-aware views; binary files are available through their file link.
+4. Use **Copy content** for text-backed files or **Download** for the original file.
+5. If the file needs changes, add a comment or ask Allen to revise the artifact rather than describing feedback in an unrelated chat.
+
+The viewer keeps the artifact's relative path, content type, size, language hint, producing agent, document version, and open-comment count visible when that metadata exists.
+
+## Comment on a document
+
+Markdown, text, code, JSON, and CSV artifacts are commentable. Allen creates a document identity automatically when these artifact types are saved. Older eligible artifacts may instead show **Enable Commenting**.
+
+To leave precise feedback:
+
+1. Open the artifact.
+2. Select the relevant text or lines.
+3. Enter a comment attached to that selection.
+4. Use the **Comments** panel to filter open, resolved, stale, or all threads.
+5. Reply within a thread when clarification is needed.
+6. Resolve a comment with a resolution note after the requested change is complete, or reopen it if more work is required.
+
+A stale comment means its original anchor no longer matches the latest content closely enough. Treat it as historical context until it can be re-anchored; do not assume the latest version still contains the issue at the original location.
+
+:::tip
+When asking Allen to revise a document, keep the request in the same chat and identify the artifact. Allen can read unresolved comments, publish a new version, and resolve addressed threads with notes.
+:::
+
+## Review versions and changes
+
+Commentable artifacts keep version history:
+
+- saving new content over the same artifact with overwrite enabled creates another document version;
+- **Version history** shows prior versions and who or what produced them;
+- **Compare** shows line-level additions, removals, and modifications;
+- restoring an older version creates a new latest version instead of erasing history;
+- **Timeline** combines version creation and comment events in reverse chronological order.
+
+When content changes, Allen re-checks comment anchors. Comments that still match remain attached; comments whose anchors no longer match become stale. A new version can also record which comments it addressed.
+
+## Choose a clear format and name
+
+| Output | Recommended format |
+| --- | --- |
+| Plan, specification, review, or narrative report | Markdown |
+| Records another tool should parse | JSON |
+| Rows for spreadsheet review | CSV |
+| Logs or unformatted notes | Text |
+| Source or configuration | Code with a language hint |
+| Image, PDF, archive, audio, or video | Binary |
+
+Use descriptive filenames such as `implementation-plan.md`, `validation-report.md`, `review-findings.json`, or `query-results.csv`. Short subpaths such as `design/decision-log.md` can group related outputs. Avoid generic names such as `output.txt`, especially when several agents contribute to one task.
+
+If a producer saves the same path again, Allen rejects the write unless overwrite is explicitly enabled. This protects work from accidental collisions between agents. Overwrite keeps the artifact identity and original creation time while updating its content and metadata.
+
+## Share artifacts safely
+
+Each artifact has a content link that can be opened without an Allen login. The unguessable artifact identifier acts like a capability token: anyone who receives the link may be able to read the file.
+
+:::caution
+Never put credentials, private keys, customer data, proprietary prompts, or sensitive repository content into an artifact. Review the file before sharing its link outside the approved audience.
+:::
+
+Prefer the artifact link returned by Allen rather than reconstructing a URL. When a substantial artifact is created, the final response should summarize the result and include a clickable filename.
+
+## Delete an artifact
+
+Use the delete action in the artifact viewer only after confirming the file is no longer needed. Deletion removes the artifact metadata and stops its content link from resolving. Local file cleanup is best-effort, and external storage follows the configured storage behavior, so artifacts are not a substitute for a regulated retention or secure-erasure system.
+
+Deleting an artifact also removes it from the chat or execution list. Download anything you must retain before deleting it.
+
+## Troubleshooting
+
+| Problem | What to check |
+| --- | --- |
+| An expected file is missing | Confirm that you opened the chat, workflow, or standalone agent run that owns the artifact. Refresh the list and check the producing node or agent group. |
+| Save reports that the name already exists | Choose a different relative path or explicitly request overwrite when replacing the same deliverable is intentional. |
+| The viewer shows raw text or code | The saved content type or filename may not match the intended renderer. Ask the producer to save it with the correct type. |
+| Copy is unavailable | Binary artifacts cannot be copied as text; use **Download** instead. |
+| A comment is stale | Open the latest version and verify whether the concern still applies before recreating feedback at the new location. |
+| The content link no longer works | The artifact may have been deleted, or its backing file may be unavailable. Return to the owning chat or task and check the artifact list. |
+
+Related guide: [Use artifacts](/guides/use-artifacts). Related references: [Security](/reference/security) and [Environment](/reference/environment).
