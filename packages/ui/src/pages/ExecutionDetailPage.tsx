@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo, type CSSProperties, type MouseEvent } from 'react';
+import { Fragment, useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo, type CSSProperties, type MouseEvent } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, ArrowDown, X, XCircle, Play, RefreshCw,
@@ -729,15 +729,34 @@ function isActiveStep(status: string): boolean {
   return ['running', 'in_progress', 'waiting_for_input', 'failed'].includes(status);
 }
 
+const STEP_ACRONYMS = new Set(['api', 'ci', 'cd', 'dx', 'mcp', 'pr', 'qa', 'qc', 'tdd', 'ui', 'ux']);
+
+export function sentenceCaseStepName(name: string, capitalizeFirst = true): string {
+  return name
+    .replaceAll('-', '_')
+    .split('_')
+    .filter(Boolean)
+    .map((part, index) => {
+      const lower = part.toLowerCase();
+      if (STEP_ACRONYMS.has(lower)) return lower.toUpperCase();
+      if (index === 0 && capitalizeFirst) return `${lower.charAt(0).toUpperCase()}${lower.slice(1)}`;
+      return lower;
+    })
+    .join(' ');
+}
+
+export function executionCostLabel(status: string, runCost: number): 'run cost' | 'cost so far' {
+  return status === 'completed' && runCost > 0 ? 'run cost' : 'cost so far';
+}
+
 function stepPresentation(name: string, status: string) {
   const normalized = name.toLowerCase().replaceAll('-', '_');
   const matched = EXECUTION_STEP_COPY.find(item => item.match.test(normalized));
-  const fallback = normalized
-    .replaceAll('_', ' ')
-    .replace(/\b\w/g, char => char.toUpperCase());
+  const fallback = sentenceCaseStepName(normalized);
+  const fallbackPhrase = sentenceCaseStepName(normalized, false);
   if (!matched) return {
     short: fallback,
-    title: isFinishedStep(status) ? `Completed ${fallback.toLowerCase()}` : isActiveStep(status) ? fallback : fallback,
+    title: isFinishedStep(status) ? `Completed ${fallbackPhrase}` : fallback,
     description: isFinishedStep(status) ? 'Completed successfully.' : isActiveStep(status) ? 'This step is currently in progress.' : 'Runs automatically when its dependencies complete.',
   };
   return {
@@ -3456,8 +3475,9 @@ export default function ExecutionDetailPage() {
   const currentStep = structuredSteps[currentStepIndex] ?? structuredSteps[0];
   const currentStepCopy = stepPresentation(currentStep?.name ?? 'workflow', currentStep?.status ?? execution.status);
   const finishedStepCount = structuredSteps.filter(step => isFinishedStep(step.status)).length;
-  const actionRequired = approvalPending || execution.status === 'waiting_for_input' || execution.status === 'failed';
-  const isTerminal = ['completed', 'cancelled'].includes(execution.status);
+  const actionRequired = approvalPending || execution.status === 'waiting_for_input' || execution.status === 'waiting_for_human';
+  const hasFailed = execution.status === 'failed';
+  const isTerminal = ['completed', 'cancelled', 'failed'].includes(execution.status);
   const currentOutputForSummary = currentStep
     ? (displayNodeStates.get(currentStep.name)?.output ?? [...traces].reverse().find((trace: any) => trace.node === currentStep.name)?.output)
     : null;
@@ -3468,12 +3488,16 @@ export default function ExecutionDetailPage() {
     && (currentOutputText.includes('pass') || currentOutputText.includes('success'));
   const structuredTitle = execution.status === 'completed'
     ? `Allen finished ${execution.workflowName}`
+    : hasFailed
+      ? `Allen could not complete ${execution.workflowName}`
     : actionRequired
       ? `Allen needs your decision on ${currentStepCopy.short.toLowerCase()}`
       : execution.status === 'queued'
         ? 'Allen is preparing this run'
         : `Allen is ${currentStepCopy.title.toLowerCase()}`;
-  const structuredSummary = actionRequired
+  const structuredSummary = hasFailed
+    ? `${finishedStepCount} of ${structuredSteps.length} steps completed before the run stopped. Inspect the failed step for the error and retry evidence.`
+    : actionRequired
     ? `${finishedStepCount} of ${structuredSteps.length} steps are preserved. Review the current step and choose how Allen should continue.`
     : isTerminal
       ? `All ${structuredSteps.length} workflow steps are accounted for. The run record, artifacts, and technical evidence remain available below.`
@@ -3515,6 +3539,21 @@ export default function ExecutionDetailPage() {
     Number(liveCost?.actual ?? liveCost?.estimated ?? 0),
     Number(execution.cost?.actual ?? execution.cost?.estimated ?? 0),
   );
+  const railStepIndexes = (() => {
+    if (structuredSteps.length <= 9) return structuredSteps.map((_, index) => index);
+    const indexes = new Set<number>([
+      0,
+      structuredSteps.length - 1,
+      currentStepIndex - 2,
+      currentStepIndex - 1,
+      currentStepIndex,
+      currentStepIndex + 1,
+      currentStepIndex + 2,
+    ]);
+    return Array.from(indexes)
+      .filter(index => index >= 0 && index < structuredSteps.length)
+      .sort((left, right) => left - right);
+  })();
   const legacyPullRequest = (runContext?.pullRequest ?? {}) as NonNullable<RunStatus['pullRequest']>;
 
   return (
@@ -3555,36 +3594,40 @@ export default function ExecutionDetailPage() {
           <div><dt>status</dt><dd>{actionRequired ? 'paused · needs you' : isTerminal ? execution.status : currentStepCopy.title.toLowerCase()}</dd></div>
           <div><dt>step</dt><dd>{Math.min(currentStepIndex + 1, structuredSteps.length)} of {structuredSteps.length}</dd></div>
           <div><dt>elapsed</dt><dd>{formatDuration(execution.durationMs).replace(/ 0s$/, '') || '—'}</dd></div>
-          <div><dt>run cost</dt><dd>{runCost > 0 ? `$${runCost.toFixed(2)}` : '—'}</dd></div>
+          <div><dt>{executionCostLabel(execution.status, runCost)}</dt><dd>{runCost > 0 ? `$${runCost.toFixed(2)}` : '—'}</dd></div>
         </dl>
 
         <div className="v8-structured-execution__rail" aria-label="Workflow steps">
-          {structuredSteps.map((step, index) => {
+          {railStepIndexes.map((index, railIndex) => {
+            const step = structuredSteps[index];
             const copy = stepPresentation(step.name, step.status);
             const done = isFinishedStep(step.status);
             const active = isActiveStep(step.status);
-            return (
+            const previousIndex = railStepIndexes[railIndex - 1];
+            return (<Fragment key={step.id || step.name}>
+              {railIndex > 0 && index - previousIndex > 1 && (
+                <span className="v8-structured-execution__rail-gap" aria-hidden="true">•••</span>
+              )}
               <button
                 type="button"
-                key={step.id || step.name}
                 className={`v8-structured-execution__rail-step ${done ? 'done' : ''} ${active ? 'active' : ''} ${step.status === 'failed' ? 'failed' : ''}`}
                 onClick={() => inspectNode(step.name)}
-                title={copy.title}
+                title={`Step ${index + 1} of ${structuredSteps.length}: ${copy.title}`}
               >
                 <i>{done ? '✓' : step.status === 'failed' ? '!' : index + 1}</i>
                 <span>{copy.short}</span>
               </button>
-            );
+            </Fragment>);
           })}
         </div>
         <div className="v8-structured-execution__rail-meta">
           <span>started {formatClock(execution.startedAt) || '—'} · {execution.status === 'running' ? 'running' : execution.status} {formatDuration(execution.durationMs).replace(/ 0s$/, '')}</span>
-          <span>{actionRequired ? 'paused · waiting on you' : `${structuredSteps.length - finishedStepCount} steps remaining`}</span>
+          <span>{structuredSteps.length > railStepIndexes.length ? `${railStepIndexes.length} key steps shown · ` : ''}{actionRequired ? 'paused · waiting on you' : hasFailed ? 'stopped at failed step' : `${structuredSteps.length - finishedStepCount} steps remaining`}</span>
         </div>
 
-        <div className={`v8-structured-execution__attention ${actionRequired ? 'needs-action' : ''}`}>
-          <span><i />{actionRequired ? 'action needed' : 'nothing needs you'}</span>
-          <p>{actionRequired ? 'Review the current step. Completed work is preserved while this run waits.' : 'Allen pings you only for decisions or failures — the remaining steps continue automatically.'}</p>
+        <div className={`v8-structured-execution__attention ${actionRequired ? 'needs-action' : hasFailed ? 'failed' : ''}`}>
+          <span><i />{actionRequired ? 'action needed' : hasFailed ? 'run failed' : 'nothing needs you'}</span>
+          <p>{actionRequired ? 'Review the current step. Completed work is preserved while this run waits.' : hasFailed ? 'No decision is currently waiting. Inspect the failed step to diagnose or retry the run.' : 'Allen pings you only for decisions — the remaining steps continue automatically.'}</p>
           {actionRequired && <button type="button" onClick={() => effectivePendingIntervention ? setApprovalModalOpen(true) : setInputDialogDismissed(false)}>Review &amp; decide →</button>}
         </div>
 

@@ -254,6 +254,7 @@ export function chatRoutes(db: Db): Router {
         artifact_root_type, artifact_root_id,
         repo_knowledge_packet_id, repo_knowledge_repo_id, repo_knowledge_index_id,
         repo_knowledge_repo_name, repo_knowledge_freshness,
+        origin, cron_job_name, triggered_by,
       } = req.body;
       if (!agent_name || !prompt) return res.status(400).json({ error: 'agent_name and prompt are required' });
       const result = await executeChatTool('spawn_agent', {
@@ -262,6 +263,7 @@ export function chatRoutes(db: Db): Router {
         artifact_root_type, artifact_root_id,
         repo_knowledge_packet_id, repo_knowledge_repo_id, repo_knowledge_index_id,
         repo_knowledge_repo_name, repo_knowledge_freshness,
+        origin, cron_job_name, triggered_by,
       }, db, readToolContext(req));
       res.json(result);
     } catch (err: unknown) {

@@ -4,6 +4,7 @@ export const DEFAULT_COLOR_MODE: ColorMode = 'system';
 
 export const COLOR_MODE_TOKENS = {
   dark: {
+    sidebar: '#0c0d10',
     surface: '#131418',
     surface100: '#1a1c21',
     surface200: '#1d2026',
@@ -31,6 +32,7 @@ export const COLOR_MODE_TOKENS = {
     mermaidEdgeLabelBg: '#1a1c21',
   },
   light: {
+    sidebar: '#f7fafd',
     surface: '#fbfcfe',
     surface100: '#ffffff',
     surface200: '#eef2f7',

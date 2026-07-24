@@ -57,15 +57,16 @@ function pickJsonFile(): Promise<unknown> {
   });
 }
 
-function workflowRouteSummary(workflow: any): string {
+export function workflowRouteSummary(workflow: any): string {
   const names = Object.values(workflowNodes(workflow)).map((node: any) =>
     node.agent ?? node.agentName ?? node.config?.agent ?? (node.type === 'human' ? 'you' : node.name),
   ).filter(Boolean).map(String);
   if (names.length === 0) return 'Reusable Allen workflow';
   const compact = names.filter((name, index) => index === 0 || name !== names[index - 1]);
   const counts = new Map(compact.map(name => [name, names.filter(value => value === name).length]));
-  const route = compact.slice(0, 8).map(name => `${name}${(counts.get(name) ?? 0) > 1 ? ` ×${counts.get(name)}` : ''}`);
-  return `${route.join(' → ')}${compact.length > 8 ? ' → …' : ''}`;
+  const route = compact.slice(0, 5).map(name => `${name}${(counts.get(name) ?? 0) > 1 ? ` ×${counts.get(name)}` : ''}`);
+  const remaining = compact.length - route.length;
+  return `${route.join(' → ')}${remaining > 0 ? ` · +${remaining} more` : ''}`;
 }
 
 function PageIcon({ name }: { name: 'refresh' | 'search' | 'run' | 'edit' | 'trash' | 'check' | 'x' | 'tray' }) {
@@ -203,7 +204,7 @@ export default function WorkflowListPage() {
             <button type="button">Product</button>
             <button type="button">Marketing</button>
             <button type="button">Design</button>
-            <button type="button">Unknown</button>
+            <button type="button">Unassigned</button>
           </div>
           <div className="v8-workflows__panel">
             {Array.from({ length: 4 }).map((_, i) => <RowSkeleton key={i} />)}

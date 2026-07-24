@@ -2,6 +2,8 @@ export const ALLEN_MCP_TOOL_NAMES = [
   'list_skills',
   'search_skills',
   'get_skill',
+  'create_skill',
+  'update_skill',
   'list_workflows',
   'get_workflow',
   'run_workflow',

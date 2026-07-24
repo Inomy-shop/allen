@@ -364,13 +364,17 @@ export async function importAsNewWorkspace(store: DesignStudioStore, opts: Impor
   const repoId = opts.repo?.id ?? sourceWorkspace?.sourceRepoId;
   const repoPath = opts.repo?.path ?? sourceWorkspace?.sourceRepoPath;
 
-  const name = opts.name?.trim() || `${sourceName} (imported)`;
+  const name = opts.name?.trim() || sourceName.replace(/\s+\(imported\)$/i, '').trim();
   const workspace = await store.createWorkspace({
     kind: 'greenfield',
     name,
     sourceRepoId: repoId,
     sourceRepoPath: repoPath,
     ownerUserId: opts.ownerUserId ?? null,
+    imported: true,
+    importedFrom: opts.sourceWorkspaceId
+      ? { type: 'workspace', id: opts.sourceWorkspaceId }
+      : { type: 'bundle', id: resolve(opts.sourceDir!) },
   });
   const id = String(workspace._id);
   try {

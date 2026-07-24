@@ -28,7 +28,7 @@ export default function TeamClassificationSelect({
       aria-label={ariaLabel}
       title={ariaLabel}
     >
-      <option value="">Unknown</option>
+      <option value="">Unassigned</option>
       {TEAM_CLASSIFICATIONS.map((classification) => (
         <option key={classification} value={classification}>
           {TEAM_CLASSIFICATION_META[classification].label}

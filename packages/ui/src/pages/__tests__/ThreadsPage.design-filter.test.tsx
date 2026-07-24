@@ -7,6 +7,9 @@ vi.mock('../../services/api', () => ({
   chat: {
     listSessions: vi.fn(),
   },
+  executions: {
+    listPaged: vi.fn().mockResolvedValue({ items: [] }),
+  },
   users: {
     list: vi.fn().mockResolvedValue([]),
   },

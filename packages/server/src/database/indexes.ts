@@ -218,6 +218,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   // Cron Runs — per-execution history
   await db.collection('cron_runs').createIndex({ cronJobId: 1, startedAt: -1 });
+  await db.collection('cron_runs').createIndex({ executionId: 1 }, { sparse: true });
   // 90-day TTL on run history
   await db.collection('cron_runs').createIndex(
     { startedAt: 1 },

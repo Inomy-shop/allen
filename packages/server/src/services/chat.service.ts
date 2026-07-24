@@ -3306,14 +3306,43 @@ export async function backfillSessionOwners(db: Db): Promise<{ scanned: number; 
   return { scanned, updated };
 }
 
-/** Idempotently classify legacy Design Studio conversations as Design. */
+export function inferLegacyTeamClassification(
+  session: Partial<ChatSession> & { activeAgent?: string },
+  agentTeamName?: string,
+): TeamClassification | null {
+  const context = [
+    session.title,
+    session.repoName,
+    session.repoPath,
+    session.workspaceName,
+    session.workspaceRepoName,
+    session.workspaceBranch,
+    session.activeAgent,
+    agentTeamName,
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  if (/(marketing|growth|content|brand|campaign|social|seo)/.test(context)) return 'marketing';
+  if (/(design|designer|ui|ux|figma|creative)/.test(context)) return 'design';
+  if (/(product|roadmap|research|prd|requirements)/.test(context)) return 'product';
+  if (/(engineering|developer|frontend|backend|infra|security|quality|qa|code|bug|fix|test|pull request|\\bpr\\b)/.test(context)) {
+    return 'engineering';
+  }
+  if (session.repoId || session.repoPath || session.workspaceId || session.workspaceRepoId) return 'engineering';
+  return null;
+}
+
+/** Idempotently classify legacy conversations from durable session/agent context. */
 export async function backfillStudioTeamClassifications(
   db: Db,
 ): Promise<{ matched: number; modified: number }> {
   const studio = await db.collection('chat_sessions').updateMany(
     {
       studioWorkspaceId: { $exists: true },
-      teamClassification: { $exists: false },
+      teamClassificationSource: { $ne: 'manual' },
+      $or: [
+        { teamClassification: { $exists: false } },
+        { teamClassification: null },
+      ],
     },
     {
       $set: {
@@ -3322,12 +3351,45 @@ export async function backfillStudioTeamClassifications(
       },
     },
   );
+
+  let inferredMatched = 0;
+  let inferredModified = 0;
+  const sessions = db.collection<ChatSession>('chat_sessions');
+  const cursor = sessions.find({
+    studioWorkspaceId: { $exists: false },
+    teamClassificationSource: { $ne: 'manual' },
+    $or: [
+      { teamClassification: { $exists: false } },
+      { teamClassification: null },
+    ],
+  });
+  for await (const session of cursor) {
+    inferredMatched++;
+    const activeAgent = (session as ChatSession & { activeAgent?: string }).activeAgent;
+    const agent = activeAgent
+      ? await db.collection('agents').findOne({ name: activeAgent }, { projection: { teamName: 1 } })
+      : null;
+    const classification = inferLegacyTeamClassification(
+      session as ChatSession & { activeAgent?: string },
+      typeof agent?.teamName === 'string' ? agent.teamName : undefined,
+    );
+    if (!classification) continue;
+    const result = await sessions.updateOne(
+      { _id: session._id, teamClassificationSource: { $ne: 'manual' } },
+      { $set: { teamClassification: classification, teamClassificationSource: 'inherited' } },
+    );
+    inferredModified += result.modifiedCount;
+  }
+
   const unknown = await db.collection('chat_sessions').updateMany(
-    { teamClassification: { $exists: false } },
+    {
+      teamClassification: { $exists: false },
+      teamClassificationSource: { $ne: 'manual' },
+    },
     { $set: { teamClassification: null, teamClassificationSource: null } },
   );
   return {
-    matched: studio.matchedCount + unknown.matchedCount,
-    modified: studio.modifiedCount + unknown.modifiedCount,
+    matched: studio.matchedCount + inferredMatched + unknown.matchedCount,
+    modified: studio.modifiedCount + inferredModified + unknown.modifiedCount,
   };
 }

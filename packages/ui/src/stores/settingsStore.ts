@@ -371,6 +371,7 @@ function applyThemeColors(theme: ThemePreset, _customAccent: string | null, colo
   const accentPurple = dark.accentPurple ?? theme.colors.accentPurple;
   const accentOrange = dark.accentOrange ?? theme.colors.accentOrange ?? '#f97316';
 
+  root.setProperty('--color-sidebar', hexToRgbChannels(modeTokens.sidebar));
   root.setProperty('--color-surface', hexToRgbChannels(modeTokens.surface ?? surface));
   root.setProperty('--color-surface-100', hexToRgbChannels(modeTokens.surface100 ?? surface100));
   root.setProperty('--color-surface-200', hexToRgbChannels(modeTokens.surface200 ?? surface200));

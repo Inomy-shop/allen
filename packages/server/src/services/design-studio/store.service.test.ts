@@ -61,6 +61,24 @@ describe('DesignStudioStore', () => {
     expect(updated?.repoFingerprint).toBe('fp1');
   });
 
+  it('backfills legacy imported-name suffixes into explicit provenance metadata', async () => {
+    const now = new Date();
+    const inserted = await db.collection('dstudio_workspaces').insertOne({
+      kind: 'greenfield',
+      name: 'Design source (imported)',
+      profileStatus: 'confirmed',
+      greenfieldBrief: {
+        product: '', audience: '', feel: '', screens: '', references: 'workspace:source-1',
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+    const workspace = await store.getWorkspace(String(inserted.insertedId));
+    expect(workspace?.name).toBe('Design source');
+    expect(workspace?.imported).toBe(true);
+    expect(workspace?.importedFrom).toEqual({ type: 'workspace', id: 'source-1' });
+  });
+
   it('R17/R18: restoring an old version preserves later versions', async () => {
     const ws = await store.createWorkspace({ kind: 'greenfield', name: 'Idea' });
     const session = await store.createSession({ workspaceId: String(ws._id) });

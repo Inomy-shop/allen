@@ -57,8 +57,16 @@ function numberOrNull(value: string): number | null {
 }
 
 function formatCost(value: number | null | undefined): string {
-  if (value == null) return '-';
-  return String(value);
+  if (value == null) return '—';
+  return `$${value}/MTok`;
+}
+
+export function modelTierLabel(entry: Pick<ModelRegistryEntry, 'tier' | 'fullId'>, chatDefaultModel?: string): string | null {
+  if (!entry.tier) return null;
+  if (entry.tier !== 'default') return entry.tier;
+  return chatDefaultModel && entry.fullId === chatDefaultModel
+    ? 'Default · chat'
+    : 'Default · workflow';
 }
 
 function ModelDialog({
@@ -274,10 +282,12 @@ export function ProviderModelRegistrySection({
   modelRegistry,
   provider,
   providerLabel,
+  chatDefaultModel,
 }: {
   modelRegistry: UseModelRegistryReturn;
   provider: string;
   providerLabel: string;
+  chatDefaultModel?: string;
 }) {
   const toast = useToast();
   const user = useAuthStore((state) => state.user);
@@ -295,6 +305,12 @@ export function ProviderModelRegistrySection({
         return (a.displayName || a.fullId).localeCompare(b.displayName || b.fullId);
       });
   }, [modelRegistry.models, provider, showInactive]);
+  const resolvedChatDefaultModel = useMemo(() => {
+    const defaults = providerModels.filter((model) => model.tier === 'default');
+    return defaults.find((model) => model.fullId === chatDefaultModel)?.fullId
+      ?? defaults[0]?.fullId
+      ?? chatDefaultModel;
+  }, [chatDefaultModel, providerModels]);
 
   async function handleCreate(draft: ModelDraft) {
     const payload: CreateModelInput = {
@@ -398,7 +414,9 @@ export function ProviderModelRegistrySection({
                 <div className="model-registry-row-main">
                   <span className="model-registry-row-title">
                     {entry.displayName || entry.fullId}
-                    {entry.tier && <span className="model-registry-tier">{entry.tier}</span>}
+                    {modelTierLabel(entry, resolvedChatDefaultModel) && (
+                      <span className="model-registry-tier">{modelTierLabel(entry, resolvedChatDefaultModel)}</span>
+                    )}
                     {!entry.isActive && <span className="model-registry-status">inactive</span>}
                   </span>
                   <span className="model-registry-row-id">{entry.fullId}</span>
@@ -412,19 +430,19 @@ export function ProviderModelRegistrySection({
               <div className="model-registry-row-actions">
                 <button
                   type="button"
-                  className="settings-icon-button"
+                  className="settings-text-action"
                   title="Edit model"
                   onClick={() => setDialog({ mode: 'edit', entry })}
                 >
-                  <Edit2 className="h-3.5 w-3.5" />
+                  <Edit2 className="h-3.5 w-3.5" /> Edit
                 </button>
                 <button
                   type="button"
-                  className="settings-icon-button danger"
+                  className="settings-text-action danger"
                   title="Delete model"
                   onClick={() => setDeleteEntry(entry)}
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <Trash2 className="h-3.5 w-3.5" /> Delete
                 </button>
               </div>
             </div>
@@ -483,6 +501,7 @@ export default function ModelRegistryPanel() {
             modelRegistry={modelRegistry}
             provider={provider.value}
             providerLabel={provider.label}
+            chatDefaultModel={enabledProviders.find((item) => item.provider === provider.value)?.defaultModel}
           />
         </div>
       ))}

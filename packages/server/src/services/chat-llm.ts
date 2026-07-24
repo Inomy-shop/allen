@@ -215,7 +215,11 @@ async function runClaudeCLI(
       if (text && text !== fullText) { fullText = text; callbacks.onText(fullText); }
 
       if (callbacks.onThinking) {
-        const thinking = blocks.filter(b => b.type === 'thinking').map(b => b.thinking || b.text || '').join('');
+        const thinking = blocks
+          .filter(b => b.type === 'thinking')
+          .map(b => b.thinking || b.text || '')
+          .filter(Boolean)
+          .join('\n\n');
         if (thinking) { trace.push({ timestamp: new Date(), type: 'thinking', text: thinking }); callbacks.onThinking(thinking); }
       }
 

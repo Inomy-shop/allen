@@ -93,6 +93,7 @@ const STATE_TYPE_ORDER: Record<string, number> = {
 interface IssueStateGroup {
   key: string;
   label: string;
+  scopeLabel?: string;
   color: string;
   type: string;
   issues: LinearIssue[];
@@ -223,6 +224,34 @@ export function buildChatDispatchPrompt(
   return lines.flat().filter((line): line is string => line != null).join('\n');
 }
 
+export function buildBulkChatDispatchPrompt(
+  issues: LinearIssue[],
+  args: {
+    target: DispatchTarget | null;
+    repoName?: string;
+    extraInstructions: string;
+    workflowInput?: Record<string, unknown>;
+  },
+): string {
+  const ticketLines = issues.map((issue) => (
+    `- ${issue.identifier} · ${issue.title} · ${issue.url} · ${issue.state?.name ?? 'unknown'}`
+  ));
+  return [
+    `Dispatch these ${issues.length} Linear tickets through Allen as one visible batch.`,
+    '',
+    ...ticketLines,
+    '',
+    args.repoName ? `Repo: ${args.repoName}` : null,
+    `Dispatch preference: ${dispatchTargetLabel(args.target)}`,
+    args.extraInstructions ? `Extra instructions: ${args.extraInstructions}` : null,
+    args.workflowInput && Object.keys(args.workflowInput).length > 0
+      ? `Shared workflow input: ${JSON.stringify(args.workflowInput)}`
+      : null,
+    '',
+    'For each ticket, move it to In Progress if needed, route it to the selected workflow/lead/specialist, create or reuse an isolated workspace for code changes, and report one linked result per ticket. Do not silently skip a ticket.',
+  ].filter((line): line is string => line != null).join('\n');
+}
+
 export default function TicketsPage() {
   const navigate = useNavigate();
   const toast = useToast();
@@ -250,6 +279,7 @@ export default function TicketsPage() {
 
   // Dispatch modal + repo list
   const [dispatchFor, setDispatchFor] = useState<LinearIssue | null>(null);
+  const [dispatchBatch, setDispatchBatch] = useState<LinearIssue[] | null>(null);
   const [repos, setRepos] = useState<any[]>([]);
   const [reposLoading, setReposLoading] = useState(true);
   const [workflowList, setWorkflowList] = useState<WorkflowOption[]>([]);
@@ -431,17 +461,23 @@ export default function TicketsPage() {
     [filteredProjects],
   );
 
-  // Group by status type
+  // Linear state names are not globally unique. Keep team scope in the group
+  // identity and header so two "Backlog" states never look duplicated.
   const groupedStateSections = useMemo(() => {
     const m = new Map<string, IssueStateGroup>();
     for (const issue of filteredIssues) {
-      const key = issue.state?.id || issue.state?.name || 'unknown';
+      const stateLabel = issue.state?.name || 'Unassigned';
+      const stateType = issue.state?.type || 'backlog';
+      const teamKey = issue.team?.key || 'ALL';
+      const teamName = issue.team?.name || linearTitle;
+      const key = `${stateType}:${stateLabel.trim().toLowerCase()}:${issue.team?.id || teamKey}`;
       if (!m.has(key)) {
         m.set(key, {
           key,
-          label: issue.state?.name || 'Unknown',
+          label: stateLabel,
+          scopeLabel: `${teamKey} — ${teamName}`,
           color: issue.state?.color || '#999',
-          type: issue.state?.type || 'backlog',
+          type: stateType,
           issues: [],
         });
       }
@@ -485,6 +521,27 @@ export default function TicketsPage() {
       autosend: '1',
       prompt,
     });
+    if (args.repoId) params.set('repoId', args.repoId);
+    navigate(`/chat?${params.toString()}`);
+  }
+
+  async function handleBulkDispatch(
+    batch: LinearIssue[],
+    args: {
+      target: DispatchTarget | null;
+      repoId: string;
+      extraInstructions: string;
+      workflowInput?: Record<string, unknown>;
+    },
+  ) {
+    const repo = repos.find(r => String(r._id) === args.repoId);
+    const prompt = buildBulkChatDispatchPrompt(batch, {
+      ...args,
+      repoName: repo?.name,
+    });
+    setDispatchBatch(null);
+    toast.success(`Opening chat to dispatch ${batch.length} tickets`);
+    const params = new URLSearchParams({ autosend: '1', prompt });
     if (args.repoId) params.set('repoId', args.repoId);
     navigate(`/chat?${params.toString()}`);
   }
@@ -650,6 +707,7 @@ export default function TicketsPage() {
                       {collapsed ? <ChevronRight /> : <ChevronDown />}
                       <i style={{ background: group.color }} />
                       <b>{group.label}</b>
+                      {group.scopeLabel && <em>{group.scopeLabel}</em>}
                       <span>{group.issues.length} issue{group.issues.length === 1 ? '' : 's'}</span>
                     </button>
                     {!collapsed && group.issues.map(issue => (
@@ -689,7 +747,14 @@ export default function TicketsPage() {
                     <i style={{ background: group.color }} />
                     <b>{group.label}</b>
                     <span>{group.issues.length}</span>
-                    <em>{group.issues[0]?.team?.key ?? 'ALL'} · {group.issues[0]?.team?.name ?? linearTitle}</em>
+                    <em>{group.scopeLabel ?? `${group.issues[0]?.team?.key ?? 'ALL'} — ${group.issues[0]?.team?.name ?? linearTitle}`}</em>
+                    <button
+                      type="button"
+                      className="v8-linear-column-dispatch"
+                      onClick={() => setDispatchBatch(group.issues)}
+                    >
+                      <Play /> Dispatch all
+                    </button>
                   </header>
                   {group.issues.map(issue => (
                     <article className="v8-linear-card" key={issue.id}>
@@ -744,6 +809,26 @@ export default function TicketsPage() {
           reposLoading={reposLoading}
           onClose={() => setDispatchFor(null)}
           onSubmit={(args) => handleDispatch(dispatchFor, args)}
+        />
+      )}
+      {dispatchBatch && dispatchBatch.length > 0 && (
+        <DispatchModal
+          open={true}
+          issue={{
+            id: `batch-${dispatchBatch.length}`,
+            identifier: `${dispatchBatch.length} tickets`,
+            title: 'Bulk dispatch',
+            description: dispatchBatch.map((issue) => `${issue.identifier} · ${issue.title}`).join('\n'),
+          }}
+          currentAgent={null}
+          agents={agentOptions}
+          teams={teamOptions}
+          workflows={workflowList}
+          workflowsLoading={workflowsLoading}
+          repos={repos}
+          reposLoading={reposLoading}
+          onClose={() => setDispatchBatch(null)}
+          onSubmit={(args) => handleBulkDispatch(dispatchBatch, args)}
         />
       )}
     </main>

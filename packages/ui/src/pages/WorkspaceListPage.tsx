@@ -19,6 +19,7 @@ import { EmbeddedChat } from '../components/workspace/EmbeddedChat';
 import { XTerminal } from '../components/workspace/XTerminal';
 import { getMonacoTheme, setupMonaco } from '../lib/monaco-theme';
 import { workspaceChatPath } from '../lib/workspace-routes';
+import { humanizeWorkspaceName, workspaceActivityState } from '../lib/activity-status';
 
 type Workspace = {
   _id: string;
@@ -101,8 +102,7 @@ type SplitDiffRow = {
 type WorkspaceFilter = 'all' | 'active' | 'idle';
 
 function isActiveWorkspace(workspace: Workspace): boolean {
-  const status = (workspace.status ?? 'active').toLowerCase();
-  return !['idle', 'stopped', 'archived', 'deleted', 'failed'].includes(status);
+  return workspaceActivityState(workspace) === 'active';
 }
 
 function workspaceRelativeTime(value?: string): string {
@@ -882,11 +882,12 @@ export default function WorkspaceListPage() {
               <div className="v8-workspace-panel">
                 {group.items.map(workspace => {
                   const activeWorkspace = isActiveWorkspace(workspace);
+                  const workspaceDisplayName = humanizeWorkspaceName(workspace.name, workspace.branch);
                   return (
                     <div className="v8-workspace-row" key={workspace._id}>
                       <i className={activeWorkspace ? (workspace.status?.toLowerCase() === 'running' ? 'running' : 'active') : 'idle'} />
                       <button className="v8-workspace-main" onClick={() => openWorkspace(workspace._id)} type="button">
-                        <b>{workspace.name}</b>
+                        <b title={workspace.name}>{workspaceDisplayName}</b>
                         <span>
                           {group.label}
                           <em>·</em>

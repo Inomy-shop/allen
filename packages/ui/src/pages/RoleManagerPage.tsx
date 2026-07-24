@@ -35,6 +35,7 @@ import { AgentCard } from '../components/agents/AgentCard';
 import { registryDefaultModelForProvider, getModelDisplay, useModelRegistry } from '../hooks/useModelRegistry';
 import RepoManagerPage from './RepoManagerPage';
 import { normalizeStringList, stringListIncludes } from '../utils/stringList';
+import V8EmptyState from '../components/common/V8EmptyState';
 
 type Agent = Record<string, unknown>;
 type Selection = { kind: 'overview' } | { kind: 'team'; name: string } | { kind: 'unassigned' };
@@ -144,9 +145,7 @@ export function AgentDetailPanel({
             <div className="px-8 py-7 max-w-[920px] mx-auto">
               <div className="overline mb-3">Agent instructions</div>
               {system ? (
-                <div className="text-[14px] text-theme-secondary leading-[1.7] prose-allen">
-                  {renderMarkdown(system)}
-                </div>
+                <pre className="whitespace-pre-wrap break-words font-body text-[14px] leading-[1.7] text-theme-secondary">{system}</pre>
               ) : (
                 <div className="text-center py-16 text-theme-muted italic font-body text-[13px]">
                   No system prompt defined for this agent.
@@ -289,16 +288,6 @@ export function AgentDetailPanel({
           </div>
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="btn btn-ghost btn-sm">Close</button>
-            {onEdit && (
-              <button onClick={() => onEdit(agent)} className="btn btn-secondary btn-sm">
-                <Pencil className="w-3.5 h-3.5" /> Edit
-              </button>
-            )}
-            {onRun && (
-              <button onClick={() => onRun(agent)} className="btn btn-primary btn-sm">
-                <Play className="w-3.5 h-3.5" /> Run agent
-              </button>
-            )}
           </div>
         </div>
       </div>
@@ -1868,6 +1857,7 @@ function LibraryTeamsAgentsPane({
   const [agentQuery, setAgentQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'lead' | 'member'>('all');
   const [resourceFilter, setResourceFilter] = useState<'all' | 'agent' | 'skill'>('all');
+  const [expandedLeadName, setExpandedLeadName] = useState<string | null>(null);
 
   useEffect(() => {
     if (activeName !== 'all' && !teams.some(t => t.name === activeName)) setActiveName('all');
@@ -1886,6 +1876,8 @@ function LibraryTeamsAgentsPane({
   const activeTeam = activeName === 'all' ? null : teams.find(t => t.name === activeName) ?? null;
   const activeMembers = activeTeam ? (agentsByTeam.get(activeTeam.name) ?? []) : agents;
   const activeLead = activeMembers.find(member => member.teamRole === 'lead');
+  const activeLeadSummary = String(activeLead?.description || activeLead?.system || 'Routes work through the team and coordinates specialist execution.');
+  const activeLeadSummaryExpanded = expandedLeadName === activeLead?.name;
   const memberQ = agentQuery.trim().toLowerCase();
   const matchesAgentFilters = (member: any) => {
     const matchesRole = roleFilter === 'all' || member.teamRole === roleFilter;
@@ -1942,9 +1934,14 @@ function LibraryTeamsAgentsPane({
             <button className="v8-icon-chip" type="button" aria-label="Refresh" onClick={onRefresh}>
               <RefreshCw />
             </button>
-            <button className="v8-btn v8-btn--ghost" type="button" onClick={() => onExportAgents()}>Export</button>
-            <button className="v8-btn v8-btn--ghost" type="button" onClick={onImportAgentJson}>Import JSON</button>
-            <button className="v8-btn v8-btn--ghost" type="button" onClick={onImportAgents}>Import from repo</button>
+            <details className="v8-team-more">
+              <summary className="v8-btn v8-btn--ghost">More <ChevronRight /></summary>
+              <div>
+                <button type="button" onClick={() => onExportAgents()}>Export agents</button>
+                <button type="button" onClick={onImportAgentJson}>Import JSON</button>
+                <button type="button" onClick={onImportAgents}>Import from repo</button>
+              </div>
+            </details>
             <button className="v8-btn v8-btn--ghost" type="button" onClick={onCreateTeam}>New team</button>
             <button className="v8-btn v8-btn--ink" type="button" onClick={onCreateAgent}>Add agent</button>
           </header>
@@ -2075,7 +2072,7 @@ function LibraryTeamsAgentsPane({
                   {leadProviderLabel.toLowerCase()} · {leadModelLabel.toLowerCase()}
                 </span>
               )}
-              <span><b>{teamRuns7d}</b> sessions this week</span>
+              <span><b>{teamRuns7d}</b> runs this week</span>
             </div>
           </div>
           <button className="v8-btn v8-btn--ghost" type="button" onClick={() => onEditTeam(activeTeam)}>Edit team</button>
@@ -2098,7 +2095,16 @@ function LibraryTeamsAgentsPane({
                     </span>
                   </span>
                   <span className="v8-team-detail__lead-id">{activeLead.name}</span>
-                  <p>{activeLead.description || activeLead.system || 'Routes work through the team and coordinates specialist execution.'}</p>
+                  <p className={activeLeadSummaryExpanded ? 'expanded' : ''}>{activeLeadSummary}</p>
+                  {activeLeadSummary.length > 220 && (
+                    <button
+                      className="v8-team-detail__lead-more"
+                      type="button"
+                      onClick={() => setExpandedLeadName(activeLeadSummaryExpanded ? null : String(activeLead.name))}
+                    >
+                      {activeLeadSummaryExpanded ? 'Show less' : 'Show more'}
+                    </button>
+                  )}
                 </span>
                 <span className="v8-team-detail__lead-actions">
                   <button className="v8-btn v8-btn--ghost" type="button" onClick={() => onEditAgent(activeLead)}>Edit</button>
@@ -2167,10 +2173,13 @@ function LibraryTeamsAgentsPane({
               </button>
             ))}
             {visibleAgents.length === 0 && visibleSkills.length === 0 && (
-              <div className="v8-filter-empty">No team members match this view.</div>
+              <V8EmptyState
+                scene="team"
+                title="No team members match this view"
+                description="Adjust the search or resource filter to see this team’s agents and skills."
+              />
             )}
           </div>
-          <p className="v8-page-foot">Row actions: chat · run · edit · move to another team · delete — hover a row</p>
         </section>
       </div>
     </div>

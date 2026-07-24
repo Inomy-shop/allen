@@ -6,6 +6,19 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.23] - 2026-07-24
+
+### Added
+
+- **`create_skill` MCP tool** (`packages/engine`, `packages/server`): agents can create an Allen Library skill with all Library UI fields (`name`, `displayName`, `description`, `category`, `triggers`, `excludes`, `priority`, `enabled`, `allowedRoutes`, `relatedWorkflows`, `relatedAgents`, `body`, `tags`), with `createdBy` audited from the calling agent/session when available.
+- **Cron run provenance on executions** (`packages/server`): executions now carry `meta.cronJobName` and `meta.triggeredBy` (`manual` vs `schedule`), merged via a new `mergeCronRunProvenance` helper and backed by supporting indexes, so scheduled runs are attributable to the cron job that triggered them.
+- **Shared activity-status helper and empty-state component** (`packages/ui`): a new `activity-status` module for consistent status derivation, plus a `V8EmptyState` component and a `design-workspace-name` helper.
+
+### Fixed
+
+- **UI audit pass across the redesigned surfaces** (`packages/ui`, `packages/server`): corrections across the executions list and detail, tickets, pull requests, dashboard, settings/model registry, and cron manager — including activity/status derivation, execution step names, empty and placeholder states, chat response sanitization, design workspace naming, and stylesheet refinements.
+- **Documentation**: removed a remaining media placeholder reference from the reference docs.
+
 ## [0.1.22] - 2026-07-23
 
 Large UI redesign release.

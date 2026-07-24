@@ -43,8 +43,6 @@ import {
   V8SessionsIcon,
   V8SidebarCollapseIcon,
   V8SidebarExpandIcon,
-  V8ThemeMoonIcon,
-  V8ThemeSunIcon,
   V8WorkflowsIcon,
   V8WorkspacesIcon,
 } from './components/common/V8SidebarIcons';
@@ -139,9 +137,9 @@ const CORE_NAV_ITEMS: NavItem[] = [
 ];
 
 const LIBRARY_NAV_ITEMS: NavItem[] = [
-  { to: '/repos', icon: V8ReposIcon, label: 'Repos' },
   { to: '/tickets', icon: V8LinearIcon, label: 'Linear' },
   { to: '/pull-requests', icon: V8PullRequestsIcon, label: 'Pull requests' },
+  { to: '/repos', icon: V8ReposIcon, label: 'Repos' },
   { to: '/documents', icon: V8DocumentsIcon, label: 'Documents' },
   { to: '/agents?section=teams-agents', icon: V8AgentsIcon, label: 'Agents' },
   { to: '/workflows', icon: V8WorkflowsIcon, label: 'Workflows', activePrefixes: ['/workflows'] },
@@ -1763,17 +1761,6 @@ export default function App() {
           onColorModeToggle={toggleColorMode}
           chatConversationId={copyableChatConversationId}
         />}
-        {isPrototypePageRoute && !location.pathname.startsWith('/chat') && !documentTabOpen && (
-          <button
-            type="button"
-            className="home-theme-toggle"
-            onClick={toggleColorMode}
-            aria-label={`Switch to ${resolvedMode === 'dark' ? 'light' : 'dark'} theme`}
-            title={`Switch to ${resolvedMode === 'dark' ? 'light' : 'dark'} theme`}
-          >
-            {resolvedMode === 'dark' ? <V8ThemeMoonIcon /> : <V8ThemeSunIcon />}
-          </button>
-        )}
         <div className={`relative flex-1 min-h-0 ${documentTabOpen ? 'overflow-hidden' : 'overflow-auto'}`}>
           <ErrorBoundary>
             <Outlet />

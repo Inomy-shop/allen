@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Inbox, Search } from 'lucide-react';
-import { chat as chatApi, type ChatSession } from '../services/api';
+import { chat as chatApi, executions as executionsApi, type ChatSession } from '../services/api';
 import { getModelDisplay } from '../hooks/useModelRegistry';
+import {
+  sessionActivityState,
+  type SessionExecutionInput,
+} from '../lib/activity-status';
 import {
   TEAM_CLASSIFICATION_META,
   teamClassificationKey,
@@ -20,22 +24,19 @@ function shortAge(value?: string) {
   return `${Math.floor(minutes / 1440)}d`;
 }
 
-function sessionState(session: ChatSession): SessionFilter {
-  return session.status === 'archived' ? 'completed' : 'running';
+function sessionState(session: ChatSession, executionItems: SessionExecutionInput[]): SessionFilter {
+  return sessionActivityState(session, executionItems);
 }
 
-function ModelMark({ provider }: { provider?: string }) {
-  const openAi = /codex|openai|gpt/i.test(provider ?? '');
-  return openAi ? (
-    <svg viewBox="0 0 16 16" fill="none" stroke="#10A37F" strokeWidth="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5.7"/><path d="M8 2.3v11.4M3.1 5.2l9.8 5.6M12.9 5.2 3.1 10.8"/></svg>
-  ) : (
-    <svg viewBox="0 0 16 16" fill="none" stroke="#D97757" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><path d="M8 1.6v2.7M8 11.7v2.7M1.6 8h2.7M11.7 8h2.7M3.5 3.5l1.9 1.9M10.6 10.6l1.9 1.9M12.5 3.5l-1.9 1.9M5.4 10.6l-1.9 1.9"/></svg>
-  );
+function sessionStateLabel(state: SessionFilter): string {
+  if (state === 'needs-you') return 'needs you';
+  return state;
 }
 
 export default function ThreadsPage() {
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [executionItems, setExecutionItems] = useState<SessionExecutionInput[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<SessionFilter>('all');
@@ -43,10 +44,13 @@ export default function ThreadsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    chatApi.listSessions({ includeStudio: true }).then((items) => {
-      if (!cancelled) setSessions(items ?? []);
-    }).catch(() => {
-      if (!cancelled) setSessions([]);
+    Promise.all([
+      chatApi.listSessions({ includeStudio: true }).catch(() => []),
+      executionsApi.listPaged({ limit: 500, offset: 0 }).catch(() => ({ items: [] })),
+    ]).then(([items, executionPage]) => {
+      if (cancelled) return;
+      setSessions(items ?? []);
+      setExecutionItems(executionPage.items ?? []);
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
@@ -54,15 +58,17 @@ export default function ThreadsPage() {
   }, []);
 
   const visible = useMemo(() => sessions
-    .filter((session) => filter === 'all' || sessionState(session) === filter)
+    .filter((session) => filter === 'all' || sessionState(session, executionItems) === filter)
     .filter((session) => space === 'all' || teamClassificationKey(session.teamClassification, session.studioWorkspaceId) === space)
     .filter((session) => {
       const value = `${session.title} ${session.repoName ?? ''} ${session.workspaceName ?? ''} ${session.provider ?? ''} ${session.model ?? ''} ${session.studioWorkspaceId ? 'studio design' : ''}`.toLowerCase();
       return !query.trim() || value.includes(query.trim().toLowerCase());
     })
-    .sort((a, b) => new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime()), [filter, query, sessions, space]);
+    .sort((a, b) => new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime()), [executionItems, filter, query, sessions, space]);
 
-  const count = (value: SessionFilter) => value === 'all' ? sessions.length : sessions.filter((item) => sessionState(item) === value).length;
+  const count = (value: SessionFilter) => value === 'all'
+    ? sessions.length
+    : sessions.filter((item) => sessionState(item, executionItems) === value).length;
   const spaceCount = (value: TeamClassificationKey) => sessions
     .filter((item) => teamClassificationKey(item.teamClassification, item.studioWorkspaceId) === value).length;
 
@@ -101,7 +107,7 @@ export default function ThreadsPage() {
         ) : (
           <div className="v8-panel">
             {visible.map((session) => {
-              const state = sessionState(session);
+              const state = sessionState(session, executionItems);
               const itemSpace = teamClassificationKey(session.teamClassification, session.studioWorkspaceId);
               const display = getModelDisplay(session.provider ?? '', session.model);
               const model = display.modelLabel || display.providerLabel || 'Default model';
@@ -121,8 +127,8 @@ export default function ThreadsPage() {
                     </p>
                   </div>
                   <div className="v8-row-cols">
-                    <span className="v8-model"><ModelMark provider={session.provider} />{model}</span>
-                    <span className={`v8-status ${state}`}>{state === 'completed' ? 'completed' : 'running'}</span>
+                    <span className="v8-model">{model}</span>
+                    <span className={`v8-status ${state}`}>{sessionStateLabel(state)}</span>
                     <time>{shortAge(session.lastMessageAt)}</time>
                   </div>
                 </Link>

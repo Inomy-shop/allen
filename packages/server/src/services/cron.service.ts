@@ -175,7 +175,7 @@ export class CronService {
     });
 
     try {
-      const result = await this.dispatch(job);
+      const result = await this.dispatch(job, triggeredBy);
       executionId = result.executionId;
       notes = result.notes;
       status = result.status;
@@ -224,7 +224,7 @@ export class CronService {
 
   // ── Dispatcher ──
 
-  private async dispatch(job: CronJob): Promise<{
+  private async dispatch(job: CronJob, triggeredBy: 'schedule' | 'manual'): Promise<{
     executionId?: string;
     notes?: string;
     status: CronRunStatus;
@@ -233,10 +233,10 @@ export class CronService {
 
     switch (target.type) {
       case 'agent':
-        return this.dispatchAgent(target, job);
+        return this.dispatchAgent(target, job, triggeredBy);
 
       case 'workflow':
-        return this.dispatchWorkflow(target, job.name);
+        return this.dispatchWorkflow(target, job.name, triggeredBy);
 
       case 'system':
         return this.dispatchSystem(target);
@@ -311,6 +311,7 @@ export class CronService {
   private async dispatchAgent(
     target: Extract<CronJob['target'], { type: 'agent' }>,
     job: CronJob,
+    triggeredBy: 'schedule' | 'manual',
   ): Promise<{ executionId?: string; notes?: string; status: CronRunStatus }> {
     let prompt = target.prompt;
 
@@ -348,6 +349,9 @@ export class CronService {
         agent_name: target.agentName,
         prompt,
         repo_path: target.repoPath,
+        origin: 'cron',
+        cron_job_name: job.name,
+        triggered_by: triggeredBy,
       }),
     });
     const data = (await res.json()) as Record<string, unknown>;
@@ -364,6 +368,7 @@ export class CronService {
   private async dispatchWorkflow(
     target: Extract<CronJob['target'], { type: 'workflow' }>,
     jobName: string,
+    triggeredBy: 'schedule' | 'manual',
   ): Promise<{ executionId?: string; notes?: string; status: CronRunStatus }> {
     if (isSelfHealingWorkflowName(target.workflowName)) {
       const missing = missingSelfHealingLinearEnv();
@@ -385,6 +390,9 @@ export class CronService {
       body: JSON.stringify({
         workflowId: String(wfDoc._id),
         input: target.workflowInput ?? {},
+        origin: 'cron',
+        cronJobName: jobName,
+        triggeredBy,
       }),
     });
     const data = (await res.json()) as Record<string, unknown>;

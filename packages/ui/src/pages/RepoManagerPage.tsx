@@ -811,23 +811,24 @@ export default function RepoManagerPage() {
               const branch = repo.detected?.defaultBranch?.trim() || repo.defaultBranch?.trim() || repo.branch?.trim() || 'main';
               const scan = repo.contextScan?.status;
               const needsRetry = scan === 'error' || scan === 'cancelled';
+              const isPending = !repo.context && (scan === 'pending' || !scan);
               const health = scan === 'scanning'
                 ? 'Scanning repository'
                 : needsRetry
                   ? 'Scan interrupted'
                   : repo.context
                     ? null
-                    : scan === 'pending' || !scan
-                      ? 'First scan pending'
+                    : isPending
+                      ? 'Awaiting first scan'
                       : 'No context docs yet';
               return (
-                <div key={repo._id} className="v8-repo-row">
+                <div key={repo._id} className={`v8-repo-row ${isPending ? 'is-pending' : ''}`}>
                   <div className="v8-repo-who">
                     <span className="v8-repo-name">{repo.name} <span>{branch}</span></span>
                     <div className="v8-repo-source">
                       {remote ? <a href={remote.href} target="_blank" rel="noreferrer"><Github /> {remote.label}</a> : <span>local</span>}
                     </div>
-                    {health && <div className={`v8-repo-health ${needsRetry ? 'warning' : scan === 'scanning' ? 'running' : ''}`}><i />{health}{needsRetry && <>&nbsp;—&nbsp;<button type="button" onClick={(event) => handleScan(event, repo._id)}>Retry</button></>}</div>}
+                    {health && <div className={`v8-repo-health ${needsRetry ? 'warning' : scan === 'scanning' ? 'running' : isPending ? 'is-pending' : ''}`}><i />{health}{needsRetry && <>&nbsp;—&nbsp;<button type="button" onClick={(event) => handleScan(event, repo._id)}>Retry</button></>}</div>}
                   </div>
                   <div className="v8-repo-actions" role="group" aria-label="Repository actions">
                     <div className="v8-repo-action-list">
@@ -904,7 +905,7 @@ export default function RepoManagerPage() {
             })}
           </div>
         )}
-        {!loading && repoList.length > 0 && <p className="v8-page-foot v8-page-foot--center">{repoList.length} repositories · status appears only when something needs attention · Context is the door in</p>}
+        {!loading && repoList.length > 0 && <p className="v8-page-foot v8-page-foot--center">{repoList.length} repositories · status appears only when something needs attention</p>}
 
         <AddRepoDialog open={addOpen} onClose={() => setAddOpen(false)} onCreated={refresh} />
         <EditRepoDialog repo={editRepo} open={!!editRepo} onClose={() => setEditRepo(null)} onUpdated={refresh} />

@@ -11,6 +11,7 @@ import { designStudio, type ImportSource, type Workspace } from '../services/des
 import { repos as reposApi } from '../services/api';
 import Select from '../components/common/Select';
 import DesignStudioCreateDialog from '../components/design/DesignStudioCreateDialog';
+import { designWorkspaceDisplayName, isImportedDesignWorkspace } from '../lib/design-workspace-name';
 
 function StatusChip({ status }: { status: Workspace['profileStatus'] }) {
   const map: Record<Workspace['profileStatus'], { label: string; cls: string }> = {
@@ -116,8 +117,14 @@ export default function DesignStudioPage() {
               <div className="v8-design-workspace__link">
               <div className="v8-design-workspace__top">
                 <span className="v8-design-workspace__icon">{ws.kind === 'repo' ? <FolderGit2 /> : <Lightbulb />}</span>
-                <span className="v8-design-workspace__name">{ws.name}</span>
+                <span className="v8-design-workspace__name">
+                  {designWorkspaceDisplayName(ws.name)}
+                  {isImportedDesignWorkspace(ws) && <small>imported</small>}
+                </span>
               </div>
+              {designWorkspaceDisplayName(ws.name) !== ws.name && (
+                <code className="v8-design-workspace__slug">{ws.name}</code>
+              )}
               <p className="v8-design-workspace__path" title={ws.sourceRepoPath}>
                 {ws.kind === 'repo' ? ws.sourceRepoPath || 'Repository workspace' : 'Greenfield design workspace'}
               </p>
@@ -170,7 +177,7 @@ function ImportAsNewWorkspaceDialog({ onClose, onCreated }: { onClose: () => voi
   }
   function folderSuggestion(path: string): string {
     const base = path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? '';
-    return base ? `${base} (imported)` : '';
+    return base;
   }
 
   const canImport = !busy && (Boolean(selectedSource) || bundleDir.trim().length > 0);
@@ -245,7 +252,7 @@ function ImportAsNewWorkspaceDialog({ onClose, onCreated }: { onClose: () => voi
                     const next = selectedSource === s._id ? null : s._id;
                     setSelectedSource(next);
                     setBundleDir('');
-                    suggestName(next ? `${s.name} (imported)` : '');
+                    suggestName(next ? designWorkspaceDisplayName(s.name) : '');
                   }}
                 >
                   <span className="flex min-w-0 items-center gap-2">

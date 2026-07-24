@@ -33,6 +33,11 @@ describe('inferCommand', () => {
 });
 
 describe('Allen MCP tool allowlist', () => {
+  it('includes Library skill creation tools', () => {
+    expect(ALLEN_MCP_TOOL_NAMES).toContain('create_skill');
+    expect(ALLEN_MCP_CLAUDE_TOOL_NAMES).toContain('mcp__allen__create_skill');
+  });
+
   it('includes repo context body loaders', () => {
     expect(ALLEN_MCP_TOOL_NAMES).toContain('get_repo_context_body');
     expect(ALLEN_MCP_CLAUDE_TOOL_NAMES).toContain('mcp__allen__get_repo_context_body');

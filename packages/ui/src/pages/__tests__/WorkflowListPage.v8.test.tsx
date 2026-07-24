@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import WorkflowListPage from '../WorkflowListPage';
+import WorkflowListPage, { workflowRouteSummary } from '../WorkflowListPage';
 
 const refresh = vi.fn();
 
@@ -42,6 +42,16 @@ vi.mock('../../components/workflow/WorkflowRunDialog', () => ({ default: () => n
 vi.mock('../../components/common/DeleteConfirmDialog', () => ({ default: () => null }));
 
 describe('WorkflowListPage V8', () => {
+  it('summarizes long routes with an exact remaining-node count', () => {
+    expect(workflowRouteSummary({
+      parsed: {
+        nodes: Object.fromEntries(
+          ['one', 'two', 'three', 'four', 'five', 'six', 'seven'].map((name) => [name, { type: 'agent', agent: name }]),
+        ),
+      },
+    })).toContain('+2 more');
+  });
+
   it('renders workflow shape, route metadata, and category filtering', () => {
     render(<MemoryRouter><WorkflowListPage /></MemoryRouter>);
 

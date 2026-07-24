@@ -223,7 +223,7 @@ export default function ChatDetailHeader({
         )}
       </div>
       <div className="v8-chat-detail-actions">
-        {onTeamClassificationChange && (
+        {teamClassification && onTeamClassificationChange && (
           <TeamClassificationSelect
             compact
             value={teamClassification}
