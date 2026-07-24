@@ -11,9 +11,13 @@ import { useSettingsStore } from '../../stores/settingsStore';
 
 describe('V8 design system foundation', () => {
   it('exposes the canonical V8 light and dark theme colors', () => {
+    expect(COLOR_MODE_TOKENS.light.sidebar).toBe('#f7fafd');
     expect(COLOR_MODE_TOKENS.light.surface).toBe('#fbfcfe');
+    expect(COLOR_MODE_TOKENS.light.surface100).toBe('#ffffff');
     expect(COLOR_MODE_TOKENS.light.accent).toBe('#5e6ad2');
+    expect(COLOR_MODE_TOKENS.dark.sidebar).toBe('#0c0d10');
     expect(COLOR_MODE_TOKENS.dark.surface).toBe('#131418');
+    expect(COLOR_MODE_TOKENS.dark.surface100).toBe('#1a1c21');
     expect(COLOR_MODE_TOKENS.dark.accent).toBe('#828be0');
   });
 
@@ -25,7 +29,9 @@ describe('V8 design system foundation', () => {
 
     useSettingsStore.getState().setColorMode('light');
     expect(document.documentElement).not.toHaveClass('dark');
+    expect(document.documentElement.style.getPropertyValue('--color-sidebar')).toBe('247 250 253');
     expect(document.documentElement.style.getPropertyValue('--color-surface')).toBe('251 252 254');
+    expect(document.documentElement.style.getPropertyValue('--color-surface-100')).toBe('255 255 255');
     expect(document.documentElement.style.getPropertyValue('--color-accent')).toBe('94 106 210');
   });
 

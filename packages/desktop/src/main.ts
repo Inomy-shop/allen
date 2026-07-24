@@ -833,7 +833,7 @@ function createWindow(url: string): BrowserWindow {
       ? {
         titleBarStyle: 'hiddenInset' as const,
         fullSizeContentView: true,
-        trafficLightPosition: { x: 16, y: 4 },
+        trafficLightPosition: { x: 16, y: 14 },
       }
       : {}),
     webPreferences: {

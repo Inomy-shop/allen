@@ -2,12 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import { pullRequests } from '../services/workspaceService';
-import {
-  AlertCircle, GitPullRequest, KeyRound, RefreshCw,
-} from 'lucide-react';
+import { AlertCircle, KeyRound, RefreshCw } from 'lucide-react';
 import { SetupProgressDialog } from '../components/workspace/SetupProgressDialog';
 import { system as systemApi } from '../services/api';
 import { workspaceChatPath } from '../lib/workspace-routes';
+import V8EmptyState from '../components/common/V8EmptyState';
 
 const STATUS_FILTERS = [
   { id: 'open', label: 'Open' },
@@ -122,33 +121,35 @@ export default function PullRequestListPage() {
     return (
       <div className="content scroll-hide !p-0 h-full bg-app" data-screen-label="pull-requests">
         <div className="flex min-h-full w-full items-center justify-center px-8 py-8">
-          <div className="w-full max-w-[480px] rounded-md border border-app bg-app-card px-6 py-8 text-center">
-            <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-md border border-app bg-app text-accent">
-              <AlertCircle className="h-5 w-5" />
-            </span>
-            <h2 className="mt-5 text-[17px] font-semibold text-theme-primary">GitHub is not connected</h2>
-            <p className="mt-2 text-[13px] text-theme-muted">
-              Add the GitHub credential before pull requests can be synced from repositories.
-            </p>
-            <div className="mt-5 inline-flex items-center gap-2 rounded-md border border-app bg-app px-3 py-2 font-mono text-[11px] text-accent">
-              <KeyRound className="h-3.5 w-3.5" /> ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN
-            </div>
-            <div className="mt-6 flex items-center justify-center gap-2">
-              <button
-                onClick={() => setShowGithubModal(true)}
-                className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
-                type="button"
-              >
-                Connect GitHub
-              </button>
-              <button
-                onClick={loadGitHubStatus}
-                className="inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
-                type="button"
-              >
-                <RefreshCw className="h-3.5 w-3.5" /> Recheck
-              </button>
-            </div>
+          <div className="w-full max-w-[480px] rounded-md border border-app bg-app-card px-6 py-3 text-center">
+            <V8EmptyState
+              scene="pull-request"
+              title="GitHub is not connected"
+              description="Add the GitHub credential before pull requests can be synced from repositories."
+              action={(
+                <>
+                  <div className="mb-5 inline-flex items-center gap-2 rounded-md border border-app bg-app px-3 py-2 font-mono text-[11px] text-accent">
+                    <KeyRound className="h-3.5 w-3.5" /> ALLEN_GITHUB_PERSONAL_ACCESS_TOKEN
+                  </div>
+                  <div className="flex items-center justify-center gap-2">
+                    <button
+                      onClick={() => setShowGithubModal(true)}
+                      className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
+                      type="button"
+                    >
+                      Connect GitHub
+                    </button>
+                    <button
+                      onClick={loadGitHubStatus}
+                      className="inline-flex h-9 items-center gap-2 rounded-md border border-app bg-app px-3 text-[13px] font-medium text-theme-secondary transition-colors hover:border-app-strong hover:text-theme-primary"
+                      type="button"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" /> Recheck
+                    </button>
+                  </div>
+                </>
+              )}
+            />
           </div>
           {showGithubModal && (
             <McpPresetConnectModal
@@ -202,12 +203,12 @@ export default function PullRequestListPage() {
         {loading ? (
           <div className="v8-prs-loading">Loading pull requests…</div>
         ) : prs.length === 0 ? (
-          <div className="v8-empty">
-            <span className="glyph"><GitPullRequest /></span>
-            <h2>{statusFilter ? emptyState.title : 'No pull requests'}</h2>
-            <p>{statusFilter ? emptyState.description : 'PRs opened by Allen sessions appear here after each sync (every 30 minutes).'}</p>
-            <button onClick={handleSync} className="v8-btn v8-btn--ink" type="button">Sync now</button>
-          </div>
+          <V8EmptyState
+            scene="pull-request"
+            title={statusFilter ? emptyState.title : 'No pull requests'}
+            description={statusFilter ? emptyState.description : 'PRs opened by Allen sessions appear here after each sync (every 30 minutes).'}
+            action={<button onClick={handleSync} className="v8-btn v8-btn--ink" type="button">Sync now</button>}
+          />
         ) : (
           <div className="v8-prs-panel">
             {prs.map(pr => (

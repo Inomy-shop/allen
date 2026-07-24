@@ -70,6 +70,46 @@ function timeUntil(d: string | null): string {
   return `in ${Math.floor(hrs / 24)}d`;
 }
 
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+export function humanizeCronSchedule(schedule: string): string {
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = schedule.trim().split(/\s+/);
+  if (!dayOfWeek) return 'Custom schedule';
+  if (schedule === '* * * * *') return 'Every minute';
+  if (/^\*\/\d+$/.test(minute) && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    return `Every ${minute.slice(2)} minutes`;
+  }
+  if (/^\d+$/.test(minute) && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    return `Hourly at :${minute.padStart(2, '0')}`;
+  }
+  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && month === '*') {
+    const time = new Date(2000, 0, 1, Number(hour), Number(minute))
+      .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (dayOfMonth === '*' && dayOfWeek === '*') return `Daily at ${time}`;
+    if (dayOfMonth === '*' && /^\d$/.test(dayOfWeek)) {
+      return `Every ${WEEKDAY_NAMES[Number(dayOfWeek)] ?? dayOfWeek} at ${time}`;
+    }
+    if (dayOfMonth === '*' && dayOfWeek === '1-5') {
+      return `Weekdays at ${time}`;
+    }
+    if (dayOfMonth === '*' && /^\d(?:,\d)+$/.test(dayOfWeek)) {
+      const days = dayOfWeek.split(',').map((value) => WEEKDAY_NAMES[Number(value)] ?? value);
+      return `${days.join(', ')} at ${time}`;
+    }
+    if (/^\d+$/.test(dayOfMonth) && dayOfWeek === '*') {
+      return `Monthly on day ${dayOfMonth} at ${time}`;
+    }
+  }
+  return 'Custom schedule';
+}
+
+export function cronDisplayName(displayName: string): string {
+  return displayName
+    .replace(/\s*\((?:every|each|hourly|daily|weekly|monthly|weekdays?|custom schedule)[^)]*\)\s*$/i, '')
+    .replace(/\s*[-—·]\s*(?:every|each|hourly|daily|weekly|monthly|weekdays?)(?:\s+.+)?$/i, '')
+    .trim() || displayName;
+}
+
 const statusColors: Record<string, string> = {
   success: 'bg-accent-green/10 text-accent-green border-accent-green/25',
   failed: 'bg-accent-red/10 text-accent-red border-accent-red/25',
@@ -720,15 +760,16 @@ export default function CronManagerPage({ compact = false }: { compact?: boolean
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-center gap-2">
-                          <span className="truncate text-[14px] font-semibold text-theme-primary">{job.displayName}</span>
+                          <span className="truncate text-[14px] font-semibold text-theme-primary">{cronDisplayName(job.displayName)}</span>
                           <span className="inline-flex h-6 shrink-0 items-center rounded-md border border-app bg-app px-2 text-[11px] font-medium text-theme-muted">
                             {targetTypeLabels[job.target?.type] ?? job.target?.type ?? '-'}
                           </span>
                         </div>
                         <div className="mt-1 flex min-w-0 items-center gap-2 text-[12px] text-theme-muted">
-                          <span className="rounded-md border border-app bg-app px-2 py-0.5 font-mono text-[11px] text-theme-secondary" title="Cron schedule">
-                            {job.schedule}
+                          <span className="rounded-md border border-app bg-app px-2 py-0.5 text-[11px] text-theme-secondary" title={`Cron: ${job.schedule}`}>
+                            {humanizeCronSchedule(job.schedule)}
                           </span>
+                          <code className="truncate font-mono text-[10px] text-theme-subtle">{job.schedule}</code>
                           <span className="truncate">{targetSummary(job.target)}</span>
                         </div>
                       </div>

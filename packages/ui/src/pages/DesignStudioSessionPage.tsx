@@ -13,6 +13,7 @@ import ChatPage from './ChatPage';
 import WorkspaceFilesPanel from '../components/design-studio/WorkspaceFilesPanel';
 import { chat as chatApi } from '../services/api';
 import { designStudio } from '../services/designStudioService';
+import { designWorkspaceDisplayName } from '../lib/design-workspace-name';
 
 export default function DesignStudioSessionPage() {
   const { sessionId } = useParams<{ sessionId?: string }>();
@@ -31,7 +32,7 @@ export default function DesignStudioSessionPage() {
   useEffect(() => {
     if (!workspaceId) return;
     designStudio.getWorkspace(workspaceId)
-      .then((workspace) => setWorkspaceName(workspace.name))
+      .then((workspace) => setWorkspaceName(designWorkspaceDisplayName(workspace.name)))
       .catch(() => {});
   }, [workspaceId]);
 

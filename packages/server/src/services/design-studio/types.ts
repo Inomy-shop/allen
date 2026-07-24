@@ -88,6 +88,9 @@ export interface DesignWorkspace {
   ownerUserId?: string | null;
   kind: WorkspaceKind;
   name: string;
+  /** Imported state is metadata, never encoded into the display name. */
+  imported?: boolean;
+  importedFrom?: { type: 'workspace' | 'bundle'; id: string };
   /** Repo mode only. */
   sourceRepoId?: string;
   sourceRepoPath?: string;

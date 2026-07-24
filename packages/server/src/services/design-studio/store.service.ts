@@ -45,6 +45,8 @@ export class DesignStudioStore {
     sourceRepoId?: string;
     sourceRepoPath?: string;
     ownerUserId?: string | null;
+    imported?: boolean;
+    importedFrom?: { type: 'workspace' | 'bundle'; id: string };
   }): Promise<DesignWorkspace> {
     const now = new Date();
     const doc: DesignWorkspace = {
@@ -53,6 +55,8 @@ export class DesignStudioStore {
       sourceRepoId: data.sourceRepoId,
       sourceRepoPath: data.sourceRepoPath,
       ownerUserId: data.ownerUserId ?? null,
+      imported: data.imported,
+      importedFrom: data.importedFrom,
       profileStatus: 'pending',
       createdAt: now,
       updatedAt: now,
@@ -63,11 +67,28 @@ export class DesignStudioStore {
 
   async listWorkspaces(ownerUserId?: string): Promise<DesignWorkspace[]> {
     const filter = ownerUserId ? { ownerUserId } : {};
-    return this.workspaces.find(filter).sort({ updatedAt: -1 }).toArray();
+    const workspaces = await this.workspaces.find(filter).sort({ updatedAt: -1 }).toArray();
+    return Promise.all(workspaces.map((workspace) => this.normalizeLegacyImportedWorkspace(workspace)));
   }
 
   async getWorkspace(id: string): Promise<DesignWorkspace | null> {
-    return this.workspaces.findOne({ _id: oid(id) });
+    const workspace = await this.workspaces.findOne({ _id: oid(id) });
+    return workspace ? this.normalizeLegacyImportedWorkspace(workspace) : null;
+  }
+
+  private async normalizeLegacyImportedWorkspace(workspace: DesignWorkspace): Promise<DesignWorkspace> {
+    if (workspace.imported || !/\s+\(imported\)$/i.test(workspace.name)) return workspace;
+    const name = workspace.name.replace(/\s+\(imported\)$/i, '').trim() || workspace.name;
+    const reference = workspace.greenfieldBrief?.references?.trim() ?? '';
+    const source = reference.match(/^(workspace|bundle):(.+)$/i);
+    const importedFrom = source
+      ? { type: source[1].toLowerCase() as 'workspace' | 'bundle', id: source[2] }
+      : undefined;
+    await this.workspaces.updateOne(
+      { _id: workspace._id },
+      { $set: { name, imported: true, ...(importedFrom ? { importedFrom } : {}) } },
+    );
+    return { ...workspace, name, imported: true, importedFrom };
   }
 
   /** Find an existing repo workspace so we don't re-create one per design (R22). */

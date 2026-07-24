@@ -197,11 +197,20 @@ function configureWorkflowService(overrides: Partial<{
 
 /** Configure SkillService mock to provide canned skill-service behaviour. */
 function configureSkillService(overrides: Partial<{
+  create: (input: unknown) => Promise<unknown>;
   getById: (id: string) => Promise<unknown>;
   getByName: (name: string) => Promise<unknown>;
   update: (id: string, input: unknown) => Promise<unknown>;
 }> = {}) {
   const instance = {
+    create: overrides.create ?? vi.fn().mockResolvedValue({
+      _id: 'skill-001',
+      name: 'test-skill',
+      version: 1,
+      displayName: 'Test Skill',
+      enabled: true,
+      createdBy: 'assistant',
+    }),
     getById: overrides.getById ?? vi.fn().mockResolvedValue(null),
     getByName: overrides.getByName ?? vi.fn().mockResolvedValue(null),
     update: overrides.update ?? vi.fn().mockResolvedValue({
@@ -342,6 +351,139 @@ describe('chat-tools-meta — allowlist removal (ENG-1524)', () => {
       );
 
       expect(result).toMatchObject({ error: expect.stringContaining('system-seeded') });
+    });
+  });
+
+  // ── create_skill ────────────────────────────────────────────────────────────
+
+  describe('create_skill', () => {
+    const tool = getTool('create_skill');
+
+    for (const scenario of CALLER_SCENARIOS) {
+      it(`succeeds from ${scenario.label}`, async () => {
+        scenario.setup();
+        configureSkillService();
+        const db = makeMockDb();
+
+        const result = await tool.execute(
+          {
+            name: 'test-skill',
+            displayName: 'Test Skill',
+            body: '# Test Skill\n\n## When to use\nUse for tests.',
+          },
+          db,
+          { chatSessionId: 'sess-1' },
+        );
+
+        expect(result).not.toMatchObject({ error: expect.stringContaining('Permission denied') });
+        expect(result).toMatchObject({ success: true });
+      });
+    }
+
+    it('passes all Library skill fields and audits the calling agent', async () => {
+      vi.mocked(resolveActiveSession).mockReturnValue({
+        chatSessionId: 'sess-agent',
+        parentMessageId: 'msg-agent',
+        currentAgent: 'workflow-builder-agent',
+        broadcastEvent: vi.fn(),
+        pendingBackgroundTasks: 0,
+      });
+      const mockCreate = vi.fn().mockResolvedValue({
+        _id: 'skill-002',
+        name: 'new-skill',
+        version: 1,
+        displayName: 'New Skill',
+        enabled: true,
+        createdBy: 'workflow-builder-agent',
+      });
+      configureSkillService({ create: mockCreate });
+      const db = makeMockDb();
+
+      const result = await tool.execute(
+        {
+          name: 'new-skill',
+          displayName: 'New Skill',
+          description: 'Creates a test skill',
+          category: 'routing',
+          triggers: ['new skill'],
+          excludes: ['old skill'],
+          priority: 64,
+          enabled: true,
+          allowedRoutes: ['direct_answer', 'spawn_agent'],
+          relatedAgents: ['workflow-builder-agent'],
+          relatedWorkflows: ['workflow-build-and-review'],
+          body: '# New Skill\n\n## When to use\nUse this in tests.',
+          tags: ['test'],
+        },
+        db,
+        { chatSessionId: 'sess-agent' },
+      );
+
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'new-skill',
+        displayName: 'New Skill',
+        description: 'Creates a test skill',
+        category: 'routing',
+        triggers: ['new skill'],
+        excludes: ['old skill'],
+        priority: 64,
+        enabled: true,
+        allowedRoutes: ['direct_answer', 'spawn_agent'],
+        relatedAgents: ['workflow-builder-agent'],
+        relatedWorkflows: ['workflow-build-and-review'],
+        body: '# New Skill\n\n## When to use\nUse this in tests.',
+        tags: ['test'],
+        createdBy: 'workflow-builder-agent',
+      }));
+      expect(result).toMatchObject({
+        success: true,
+        skill: {
+          _id: 'skill-002',
+          name: 'new-skill',
+          version: 1,
+          displayName: 'New Skill',
+          createdBy: 'workflow-builder-agent',
+        },
+      });
+    });
+
+    it('uses execution id as audit actor when no active chat session exists', async () => {
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
+      const mockCreate = vi.fn().mockResolvedValue({
+        _id: 'skill-003',
+        name: 'workflow-skill',
+        version: 1,
+        displayName: 'Workflow Skill',
+        enabled: true,
+        createdBy: 'execution:exec-123',
+      });
+      configureSkillService({ create: mockCreate });
+      const db = makeMockDb();
+
+      await tool.execute(
+        { name: 'workflow-skill', body: '# Workflow Skill' },
+        db,
+        { parentExecutionId: 'exec-123' },
+      );
+
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
+        createdBy: 'execution:exec-123',
+      }));
+    });
+
+    it('returns validation errors without throwing', async () => {
+      vi.mocked(resolveActiveSession).mockReturnValue(undefined);
+      configureSkillService({
+        create: vi.fn().mockRejectedValue(new Error('Skill "duplicate" already exists')),
+      });
+      const db = makeMockDb();
+
+      const result = await tool.execute(
+        { name: 'duplicate', body: '# Duplicate Skill' },
+        db,
+      );
+
+      expect(result).toMatchObject({ error: 'Skill "duplicate" already exists' });
     });
   });
 

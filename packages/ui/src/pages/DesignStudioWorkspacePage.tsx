@@ -23,6 +23,7 @@ import {
   type WorkspaceFile,
 } from '../services/designStudioService';
 import { groupWorkspaceFiles } from '../components/design-studio/WorkspaceFilesPanel';
+import { designWorkspaceDisplayName, isImportedDesignWorkspace } from '../lib/design-workspace-name';
 
 interface DesignSummary { _id: string; title: string; lastMessageAt: string; messageCount: number }
 
@@ -82,7 +83,7 @@ export default function DesignStudioWorkspacePage() {
               <StatusBadge status={ws.profileStatus} />
               <WorkspaceKindBadge ws={ws} />
             </div>
-            <h1>{ws.name}</h1>
+            <h1>{designWorkspaceDisplayName(ws.name)}{isImportedDesignWorkspace(ws) && <small className="v8-imported-badge">imported</small>}</h1>
             <p className="mono">
               {ws.kind === 'repo' ? ws.sourceRepoPath || 'Repository workspace' : 'Greenfield design workspace'}
             </p>
@@ -122,7 +123,7 @@ export default function DesignStudioWorkspacePage() {
       <DeleteConfirmDialog
         open={deleteOpen}
         resourceType="Allen Design repository"
-        resourceName={ws.name}
+        resourceName={designWorkspaceDisplayName(ws.name)}
         title="Delete Allen Design repository"
         description="This removes the repository from Allen Design, including its design profile, sessions, messages, and generated versions. It does not delete the source repository checkout."
         confirmLabel="Delete repository"

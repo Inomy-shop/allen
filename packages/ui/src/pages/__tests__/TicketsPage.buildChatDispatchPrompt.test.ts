@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildChatDispatchPrompt,
+  buildBulkChatDispatchPrompt,
   compactWorkflowInputForPrompt,
   type LinearIssue,
 } from '../TicketsPage';
@@ -41,6 +42,23 @@ const BASE_ARGS = {
   promptTemplate: undefined as string | undefined,
   workflowInput: undefined as Record<string, unknown> | undefined,
 };
+
+describe('buildBulkChatDispatchPrompt', () => {
+  it('keeps every selected ticket visible in one dispatch request', () => {
+    const prompt = buildBulkChatDispatchPrompt([
+      makeIssue(),
+      makeIssue({ id: '2', identifier: 'ENG-43', title: 'Fix logout' }),
+    ], {
+      target: { kind: 'agent', name: 'engineering-lead' },
+      repoName: 'allen-internal',
+      extraInstructions: 'Run tests first.',
+    });
+    expect(prompt).toContain('ENG-42 · Fix the flaky login test');
+    expect(prompt).toContain('ENG-43 · Fix logout');
+    expect(prompt).toContain('Dispatch preference: agent: engineering-lead');
+    expect(prompt).toContain('Do not silently skip a ticket');
+  });
+});
 
 // ── buildChatDispatchPrompt ───────────────────────────────────────────────────
 

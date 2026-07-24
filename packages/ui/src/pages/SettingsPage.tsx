@@ -204,7 +204,7 @@ function SettingsRow({
 }
 
 function ReadOnlyInput({ value }: { value: string }) {
-  return <input className="settings-readonly-input" readOnly value={value} />;
+  return <input className="settings-readonly-input" readOnly title={value} value={value} />;
 }
 
 function SettingsSwitch({
@@ -542,6 +542,7 @@ function RuntimeSettingControl({
       disabled={disabled}
       inputMode={field.kind === 'number' ? 'numeric' : undefined}
       placeholder={field.placeholder ?? field.defaultValue}
+      title={field.kind === 'path' ? value : undefined}
       type={field.kind === 'number' ? 'number' : 'text'}
       value={value}
       onChange={(event) => onChange(field.key, event.target.value)}
@@ -659,6 +660,7 @@ function CliProviderRows({ modelRegistry }: { modelRegistry: UseModelRegistryRet
                   modelRegistry={modelRegistry}
                   provider={p.provider}
                   providerLabel={providerLabel}
+                  chatDefaultModel={p.defaultModel}
                 />
               </div>
             )}

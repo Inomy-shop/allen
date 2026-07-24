@@ -1,6 +1,6 @@
 export function sanitizeChatAssistantResponse(candidate: unknown): string {
   if (typeof candidate !== 'string') return '';
-  let text = candidate;
+  let text = stripProviderInternalTags(candidate);
   let previous = '';
   while (text !== previous) {
     previous = text;
@@ -10,6 +10,21 @@ export function sanitizeChatAssistantResponse(candidate: unknown): string {
     text = stripTrailingRepoContextUsageSection(text).replace(/\s+$/g, '');
   }
   return text;
+}
+
+function stripProviderInternalTags(text: string): string {
+  return text
+    .replace(/<\/?(?:sub|think|thinking|analysis)\b[^>]*>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+}
+
+export function normalizeThinkingText(candidate: unknown): string {
+  return sanitizeChatAssistantResponse(candidate)
+    .replace(/([.!?])(?=[A-Z][a-z])/g, '$1\n\n')
+    .replace(/([a-z])(?=[A-Z][a-z])/g, '$1\n\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function stripTrailingRepoContextUsageMarker(text: string): string {

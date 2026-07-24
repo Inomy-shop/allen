@@ -469,7 +469,11 @@ export class ClaudePersistentRuntime implements PersistentChatRuntime {
       });
       turn.input.callbacks.onText(turn.text);
     }
-    const thinking = blocks.filter((b) => b.type === 'thinking').map((b) => String(b.thinking ?? b.text ?? '')).join('');
+    const thinking = blocks
+      .filter((b) => b.type === 'thinking')
+      .map((b) => String(b.thinking ?? b.text ?? ''))
+      .filter(Boolean)
+      .join('\n\n');
     if (thinking) {
       turn.thinking = thinking;
       turn.trace.push({ timestamp: new Date(), type: 'thinking', text: thinking });

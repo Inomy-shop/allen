@@ -984,7 +984,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
           )}
 
           {/* Repo selector */}
-          {!hideRepoSelector && ((repos && repos.length > 0) || isV8Home) && (
+          {!hideRepoSelector && !repoLocked && ((repos && repos.length > 0) || isV8Home) && (
             <div className="relative" ref={repoPickerRef}>
               <button
                 type="button"
@@ -1007,9 +1007,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                   ? <V8WorkspacesIcon className="h-3.5 w-3.5 shrink-0" />
                   : <FolderGit2 className="h-3 w-3 shrink-0" />}
                 <span className="max-w-[120px] truncate">
-                  {selectedRepoName ?? (isV8Home ? repos?.[0]?.name ?? 'allen-internal' : 'Auto')}
+                  {selectedRepoName ?? (isV8Home ? repos?.[0]?.name ?? 'Choose a repo' : 'Auto')}
                 </span>
-                {isV8Home && <span className="chat-repo-workspace-label">· auto</span>}
                 {!repoLocked && (isV8Home
                   ? <V8ChevronDownIcon className="h-2.5 w-2.5 text-theme-subtle" />
                   : <ChevronDown className="h-2.5 w-2.5 text-theme-subtle" />)}

@@ -502,7 +502,9 @@ describe('design-studio routes', () => {
 
       // Immediately usable: confirmed, named after the source, brief records provenance.
       expect(workspace.kind).toBe('greenfield');
-      expect(workspace.name).toBe('Design source (imported)');
+      expect(workspace.name).toBe('Design source');
+      expect(workspace.imported).toBe(true);
+      expect(workspace.importedFrom).toEqual({ type: 'workspace', id: sourceId });
       expect(workspace.profileStatus).toBe('confirmed');
       expect(workspace.greenfieldBrief.references).toBe(`workspace:${sourceId}`);
       // Repo link and analyzed profile carried over from the source.

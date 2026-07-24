@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import ExecutionListPage from '../ExecutionListPage';
+import ExecutionListPage, { groupConsecutiveScheduledExecutions } from '../ExecutionListPage';
 
 vi.mock('../../services/api', () => ({
   executions: {
@@ -37,6 +37,17 @@ vi.mock('../../services/api', () => ({
 }));
 
 describe('ExecutionListPage V8', () => {
+  it('groups consecutive scheduled executions from the same job and day', () => {
+    const items = groupConsecutiveScheduledExecutions([
+      { id: '1', startedAt: '2026-07-24T10:00:00Z', meta: { origin: 'cron', triggeredBy: 'schedule', cronJobName: 'health' } },
+      { id: '2', startedAt: '2026-07-24T09:00:00Z', meta: { origin: 'cron', triggeredBy: 'schedule', cronJobName: 'health' } },
+      { id: '3', startedAt: '2026-07-24T08:00:00Z', meta: { origin: 'chat' } },
+    ]);
+    expect(items[0]).toMatchObject({ kind: 'scheduled-group', cronJobName: 'health' });
+    expect(items[0].kind === 'scheduled-group' ? items[0].executions : []).toHaveLength(2);
+    expect(items[1]).toMatchObject({ kind: 'execution', exec: { id: '3' } });
+  });
+
   it('renders the type-led execution ledger and readable controls', async () => {
     render(<MemoryRouter><ExecutionListPage /></MemoryRouter>);
 
@@ -53,6 +64,6 @@ describe('ExecutionListPage V8', () => {
     expect(screen.getByText('completed')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Search execution, workflow, or node')).toBeVisible();
     expect(screen.getByRole('group', { name: 'Filter executions by source' })).toBeVisible();
-    expect(screen.getByText('Click a run to open its detail. Failed runs open at the decision that needs you.')).toBeVisible();
+    expect(screen.getByText('Click a run to open its detail. Failed runs open at the step that stopped.')).toBeVisible();
   });
 });

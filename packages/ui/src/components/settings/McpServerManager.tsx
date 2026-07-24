@@ -56,6 +56,10 @@ function ServerCard({
     server.source?.kind === 'preset' ? `preset · ${server.source.presetName}`
     : server.source?.kind === 'repo'  ? `repo · ${server.source.entryPath}`
     : sourceKind;
+  const presetName = server.source?.kind === 'preset' ? server.source.presetName : null;
+  const presetIcon = presetName
+    ? <NativePresetIcon preset={{ name: presetName } as McpPreset} />
+    : <Server className={`h-4 w-4 shrink-0 ${server.enabled ? 'text-accent-blue' : 'text-theme-subtle'}`} />;
   const commandPreview = server.command
     ? `${server.command}${server.args?.length ? ' ' + server.args.join(' ') : ''}`
     : server.url ?? 'Not configured';
@@ -124,7 +128,7 @@ function ServerCard({
         <IconTooltipButton label={expanded ? 'Collapse details' : 'Expand details'} onClick={() => setExpanded(!expanded)}>
           {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </IconTooltipButton>
-        <Server className={`w-4 h-4 shrink-0 ${server.enabled ? 'text-accent-blue' : 'text-theme-subtle'}`} />
+        <span className="shrink-0" aria-hidden="true">{presetIcon}</span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-body text-theme-primary">{server.name}</span>
@@ -143,7 +147,7 @@ function ServerCard({
           </span>
         )}
         <StatusBadge status={server.status} />
-        <div className="flex items-center gap-1">
+        <div className="mcp-server-row-actions flex items-center gap-1">
           <IconTooltipButton label="Test connection" tone="accent" onClick={handleTest} disabled={!!busy || !server.enabled}>
             {busy === 'test' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
           </IconTooltipButton>
@@ -1075,6 +1079,10 @@ function NativePresetIcon({ preset }: { preset: McpPreset }) {
   if (name === 'jira') return <BrandTile label="J" color="bg-[#0c66e4]" Icon={BriefcaseBusiness} />;
   if (name === 'linear') return <BrandTile label="L" color="bg-[#5e6ad2]" Icon={BriefcaseBusiness} />;
   if (name === 'slack') return <BrandTile label="S" color="bg-[#4a154b]" Icon={MessageSquare} />;
+  if (name === 'notion') return <NotionTile />;
+  if (name === 'posthog') return <PostHogTile />;
+  if (name === 'playwright') return <BrandTile label="P" color="bg-[#2eAD33]" Icon={Video} />;
+  if (name === 'xapi') return <BrandTile label="X" color="bg-black" Icon={XIcon} />;
   if (name === 'postgres') return <PostgresTile />;
   if (name === 'mongodb') return <MongoDbTile />;
   if (name === 'mysql') return <MySqlTile />;
@@ -1083,6 +1091,22 @@ function NativePresetIcon({ preset }: { preset: McpPreset }) {
   return (
     <div className={`flex h-8 w-8 items-center justify-center rounded-md border ${CATEGORY_STYLES[presetCategory(preset)]}`}>
       <PresetIcon preset={preset} className="h-4 w-4" />
+    </div>
+  );
+}
+
+function NotionTile() {
+  return (
+    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-app bg-white text-black">
+      <span className="font-serif text-[15px] font-black leading-none" aria-hidden="true">N</span>
+    </div>
+  );
+}
+
+function PostHogTile() {
+  return (
+    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-[#f9bd2b]/35 bg-[#f9bd2b] text-[#1d1f27]">
+      <span className="text-[14px] font-black leading-none" aria-hidden="true">PH</span>
     </div>
   );
 }

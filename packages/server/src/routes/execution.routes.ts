@@ -71,7 +71,10 @@ export function executionRoutes(db: Db): Router {
   // POST /api/executions
   router.post('/', async (req: AuthedRequest, res: Response) => {
     try {
-      const { workflowId, input, agentProvider, runtimeModel, runtime_model } = req.body;
+      const {
+        workflowId, input, agentProvider, runtimeModel, runtime_model,
+        origin, cronJobName, triggeredBy,
+      } = req.body;
       if (!workflowId) return res.status(400).json({ error: 'workflowId is required' });
       const provider = typeof agentProvider === 'string' && PROVIDERS.some((item) => item.provider === agentProvider)
         ? agentProvider as ChatProvider
@@ -89,6 +92,11 @@ export function executionRoutes(db: Db): Router {
         'meta.startedByUserEmail': dbUser?.email ?? authUser.email,
         'meta.startedByUserName': dbUser?.name ?? authUser.email?.split('@')[0] ?? authUser.sub,
       } : {};
+      if (origin === 'cron' && typeof cronJobName === 'string') {
+        userMeta['meta.origin'] = 'cron';
+        userMeta['meta.cronJobName'] = cronJobName;
+        userMeta['meta.triggeredBy'] = triggeredBy === 'manual' ? 'manual' : 'schedule';
+      }
       if (chatSessionId) {
         const chatMeta: Record<string, unknown> = {
           'meta.origin': 'chat',

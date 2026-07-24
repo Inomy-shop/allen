@@ -64,6 +64,46 @@ function executionId(exec: any): string {
   return String(exec?.id ?? exec?._id ?? '');
 }
 
+export type ExecutionListItem =
+  | { kind: 'execution'; exec: any }
+  | { kind: 'scheduled-group'; key: string; cronJobName: string; executions: any[] };
+
+function scheduledGroupKey(exec: any): string | null {
+  const meta = exec?.meta ?? {};
+  if (meta.origin !== 'cron' || meta.triggeredBy !== 'schedule' || !meta.cronJobName) return null;
+  const date = new Date(exec.startedAt ?? exec.createdAt ?? 0);
+  if (!Number.isFinite(date.getTime())) return null;
+  return `${meta.cronJobName}:${date.toISOString().slice(0, 10)}`;
+}
+
+export function groupConsecutiveScheduledExecutions(executions: any[]): ExecutionListItem[] {
+  const result: ExecutionListItem[] = [];
+  for (let index = 0; index < executions.length;) {
+    const exec = executions[index];
+    const key = scheduledGroupKey(exec);
+    if (!key) {
+      result.push({ kind: 'execution', exec });
+      index++;
+      continue;
+    }
+    const group: any[] = [exec];
+    let next = index + 1;
+    while (next < executions.length && scheduledGroupKey(executions[next]) === key) {
+      group.push(executions[next]);
+      next++;
+    }
+    if (group.length === 1) result.push({ kind: 'execution', exec });
+    else result.push({
+      kind: 'scheduled-group',
+      key,
+      cronJobName: String(exec.meta.cronJobName),
+      executions: group,
+    });
+    index = next;
+  }
+  return result;
+}
+
 function isActiveStatus(status: string): boolean {
   return status === 'running' || status === 'queued' || status === 'waiting_for_input';
 }
@@ -149,7 +189,7 @@ function firstString(...values: unknown[]): string | null {
   return null;
 }
 
-function executionRunContext(exec: any): { label: string; detail: string; title?: string } {
+function executionRunContext(exec: any): { label: string; detail: string } {
   const workspace = exec?.workspace ?? null;
   const repository = exec?.repository ?? null;
   const input = exec?.input ?? {};
@@ -170,27 +210,24 @@ function executionRunContext(exec: any): { label: string; detail: string; title?
     return {
       label,
       detail: repo,
-      title: workspacePath ?? undefined,
     };
   }
 
   if (repository) {
     return {
-      label: 'no workspace',
-      detail: firstString(repository.name) ?? 'repository context',
-      title: repoPath ?? undefined,
+      label: firstString(repository.name) ?? 'Repository run',
+      detail: 'repository context',
     };
   }
 
   if (fallbackPath) {
     return {
-      label: 'no workspace',
-      detail: compactPath(fallbackPath),
-      title: fallbackPath,
+      label: compactPath(fallbackPath),
+      detail: 'runtime context',
     };
   }
 
-  return { label: 'no workspace', detail: 'no repository context' };
+  return { label: 'Unscoped run', detail: 'no repository context' };
 }
 
 function executionKindLabel(exec: any): string {
@@ -234,7 +271,7 @@ function ExecutionRow({ exec, nowMs }: { exec: any; nowMs: number }) {
           {prettyWorkflowName(exec)}
           <span className="v8-execution-list__kind">{executionKindLabel(exec)}</span>
         </b>
-        <small title={context.title}>{context.label} · {context.detail}</small>
+        <small>{context.label} · {context.detail}</small>
       </div>
       <span className={`v8-execution-list__status is-${tone} ${isActiveStatus(exec?.status) ? 'is-pulsing' : ''}`}>
         {executionStatusLabel(exec)}
@@ -251,6 +288,7 @@ export default function ExecutionListPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [nowMs, setNowMs] = useState(Date.now());
+  const [expandedScheduleGroups, setExpandedScheduleGroups] = useState<Set<string>>(() => new Set());
   const [searchParams, setSearchParams] = useSearchParams();
   const snapshots = useExecutionStore((state) => state.entities);
   const filter = searchParams.get('status') ?? '';
@@ -344,6 +382,10 @@ export default function ExecutionListPage() {
   const runningNow = hideSpawnedChildrenWhenParentVisible(sorted.filter(exec => isActiveStatus(exec.status)));
   const recentExecs = hideSpawnedChildrenWhenParentVisible(sorted.filter(exec => isTerminalStatus(exec.status)));
   const visibleExecs = hideSpawnedChildrenWhenParentVisible(sorted);
+  const visibleItems = useMemo(
+    () => groupConsecutiveScheduledExecutions(visibleExecs),
+    [visibleExecs],
+  );
   const recentCount = Math.max(recentExecs.length, total - runningNow.length);
 
   const vm = paginationViewModel({ page, total, pageSize: PAGE_SIZE });
@@ -412,13 +454,49 @@ export default function ExecutionListPage() {
               <p>Runs will appear here as soon as Allen starts workflow or agent work.</p>
             </div>
           ) : (
-            visibleExecs.map((exec: any) => (
-              <ExecutionRow key={executionId(exec)} exec={exec} nowMs={nowMs} />
-            ))
+            visibleItems.map((item) => {
+              if (item.kind === 'execution') {
+                return <ExecutionRow key={executionId(item.exec)} exec={item.exec} nowMs={nowMs} />;
+              }
+              const expanded = expandedScheduleGroups.has(item.key);
+              const failed = item.executions.filter((exec) => exec.status === 'failed').length;
+              const completed = item.executions.filter((exec) => exec.status === 'completed').length;
+              return (
+                <div key={item.key} className="v8-execution-list__schedule-group">
+                  <button
+                    type="button"
+                    className="v8-execution-list__row v8-execution-list__schedule-summary"
+                    aria-expanded={expanded}
+                    onClick={() => setExpandedScheduleGroups((current) => {
+                      const next = new Set(current);
+                      if (next.has(item.key)) next.delete(item.key);
+                      else next.add(item.key);
+                      return next;
+                    })}
+                  >
+                    <span className="v8-execution-list__primary">
+                      <b>{prettyWorkflowName(item.executions[0])}<span className="v8-execution-list__kind">scheduled</span></b>
+                      <small>{item.cronJobName} · {item.executions.length} runs</small>
+                    </span>
+                    <span className={`v8-execution-list__status ${failed ? 'is-error' : 'is-success'}`}>
+                      {failed ? `${failed} failed` : `${completed} completed`}
+                    </span>
+                    <time>{executionStartedAt(item.executions[0])}</time>
+                    <time>grouped</time>
+                    <span className="v8-execution-list__arrow" aria-hidden="true">{expanded ? '−' : '+'}</span>
+                  </button>
+                  {expanded && item.executions.map((exec) => (
+                    <div className="v8-execution-list__schedule-child" key={executionId(exec)}>
+                      <ExecutionRow exec={exec} nowMs={nowMs} />
+                    </div>
+                  ))}
+                </div>
+              );
+            })
           )}
         </section>
 
-        <p className="v8-execution-list__footnote">Click a run to open its detail. Failed runs open at the decision that needs you.</p>
+        <p className="v8-execution-list__footnote">Click a run to open its detail. Failed runs open at the step that stopped.</p>
 
         {vm.visible && (
           <div className="v8-execution-list__pagination">

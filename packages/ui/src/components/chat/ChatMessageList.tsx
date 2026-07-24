@@ -15,7 +15,7 @@ import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc, type 
 import { useDocumentTabStore } from '../../stores/documentTabStore';
 import { chatCodeDiffs, pullRequests as pullRequestsApi, workspaces as workspacesApi } from '../../services/workspaceService';
 import { WorkflowInterventionAction } from '../execution/WorkflowInterventionAction';
-import { sanitizeChatAssistantResponse } from '../../lib/chat-response-sanitize';
+import { normalizeThinkingText, sanitizeChatAssistantResponse } from '../../lib/chat-response-sanitize';
 import { workspaceChatPath } from '../../lib/workspace-routes';
 import { humanLabel } from '../../lib/model-catalog';
 import { getModelDisplay } from '../../hooks/useModelRegistry';
@@ -218,7 +218,7 @@ function ThinkingBlock({ text, durationMs, active }: { text: string; durationMs?
       </button>
       {expanded && (
         <div className="chat-activity-expansion chat-thinking-copy">
-          {renderMarkdown(text)}
+          {renderMarkdown(normalizeThinkingText(text))}
         </div>
       )}
     </div>
@@ -3067,7 +3067,8 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
   const containerRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
   const initialHistoryRef = useRef(true);
-  const sessionRef = useRef<string | undefined>(messages[0]?.sessionId);
+  const conversationKey = resourceScopeKey ?? messages[0]?.sessionId;
+  const sessionRef = useRef<string | undefined>(conversationKey);
   const scrollToBottomIfPinned = useCallback(() => {
     if (autoScrollRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: streaming ? 'smooth' : 'instant' });
@@ -3086,14 +3087,14 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
   }, []);
 
   useEffect(() => {
-    const sessionId = messages[0]?.sessionId;
-    if (sessionRef.current !== sessionId) {
-      sessionRef.current = sessionId;
+    if (sessionRef.current !== conversationKey) {
+      sessionRef.current = conversationKey;
       initialHistoryRef.current = true;
     }
     if (initialHistoryRef.current && messages.length > 0 && !streaming) {
-      if (containerRef.current) containerRef.current.scrollTop = 0;
-      autoScrollRef.current = false;
+      const container = containerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+      autoScrollRef.current = true;
       initialHistoryRef.current = false;
       return;
     }
@@ -3101,7 +3102,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
     if (autoScrollRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: streaming ? 'smooth' : 'instant' });
     }
-  }, [messages, streamText, pendingWorkflowIntervention?.intervention.intervention_id, streaming]);
+  }, [conversationKey, messages, streamText, pendingWorkflowIntervention?.intervention.intervention_id, streaming]);
 
   const renderWorkflowInterventionHeaderAction = (run: SpawnedAgent) => {
     if (!pendingWorkflowIntervention || !onAnswerWorkflowIntervention) return null;
@@ -3187,8 +3188,14 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             </div>
             {hasAssistantMetrics && (
               <div className="ch-msg-meta-line">
-                {msg.costUsd != null && msg.costUsd > 0 && <span className="ch-msg-ts">${msg.costUsd.toFixed(4)}</span>}
-                {msg.tokenUsage && <TokenUsageDisplay tokenUsage={msg.tokenUsage} />}
+                <details className="ch-msg-metrics">
+                  <summary>
+                    {msg.costUsd != null && msg.costUsd > 0
+                      ? `$${msg.costUsd < 0.01 ? msg.costUsd.toFixed(3) : msg.costUsd.toFixed(2)}`
+                      : 'Usage'}
+                  </summary>
+                  {msg.tokenUsage && <TokenUsageDisplay tokenUsage={msg.tokenUsage} />}
+                </details>
               </div>
             )}
 

@@ -237,7 +237,11 @@ export default function DocumentsPlaceholderPage() {
                         openDocument(item, { sourceLabel: 'Documents', scopeKey });
                       }}>
                         <span className="v8-documents-icon"><FileText /></span>
-                        <span className="v8-documents-copy"><b>{displayTitle(item.filename)}<em>{extension(item.filename)}</em></b><small>{documentType(item)} <i>·</i> v1 <i>·</i> updated {relativeTime(item.createdAt)} by {item.createdByAgent || 'Allen'}</small></span>
+                        <span className="v8-documents-copy">
+                          <b>{displayTitle(item.filename)}<em>{extension(item.filename)}</em></b>
+                          {item.description && <span className="v8-documents-description">{item.description}</span>}
+                          <small>{documentType(item)} <i>·</i> v1 <i>·</i> updated {relativeTime(item.createdAt)} by {item.createdByAgent || 'Allen'}</small>
+                        </span>
                       </button>
                       <TeamClassificationSelect
                         compact

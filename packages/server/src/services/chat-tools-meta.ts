@@ -17,10 +17,12 @@
  *   create_team / update_team / delete_team — any agent may call
  *
  *   create_workflow / update_workflow — any agent may call
+ *
+ *   create_skill / update_skill — any agent may call
  */
 
 import type { Db } from 'mongodb';
-import type { ChatTool } from './chat-tools.js';
+import type { ChatTool, ChatToolContext } from './chat-tools.js';
 import { resolveActiveSession } from './chat-tools.js';
 import { TeamService } from './team.service.js';
 import { WorkflowService } from './workflow.service.js';
@@ -40,6 +42,18 @@ function isConfirmed(value: unknown): boolean {
   if (value === true) return true;
   if (typeof value === 'string' && value.toLowerCase() === 'true') return true;
   return false;
+}
+
+function optionalStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) ? value.map(v => String(v).trim()).filter(Boolean) : undefined;
+}
+
+function skillCreatorFromContext(context?: ChatToolContext): string {
+  const active = resolveActiveSession(context);
+  if (active?.currentAgent) return active.currentAgent;
+  if (context?.parentExecutionId) return `execution:${context.parentExecutionId}`;
+  if (context?.rootExecutionId) return `execution:${context.rootExecutionId}`;
+  return 'assistant';
 }
 
 // ── Read-only tools (no permission gating beyond meta-team membership at runtime) ──
@@ -173,6 +187,72 @@ const getSkillTool: ChatTool = {
     const skill = id ? await service.getById(id) : await service.getByName(name);
     if (!skill) return { error: 'Skill not found' };
     return { skill };
+  },
+};
+
+const createSkillTool: ChatTool = {
+  name: 'create_skill',
+  description: 'Create a new Allen Library skill with the same fields as the Library UI form. Returns the created skill id, slug, version, displayName, and createdBy audit value.',
+  destructive: true,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'Skill name slug. It is normalized to lowercase kebab-case.' },
+      displayName: { type: 'string' },
+      description: { type: 'string' },
+      category: { type: 'string' },
+      triggers: { type: 'array', items: { type: 'string' } },
+      excludes: { type: 'array', items: { type: 'string' } },
+      priority: { type: 'number' },
+      enabled: { type: 'boolean' },
+      allowedRoutes: { type: 'array', items: { type: 'string' } },
+      relatedWorkflows: { type: 'array', items: { type: 'string' } },
+      relatedAgents: { type: 'array', items: { type: 'string' } },
+      body: { type: 'string' },
+      tags: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['name', 'body'],
+  },
+  async execute(args, db, context) {
+    const name = typeof args.name === 'string' ? args.name.trim() : '';
+    const body = typeof args.body === 'string' ? args.body.trim() : '';
+    if (!name) return { error: 'Skill name is required' };
+    if (!body) return { error: 'Skill body is required' };
+
+    const input: SkillInput = {
+      name,
+      displayName: typeof args.displayName === 'string' ? args.displayName : undefined,
+      description: typeof args.description === 'string' ? args.description : undefined,
+      category: typeof args.category === 'string' ? args.category : undefined,
+      triggers: optionalStringArray(args.triggers),
+      excludes: optionalStringArray(args.excludes),
+      priority: typeof args.priority === 'number' ? args.priority : undefined,
+      enabled: typeof args.enabled === 'boolean' ? args.enabled : undefined,
+      allowedRoutes: optionalStringArray(args.allowedRoutes) as SkillInput['allowedRoutes'],
+      relatedWorkflows: optionalStringArray(args.relatedWorkflows),
+      relatedAgents: optionalStringArray(args.relatedAgents),
+      body,
+      tags: optionalStringArray(args.tags),
+      createdBy: skillCreatorFromContext(context),
+    };
+
+    try {
+      const created = await new SkillService(db).create(input);
+      return {
+        success: true,
+        skill: {
+          _id: String(created._id),
+          name: created.name,
+          version: created.version,
+          displayName: created.displayName,
+          enabled: created.enabled !== false,
+          createdBy: created.createdBy,
+          restored: created.restored === true,
+        },
+      };
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
   },
 };
 
@@ -827,6 +907,7 @@ export const metaChatTools: ChatTool[] = [
   searchSkillsTool,
   getSkillTool,
   // Skill management
+  createSkillTool,
   updateSkillTool,
   // Self-introspection (any agent)
   getMySessionHistory,
@@ -854,5 +935,6 @@ export const META_DESTRUCTIVE_TOOLS = [
   'delete_agent',
   'create_workflow',
   'update_workflow',
+  'create_skill',
   'update_skill',
 ];

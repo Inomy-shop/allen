@@ -19,7 +19,7 @@ export const TEAM_CLASSIFICATION_META: Record<
   marketing: { label: 'Marketing', short: 'mkt', color: '#B0568F' },
   product: { label: 'Product', short: 'prod', color: '#3C9D8A' },
   design: { label: 'Design', short: 'dsgn', color: '#8B6CC9' },
-  unknown: { label: 'Unknown', short: '—', color: '#7B8190' },
+  unknown: { label: 'Unassigned', short: '—', color: '#7B8190' },
 };
 
 export function effectiveTeamClassification(

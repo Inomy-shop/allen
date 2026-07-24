@@ -7,7 +7,6 @@ import {
 import { agents as agentsApi, chat as chatApi, executions, interventions, linear as linearApi, mcp as mcpApi, repos as reposApi, system as systemApi, workflows as workflowsApi } from '../services/api';
 import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import { chatCodeDiffs, pullRequests } from '../services/workspaceService';
-import { useAuthStore } from '../stores/authStore';
 import { useExecutionStore } from '../stores/executionStore';
 import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption } from '../components/chat/ChatInput';
 import { useSkillSlashCommands } from '../hooks/useSkillSlashCommands';
@@ -22,6 +21,10 @@ import {
   V8SetupTickIcon,
   V8SetupWorkflowIcon,
 } from '../components/common/V8SidebarIcons';
+import {
+  executionActivityState,
+  sessionActivityState,
+} from '../lib/activity-status';
 
 interface ExecutionItem {
   id: string;
@@ -29,6 +32,7 @@ interface ExecutionItem {
   workflowName?: string;
   status: string;
   startedAt?: string;
+  updatedAt?: string;
   durationMs?: number | null;
   currentNodes?: string[];
   completedNodes?: string[];
@@ -217,7 +221,7 @@ function waitingAge(dateStr?: string): string {
 }
 
 function isActiveRun(run: ExecutionItem): boolean {
-  return ['running', 'queued', 'waiting_for_input', 'waiting_for_human'].includes(run.status);
+  return executionActivityState(run) === 'active';
 }
 
 function canNeedHumanInput(run?: ExecutionItem): boolean {
@@ -386,8 +390,34 @@ function sessionOwnerLabel(session?: ChatSessionItem | null): string | undefined
   return compactTitle(session?.ownerName) ?? compactTitle(session?.ownerEmail) ?? undefined;
 }
 
-function isStreamingSession(session?: ChatSessionItem | null): boolean {
-  return Boolean(session?.streaming || session?.status === 'streaming' || session?.status === 'running');
+function isStreamingSession(
+  session?: ChatSessionItem | null,
+  activityRuns: ExecutionItem[] = [],
+): boolean {
+  return Boolean(session && sessionActivityState(session, activityRuns) === 'running');
+}
+
+export function homeComposerPlaceholder(
+  repo?: Pick<RepoOption, 'name' | 'path'> | null,
+  agent?: { name?: string; teamName?: string; role?: string } | null,
+): string {
+  const context = [repo?.name, repo?.path, agent?.name, agent?.teamName, agent?.role]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (/(marketing|growth|content|brand|campaign|social)/.test(context)) {
+    return 'Ask Allen to draft campaign copy, plan a launch, or review the content calendar…';
+  }
+  if (/(design|ui|ux|figma|creative)/.test(context)) {
+    return 'Ask Allen to audit a screen, refine the UI, or prepare an implementation brief…';
+  }
+  if (/(product|roadmap|research|prd)/.test(context)) {
+    return 'Ask Allen to triage feedback, refine a spec, or summarize the product backlog…';
+  }
+  if (/(data|pipeline|analytics|warehouse|etl)/.test(context)) {
+    return 'Ask Allen to inspect a pipeline, validate data quality, or investigate a failed job…';
+  }
+  return 'Ask Allen to fix a Linear ticket, update tests, or review a PR…';
 }
 
 function sessionContextLabel(session?: ChatSessionItem | null): string | undefined {
@@ -672,12 +702,12 @@ function activateConversationRow(
 export default function DashboardPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const user = useAuthStore((s) => s.user);
   const chatInputRef = useRef<ChatInputHandle>(null);
   const skillSlashCommands = useSkillSlashCommands();
   const [pendingInterventions, setPendingInterventions] = useState<InterventionItem[]>([]);
   const [allPullRequests, setAllPullRequests] = useState<PullRequestReviewItem[]>([]);
   const [runs, setRuns] = useState<ExecutionItem[]>([]);
+  const [activityRuns, setActivityRuns] = useState<ExecutionItem[]>([]);
   const executionRevisionClock = useExecutionStore(state => state.changeVersion);
   const [chatSessions, setChatSessions] = useState<ChatSessionItem[]>([]);
   const [chatDiffSummaries, setChatDiffSummaries] = useState<Record<string, DiffSummary>>({});
@@ -704,8 +734,8 @@ export default function DashboardPage() {
     try {
       const [pending, execs, sessions, prs] = await Promise.all([
         interventions.list({ status: 'pending', limit: 20 }).catch(() => []),
-        executions.listPaged({ limit: 40, offset: 0 }).catch(() => ({ items: [] })),
-        chatApi.listSessions(user?.id ? { ownerUserId: user.id } : undefined).catch(() => []),
+        executions.listPaged({ limit: 500, offset: 0 }).catch(() => ({ items: [] })),
+        chatApi.listSessions({ includeStudio: true }).catch(() => []),
         pullRequests.list().catch(() => []),
       ]);
       setPendingInterventions(pending ?? []);
@@ -713,11 +743,17 @@ export default function DashboardPage() {
       for (const execution of execs.items ?? []) {
         useExecutionStore.getState().ingestExecution(execution as unknown as Record<string, unknown>);
       }
-      const assignedRuns = collapseTaskRuns((execs.items ?? []).filter((run) => isAssignedTask(run) && hasChatReference(run)));
-      setRuns(assignedRuns);
+      // Home and the global running counter must use the same execution source.
+      // Keep assigned history, but never hide an active run simply because it
+      // did not originate from a chat session.
+      const visibleRuns = collapseTaskRuns((execs.items ?? []).filter((run) => (
+        isActiveRun(run) || (isAssignedTask(run) && hasChatReference(run))
+      )));
+      setActivityRuns(execs.items ?? []);
+      setRuns(visibleRuns);
       setChatSessions(sessions ?? []);
       const recentSessionIds = (sessions ?? []).slice(0, 20).map((session) => session._id);
-      const runSessionIds = assignedRuns
+      const runSessionIds = visibleRuns
         .map((run) => run.meta?.chatSessionId)
         .filter((sessionId): sessionId is string => Boolean(sessionId));
       const diffSessionIds = Array.from(new Set([...recentSessionIds, ...runSessionIds])).slice(0, 30);
@@ -741,7 +777,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     void load();
-  }, [user?.id, executionRevisionClock]);
+  }, [executionRevisionClock]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -814,7 +850,7 @@ export default function DashboardPage() {
   );
   const runningConversations = useMemo<ChatConversationItem[]>(() => {
     const runItems = runs
-      .filter((run) => ['running', 'queued'].includes(run.status))
+      .filter((run) => executionActivityState(run) === 'active' && !isWaitingForHumanInput(run))
       .map((run) => {
         const sessionId = run.meta?.chatSessionId;
         const session = sessionId ? chatSessionById.get(sessionId) : null;
@@ -840,7 +876,7 @@ export default function DashboardPage() {
       });
     const runSessionIds = new Set(runItems.map((item) => item.id));
     const streamingSessionItems = chatSessions
-      .filter((session) => isStreamingSession(session) && !runSessionIds.has(session._id))
+      .filter((session) => isStreamingSession(session, activityRuns) && !runSessionIds.has(session._id))
       .map((session) => {
         const pullRequest = conversationPullRequest(
           session,
@@ -865,14 +901,14 @@ export default function DashboardPage() {
     return [...runItems, ...streamingSessionItems]
       .sort((a, b) => new Date(b.timestamp ?? 0).getTime() - new Date(a.timestamp ?? 0).getTime())
       .slice(0, 8);
-  }, [allPullRequests, chatDiffSummaries, chatSessionById, chatSessions, runs]);
+  }, [activityRuns, allPullRequests, chatDiffSummaries, chatSessionById, chatSessions, runs]);
   const runningConversationIds = useMemo(
     () => new Set(runningConversations.map((item) => item.id)),
     [runningConversations],
   );
   const recentConversations = useMemo<ChatConversationItem[]>(() => {
     const fromSessions = chatSessions
-      .filter((session) => !runningConversationIds.has(session._id) && !isStreamingSession(session))
+      .filter((session) => !runningConversationIds.has(session._id) && !isStreamingSession(session, activityRuns))
       .sort((a, b) => new Date(sessionTimestamp(b) ?? 0).getTime() - new Date(sessionTimestamp(a) ?? 0).getTime())
       .map((session) => {
         const run = runs.find((candidate) => candidate.meta?.chatSessionId === session._id);
@@ -923,7 +959,7 @@ export default function DashboardPage() {
         };
       })
       .slice(0, 8);
-  }, [allPullRequests, chatDiffSummaries, chatSessionById, chatSessions, runningConversationIds, runs]);
+  }, [activityRuns, allPullRequests, chatDiffSummaries, chatSessionById, chatSessions, runningConversationIds, runs]);
   const humanApprovals = useMemo(
     () => {
       const runById = new Map(runs.map((run) => [run.id, run]));
@@ -1101,7 +1137,7 @@ export default function DashboardPage() {
               onAgentOverridesChanged={setAgentOverrides}
               maxVisibleLines={2}
               controlPresentation="v8-home"
-              placeholder="Ask Allen to fix a Linear ticket, update tests, or review a PR…"
+              placeholder={homeComposerPlaceholder(selectedRepo, selectedAgentDoc)}
               extraControls={(
                 <AgentChatDropdown
                   value={selectedAgent}

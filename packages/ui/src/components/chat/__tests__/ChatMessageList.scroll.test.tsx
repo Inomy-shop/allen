@@ -1,7 +1,7 @@
 /**
  * Tests for ChatMessageList scroll behaviour after the tab-switch scroll fix.
  *
- * AC-1: Initial historical messages start at the top without scrolling.
+ * AC-1: Opening a conversation starts at the bottom of its history.
  * AC-2: When a non-streaming view is pinned to the bottom, subsequent messages
  *       use behavior:'instant' so updates produce no visible animation.
  * AC-3: When streaming=true, scrollIntoView is called with behavior:'smooth'
@@ -92,24 +92,27 @@ describe('ChatMessageList scroll behaviour', () => {
   });
 
   it(
-    // AC-1: loaded history starts at the beginning of the conversation
-    'AC-1: keeps initial non-streaming history at the top without scrolling',
+    // AC-1: loaded history opens at the latest message
+    'AC-1: opens initial non-streaming history at the bottom',
     () => {
       const messages: ChatMessage[] = [
         makeMessage({ _id: 'm1', role: 'user', content: 'Hello' }),
       ];
+      const scrollHeight = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(720);
 
       const { container } = render(
         <ChatMessageList
           messages={messages}
           streamText=""
           streaming={false}
+          resourceScopeKey="chat:first"
         />,
       );
 
       const messageList = container.querySelector<HTMLElement>('.chat-stream-v2');
-      expect(messageList?.scrollTop).toBe(0);
+      expect(messageList?.scrollTop).toBe(720);
       expect(capturedBehaviors()).toEqual([]);
+      scrollHeight.mockRestore();
     },
   );
 
@@ -148,6 +151,41 @@ describe('ChatMessageList scroll behaviour', () => {
       });
     },
   );
+
+  it('scrolls to the bottom again when another conversation is opened', () => {
+    const scrollHeight = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(960);
+    const firstMessage = makeMessage({ _id: 'm1', role: 'user', content: 'First chat' });
+    const { container, rerender } = render(
+      <ChatMessageList
+        messages={[firstMessage]}
+        streamText=""
+        streaming={false}
+        resourceScopeKey="chat:first"
+      />,
+    );
+    const messageList = container.querySelector<HTMLElement>('.chat-stream-v2');
+    expect(messageList?.scrollTop).toBe(960);
+
+    if (messageList) messageList.scrollTop = 0;
+    rerender(
+      <ChatMessageList
+        messages={[
+          makeMessage({
+            _id: 'm2',
+            role: 'assistant',
+            sessionId: 'second-session',
+            content: 'Latest message in second chat',
+          }),
+        ]}
+        streamText=""
+        streaming={false}
+        resourceScopeKey="chat:second"
+      />,
+    );
+
+    expect(messageList?.scrollTop).toBe(960);
+    scrollHeight.mockRestore();
+  });
 
   it(
     // AC-3: scroll is smooth during streaming

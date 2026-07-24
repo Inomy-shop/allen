@@ -92,8 +92,8 @@ describe('V8 sidebar', () => {
     expect(repository).toBeInTheDocument();
     expect(linear).toBeInTheDocument();
     expect(pullRequests).toBeInTheDocument();
-    expect(repository.compareDocumentPosition(linear) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(linear.compareDocumentPosition(pullRequests) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pullRequests.compareDocumentPosition(repository) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Agents' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Workflows' })).toBeInTheDocument();
 

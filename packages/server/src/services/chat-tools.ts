@@ -1037,7 +1037,10 @@ const spawnAgent: ChatTool = {
         type: 'object',
         description: 'Optional structured retrieval-only context query. This is used by the context engine and is not sent as part of the agent prompt.',
       },
-      repo_path: { type: 'string', description: 'Optional repo path for the agent to work in' },
+        repo_path: { type: 'string', description: 'Optional repo path for the agent to work in' },
+      origin: { type: 'string', description: 'Internal dispatch origin.' },
+      cron_job_name: { type: 'string', description: 'Internal scheduled job name.' },
+      triggered_by: { type: 'string', description: 'Internal schedule trigger type.' },
       session_id: { type: 'string', description: 'Session ID from a previous spawn to resume with context. The agent picks up where it left off.' },
       runtime_model: {
         type: 'object',
@@ -1174,6 +1177,11 @@ const spawnAgent: ChatTool = {
           repoName: providedRepoKnowledgeRepoName,
           freshness: providedRepoKnowledgeFreshness,
         } : undefined,
+        ...(args.origin === 'cron' ? {
+          origin: 'cron',
+          cronJobName: args.cron_job_name,
+          triggeredBy: args.triggered_by === 'manual' ? 'manual' : 'schedule',
+        } : {}),
       },
       // Spawn-tree linkage — indexed for the /children query and Phase 3 fan-out.
       parentExecutionId,

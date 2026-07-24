@@ -218,6 +218,8 @@ const EXECUTION_LIST_PROJECTION = {
   completedNodes: 1,
 
   'meta.origin': 1,
+  'meta.cronJobName': 1,
+  'meta.triggeredBy': 1,
   'meta.chatSessionId': 1,
   'meta.parentMessageId': 1,
   'meta.startedByUserId': 1,
@@ -324,6 +326,38 @@ function listItemSummary(item: Record<string, unknown>): Record<string, unknown>
     linear,
     pullRequest,
   };
+}
+
+export function mergeCronRunProvenance(
+  rows: Record<string, unknown>[],
+  cronRuns: Record<string, unknown>[],
+): void {
+  const runByExecutionId = new Map<string, Record<string, unknown>>();
+  for (const run of cronRuns) {
+    const executionId = stringValue(run.executionId);
+    if (executionId && !runByExecutionId.has(executionId)) {
+      runByExecutionId.set(executionId, run);
+    }
+  }
+
+  for (const row of rows) {
+    const executionId = stringValue(row.id);
+    const run = executionId ? runByExecutionId.get(executionId) : undefined;
+    if (!run) continue;
+    const cronJobName = stringValue(run.cronJobName);
+    if (!cronJobName) continue;
+    const existingMeta = ((row.meta ?? {}) as Record<string, unknown>) ?? {};
+    const runTriggeredBy = run.triggeredBy === 'manual' || run.triggeredBy === 'schedule'
+      ? run.triggeredBy
+      : undefined;
+    const triggeredBy = stringValue(existingMeta.triggeredBy) ?? runTriggeredBy;
+    row.meta = {
+      ...existingMeta,
+      origin: 'cron',
+      cronJobName: stringValue(existingMeta.cronJobName) ?? cronJobName,
+      ...(triggeredBy ? { triggeredBy } : {}),
+    };
+  }
 }
 
 function listUserSummary(meta: Record<string, unknown>): Record<string, unknown> | null {
@@ -1008,6 +1042,35 @@ export class ExecutionService {
   }
 
   /**
+   * Older cron-dispatched executions predate execution.meta provenance, but
+   * their durable cron_runs rows already link the execution ID to the job and
+   * trigger. Hydrate that provenance for list responses without rewriting
+   * historical execution documents.
+   */
+  private async hydrateCronRunProvenance(rows: Record<string, unknown>[]): Promise<void> {
+    const executionIds = rows
+      .filter((row) => {
+        const meta = ((row.meta ?? {}) as Record<string, unknown>) ?? {};
+        return meta.origin !== 'cron'
+          || !stringValue(meta.cronJobName)
+          || !stringValue(meta.triggeredBy);
+      })
+      .map((row) => stringValue(row.id))
+      .filter((value): value is string => Boolean(value));
+    if (executionIds.length === 0) return;
+
+    const cronRuns = await this.db.collection('cron_runs')
+      .find(
+        { executionId: { $in: executionIds } },
+        { projection: { _id: 0, executionId: 1, cronJobName: 1, triggeredBy: 1, startedAt: 1 } },
+      )
+      .sort({ startedAt: -1 })
+      .toArray()
+      .catch(() => []);
+    mergeCronRunProvenance(rows, cronRuns as Record<string, unknown>[]);
+  }
+
+  /**
    * Paginated list with optional free-text search and agent/workflow type
    * filter. `type='agent'` matches workflowName patterns produced by
    * spawn_agent (`<caller>:spawn_agent/<name>`); `type='workflow'` excludes
@@ -1065,6 +1128,7 @@ export class ExecutionService {
       projection: EXECUTION_LIST_PROJECTION,
     });
     const normalizedItems = (items as unknown as Record<string, unknown>[]).map(normalizeTerminalCurrentNodes);
+    await this.hydrateCronRunProvenance(normalizedItems);
     if (opts.hydrateLegacyChatMetadata) {
       await this.attachChatMetadataFromMessages(normalizedItems);
     }

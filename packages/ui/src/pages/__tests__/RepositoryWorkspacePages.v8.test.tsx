@@ -71,7 +71,7 @@ vi.mock('../../services/workspaceService', () => ({
         baseBranch: 'dev',
         status: 'active',
         changedFiles: 6,
-        updatedAt: '2026-07-20T09:30:00Z',
+        updatedAt: new Date().toISOString(),
       },
       {
         _id: 'workspace-idle',
@@ -117,7 +117,9 @@ describe('Repository and workspace V8 pages', () => {
       expect(within(actionGroups[0]).getByRole('button', { name: label })).toBeVisible();
     }
 
-    expect(screen.getAllByText('First scan pending')).toHaveLength(1);
+    const pendingStatus = screen.getByText('Awaiting first scan');
+    expect(pendingStatus).toHaveClass('v8-repo-health', 'is-pending');
+    expect(pendingStatus.closest('.v8-repo-row')).toHaveClass('is-pending');
     expect(screen.getAllByText(/^updated Jun 13/)).toHaveLength(2);
     expect(screen.getByText(/status appears only when something needs attention/)).toBeVisible();
   });

@@ -53,8 +53,8 @@ describe('V8 Home composer presentation', () => {
 
     expect(screen.getByText('Opus 4.8')).toBeInTheDocument();
     expect(screen.getByText('· High')).toBeInTheDocument();
-    expect(screen.getByText('allen-internal')).toBeInTheDocument();
-    expect(screen.getByText('· auto')).toBeInTheDocument();
+    expect(screen.getByText('Choose a repo')).toBeInTheDocument();
+    expect(screen.queryByText('· auto')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Attach files' })).toHaveAttribute('title', 'Attach files');
     expect(screen.getByRole('button', { name: 'Start session' })).toHaveAttribute('title', 'Start session (⏎)');
     expect(container.querySelector('[data-provider-icon="claude"]')).toBeInTheDocument();
@@ -80,6 +80,20 @@ describe('V8 Home composer presentation', () => {
     }));
 
     expect(container.querySelector('textarea')).toHaveStyle({ minHeight: '50px' });
+  });
+
+  it('removes the repository chip entirely once a chat session locks its repository', () => {
+    render(createElement(ChatInput, {
+      onSend: vi.fn(),
+      streaming: false,
+      repos: [{ _id: 'repo-1', name: 'allen-internal', path: '/repo' }],
+      selectedRepoName: 'allen-internal',
+      repoLocked: true,
+    }));
+
+    expect(screen.queryByTitle(/Repo:/)).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Select repository')).not.toBeInTheDocument();
+    expect(screen.queryByText('allen-internal')).not.toBeInTheDocument();
   });
 
   it('shows all supported Codex effort levels in an evenly aligned grid', () => {

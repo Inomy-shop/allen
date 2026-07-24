@@ -35,6 +35,8 @@ export interface Workspace {
   _id: string;
   kind: 'repo' | 'greenfield';
   name: string;
+  imported?: boolean;
+  importedFrom?: { type: 'workspace' | 'bundle'; id: string };
   sourceRepoId?: string;
   sourceRepoPath?: string;
   repoFingerprint?: string;
