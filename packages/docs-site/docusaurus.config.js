@@ -1,10 +1,12 @@
 // @ts-check
 
+const { themes: prismThemes } = require('prism-react-renderer');
+
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Allen Docs',
   tagline: 'Operate agentic software work with visible workflows, workspaces, and human checkpoints.',
-  favicon: 'img/favicon.svg',
+  favicon: 'img/allen-favicon.svg',
 
   url: 'https://askallen.build',
   baseUrl: '/docs/',
@@ -50,11 +52,25 @@ const config = {
       image: 'img/docs/social-card.svg',
       navbar: {
         hideOnScroll: false,
+        title: 'allen docs',
+        logo: {
+          alt: 'Allen',
+          src: 'img/allen-favicon.svg',
+          href: 'https://askallen.build',
+        },
+        items: [
+          { label: 'Demo', href: 'https://askallen.build/#demo', position: 'left' },
+          { label: 'How it works', href: 'https://askallen.build/#how', position: 'left' },
+          { label: 'Integrations', href: 'https://askallen.build/#stack', position: 'left' },
+          { label: 'Quickstart', href: 'https://askallen.build/#start', position: 'left' },
+          { label: 'Docs', to: '/', position: 'left' },
+          { label: 'GitHub', href: 'https://github.com/Inomy-shop/allen', position: 'right' },
+        ],
       },
       colorMode: {
         defaultMode: 'light',
-        disableSwitch: true,
-        respectPrefersColorScheme: false,
+        disableSwitch: false,
+        respectPrefersColorScheme: true,
       },
       footer: {
         style: 'dark',
@@ -87,6 +103,8 @@ const config = {
         copyright: `Copyright © ${new Date().getFullYear()} Allen contributors.`,
       },
       prism: {
+        theme: prismThemes.github,
+        darkTheme: prismThemes.vsDark,
         additionalLanguages: ['bash', 'yaml', 'json'],
       },
     }),

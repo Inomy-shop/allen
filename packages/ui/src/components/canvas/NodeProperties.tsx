@@ -4,6 +4,7 @@ import { Trash2, Plus, X, ChevronDown, SlidersHorizontal } from 'lucide-react';
 import { agents as agentsApi, mcp as mcpApi, type McpToolGroup } from '../../services/api';
 import Select from '../common/Select';
 import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
+import ModelIcon, { modelIconColor } from '../common/ModelIcon';
 import { outputsAsMap } from '../../utils/outputs';
 import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
 import { useEnabledProviders, isProviderSelectable } from '../../hooks/useEnabledProviders';
@@ -877,7 +878,7 @@ function AgentNodeOverrides({
               createCustomValue={(query) => encodeModelOption(effectiveProvider, query)}
               customValueLabel={(query) => `Use "${query}"`}
               options={[
-                { value: '', label: 'Inherit', sublabel: inheritedModelLabel },
+                { value: '', label: 'Inherit', sublabel: inheritedModelLabel, icon: <ModelIcon provider={agentProvider} className={`h-4 w-4 ${modelIconColor(agentProvider)}`} /> },
                 ...selectableModelGroups,
               ]}
             />

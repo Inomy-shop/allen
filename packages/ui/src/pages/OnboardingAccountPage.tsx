@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight, CheckCircle2, Circle, CircleDot, Loader2 } from 'lucide-react';
+import { ArrowRight, Loader2 } from 'lucide-react';
 import { auth, system } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { OnboardingShell } from '../components/onboarding/OnboardingShell';
@@ -11,6 +11,15 @@ function passwordLooksStrong(password: string): boolean {
     && /[A-Z]/.test(password)
     && /\d/.test(password)
     && /[^A-Za-z0-9]/.test(password);
+}
+
+function passwordScore(password: string): number {
+  let score = 0;
+  if (password.length >= 8) score += 1;
+  if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score += 1;
+  if (/\d/.test(password)) score += 1;
+  if (/[^A-Za-z0-9]/.test(password)) score += 1;
+  return score;
 }
 
 export default function OnboardingAccountPage() {
@@ -86,182 +95,121 @@ export default function OnboardingAccountPage() {
   }
 
   const runtimeLabel = isDesktop ? 'desktop runtime' : 'web setup';
-  const runtimeCopy = isDesktop
-    ? 'Allen is preparing the local runtime that will host your repos, workspaces, and execution traces.'
-    : 'Create the first admin for this Allen instance before continuing into setup.';
-  const bootstrapSteps: Array<{
-    number: string;
-    title: string;
-    copy: string;
-    state: 'done' | 'active' | 'next';
-  }> = isDesktop
-    ? [
-      { number: '01', title: 'Create admin', copy: 'Unlock this local Allen instance.', state: 'active' },
-      { number: '02', title: 'Verify runtime', copy: 'Check CLIs, auth, ports, and local services.', state: 'next' },
-      { number: '03', title: 'Choose models', copy: 'Set chat and seeded workflow defaults.', state: 'next' },
-      { number: '04', title: 'Connect repo', copy: 'Register a checkout or clone a starter repository.', state: 'next' },
-      { number: '05', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'next' },
-    ]
-    : [
-      { number: '01', title: 'Create admin', copy: 'Unlock this local Allen instance.', state: 'active' },
-      { number: '02', title: 'Verify runtime', copy: 'Check CLIs, auth, ports, and local services.', state: 'next' },
-      { number: '03', title: 'Connect repo', copy: 'Register a checkout or clone a starter repository.', state: 'next' },
-      { number: '04', title: 'Start workflow', copy: 'Launch a small bug fix or feature run.', state: 'next' },
-    ];
+  const runtimeCopy = 'about 3 minutes to your first run';
+  const strength = passwordScore(password);
+  const passwordsMatch = confirmPassword.length > 0 && password === confirmPassword;
 
   return (
     <OnboardingShell
       step="account"
-      eyebrow="Allen setup"
-      title="Create the first admin account"
-      description="Allen is an agentic operating system for software development. It coordinates AI agents that plan, code, review, test, and ship against your repositories."
+      eyebrow="allen setup"
+      title="Your engineering org, run by agents."
+      description="Allen coordinates AI agents that plan, code, review, test, and ship against your repositories. Create the first admin to begin."
       runtimeLabel={runtimeLabel}
       runtimeCopy={runtimeCopy}
-      side={(
-        <div className="onboarding-card mt-8 rounded-md border border-app bg-app-card p-4">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <div className="font-mono text-[10.5px] text-theme-subtle">bootstrap path</div>
-              <div className="mt-1 text-[13px] font-semibold text-theme-primary">From first admin to first run</div>
-            </div>
-          </div>
-          <div className="space-y-0">
-            {bootstrapSteps.map(({ number, title, copy, state }) => (
-              <div
-                key={number}
-                className="onboarding-step grid grid-cols-[24px_minmax(0,1fr)] gap-3"
-                style={{ animationDelay: `${Number(number) * 45}ms` }}
-              >
-                <div className="relative flex justify-center">
-                  <div className={`onboarding-step-icon mt-0.5 grid h-5 w-5 place-items-center rounded-full ${
-                    state === 'active'
-                      ? 'text-accent'
-                      : state === 'done'
-                        ? 'text-accent-green'
-                        : 'text-theme-subtle'
-                  }`}>
-                    {state === 'done'
-                      ? <CheckCircle2 className="h-5 w-5" />
-                      : state === 'active'
-                        ? <CircleDot className="h-5 w-5" />
-                        : <Circle className="h-5 w-5" />}
-                  </div>
-                  {number !== (isDesktop ? '05' : '04') && (
-                    <div className={`onboarding-step-line absolute bottom-0 top-6 w-px ${
-                      state === 'done' ? 'bg-accent-green/35' : 'bg-border'
-                    }`} />
-                  )}
-                </div>
-                <div className="pb-4">
-                  <div className={`text-[13px] font-semibold ${
-                    state === 'active' ? 'text-accent' : 'text-theme-primary'
-                  }`}>
-                    {title}
-                  </div>
-                  <p className="mt-0.5 text-[12px] leading-5 text-theme-muted">{copy}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     >
-      <form onSubmit={handleSubmit} className="onboarding-card onboarding-panel-enter rounded-md border border-app bg-app-card p-5 shadow-sm sm:p-6">
-        <div className="mb-5">
-          <h2 className="text-[22px] font-semibold text-theme-primary">First admin</h2>
-          <p className="mt-1 text-[13px] leading-5 text-theme-muted">
-            Create the account that will manage this Allen instance.
-          </p>
+      <form onSubmit={handleSubmit} className="ob-card">
+        <div className="ob-card__head">
+          <div>
+            <h2>Create the first admin account</h2>
+            <p className="sub">This account manages users, repositories, and providers on this Allen instance.</p>
+          </div>
         </div>
 
         {checking && (
-          <div className="onboarding-soft-enter mb-4 flex items-center gap-2 rounded-md border border-app bg-app-muted px-3 py-2 text-[12px] text-theme-muted">
+          <div className="ob-notice">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             Checking first-run status
           </div>
         )}
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <label htmlFor="onboarding-name" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">name</label>
+        <div className="ob-f">
+            <label htmlFor="onboarding-name">name</label>
             <input
               id="onboarding-name"
               required
               autoFocus
               value={name}
               onChange={(event) => setName(event.target.value)}
-              className="onboarding-control h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+              className="ob-in"
               autoComplete="name"
               disabled={checking || submitting}
               placeholder="Elena Jones"
             />
-          </div>
+        </div>
 
-          <div className="space-y-1.5">
-            <label htmlFor="onboarding-email" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">email</label>
+        <div className="ob-f">
+            <label htmlFor="onboarding-email">email</label>
             <input
               id="onboarding-email"
               required
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              className="onboarding-control h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+              className="ob-in"
               autoComplete="email"
               disabled={checking || submitting}
               placeholder="you@company.com"
             />
-          </div>
+        </div>
 
-          <div className="space-y-1.5">
-            <label htmlFor="onboarding-password" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">password</label>
+        <div className="ob-2col">
+          <div className="ob-f">
+            <label htmlFor="onboarding-password">password</label>
             <input
               id="onboarding-password"
               required
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              className="onboarding-control h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+              className="ob-in"
               autoComplete="new-password"
               disabled={checking || submitting}
               placeholder="Create password"
             />
-            <p className="text-[11px] leading-4 text-theme-subtle">
-              Minimum 8 characters with uppercase, lowercase, number, and symbol.
+            <div className={`ob-meter s${strength}`} aria-hidden="true"><i /><i /><i /><i /></div>
+            <p className="ob-hint">
+              8+ characters with <b>upper</b>, <b>lower</b>, <b>number</b>, <b>symbol</b>.
             </p>
           </div>
 
-          <div className="space-y-1.5">
-            <label htmlFor="onboarding-confirm-password" className="block font-mono text-[11px] font-medium lowercase text-theme-muted">confirm password</label>
+          <div className="ob-f">
+            <label htmlFor="onboarding-confirm-password">confirm password</label>
             <input
               id="onboarding-confirm-password"
               required
               type="password"
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
-              className="onboarding-control h-10 w-full rounded-md border border-app bg-app-muted px-3 text-[13px] text-theme-primary outline-none placeholder:text-theme-subtle focus:border-accent focus:shadow-[var(--focus-ring)]"
+              className="ob-in"
               autoComplete="new-password"
               disabled={checking || submitting}
               placeholder="Repeat password"
             />
+            <p className={`ob-hint ${confirmPassword && !passwordsMatch ? 'err' : ''}`}>
+              {confirmPassword ? (passwordsMatch ? 'Passwords match.' : 'Passwords do not match') : '\u00a0'}
+            </p>
           </div>
         </div>
 
         {error && (
-          <div className="onboarding-soft-enter mt-4 rounded-md border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-[12px] text-accent-red">
+          <div className="ob-error">
             {error}
           </div>
         )}
 
-        <button
-          type="submit"
-          disabled={checking || submitting}
-          className="onboarding-control btn-primary mt-5 w-full justify-center"
-        >
-          {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-          {submitting ? 'Creating admin...' : 'Create admin account'}
-          {!submitting && <ArrowRight className="h-4 w-4" />}
-        </button>
+        <div className="ob-actions">
+          <span className="sp" />
+          <button type="submit" disabled={checking || submitting} className="ob-action-primary">
+            {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+            {submitting ? 'Creating admin...' : 'Create admin account'}
+            {!submitting && <ArrowRight />}
+          </button>
+        </div>
       </form>
+      <button type="button" onClick={() => navigate('/login')} className="ob-skip">
+        An admin already exists? Sign in instead
+      </button>
     </OnboardingShell>
   );
 }

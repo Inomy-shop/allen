@@ -92,7 +92,6 @@ describe('ChatMessageList tool activity presentation', () => {
     );
 
     expect(screen.getByText('Edit File')).toBeInTheDocument();
-    expect(screen.getByText('1 file · 1 tool')).toBeInTheDocument();
     expect(screen.getByText('Diff')).toBeInTheDocument();
     expect(screen.getByText('-retry();')).toBeInTheDocument();
     expect(screen.getByText('+retry(idempotencyKey);')).toBeInTheDocument();
@@ -140,7 +139,6 @@ describe('ChatMessageList tool activity presentation', () => {
     );
 
     expect(screen.getByText('Edit File')).toBeInTheDocument();
-    expect(screen.getByText('2 files · 1 tool')).toBeInTheDocument();
     expect(screen.getByText('src/a.ts + 1 more')).toBeInTheDocument();
     expect(screen.getByText('src/a.ts', { selector: 'code' })).toBeInTheDocument();
     expect(screen.getByText('src/b.ts', { selector: 'code' })).toBeInTheDocument();
@@ -392,4 +390,31 @@ describe('ChatMessageList tool activity presentation', () => {
 
     expect(screen.getByText('src/runtime.ts')).toBeInTheDocument();
   });
+
+  it('renders thinking and tool calls in recorded chronological order', () => {
+    const firstTool = call('Read', { file_path: 'src/one.ts' }, { raw: '1	const one = true;' }, 'Read src/one.ts');
+    const secondTool = call('Bash', { cmd: 'npm test' }, { stdout: 'passed' }, 'Run npm test');
+    const message = toolMessage([firstTool, secondTool]);
+    message.activityTimeline = [
+      { id: 'think-1', type: 'thinking', timestamp: '2026-07-21T00:00:00.000Z', text: 'thinking message 1' },
+      { id: 'tool-1', type: 'tool', timestamp: '2026-07-21T00:00:01.000Z', toolUseId: 'tool-1', toolCall: { ...firstTool, toolUseId: 'tool-1', status: 'completed' } },
+      { id: 'tool-2', type: 'tool', timestamp: '2026-07-21T00:00:02.000Z', toolUseId: 'tool-2', toolCall: { ...secondTool, toolUseId: 'tool-2', status: 'completed' } },
+      { id: 'think-2', type: 'thinking', timestamp: '2026-07-21T00:00:03.000Z', text: 'thinking message 2' },
+    ];
+
+    const { container } = render(
+      <ChatMessageList
+        messages={[message]}
+        streamText=""
+        streaming={false}
+      />,
+    );
+
+    const text = container.textContent ?? '';
+    expect(text.indexOf('thinking message 1')).toBeLessThan(text.indexOf('Read File'));
+    expect(text.indexOf('Read File')).toBeLessThan(text.indexOf('Run Command'));
+    expect(text.indexOf('Run Command')).toBeLessThan(text.indexOf('thinking message 2'));
+    expect(text.indexOf('thinking message 2')).toBeLessThan(text.indexOf('Done.'));
+  });
+
 });

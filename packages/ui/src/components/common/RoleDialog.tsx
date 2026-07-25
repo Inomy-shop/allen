@@ -3,6 +3,7 @@ import { X, Sparkles, FileText, Eye, Columns, Pencil, AlertCircle, AlertTriangle
 import Select from './Select';
 import RoleIcon from './RoleIcon';
 import ProviderIcon, { providerIconColor } from './ProviderIcon';
+import ModelIcon, { modelIconColor } from './ModelIcon';
 import { renderMarkdown } from '../chat/ChatMessageList';
 import { mcp as mcpApi, type McpToolGroup } from '../../services/api';
 import { ALLEN_MCP_TOOL_NAMES } from '../../lib/allen-mcp-tools';
@@ -465,7 +466,12 @@ export default function RoleDialog({
               <section className="space-y-3 border-t border-app pt-4">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="overline text-theme-muted">Runtime</h3>
-                  <span className="font-mono text-[10px] text-theme-subtle">{provider} / {model}</span>
+                  <span className="inline-flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-theme-subtle">
+                    <ProviderIcon provider={provider} className={`h-3.5 w-3.5 shrink-0 ${providerIconColor(provider)}`} />
+                    {provider} /
+                    <ModelIcon provider={provider} className={`h-3.5 w-3.5 shrink-0 ${modelIconColor(provider)}`} />
+                    <span className="truncate">{model}</span>
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

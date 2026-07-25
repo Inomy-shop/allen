@@ -40,6 +40,7 @@ import { getMonacoTheme, setupMonaco } from '../../lib/monaco-theme';
 import { renderMarkdown } from './ChatMessageList';
 import ChatContextPanel from './ChatContextPanel';
 import TokenUsageDisplay from '../common/TokenUsageDisplay';
+import ModelIcon, { modelIconColor } from '../common/ModelIcon';
 import { humanLabel } from '../../lib/model-catalog';
 import { getModelDisplay } from '../../hooks/useModelRegistry';
 
@@ -518,18 +519,28 @@ function WorkflowNodeStep({
   const canOpenDetails = Boolean(onOpenDetails) && (step.status ?? '').toLowerCase() === 'completed';
   const attempts = Math.max(0, step.attempts ?? 0);
   const meta = nodeDisplayMeta(step);
-  const sub = [
-    attempts > 1 ? `${attempts} attempts` : null,
-    step.model ? getModelDisplay(step.agent ?? '', step.model).modelLabel : null,
-    step.error ? 'error' : null,
-  ].filter(Boolean).join(' · ');
+  const modelLabel = step.model ? getModelDisplay(step.agent ?? '', step.model).modelLabel : null;
+  const hasSub = attempts > 1 || Boolean(modelLabel) || Boolean(step.error);
   const content = (
     <>
       <span className="step-copy">
         <span className="step-name">{humanLabel(step.name)}</span>
         <span className="step-meta">{meta}</span>
       </span>
-      {sub && <span className="step-sub">{sub}</span>}
+      {hasSub && (
+        <span className="step-sub inline-flex min-w-0 items-center gap-1.5">
+          {attempts > 1 && <span>{attempts} attempts</span>}
+          {attempts > 1 && modelLabel && <span>·</span>}
+          {modelLabel && (
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <ModelIcon provider={step.agent} className={`h-3 w-3 shrink-0 ${modelIconColor(step.agent)}`} />
+              <span className="truncate">{modelLabel}</span>
+            </span>
+          )}
+          {(attempts > 1 || modelLabel) && step.error && <span>·</span>}
+          {step.error && <span>error</span>}
+        </span>
+      )}
       {canOpenDetails && <ChevronRight className="step-open-chevron h-3.5 w-3.5" />}
     </>
   );
@@ -1973,7 +1984,14 @@ function CompactExecutionsPanel({ runs }: { runs: SpawnedAgent[] }) {
             </div>
             <div className="chat-compact-progress"><i style={{ width: `${progress}%` }} /></div>
             <div className="chat-compact-execution__meta">
-              {[model ? getModelDisplay(model.provider, model.model).modelLabel : null, formatCost(context?.execution.cost), formatDuration(context?.execution.durationMs ?? run.durationMs)].filter(Boolean).join(' · ')}
+              {model && (
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  <ModelIcon provider={model.provider} className={`h-3 w-3 shrink-0 ${modelIconColor(model.provider)}`} />
+                  <span className="truncate">{getModelDisplay(model.provider, model.model).modelLabel}</span>
+                </span>
+              )}
+              {model && (formatCost(context?.execution.cost) || formatDuration(context?.execution.durationMs ?? run.durationMs)) && <span>·</span>}
+              {[formatCost(context?.execution.cost), formatDuration(context?.execution.durationMs ?? run.durationMs)].filter(Boolean).join(' · ')}
             </div>
             {steps.map(step => (
               <div className="chat-compact-execution__step" key={step.id}>

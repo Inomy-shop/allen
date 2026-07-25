@@ -1,6 +1,7 @@
 import { Crown, Play, Pencil, Trash2, Eye, ArrowRight, FolderGit2 } from 'lucide-react';
 import RoleIcon from '../common/RoleIcon';
 import ProviderIcon from '../common/ProviderIcon';
+import ModelIcon, { modelIconColor } from '../common/ModelIcon';
 import { registryDefaultModelForProvider, getModelDisplay } from '../../hooks/useModelRegistry';
 import { normalizeStringList } from '../../utils/stringList';
 
@@ -37,11 +38,11 @@ export function AgentCard({
 
   return (
     <div
-      className={`group relative rounded-xl border border-app bg-app-muted/50 hover:bg-surface-100/70 hover:border-border/70 transition-all p-4 ${
+      className={`group relative rounded-xl border border-app bg-app-muted/50 hover:bg-surface-100/70 hover:border-border/70 transition-all p-3.5 ${
         selected ? 'ring-1 ring-accent-blue/50 border-accent-blue/50' : ''
       } ${isLead ? 'bg-accent-yellow/[0.03]' : ''}`}
     >
-      <div className="flex items-start gap-4">
+      <div className="flex items-start gap-3">
         {/* Selection checkbox */}
         <input
           type="checkbox"
@@ -54,11 +55,11 @@ export function AgentCard({
         {/* Agent icon */}
         <button
           onClick={() => onView(agent)}
-          className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 hover:opacity-80 transition-opacity border border-app"
+          className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0 hover:opacity-80 transition-opacity border border-app"
           style={{ backgroundColor: color + '18' }}
           title="View instructions"
         >
-          <RoleIcon icon={agent.icon as string} color={color} size={22} />
+          <RoleIcon icon={agent.icon as string} color={color} size={20} />
         </button>
 
         {/* Identity + description + capabilities */}
@@ -128,14 +129,15 @@ export function AgentCard({
             <ProviderIcon provider={provider} className="h-3.5 w-3.5 shrink-0" />
             {cardProviderLabel}
           </div>
-          <div className="text-[11px] font-mono px-3 py-1.5 text-theme-primary bg-app-muted/50">
-            {cardModelLabel}
+          <div className="flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] font-mono text-theme-primary bg-app-muted/50">
+            <ModelIcon provider={provider} className={`h-3.5 w-3.5 shrink-0 ${modelIconColor(provider)}`} />
+            <span className="truncate">{cardModelLabel}</span>
           </div>
         </div>
       </div>
 
       {/* Actions — second row */}
-      <div className="flex items-center justify-end gap-1.5 mt-3 pt-3 border-t border-app">
+      <div className="flex items-center justify-end gap-1.5 mt-3 pt-2.5 border-t border-app">
         <button
           onClick={() => onView(agent)}
           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors"

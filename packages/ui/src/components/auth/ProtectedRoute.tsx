@@ -5,7 +5,7 @@ import { system } from '../../services/api';
 
 const ONBOARDING_STEP_PATHS: Record<string, string> = {
   health: '/onboarding/health',
-  model_defaults: '/onboarding/model-defaults',
+  model_defaults: '/onboarding/repository',
   repository: '/onboarding/repository',
   first_workflow: '/onboarding/first-workflow',
 };

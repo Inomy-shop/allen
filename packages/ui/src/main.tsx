@@ -24,9 +24,9 @@ import TicketsPage from './pages/TicketsPage';
 import LoginPage from './pages/LoginPage';
 import OnboardingAccountPage from './pages/OnboardingAccountPage';
 import OnboardingHealthPage from './pages/OnboardingHealthPage';
-import OnboardingModelDefaultsPage from './pages/OnboardingModelDefaultsPage';
 import OnboardingRepositoryPage from './pages/OnboardingRepositoryPage';
 import OnboardingFirstWorkflowPage from './pages/OnboardingFirstWorkflowPage';
+import OnboardingLaunchPage from './pages/OnboardingLaunchPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
 import DesignStudioPage from './pages/DesignStudioPage';
@@ -59,9 +59,10 @@ const router = createBrowserRouter([
   { path: '/onboarding', element: <Navigate to="/onboarding/account" replace /> },
   { path: '/onboarding/account', element: <OnboardingAccountPage /> },
   { path: '/onboarding/health', element: <OnboardingHealthPage /> },
-  { path: '/onboarding/model-defaults', element: <OnboardingModelDefaultsPage /> },
+  { path: '/onboarding/model-defaults', element: <Navigate to="/onboarding/repository" replace /> },
   { path: '/onboarding/repository', element: <OnboardingRepositoryPage /> },
   { path: '/onboarding/first-workflow', element: <OnboardingFirstWorkflowPage /> },
+  { path: '/onboarding/launch', element: <OnboardingLaunchPage /> },
   { path: '/login', element: <LoginPage /> },
   { path: '/reset-password', element: <ResetPasswordPage /> },
   { path: '/403', element: <ForbiddenPage /> },

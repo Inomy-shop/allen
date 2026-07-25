@@ -187,6 +187,10 @@ export interface ToolCallRecord {
   toolUseId?: string;
 }
 
+export type ChatActivityTimelineItem =
+  | { id: string; type: 'thinking'; timestamp: string; text: string }
+  | { id: string; type: 'tool'; timestamp: string; toolUseId?: string; toolCall: ToolCallRecord & { status?: 'running' | 'completed' } };
+
 export interface ChatMessage {
   _id?: string;
   sessionId: string;
@@ -203,6 +207,7 @@ export interface ChatMessage {
   error?: string;
   toolCalls?: ToolCallRecord[];
   thinkingText?: string;
+  activityTimeline?: ChatActivityTimelineItem[];
   hidden?: boolean;
   /** Present when this user message was a `/skill <name>` load command —
    *  rendered as a compact skill slice instead of a text bubble. */
@@ -309,6 +314,117 @@ function upsertSpawnedRun(prev: SpawnedAgent[], run: Omit<Partial<SpawnedAgent>,
         }
       : s,
   );
+}
+
+function coerceActivityTimeline(value: unknown): ChatActivityTimelineItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index): ChatActivityTimelineItem[] => {
+    if (!item || typeof item !== 'object') return [];
+    const record = item as Record<string, any>;
+    const timestamp = typeof record.timestamp === 'string'
+      ? record.timestamp
+      : record.timestamp ? new Date(record.timestamp).toISOString() : new Date().toISOString();
+    if (record.type === 'thinking' && typeof record.text === 'string' && record.text.trim()) {
+      return [{ id: String(record.id ?? `thinking:${index}`), type: 'thinking', timestamp, text: record.text }];
+    }
+    if (record.type === 'tool' && record.toolCall && typeof record.toolCall === 'object') {
+      const toolCall = record.toolCall as Record<string, any>;
+      if (typeof toolCall.tool !== 'string') return [];
+      return [{
+        id: String(record.id ?? `tool:${toolCall.toolUseId ?? index}`),
+        type: 'tool',
+        timestamp,
+        toolUseId: typeof record.toolUseId === 'string' ? record.toolUseId : toolCall.toolUseId,
+        toolCall: {
+          tool: toolCall.tool,
+          description: toolCall.description,
+          args: toolCall.args ?? {},
+          result: toolCall.result ?? {},
+          durationMs: Number(toolCall.durationMs ?? 0),
+          timestamp: typeof toolCall.timestamp === 'string' ? toolCall.timestamp : timestamp,
+          toolUseId: toolCall.toolUseId,
+          status: toolCall.status === 'running' ? 'running' : 'completed',
+        },
+      }];
+    }
+    return [];
+  });
+}
+
+function appendThinkingTimeline(prev: ChatActivityTimelineItem[], nextThinking: string): ChatActivityTimelineItem[] {
+  if (!nextThinking) return prev;
+  const previousThinking = prev
+    .filter((item): item is Extract<ChatActivityTimelineItem, { type: 'thinking' }> => item.type === 'thinking')
+    .map(item => item.text)
+    .join('\n');
+  if (previousThinking === nextThinking) return prev;
+  let delta = nextThinking;
+  if (previousThinking && nextThinking.startsWith(previousThinking)) {
+    delta = nextThinking.slice(previousThinking.length);
+  }
+  const text = delta.trim();
+  if (!text) return prev;
+  const next = [...prev];
+  const last = next[next.length - 1];
+  if (last?.type === 'thinking') {
+    next[next.length - 1] = { ...last, text: `${last.text}${last.text.endsWith('\n') ? '' : '\n'}${text}`, timestamp: new Date().toISOString() };
+    return next;
+  }
+  return [...next, { id: `thinking:${Date.now()}:${next.length}`, type: 'thinking', timestamp: new Date().toISOString(), text }];
+}
+
+function appendToolStartTimeline(prev: ChatActivityTimelineItem[], data: any): ChatActivityTimelineItem[] {
+  const toolUseId = data.toolUseId ?? data.tool_use_id;
+  if (toolUseId && prev.some(item => item.type === 'tool' && item.toolUseId === toolUseId)) return prev;
+  const timestamp = new Date().toISOString();
+  return [...prev, {
+    id: `tool:${toolUseId ?? `${Date.now()}:${prev.length}`}`,
+    type: 'tool',
+    timestamp,
+    toolUseId,
+    toolCall: {
+      tool: data.tool,
+      description: data.description,
+      args: data.args ?? {},
+      result: {},
+      durationMs: 0,
+      timestamp,
+      toolUseId,
+      status: 'running',
+    },
+  }];
+}
+
+function completeToolTimeline(prev: ChatActivityTimelineItem[], data: any): ChatActivityTimelineItem[] {
+  const toolUseId = data.toolUseId ?? data.tool_use_id;
+  let matched = false;
+  const timestamp = new Date().toISOString();
+  const next = prev.map(item => {
+    if (item.type !== 'tool') return item;
+    const isMatch = toolUseId ? item.toolUseId === toolUseId || item.toolCall.toolUseId === toolUseId : item.toolCall.tool === data.tool;
+    if (!isMatch) return item;
+    matched = true;
+    return {
+      ...item,
+      toolCall: {
+        ...item.toolCall,
+        tool: data.tool ?? item.toolCall.tool,
+        description: data.description ?? item.toolCall.description,
+        args: data.args ?? item.toolCall.args ?? {},
+        result: data.result ?? {},
+        durationMs: Number(data.durationMs ?? item.toolCall.durationMs ?? 0),
+        timestamp: item.toolCall.timestamp || timestamp,
+        toolUseId,
+        status: 'completed' as const,
+      },
+    };
+  });
+  if (matched) return next;
+  return appendToolStartTimeline(prev, data).map(item => {
+    if (item.type !== 'tool') return item;
+    const isMatch = toolUseId ? item.toolUseId === toolUseId : item.toolCall.tool === data.tool;
+    return isMatch ? { ...item, toolCall: { ...item.toolCall, result: data.result ?? {}, durationMs: Number(data.durationMs ?? 0), status: 'completed' as const } } : item;
+  });
 }
 
 function toolRunFromResult(tool: string, result: Record<string, unknown> | undefined): SpawnedAgent | null {
@@ -474,6 +590,7 @@ export function useChat() {
   const [streaming, setStreaming] = useState(false);
   const [streamText, setStreamText] = useState('');
   const [thinkingText, setThinkingText] = useState('');
+  const [streamActivityTimeline, setStreamActivityTimeline] = useState<ChatActivityTimelineItem[]>([]);
   const [activeToolCalls, setActiveToolCalls] = useState<ActiveToolCall[]>([]);
   const [agentReports, setAgentReports] = useState<AgentReport[]>([]);
   /** Pending question from an agent to the user (ask_user) */
@@ -653,6 +770,7 @@ export function useChat() {
             setMessages(prev => prev.filter(m => m._id !== streamingMsg._id));
             setStreamText(streamingMsg.content ?? '');
             setThinkingText(streamingMsg.thinkingText ?? '');
+            setStreamActivityTimeline(coerceActivityTimeline(streamingMsg.activityTimeline));
             setActiveToolCalls(activeToolCallsFromRecords(streamingMsg.toolCalls));
           }
         }
@@ -738,17 +856,25 @@ export function useChat() {
         setStreamText(data.text ?? '');
         break;
 
+      case 'activity_timeline':
+        setStreaming(true);
+        setStreamActivityTimeline(coerceActivityTimeline(data.activityTimeline));
+        break;
+
       case 'thinking':
         setStreaming(true);
         setThinkingText(data.text ?? '');
+        setStreamActivityTimeline(prev => data.activityTimeline ? coerceActivityTimeline(data.activityTimeline) : appendThinkingTimeline(prev, data.text ?? ''));
         break;
 
       case 'tool_start':
         setStreaming(true);
+        setStreamActivityTimeline(prev => data.activityTimeline ? coerceActivityTimeline(data.activityTimeline) : appendToolStartTimeline(prev, data));
         setActiveToolCalls(prev => mergeToolStart(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
         break;
 
       case 'tool_result':
+        setStreamActivityTimeline(prev => data.activityTimeline ? coerceActivityTimeline(data.activityTimeline) : completeToolTimeline(prev, data));
         setActiveToolCalls(prev => mergeToolResult(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
         {
           const run = toolRunFromResult(data.tool, data.result);
@@ -773,11 +899,13 @@ export function useChat() {
             tokenUsage: (data.tokenUsage ?? null) as TokenUsageInfo | null,
             toolCalls: data.toolCalls,
             thinkingText: data.thinkingText ?? thinkingText,
+            activityTimeline: coerceActivityTimeline(data.activityTimeline).length > 0 ? coerceActivityTimeline(data.activityTimeline) : streamActivityTimeline,
             createdAt: new Date().toISOString(),
           },
         ]);
         setStreamText('');
         setThinkingText('');
+        setStreamActivityTimeline([]);
         setActiveToolCalls([]);
         setStreaming(false);
         break;
@@ -900,6 +1028,7 @@ export function useChat() {
           },
         ]);
         setStreamText('');
+        setStreamActivityTimeline([]);
         setActiveToolCalls([]);
         setStreaming(false);
         break;
@@ -908,7 +1037,7 @@ export function useChat() {
         setWatchers(prev => mergeWatcherDocuments(prev, [data as WatcherUIDoc]));
         break;
     }
-  }, [streamText, thinkingText]);
+  }, [streamText, thinkingText, streamActivityTimeline]);
 
   const createSession = useCallback(
     async (
@@ -1097,6 +1226,7 @@ export function useChat() {
       let assistantMsgId = '';
       let assistantThinking = '';
       let collectedToolCalls: ToolCallRecord[] = [];
+      let assistantActivityTimeline: ChatActivityTimelineItem[] = [];
       const activeToolArgs = new Map<string, Record<string, unknown>>();
 
       while (true) {
@@ -1120,15 +1250,24 @@ export function useChat() {
                   setStreamText(assistantText);
                   break;
 
+                case 'activity_timeline':
+                  assistantActivityTimeline = coerceActivityTimeline(data.activityTimeline);
+                  setStreamActivityTimeline(assistantActivityTimeline);
+                  break;
+
                 case 'thinking':
                   assistantThinking = data.text ?? '';
+                  assistantActivityTimeline = data.activityTimeline ? coerceActivityTimeline(data.activityTimeline) : appendThinkingTimeline(assistantActivityTimeline, assistantThinking);
                   setThinkingText(assistantThinking);
+                  setStreamActivityTimeline(assistantActivityTimeline);
                   break;
 
                 case 'tool_start':
                   if (data.toolUseId ?? data.tool_use_id) {
                     activeToolArgs.set(data.toolUseId ?? data.tool_use_id, data.args ?? {});
                   }
+                  assistantActivityTimeline = data.activityTimeline ? coerceActivityTimeline(data.activityTimeline) : appendToolStartTimeline(assistantActivityTimeline, data);
+                  setStreamActivityTimeline(assistantActivityTimeline);
                   setActiveToolCalls(prev => mergeToolStart(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
                   break;
 
@@ -1145,6 +1284,8 @@ export function useChat() {
                   };
                   collectedToolCalls.push(toolRecord);
                   if (toolUseId) activeToolArgs.delete(toolUseId);
+                  assistantActivityTimeline = data.activityTimeline ? coerceActivityTimeline(data.activityTimeline) : completeToolTimeline(assistantActivityTimeline, data);
+                  setStreamActivityTimeline(assistantActivityTimeline);
                   setActiveToolCalls(prev => mergeToolResult(prev, data).slice(-MAX_LIVE_TOOL_CALLS));
                   const run = toolRunFromResult(data.tool, data.result);
                   if (run) {
@@ -1171,11 +1312,13 @@ export function useChat() {
                       tokenUsage: (data.tokenUsage ?? null) as TokenUsageInfo | null,
                       toolCalls: data.toolCalls || collectedToolCalls,
                       thinkingText: data.thinkingText ?? assistantThinking,
+                      activityTimeline: coerceActivityTimeline(data.activityTimeline).length > 0 ? coerceActivityTimeline(data.activityTimeline) : assistantActivityTimeline,
                       createdAt: new Date().toISOString(),
                     },
                   ]);
                   setStreamText('');
                   setThinkingText('');
+                  setStreamActivityTimeline([]);
                   setActiveToolCalls([]);
                   // The assistant turn is complete as soon as message_complete arrives.
                   // The HTTP stream may stay open briefly for cleanup/title updates, but
@@ -1327,6 +1470,7 @@ export function useChat() {
       if ((err as Error).name === 'AbortError') {
         // User cancelled — clean up without showing an error message.
         setStreamText('');
+        setStreamActivityTimeline([]);
         setActiveToolCalls([]);
       } else if ((err as Error & { isClientError?: boolean }).isClientError) {
         // The server rejected the message before persisting/streaming (e.g.
@@ -1346,6 +1490,7 @@ export function useChat() {
         ]);
         setRestoredDraft(content);
         setStreamText('');
+        setStreamActivityTimeline([]);
         setActiveToolCalls([]);
       } else {
         // Network / transport error. Before giving up, check whether the
@@ -1372,6 +1517,7 @@ export function useChat() {
               setMessages(prev => prev.filter(m => m._id !== streamingMsg._id));
               setStreamText(streamingMsg.content ?? '');
               setThinkingText(streamingMsg.thinkingText ?? '');
+              setStreamActivityTimeline(coerceActivityTimeline(streamingMsg.activityTimeline));
               setActiveToolCalls(prev => {
                 const hydrated = activeToolCallsFromRecords(streamingMsg.toolCalls);
                 const existingKeys = new Set(prev.map(tc => tc.toolUseId || `${tc.tool}:${tc.status}`));
@@ -1443,6 +1589,7 @@ export function useChat() {
         }
 
         setStreamText('');
+        setStreamActivityTimeline([]);
         setActiveToolCalls([]);
       }
     } finally {
@@ -1582,6 +1729,7 @@ export function useChat() {
     streamText,
     watchers,
     thinkingText,
+    streamActivityTimeline,
     activeToolCalls,
     agentReports,
     spawnedAgents,

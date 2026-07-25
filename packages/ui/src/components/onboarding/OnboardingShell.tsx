@@ -1,7 +1,10 @@
 import type { ReactNode } from 'react';
+import { Check, Clock3, Moon, Sun } from 'lucide-react';
 import { BRAND_SLUG } from '../../lib/brand';
+import { V8AllenMark } from '../common/V8SidebarIcons';
+import { useSettingsStore } from '../../stores/settingsStore';
 
-type OnboardingStep = 'account' | 'health' | 'model_defaults' | 'repository' | 'first_workflow';
+export type OnboardingStep = 'account' | 'health' | 'repository' | 'first_workflow' | 'complete';
 
 interface OnboardingShellProps {
   step: OnboardingStep;
@@ -10,8 +13,29 @@ interface OnboardingShellProps {
   description: string;
   runtimeLabel?: string;
   runtimeCopy?: string;
+  stepCopy?: Partial<Record<Exclude<OnboardingStep, 'complete'>, string>>;
   children: ReactNode;
   side?: ReactNode;
+}
+
+const STEP_ORDER: Exclude<OnboardingStep, 'complete'>[] = ['account', 'health', 'repository', 'first_workflow'];
+const STEP_LABELS: Record<Exclude<OnboardingStep, 'complete'>, { title: string; copy: string }> = {
+  account: { title: 'Account', copy: 'Create the first admin' },
+  health: { title: 'Environment', copy: 'Verify runtime & providers' },
+  repository: { title: 'Repository', copy: 'Demo repo or your own' },
+  first_workflow: { title: 'First run', copy: 'Watch agents ship a change' },
+};
+
+function stepState(
+  step: OnboardingStep,
+  candidate: Exclude<OnboardingStep, 'complete'>,
+): 'done' | 'active' | 'next' {
+  if (step === 'complete') return 'done';
+  const activeIndex = STEP_ORDER.indexOf(step);
+  const index = STEP_ORDER.indexOf(candidate);
+  if (index < activeIndex) return 'done';
+  if (index === activeIndex) return 'active';
+  return 'next';
 }
 
 export function OnboardingShell({
@@ -20,47 +44,67 @@ export function OnboardingShell({
   title,
   description,
   runtimeLabel = 'desktop runtime',
-  runtimeCopy = 'Local server, managed data, and agent workspaces start with this app.',
+  runtimeCopy,
+  stepCopy,
   children,
   side,
 }: OnboardingShellProps) {
+  const colorMode = useSettingsStore(state => state.colorMode);
+  const setColorMode = useSettingsStore(state => state.setColorMode);
+  const isDark = colorMode === 'dark'
+    || (colorMode === 'system' && typeof document !== 'undefined' && document.documentElement.classList.contains('dark'));
+
   return (
-    <main data-onboarding-step={step} className="onboarding-shell min-h-screen bg-app text-theme-primary lg:h-screen lg:overflow-hidden">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1180px] flex-col px-5 py-4 sm:px-7 lg:h-screen lg:min-h-0 lg:px-8">
-        <header className="onboarding-header flex h-9 shrink-0 items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="inline-flex items-center justify-center rounded-md border border-accent/25 bg-accent-soft px-1.5 py-0.5 font-mono text-[13px] font-semibold text-accent">
-              [a]
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-[14px] font-semibold lowercase text-theme-primary">{BRAND_SLUG}</span>
-              <span className="font-mono text-[10px] text-theme-subtle">{runtimeLabel}</span>
-            </div>
-          </div>
-        </header>
+    <main data-onboarding-step={step} className="ob-shell onboarding-shell bg-app text-theme-primary">
+      <button
+        type="button"
+        className="ob-theme-toggle"
+        aria-label={`Switch to ${isDark ? 'light' : 'dark'} theme`}
+        onClick={() => setColorMode(isDark ? 'light' : 'dark')}
+      >
+        {isDark ? <Moon /> : <Sun />}
+      </button>
+      <aside className="ob-rail onboarding-left-pane">
+        <a className="ob-brand" href="/onboarding/account" aria-label={`${BRAND_SLUG} onboarding`}>
+          <span className="mark"><V8AllenMark /></span>
+          <span className="nm">{BRAND_SLUG}</span>
+          <span className="rt">{runtimeLabel}</span>
+        </a>
 
-        <div className="grid min-h-0 flex-1 items-center gap-6 py-5 lg:grid-cols-[minmax(0,1fr)_430px] lg:gap-10 lg:py-4">
-          <section className="onboarding-left-pane hidden min-w-0 lg:block lg:max-h-full lg:overflow-hidden">
-            <div className="max-w-[620px]">
-              <span className="font-mono text-[10.5px] font-medium uppercase tracking-[0.08em] text-theme-subtle">
-                {eyebrow}
-              </span>
-              <h1 className="mt-2 max-w-[580px] text-[32px] font-semibold leading-[1.08] text-theme-primary">
-                {title}
-              </h1>
-              <p className="mt-3 max-w-[560px] text-[13px] leading-5 text-theme-muted">
-                {description}
-              </p>
+        <div className="ob-eyebrow">{eyebrow}</div>
+        <h1 className="ob-title">{title}</h1>
+        <p className="ob-desc">{description}</p>
+        {runtimeCopy && <span className="ob-time"><Clock3 />{runtimeCopy}</span>}
 
-              {side}
-            </div>
-          </section>
-
-          <section className="onboarding-main-pane mx-auto min-h-0 w-full max-w-[430px] lg:max-h-full lg:overflow-y-auto lg:pr-1">
-            {children}
-          </section>
+        <div className="ob-steps" aria-label="Bootstrap path">
+          <div className="ob-steps__lbl">bootstrap path</div>
+          {STEP_ORDER.map((candidate, index) => {
+            const state = stepState(step, candidate);
+            const meta = STEP_LABELS[candidate];
+            return (
+              <div className={`ob-step ${state === 'active' ? 'now' : ''} ${state === 'done' ? 'done' : ''}`} key={candidate}>
+                <span className="rail">
+                  <span className="dot">
+                    {state === 'done' ? <Check /> : index + 1}
+                  </span>
+                  {index < STEP_ORDER.length - 1 && <span className="cord" />}
+                </span>
+                <span className="bd">
+                  <span className="tt">{meta.title}</span>
+                  <span className="sb">{stepCopy?.[candidate] ?? meta.copy}</span>
+                </span>
+              </div>
+            );
+          })}
         </div>
-      </div>
+        {side && <div className="ob-side-extra">{side}</div>}
+      </aside>
+
+      <section className="ob-pane onboarding-main-pane">
+        <div className="ob-pane__in">
+          {children}
+        </div>
+      </section>
     </main>
   );
 }

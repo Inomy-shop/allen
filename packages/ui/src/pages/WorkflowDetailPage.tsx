@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Check, Inbox, Play } from 'lucide-react';
+import { Check, Play } from 'lucide-react';
 import { executions as executionsApi, workflows as workflowsApi } from '../services/api';
 import { mergeExecutionSnapshot, snapshotFromExecution, useExecutionStore } from '../stores/executionStore';
 import WorkflowRunDialog from '../components/workflow/WorkflowRunDialog';
+import V8EmptyState from '../components/common/V8EmptyState';
 import WorkflowBuilderPage from './WorkflowBuilderPage';
 import {
   workflowDescription,
@@ -349,7 +350,7 @@ export default function WorkflowDetailPage() {
 
   if (loading) return <div className="v8-page"><div className="v8-page__wrap v8-workflow-detail__loading">Loading workflow…</div></div>;
   if (!workflow) return (
-    <div className="v8-page"><div className="v8-page__wrap"><Link className="v8-workflow-detail__crumb" to="/workflows"><DetailIcon name="back" />Workflows</Link><div className="v8-empty v8-empty--visible"><span className="glyph"><Inbox /></span><h2>{loadError ? 'Couldn’t load workflow' : 'Workflow not found'}</h2>{loadError && <p>{loadError}</p>}<button className="v8-btn v8-btn--ghost" type="button" onClick={() => void loadWorkflow()}>Try again</button></div></div></div>
+    <div className="v8-page"><div className="v8-page__wrap"><Link className="v8-workflow-detail__crumb" to="/workflows"><DetailIcon name="back" />Workflows</Link><V8EmptyState scene="workflow" title={loadError ? 'Couldn’t load workflow' : 'Workflow not found'} description={loadError || 'This workflow is not available.'} action={<button className="v8-btn v8-btn--ghost" type="button" onClick={() => void loadWorkflow()}>Try again</button>} /></div></div>
   );
 
   return (
@@ -431,7 +432,7 @@ export default function WorkflowDetailPage() {
             {runsLoading ? <div className="v8-filter-empty">Loading runs…</div> : liveRuns.length > 0 ? liveRuns.map(run => {
               const status = runStatus(run);
               return <button className={`v8-workflow-run ${status}`} key={runId(run)} type="button" onClick={() => navigate(`/executions/${runId(run)}`)}><i /><code>{runId(run).slice(0, 12)}</code><span className="status">{status}</span><span className="summary">{runSummary(run, name)}</span><span className="source">{runSource(run)}</span><span className="tokens">{runTokens(run)}</span><time>{runDate(run)}</time></button>;
-            }) : <div className="v8-empty"><span className="glyph"><Inbox /></span><h2>No runs yet</h2><p>Run this workflow and every execution lands here with tokens, cost, and checkpoints.</p><button className="v8-btn v8-btn--ink" type="button" onClick={() => setRunDialogOpen(true)}><Play />Run workflow</button></div>}
+            }) : <V8EmptyState scene="execution" title="No runs yet" description="Run this workflow and every execution lands here with tokens, cost, and checkpoints." action={<button className="v8-btn v8-btn--ink" type="button" onClick={() => setRunDialogOpen(true)}><Play />Run workflow</button>} />}
             <p className="v8-page-foot">{liveRuns.length} most recent of {runsTotal} · from live executions</p>
           </div>
         )}

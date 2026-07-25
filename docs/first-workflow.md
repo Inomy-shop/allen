@@ -67,7 +67,7 @@ npm start
 
 Expected ports:
 
-- API server: `http://localhost:4000`
+- API server: `http://localhost:4023`
 - UI: `http://localhost:5173`
 - Workspace terminal + file-watch WebSocket: `4024` (file-watch shares the terminal port at `/ws/workspaces/:id/watch`)
 - Workspace app ports: allocated from `15000` upward in blocks of 10
@@ -75,7 +75,7 @@ Expected ports:
 Check server health:
 
 ```bash
-curl http://localhost:4000/api/health
+curl http://localhost:4023/api/health
 ```
 
 Check setup readiness:

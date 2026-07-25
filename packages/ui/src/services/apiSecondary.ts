@@ -474,6 +474,8 @@ export const system = {
 };
 
 // ── Linear Types ──────────────────────────────────────────────────────────
+export interface LinearTeamSummary { id: string; name: string }
+
 export interface LinearIssueSummary {
   id: string;
   identifier: string;
@@ -498,14 +500,16 @@ export const linear = {
     workspaceUrlKey?: string;
     error?: string;
   }>('/linear/status', {}, signal),
+  teams: (signal?: AbortSignal) => request<LinearTeamSummary[]>('/linear/teams', {}, signal),
   projects: () => request<any[]>('/linear/projects'),
-  issues: (filters: { projectId?: string; state?: string; q?: string; limit?: number; assignee?: 'me' } = {}, signal?: AbortSignal): Promise<LinearIssueSummary[]> => {
+  issues: (filters: { projectId?: string; state?: string; q?: string; limit?: number; assignee?: 'me'; teamId?: string } = {}, signal?: AbortSignal): Promise<LinearIssueSummary[]> => {
     const qs = new URLSearchParams();
     if (filters.projectId) qs.set('projectId', filters.projectId);
     if (filters.state) qs.set('state', filters.state);
     if (filters.q) qs.set('q', filters.q);
     if (filters.limit) qs.set('limit', String(filters.limit));
     if (filters.assignee === 'me') qs.set('assignee', 'me');
+    if (filters.teamId) qs.set('teamId', filters.teamId);
     const query = qs.toString();
     return request<LinearIssueSummary[]>(`/linear/issues${query ? `?${query}` : ''}`, {}, signal);
   },

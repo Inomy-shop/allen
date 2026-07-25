@@ -503,11 +503,30 @@ export default function ArtifactViewer({
                   onClick={handleSaveToggle}
                   disabled={savingDocument}
                   aria-pressed={saved}
+                  aria-label={savingDocument ? 'Saving document' : saved ? 'Saved' : 'Save'}
+                  title={savingDocument ? 'Saving document' : saved ? 'Saved' : 'Save'}
                 >
-                  <Bookmark />{savingDocument ? 'Saving…' : saved ? 'Saved' : 'Save'}
+                  <Bookmark />
                 </button>
-                <button type="button" className="document-tab-action" onClick={handleCopy} disabled={!displayContent || artifact.contentType === 'binary'}><Copy />{copied ? 'Copied' : 'Copy'}</button>
-                <a className="document-tab-action" href={url} download={artifact.filename}><Download />Download</a>
+                <button
+                  type="button"
+                  className="document-tab-action"
+                  onClick={handleCopy}
+                  disabled={!displayContent || artifact.contentType === 'binary'}
+                  aria-label={copied ? 'Copied' : 'Copy'}
+                  title={copied ? 'Copied' : 'Copy'}
+                >
+                  <Copy />
+                </button>
+                <a
+                  className="document-tab-action"
+                  href={url}
+                  download={artifact.filename}
+                  aria-label="Download"
+                  title="Download"
+                >
+                  <Download />
+                </a>
                 <button type="button" className="document-tab-close" onClick={onClose} aria-label="Close document"><XIcon /></button>
               </header>
 

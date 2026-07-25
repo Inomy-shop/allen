@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { McpPresetConnectModal } from '../components/settings/McpServerManager';
 import {
@@ -6,6 +6,7 @@ import {
   teams as teamsApi,
   repos as reposApi,
   workflows as workflowsApi,
+  type LinearTeamSummary,
 } from '../services/api';
 import { useAgents } from '../hooks/useAgents';
 import { useRunContext } from '../hooks/useRunContext';
@@ -18,9 +19,10 @@ import { workspaceChatPath } from '../lib/workspace-routes';
 import {
   AlertCircle, ChevronDown, ChevronRight, Circle, Clock, ExternalLink,
   FolderGit2, KeyRound, Loader2, MinusCircle, Play, RefreshCw, Search, X, Sparkles, CheckCircle,
-  List as ListIcon, LayoutGrid, TicketCheck,
+  List as ListIcon, LayoutGrid,
 } from 'lucide-react';
 import IconTooltipButton from '../components/common/IconTooltipButton';
+import V8EmptyState from '../components/common/V8EmptyState';
 
 type StateType = 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | 'triage';
 
@@ -202,7 +204,7 @@ export function buildChatDispatchPrompt(
 ): string {
   const workflowInputOverrides = compactWorkflowInputForPrompt(issue, args.workflowInput);
   const lines: (string | null | (string | null)[])[] = [
-    'Dispatch this Linear ticket through Allen.',
+    'You have been assigned this ticket.',
     '',
     `${issue.identifier} · ${issue.title}`,
     `URL: ${issue.url}`,
@@ -237,7 +239,7 @@ export function buildBulkChatDispatchPrompt(
     `- ${issue.identifier} · ${issue.title} · ${issue.url} · ${issue.state?.name ?? 'unknown'}`
   ));
   return [
-    `Dispatch these ${issues.length} Linear tickets through Allen as one visible batch.`,
+    `You have been assigned these ${issues.length} Linear tickets as one visible batch.`,
     '',
     ...ticketLines,
     '',
@@ -264,6 +266,10 @@ export default function TicketsPage() {
   const [projects, setProjects] = useState<LinearProject[]>([]);
   const [issues, setIssues] = useState<LinearIssue[]>([]);
   const [listLoading, setListLoading] = useState(false);
+
+  const [linearTeams, setLinearTeams] = useState<LinearTeamSummary[]>([]);
+  const [teamFilter, setTeamFilter] = useState<string>(''); // '' = All teams
+  const issuesAbortRef = useRef<AbortController | null>(null);
 
   const [projectFilter, setProjectFilter] = useState<string>(''); // '' = all
   const [stateFilters, setStateFilters] = useState<Set<StateType>>(
@@ -357,7 +363,29 @@ export default function TicketsPage() {
     }
   }, []);
 
+  const loadTeams = useCallback(async () => {
+    try {
+      const list = await linearApi.teams();
+      setLinearTeams(list ?? []);
+      // Reconcile: if the current filter is no longer valid, reset to All
+      setTeamFilter(prev => {
+        if (!prev) return prev;
+        const ids = new Set((list ?? []).map((t: LinearTeamSummary) => t.id));
+        return ids.has(prev) ? prev : '';
+      });
+    } catch (err) {
+      const error = integrationErrorMessage(err, 'Linear could not be reached. Check your network connection or Linear status, then retry.');
+      setStatus(prev => ({ configured: prev?.configured ?? true, workspaceName: prev?.workspaceName, workspaceUrlKey: prev?.workspaceUrlKey, error }));
+      // Keep prior linearTeams list on failure (do not wipe)
+    }
+  }, []);
+
   const loadIssues = useCallback(async () => {
+    // Abort any in-flight request
+    issuesAbortRef.current?.abort();
+    const controller = new AbortController();
+    issuesAbortRef.current = controller;
+
     setListLoading(true);
     try {
       const state = Array.from(stateFilters).join(',');
@@ -366,23 +394,34 @@ export default function TicketsPage() {
         state: state || undefined,
         q: search.trim() || undefined,
         limit: 200,
-      });
+        teamId: teamFilter || undefined,
+      }, controller.signal);
       // Cast: linear.issues() returns LinearIssueSummary[] (chat-mention minimal type);
       // the real API response includes all LinearIssue fields — safe at runtime.
-      setIssues((list ?? []) as unknown as LinearIssue[]);
+      const fetched = (list ?? []) as unknown as LinearIssue[];
+      setIssues(fetched);
+      // Clear stale selection if the freshly fetched list does not contain it
+      setSelectedId(prev => {
+        if (!prev) return prev;
+        return fetched.some(i => i.id === prev) ? prev : null;
+      });
     } catch (err) {
+      if ((err as any)?.name === 'AbortError') return;
       const error = integrationErrorMessage(err, 'Linear could not be reached. Check your network connection or Linear status, then retry.');
       setStatus(prev => ({ configured: prev?.configured ?? true, workspaceName: prev?.workspaceName, workspaceUrlKey: prev?.workspaceUrlKey, error }));
       setIssues([]);
     } finally {
-      setListLoading(false);
+      if (!controller.signal.aborted) {
+        setListLoading(false);
+      }
     }
-  }, [projectFilter, stateFilters, search]);
+  }, [projectFilter, stateFilters, search, teamFilter]);
 
   useEffect(() => {
     if (!status?.configured) return;
+    void loadTeams();
     void loadProjects();
-  }, [status?.configured, loadProjects]);
+  }, [status?.configured, loadTeams, loadProjects]);
 
   useEffect(() => {
     if (!status?.configured) return;
@@ -588,7 +627,7 @@ export default function TicketsPage() {
           </div>
           <button
             className="v8-icon-chip"
-            onClick={() => { void loadStatus(); void loadProjects(); void loadIssues(); }}
+            onClick={() => { void loadStatus(); void loadTeams(); void loadProjects(); void loadIssues(); }}
             disabled={listLoading}
             type="button"
             aria-label="Refresh"
@@ -617,21 +656,21 @@ export default function TicketsPage() {
       <main className="v8-page" data-screen-label="linear-tickets">
         <div className="v8-page__wrap">
           {linearPageHead}
-          <div className="v8-empty v8-linear-empty">
-            <span className="glyph"><AlertCircle /></span>
-            <h2>{connectionError ? 'Could not reach Linear' : 'No tickets synced'}</h2>
-            <p>
-              {connectionError
-                ? connectionError
-                : 'Connect Linear under Settings → MCP servers and tickets appear here with dispatch-to-Allen.'}
-            </p>
-            <div className="v8-linear-empty-actions">
-              {!connectionError && <button className="v8-btn v8-btn--ink" onClick={() => setShowLinearModal(true)} type="button">Connect Linear</button>}
-              <button className="v8-linear-recheck" onClick={loadStatus} type="button">
-                <RefreshCw /> {connectionError ? 'Retry' : 'Recheck'}
-              </button>
-            </div>
-          </div>
+          <V8EmptyState
+            scene="linear"
+            title={connectionError ? 'Could not reach Linear' : 'No tickets synced'}
+            description={connectionError
+              ? connectionError
+              : 'Connect Linear under Settings → MCP servers and tickets appear here with dispatch-to-Allen.'}
+            action={(
+              <div className="v8-linear-empty-actions">
+                {!connectionError && <button className="v8-btn v8-btn--ink" onClick={() => setShowLinearModal(true)} type="button">Connect Linear</button>}
+                <button className="v8-linear-recheck" onClick={loadStatus} type="button">
+                  <RefreshCw /> {connectionError ? 'Retry' : 'Recheck'}
+                </button>
+              </div>
+            )}
+          />
         </div>
         {showLinearModal && (
           <McpPresetConnectModal
@@ -690,6 +729,12 @@ export default function TicketsPage() {
             </select>
           </label>
           <label className="v8-linear-select">
+            <select className="select-native" value={teamFilter} onChange={event => setTeamFilter(event.target.value)} aria-label="Team filter">
+              <option value="">All teams</option>
+              {linearTeams.map(t => <option value={t.id} key={t.id}>{t.name}</option>)}
+            </select>
+          </label>
+          <label className="v8-linear-select">
             <select className="select-native" value={assigneeFilter} onChange={event => setAssigneeFilter(event.target.value)} aria-label="Assignee filter">
               {assigneeOptions.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}
             </select>
@@ -729,11 +774,7 @@ export default function TicketsPage() {
               })}
               {listLoading && issues.length === 0 && <div className="v8-filter-empty"><Loader2 className="v8-inline-spinner animate-spin" /> Loading from Linear…</div>}
               {!listLoading && displayedGroups.length === 0 && (
-                <div className="v8-empty v8-linear-empty">
-                  <span className="glyph"><TicketCheck /></span>
-                  <h2>No tickets synced</h2>
-                  <p>No tickets match the current filters.</p>
-                </div>
+                <V8EmptyState scene="linear" title="No tickets synced" description="No tickets match the current filters." />
               )}
             </div>
             {displayedGroups.length > 0 && <p className="v8-page-foot">{totalShown} of {issues.length} shown · live tickets from Linear — hover a row to dispatch it to a workflow</p>}
@@ -774,11 +815,7 @@ export default function TicketsPage() {
             </div>
             {displayedGroups.length > 0 && <p className="v8-page-foot">grouped by status · {displayedGroups.map(group => group.issues.length).join(' · ')}</p>}
             {!listLoading && displayedGroups.length === 0 && (
-              <div className="v8-empty v8-linear-empty">
-                <span className="glyph"><TicketCheck /></span>
-                <h2>No tickets synced</h2>
-                <p>No tickets match the current filters.</p>
-              </div>
+              <V8EmptyState scene="linear" title="No tickets synced" description="No tickets match the current filters." />
             )}
           </div>
         )}

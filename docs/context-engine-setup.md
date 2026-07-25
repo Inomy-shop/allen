@@ -66,7 +66,7 @@ npm start
 Verify the runtime config:
 
 ```bash
-curl http://localhost:4000/api/system/runtime-config
+curl http://localhost:4023/api/system/runtime-config
 ```
 
 Expected context state:

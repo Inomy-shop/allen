@@ -12,6 +12,7 @@ import {
   V8WorkspacesIcon,
 } from '../common/V8SidebarIcons';
 import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
+import ModelIcon, { modelIconColor } from '../common/ModelIcon';
 import {
   isReasoningEffortSupported,
   reasoningEffortLabel,
@@ -839,7 +840,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                           active ? 'bg-app-muted text-theme-primary' : 'text-theme-secondary'
                         }`}
                       >
-                        <span className="min-w-0 flex-1 truncate pl-6">{getModelDisplay(p.provider, m).modelLabel}</span>
+                        <ModelIcon provider={p.provider} className={`h-3.5 w-3.5 shrink-0 ${modelIconColor(p.provider)}`} />
+                        <span className="min-w-0 flex-1 truncate">{getModelDisplay(p.provider, m).modelLabel}</span>
                         {active && <Check className="h-3.5 w-3.5 shrink-0 text-theme-secondary" />}
                       </button>
                       );

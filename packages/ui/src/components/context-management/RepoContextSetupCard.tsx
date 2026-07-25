@@ -25,14 +25,14 @@ import {
 
 function Card({ children }: { children: ReactNode }) {
   return (
-    <div className="border border-app rounded bg-app-card/40 p-3 space-y-3">
+    <div className="repo-context-setup-card">
       {children}
     </div>
   );
 }
 
 function Row({ children }: { children: ReactNode }) {
-  return <div className="flex flex-wrap items-center gap-2">{children}</div>;
+  return <div className="repo-context-setup-card__row">{children}</div>;
 }
 
 // ── Phase chip ────────────────────────────────────────────────────────────────

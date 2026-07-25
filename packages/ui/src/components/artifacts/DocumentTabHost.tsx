@@ -1,9 +1,10 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Code2, FileText, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import ArtifactViewer from './ArtifactViewer';
 import { useDocumentTabStore } from '../../stores/documentTabStore';
 import ChatTabCreateMenu from '../chat/ChatTabCreateMenu';
+import { renderMarkdown } from '../chat/ChatMessageList';
 import DirectMonacoEditor from '../common/DirectMonacoEditor';
 
 type DocumentTabHostProps = {
@@ -26,6 +27,12 @@ function editorLanguage(path: string): string {
   } as Record<string, string>)[ext] ?? 'plaintext';
 }
 
+function isMarkdownFile(path: string): boolean {
+  return /\.(?:md|markdown)$/i.test(path);
+}
+
+type FileViewMode = 'preview' | 'raw';
+
 export default function DocumentTabHost({
   workspaceId = null,
   onAllResourcesClosed,
@@ -34,6 +41,7 @@ export default function DocumentTabHost({
   visible = true,
 }: DocumentTabHostProps) {
   const navigate = useNavigate();
+  const [fileViewModes, setFileViewModes] = useState<Record<string, FileViewMode>>({});
   const activeScopeKey = useDocumentTabStore(state => state.activeScopeKey);
   const allTabs = useDocumentTabStore(state => state.tabs);
   const activeArtifactId = useDocumentTabStore(state => state.activeArtifactId);
@@ -50,6 +58,10 @@ export default function DocumentTabHost({
   const activeFile = fileTabs.find(tab => tab.key === activeFileKey) ?? null;
   const activeResourceLabel = activeDocument?.artifact.filename ?? activeFile?.path ?? null;
   const baseTabLabel = activeDocument?.sourceLabel ?? 'Chat';
+  const activeFileIsMarkdown = activeFile ? isMarkdownFile(activeFile.path) : false;
+  const activeFileViewMode: FileViewMode = activeFile && activeFileIsMarkdown
+    ? fileViewModes[activeFile.key] ?? 'preview'
+    : 'raw';
 
   function closeDocumentTab(artifactId: string) {
     const closesActiveResource = artifactId === activeArtifactId;
@@ -75,6 +87,14 @@ export default function DocumentTabHost({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [activeDocument, activeFile, activeResourceLabel, activeScopeKey, activeArtifactId, activeFileKey, tabs, fileTabs, closeDocument, closeFile, onAllResourcesClosed, visible]);
+
+  useEffect(() => {
+    setFileViewModes(current => {
+      const openFileKeys = new Set(allFileTabs.map(tab => tab.key));
+      const next = Object.fromEntries(Object.entries(current).filter(([key]) => openFileKeys.has(key)));
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [allFileTabs]);
 
   if (!visible || (!activeDocument && !activeFile)) return null;
 
@@ -159,26 +179,50 @@ export default function DocumentTabHost({
                   <small>{activeFile.sourceLabel}</small>
                 </span>
               </div>
-              <button type="button" onClick={() => closeFileTab(activeFile.key)} aria-label={`Close ${activeFile.path}`} title="Close file (Esc)"><X aria-hidden="true" /></button>
+              <div className="file-tab-viewer__actions">
+                {activeFileIsMarkdown && (
+                  <button
+                    type="button"
+                    className="file-tab-viewer__mode-toggle"
+                    onClick={() => setFileViewModes(current => ({
+                      ...current,
+                      [activeFile.key]: activeFileViewMode === 'preview' ? 'raw' : 'preview',
+                    }))}
+                    aria-label={activeFileViewMode === 'preview' ? `Show raw markdown for ${activeFile.path}` : `Preview markdown for ${activeFile.path}`}
+                    title={activeFileViewMode === 'preview' ? 'Show raw markdown' : 'Preview markdown'}
+                  >
+                    {activeFileViewMode === 'preview' ? 'Raw' : 'Preview'}
+                  </button>
+                )}
+                <button type="button" onClick={() => closeFileTab(activeFile.key)} aria-label={`Close ${activeFile.path}`} title="Close file (Esc)"><X aria-hidden="true" /></button>
+              </div>
             </header>
-            <div className="file-tab-viewer__editor">
-              <DirectMonacoEditor
-                className="h-full w-full"
-                language={activeFile.language ?? editorLanguage(activeFile.path)}
-                value={activeFile.content}
-                readOnly
-                options={{
-                  automaticLayout: true,
-                  fontSize: 12,
-                  fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                  minimap: { enabled: true, scale: 1 },
-                  lineNumbers: 'on',
-                  scrollBeyondLastLine: false,
-                  wordWrap: 'off',
-                  padding: { top: 12, bottom: 20 },
-                }}
-              />
-            </div>
+            {activeFileIsMarkdown && activeFileViewMode === 'preview' ? (
+              <div className="file-tab-viewer__preview">
+                <article className="document-tab-body">
+                  <div className="prose prose-sm max-w-none">{renderMarkdown(activeFile.content) as React.ReactNode}</div>
+                </article>
+              </div>
+            ) : (
+              <div className="file-tab-viewer__editor">
+                <DirectMonacoEditor
+                  className="h-full w-full"
+                  language={activeFile.language ?? editorLanguage(activeFile.path)}
+                  value={activeFile.content}
+                  readOnly
+                  options={{
+                    automaticLayout: true,
+                    fontSize: 12,
+                    fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                    minimap: { enabled: true, scale: 1 },
+                    lineNumbers: 'on',
+                    scrollBeyondLastLine: false,
+                    wordWrap: 'off',
+                    padding: { top: 12, bottom: 20 },
+                  }}
+                />
+              </div>
+            )}
           </section>
         )}
       </div>

@@ -1210,7 +1210,7 @@ export default function App() {
 
   const isSettingsRoute = location.pathname.startsWith('/settings');
   const isHomeRoute = location.pathname === '/';
-  const isPrototypePageRoute = isSettingsRoute || isHomeRoute || location.pathname.startsWith('/chat') || ['/chats', '/repos', '/tickets', '/workspaces', '/documents', '/pull-requests', '/agents', '/workflows', '/executions'].includes(location.pathname) || location.pathname.startsWith('/pull-requests/') || location.pathname.startsWith('/workflows/') || location.pathname.startsWith('/executions/') || location.pathname.startsWith('/studio');
+  const isPrototypePageRoute = isSettingsRoute || isHomeRoute || location.pathname.startsWith('/chat') || ['/chats', '/repos', '/tickets', '/workspaces', '/documents', '/pull-requests', '/agents', '/workflows', '/executions'].includes(location.pathname) || location.pathname.startsWith('/repos/') || location.pathname.startsWith('/pull-requests/') || location.pathname.startsWith('/workflows/') || location.pathname.startsWith('/executions/') || location.pathname.startsWith('/interventions') || location.pathname.startsWith('/studio');
   const shellNavState = navPanel.collapsed && !isSettingsRoute ? 'nav-collapsed' : 'nav-expanded';
   const sidebarPanelIndex = Math.max(0, SIDEBAR_PANEL_ORDER.indexOf(sidebarPanel));
 
@@ -1315,8 +1315,8 @@ export default function App() {
       {isSettingsRoute ? (
         <nav className="sidebar settings-mode-sidebar [animation:none]">
           <div className="settings-mode-brandicon">
-            <button type="button" onClick={() => navigate('/')} aria-label="Return to Allen">
-              <PanelLeft className="h-3.5 w-3.5" />
+            <button type="button" className="settings-brand-mark" onClick={() => navigate('/')} aria-label="Return to Allen home">
+              <V8AllenMark className="h-3.5 w-3.5" />
             </button>
           </div>
           <div className="settings-mode-head">
@@ -1436,6 +1436,16 @@ export default function App() {
             >
               <Settings className="w-4 h-4" />
             </NavLink>
+            <button
+              type="button"
+              onClick={toggleColorMode}
+              className="foot-btn"
+              title={`Switch to ${resolvedMode === 'dark' ? 'light' : 'dark'} mode`}
+              aria-label="Toggle theme"
+              data-sidebar-tooltip={resolvedMode === 'dark' ? 'Light mode' : 'Dark mode'}
+            >
+              {resolvedMode === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
             <button
               onClick={navPanel.toggle}
               className="foot-btn"
@@ -1733,13 +1743,24 @@ export default function App() {
               <span className="prototype-design-copy"><b>Allen Design</b><small>AI interface design</small></span>
               <ChevronRight className="prototype-design-arrow" />
             </NavLink>
-            <NavLink
-              to="/settings/general"
-              className={({ isActive }) => `prototype-settings-link ${isActive ? 'active' : ''}`}
-            >
-              <span className="prototype-settings-mark"><span /></span>
-              <span>Settings</span>
-            </NavLink>
+            <div className="prototype-sidebar-controls">
+              <NavLink
+                to="/settings/general"
+                className={({ isActive }) => `prototype-settings-link ${isActive ? 'active' : ''}`}
+              >
+                <span className="prototype-settings-mark"><Settings className="h-4 w-4" /></span>
+                <span>Settings</span>
+              </NavLink>
+              <button
+                type="button"
+                onClick={toggleColorMode}
+                className="prototype-theme-toggle"
+                title={`Switch to ${resolvedMode === 'dark' ? 'light' : 'dark'} mode`}
+                aria-label="Toggle theme"
+              >
+                {resolvedMode === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
 
         </nav>

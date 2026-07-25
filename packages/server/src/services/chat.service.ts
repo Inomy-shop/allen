@@ -136,6 +136,7 @@ export interface ChatMessage {
   error?: string;
   toolCalls?: ToolCallRecord[];
   thinkingText?: string;
+  activityTimeline?: ChatActivityEvent[];
   /** Last persisted proof that the server-side runtime was still driving this assistant turn. */
   lastHeartbeatAt?: Date;
   /** Coarse active phase persisted while status === 'streaming'. */
@@ -674,6 +675,61 @@ For code tasks: direct specialist spawns need an Allen workspace first; workflow
 
 // ── Active Query Tracking ──
 
+type ChatActivityEvent =
+  | { id: string; type: 'thinking'; timestamp: Date; text: string }
+  | { id: string; type: 'tool'; timestamp: Date; toolUseId?: string; toolCall: ToolCallRecord & { status?: 'running' | 'completed' } };
+
+function appendThinkingActivity(entry: ActiveQuery, nextThinking: string): void {
+  const previousThinking = entry.currentThinking ?? '';
+  if (!nextThinking || nextThinking === previousThinking) return;
+  let delta = nextThinking;
+  if (previousThinking && nextThinking.startsWith(previousThinking)) {
+    delta = nextThinking.slice(previousThinking.length);
+  }
+  const text = delta.trim();
+  if (!text) return;
+  const last = entry.activityTimeline[entry.activityTimeline.length - 1];
+  if (last?.type === 'thinking') {
+    last.text = `${last.text}${last.text.endsWith('\n') ? '' : '\n'}${text}`;
+    last.timestamp = new Date();
+    return;
+  }
+  entry.activityTimeline.push({
+    id: `thinking:${Date.now()}:${entry.activityTimeline.length}`,
+    type: 'thinking',
+    timestamp: new Date(),
+    text,
+  });
+}
+
+function appendToolStartActivity(entry: ActiveQuery, tool: string, args: Record<string, unknown>, toolUseId: string): void {
+  const timestamp = new Date();
+  entry.activityTimeline.push({
+    id: `tool:${toolUseId || `${Date.now()}:${entry.activityTimeline.length}`}`,
+    type: 'tool',
+    timestamp,
+    toolUseId,
+    toolCall: {
+      tool,
+      description: describeTool(tool, args),
+      args,
+      result: {},
+      durationMs: 0,
+      timestamp,
+      toolUseId,
+      status: 'running',
+    },
+  });
+}
+
+function completeToolActivity(entry: ActiveQuery, record: ToolCallRecord): void {
+  const event = [...entry.activityTimeline]
+    .reverse()
+    .find(item => item.type === 'tool' && (item.toolUseId === record.toolUseId || item.toolCall.tool === record.tool));
+  if (!event || event.type !== 'tool') return;
+  event.toolCall = { ...record, status: 'completed' };
+}
+
 type ActiveQueryPhase = 'thinking' | 'streaming' | 'tool_running';
 
 interface ActiveQuery {
@@ -688,6 +744,7 @@ interface ActiveQuery {
   currentText: string;
   currentThinking: string;
   toolCalls: ToolCallRecord[];
+  activityTimeline: ChatActivityEvent[];
   pendingToolCalls: Map<string, { tool: string; args: Record<string, unknown>; startMs: number }>;
   listeners: Set<Response>;
   eventHandlers?: Set<ChatEventHandler>;
@@ -826,6 +883,10 @@ export function deterministicSessionTaskTitle(userMessage: string): string | nul
     ?? userMessage.match(/Issue title:\s*([^\n]+)/i);
   const linearTitle = compactChatTitle(linearTitleMatch?.[1]);
   if (linearTitle) return linearTitle;
+
+  const assignmentMatch = userMessage.match(/(?:You've|You have) been assigned (?:this )?(?:Linear )?ticket\.?\s*\n+\s*([A-Z][A-Z0-9]+-\d+)\s*[·:\-–—]\s*([^\n]+)/i);
+  const assignmentTitle = compactChatTitle(assignmentMatch?.[2]);
+  if (assignmentTitle) return assignmentTitle;
 
   const dispatchMatch = userMessage.match(/Dispatch Linear ticket\s+([A-Z][A-Z0-9]+-\d+)\s*(?:[:\-–—]\s*|\s+through\s+Allen\b\s*)?([^\n]*)/i);
   const dispatchTitle = compactChatTitle(dispatchMatch?.[2]);
@@ -1257,6 +1318,7 @@ export class ChatService {
       content: entry.currentText,
       thinkingText: entry.currentThinking,
       toolCalls: entry.toolCalls,
+      activityTimeline: entry.activityTimeline,
       lastHeartbeatAt: entry.lastHeartbeatAt,
       activePhase: entry.activePhase,
     };
@@ -1730,7 +1792,7 @@ export class ChatService {
     const entry: ActiveQuery = {
       sessionId, messageId: assistantMsgId, userMessage: content,
       startedAt: assistantStartedAt, lastHeartbeatAt: assistantStartedAt, activePhase: 'thinking',
-      currentText: '', currentThinking: '', toolCalls: [],
+      currentText: '', currentThinking: '', toolCalls: [], activityTimeline: [],
       pendingToolCalls: new Map(), listeners: new Set([res]), aborted: false, abortController: new AbortController(),
     };
     activeQueries.set(sessionId, entry);
@@ -1791,7 +1853,7 @@ export class ChatService {
     const entry: ActiveQuery = {
       sessionId, messageId: assistantMsgId, userMessage: content,
       startedAt: assistantStartedAt, lastHeartbeatAt: assistantStartedAt, activePhase: 'thinking',
-      currentText: '', currentThinking: '', toolCalls: [],
+      currentText: '', currentThinking: '', toolCalls: [], activityTimeline: [],
       pendingToolCalls: new Map(),
       listeners: new Set(), aborted: false, abortController: new AbortController(),
       ...(onEvent ? { eventHandlers: new Set([onEvent]) } : {}),
@@ -1819,6 +1881,7 @@ export class ChatService {
     addSessionStreamListener(sessionId, res);
     const entry = activeQueries.get(sessionId);
     if (entry) {
+      if (entry.activityTimeline.length > 0) sendSSE(res, 'activity_timeline', { activityTimeline: entry.activityTimeline, messageId: entry.messageId });
       if (entry.currentThinking) sendSSE(res, 'thinking', { text: entry.currentThinking, messageId: entry.messageId });
       if (entry.currentText) sendSSE(res, 'message_delta', { text: entry.currentText, messageId: entry.messageId });
       for (const [toolUseId, pending] of entry.pendingToolCalls) {
@@ -2348,14 +2411,16 @@ User: ${userMessage.slice(0, 500)}`;
         },
         onThinking: (thinking: string) => {
           markActiveQueryHeartbeat(entry, 'thinking', null);
+          appendThinkingActivity(entry, thinking);
           entry.currentThinking = thinking;
-          broadcastToListeners(entry, 'thinking', { text: thinking, messageId: assistantMsgId });
+          broadcastToListeners(entry, 'thinking', { text: thinking, activityTimeline: entry.activityTimeline, messageId: assistantMsgId });
         },
         onToolStart: (tool: string, args: Record<string, unknown>, toolUseId: string) => {
           markActiveQueryHeartbeat(entry, 'tool_running', tool);
           entry.pendingToolCalls.set(toolUseId, { tool, args, startMs: Date.now() });
+          appendToolStartActivity(entry, tool, args, toolUseId);
           this.persistActiveQueryState(entry);
-          broadcastToListeners(entry, 'tool_start', { tool, description: describeTool(tool, args), args, toolUseId, tool_use_id: toolUseId });
+          broadcastToListeners(entry, 'tool_start', { tool, description: describeTool(tool, args), args, toolUseId, tool_use_id: toolUseId, activityTimeline: entry.activityTimeline });
         },
         onToolResult: (tool: string, resultData: Record<string, unknown>, toolUseId: string, durationMs: number) => {
           const resolvedPending = pendingToolResult(entry, toolUseId, tool);
@@ -2370,6 +2435,7 @@ User: ${userMessage.slice(0, 500)}`;
             toolUseId,
           };
           entry.toolCalls.push(record);
+          completeToolActivity(entry, record);
           entry.pendingToolCalls.delete(resolvedPending.key);
           const nextPending = entry.pendingToolCalls.values().next().value;
           markActiveQueryHeartbeat(entry, nextPending ? 'tool_running' : 'thinking', nextPending?.tool ?? null);
@@ -2380,6 +2446,7 @@ User: ${userMessage.slice(0, 500)}`;
                 content: entry.currentText,
                 thinkingText: entry.currentThinking,
                 toolCalls: entry.toolCalls,
+                activityTimeline: entry.activityTimeline,
                 lastHeartbeatAt: entry.lastHeartbeatAt,
                 activePhase: entry.activePhase,
                 ...(entry.activeToolName ? { activeToolName: entry.activeToolName } : {}),
@@ -2387,7 +2454,7 @@ User: ${userMessage.slice(0, 500)}`;
               ...(!entry.activeToolName ? { $unset: { activeToolName: '' } } : {}),
             },
           ).catch(() => {});
-          broadcastToListeners(entry, 'tool_result', { tool, description: record.description, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
+          broadcastToListeners(entry, 'tool_result', { tool, description: record.description, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs, activityTimeline: entry.activityTimeline });
           const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
           if (userReport) {
             broadcastToListeners(entry, 'agent_report', {
@@ -2480,6 +2547,7 @@ User: ${userMessage.slice(0, 500)}`;
             tokenUsage,
             toolCalls: entry.toolCalls,
             thinkingText: entry.currentThinking,
+            activityTimeline: entry.activityTimeline,
             lastHeartbeatAt: new Date(),
             completedAt: new Date(),
           },
@@ -2532,7 +2600,7 @@ User: ${userMessage.slice(0, 500)}`;
       );
 
       broadcastToListeners(entry, 'message_complete', {
-        messageId: assistantMsgId, text: visibleResponseText, costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking,
+        messageId: assistantMsgId, text: visibleResponseText, costUsd, durationMs, tokenUsage, toolCalls: entry.toolCalls, thinkingText: entry.currentThinking, activityTimeline: entry.activityTimeline,
       });
 
       // Auto-title strategy: fire exactly once on turn 1, using only the
@@ -2713,14 +2781,16 @@ User: ${userMessage.slice(0, 500)}`;
             },
             onThinking: (thinking) => {
               markActiveQueryHeartbeat(entry, 'thinking', null);
+              appendThinkingActivity(entry, thinking);
               entry.currentThinking = thinking;
-              broadcastToListeners(entry, 'thinking', { text: thinking, messageId: assistantMsgId });
+              broadcastToListeners(entry, 'thinking', { text: thinking, activityTimeline: entry.activityTimeline, messageId: assistantMsgId });
             },
             onToolStart: (tool, args, toolUseId) => {
               markActiveQueryHeartbeat(entry, 'tool_running', tool);
               entry.pendingToolCalls.set(toolUseId, { tool, args, startMs: Date.now() });
+              appendToolStartActivity(entry, tool, args, toolUseId);
               this.persistActiveQueryState(entry);
-              broadcastToListeners(entry, 'tool_start', { tool, description: describeTool(tool, args), args, toolUseId, tool_use_id: toolUseId });
+              broadcastToListeners(entry, 'tool_start', { tool, description: describeTool(tool, args), args, toolUseId, tool_use_id: toolUseId, activityTimeline: entry.activityTimeline });
             },
             onToolResult: (tool, resultData, toolUseId, durationMs) => {
               const resolvedPending = pendingToolResult(entry, toolUseId, tool);
@@ -2737,6 +2807,7 @@ User: ${userMessage.slice(0, 500)}`;
                     content: entry.currentText,
                     thinkingText: entry.currentThinking,
                     toolCalls: entry.toolCalls,
+                    activityTimeline: entry.activityTimeline,
                     lastHeartbeatAt: entry.lastHeartbeatAt,
                     activePhase: entry.activePhase,
                     ...(entry.activeToolName ? { activeToolName: entry.activeToolName } : {}),
@@ -2744,7 +2815,7 @@ User: ${userMessage.slice(0, 500)}`;
                   ...(!entry.activeToolName ? { $unset: { activeToolName: '' } } : {}),
                 },
               ).catch(() => {});
-              broadcastToListeners(entry, 'tool_result', { tool, description: record.description, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs });
+              broadcastToListeners(entry, 'tool_result', { tool, description: record.description, args: record.args, result: resultData, toolUseId, tool_use_id: toolUseId, durationMs, activityTimeline: entry.activityTimeline });
               const userReport = isReportToUserTool(tool) ? reportToUserPayload(resultData) : null;
               if (userReport) {
                 broadcastToListeners(entry, 'agent_report', {
@@ -2792,6 +2863,7 @@ User: ${userMessage.slice(0, 500)}`;
                 tokenUsage,
                 toolCalls: entry.toolCalls,
                 thinkingText: entry.currentThinking,
+                activityTimeline: entry.activityTimeline,
                 lastHeartbeatAt: new Date(),
                 completedAt: new Date(),
               },
@@ -2820,6 +2892,7 @@ User: ${userMessage.slice(0, 500)}`;
             error: errorMsg,
             toolCalls: entry.toolCalls,
             thinkingText: entry.currentThinking,
+            activityTimeline: entry.activityTimeline,
             lastHeartbeatAt: new Date(),
             completedAt: new Date(),
           },
@@ -3157,6 +3230,7 @@ RULES:
       currentText: '',
       currentThinking: '',
       toolCalls: [],
+      activityTimeline: [],
       pendingToolCalls: new Map(),
       listeners: new Set(),
       aborted: false,

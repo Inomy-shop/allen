@@ -574,7 +574,7 @@ if npm run --silent health; then
   ok "Health check passed"
   HEALTH_OK=1
 else
-  warn "Health check reported issues (most likely: Claude Code / Codex not authenticated yet)."
+  warn "Health check reported issues — see the FAILED checks above for what needs fixing."
   HEALTH_OK=0
 fi
 
@@ -592,7 +592,7 @@ if [ "$HEALTH_OK" -eq 1 ]; then
        (account → health → repository → first workflow).
 
   Allen will be available at:
-    API: http://localhost:4000
+    API: http://localhost:4023
     UI:  http://localhost:5173
 
 EOF

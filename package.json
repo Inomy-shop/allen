@@ -1,6 +1,6 @@
 {
   "name": "allen-desktop",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "private": true,
   "description": "An agentic operating system for software development — assign, coordinate, observe, and improve AI agents across real engineering workflows.",
   "license": "MIT",
@@ -17,6 +17,10 @@
     "npm": ">=10"
   },
   "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "setup:context": "bash scripts/setup-context-engine.sh",
+    "health": "npm --workspace @allen/server run health --",
+    "start": "npm run dev:web",
     "build": "npm --workspace @allen/engine run build && npm --workspace @allen/server run build && npm --workspace @allen/ui run build && npm --workspace @allen/desktop run build",
     "lint": "npm --workspace @allen/engine run lint && npm --workspace @allen/server run lint && npm --workspace @allen/ui run lint && npm --workspace @allen/desktop run lint",
     "test": "npm --workspace @allen/engine run test && npm --workspace @allen/server run test && npm --workspace @allen/ui run test && npm --workspace @allen/desktop run test",
@@ -25,7 +29,12 @@
     "docs:dev": "npm --workspace @allen/docs-site run start",
     "docs:build": "npm --workspace @allen/docs-site run build",
     "docs:serve": "npm --workspace @allen/docs-site run serve",
-    "docs:export": "npm --workspace @allen/docs-site run export:askallen"
+    "docs:export": "npm --workspace @allen/docs-site run export:askallen",
+    "test:e2e": "playwright install chromium && tsx scripts/e2e-preauth.ts && playwright test",
+    "test:e2e:ui": "playwright install chromium && tsx scripts/e2e-preauth.ts && playwright test --ui",
+    "test:e2e:headed": "playwright install chromium && tsx scripts/e2e-preauth.ts && playwright test --headed",
+    "test:e2e:dev": "tsx scripts/e2e-preauth.ts && E2E_REUSE_DEV_SERVER=1 playwright test",
+    "test:e2e:report": "playwright show-report"
   },
   "packageManager": "npm@10.0.0",
   "workspaces": [

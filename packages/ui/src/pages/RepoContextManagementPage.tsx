@@ -285,25 +285,24 @@ export default function RepoContextManagementPage() {
     : 'none';
 
   return (
-    <div className="v8-repo-context min-h-full px-8 pt-8 pb-8">
-      <div className="v8-repo-context__head mb-4 flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <button
-            type="button"
-            onClick={() => navigate('/agents?section=repos')}
-            className="btn btn-ghost btn-sm mb-3"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" /> Back to repos
-          </button>
-          <h1 className="v8-repo-context__title mt-1 text-[22px] font-semibold text-theme-primary tracking-tight truncate">
+    <div className="v8-repo-context min-h-full">
+      <button
+        type="button"
+        onClick={() => navigate('/agents?section=repos')}
+        className="v8-repo-context__crumb"
+      >
+        <ArrowLeft className="w-3.5 h-3.5" /> Back to repos
+      </button>
+      <div className="v8-repo-context__head">
+        <div className="min-w-0 grow">
+          <h1 className="v8-repo-context__title truncate">
             {repo?.name ?? 'Context management'}
           </h1>
-          <ContextBuildProgress status={cogneeStatus} stopping={stoppingBuild} onStop={() => void stopContextBuild()} />
         </div>
-        <div className="flex items-center gap-2">
+        <div className="v8-repo-context__actions">
           <ContextImportExport repoId={id} repoName={repo?.name ?? ''} onImported={() => void load({ silent: true })} />
-          <button type="button" onClick={() => void load()} className="btn btn-secondary btn-sm">
-            <RefreshCw className="w-3.5 h-3.5" /> Refresh
+          <button type="button" onClick={() => void load()} className="v8-repo-context__refresh-chip" aria-label="Refresh">
+            <RefreshCw className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
@@ -323,7 +322,8 @@ export default function RepoContextManagementPage() {
               contextRefresh phase is running so we start the fast-poll without
               waiting for the 15 s discovery poll. */}
           <RepoContextSetupCard repoId={id} onCogneeActivity={() => void refreshCogneeStatus()} />
-          <div className="v8-repo-context__tabs border-b border-app flex gap-1">
+          <ContextBuildProgress status={cogneeStatus} stopping={stoppingBuild} onStop={() => void stopContextBuild()} />
+          <div className="v8-repo-context__tabs flex gap-1">
             {([
               ['graph', Network, 'Context Graph'],
               ['curated', BookOpenCheck, 'Curated Context'],
@@ -335,7 +335,7 @@ export default function RepoContextManagementPage() {
                 key={String(tab)}
                 type="button"
                 onClick={() => setActiveTab(tab as typeof activeTab)}
-                className={`px-3 py-2 text-xs rounded-t inline-flex items-center gap-1.5 ${activeTab === tab ? 'bg-app-muted text-theme-primary' : 'text-theme-muted hover:text-theme-primary'}`}
+                className={`v8-repo-context__tab ${activeTab === tab ? 'is-active text-theme-primary' : 'text-theme-muted hover:text-theme-primary'}`}
               >
                 <Icon className="w-3.5 h-3.5" /> {label}
               </button>
@@ -675,81 +675,83 @@ function ContextGraphSection({
   const selectedNodeConnectionId = selected?.__selectionType === 'node' && selected.id ? String(selected.id) : '';
   return (
     <>
-    <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-4">
-      <div className="space-y-3 min-w-0">
-        <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => void buildContext(false)} disabled={building || liveBuild} className="btn btn-primary btn-sm">
-            {building && !liveBuild ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-            Refresh context
-          </button>
-          <button type="button" onClick={() => void buildContext(true)} disabled={building || liveBuild} className="btn btn-secondary btn-sm" title="Clean rebuild creates a fresh context dataset and does not continue the previous dataset">
-            {building && !liveBuild ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
-            Clean build context
-          </button>
+      <div className="v8-repo-context__graph-controls">
+        <button type="button" onClick={() => void buildContext(false)} disabled={building || liveBuild} className="v8-repo-context__pill v8-repo-context__pill--ghost">
+          {building && !liveBuild ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+          Refresh context
+        </button>
+        <button type="button" onClick={() => void buildContext(true)} disabled={building || liveBuild} className="v8-repo-context__pill v8-repo-context__pill--ghost" title="Clean rebuild creates a fresh context dataset and does not continue the previous dataset">
+          {building && !liveBuild ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+          Clean build context
+        </button>
+        <label className="v8-repo-context__graph-search">
+          <Search className="w-3.5 h-3.5" />
           <input
             value={graphFilters.query}
             onChange={(e) => onGraphFiltersChanged({ ...graphFilters, query: e.target.value })}
             onKeyDown={(e) => {
               if (e.key === 'Enter') void onLoadGraph();
             }}
-            className="input text-xs max-w-xs"
             placeholder="Filter nodes..."
           />
-          <Select
-            value={graphFilters.nodeType}
-            onChange={(nextNodeType) => {
-              const nextFilters = { ...graphFilters, nodeType: nextNodeType };
-              onGraphFiltersChanged(nextFilters);
-              void onLoadGraph({ nodeType: nextNodeType });
-            }}
-            className="w-[180px]"
-            placeholder="All node types"
-            searchPlaceholder="Search node types..."
-            options={[
-              { value: '', label: 'All node types' },
-              ...nodeTypes.map((item) => ({
-                value: String(item.type),
-                label: String(item.type),
-                sublabel: `${Number(item.count ?? 0)} nodes`,
-              })),
-            ]}
-          />
-          <Select
-            value={graphFilters.relationship}
-            onChange={(nextRelationship) => {
-              const nextFilters = { ...graphFilters, relationship: nextRelationship };
-              onGraphFiltersChanged(nextFilters);
-              void onLoadGraph({ relationship: nextRelationship });
-            }}
-            className="w-[220px]"
-            placeholder="All relationships"
-            searchPlaceholder="Search relationships..."
-            options={[
-              { value: '', label: 'All relationships' },
-              ...relationships.map((item) => ({
-                value: String(item.relationship),
-                label: String(item.relationship),
-                sublabel: `${Number(item.count ?? 0)} edges`,
-              })),
-            ]}
-          />
-          <button type="button" onClick={() => void onLoadGraph()} className="btn btn-secondary btn-sm">
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Apply
-          </button>
-          <button
-            type="button"
-            onClick={() => void openConnections(selectedNodeConnectionId)}
-            disabled={!selectedNodeConnectionId}
-            className="btn btn-secondary btn-sm"
-            title={selectedNodeConnectionId ? 'Open the selected node neighborhood graph' : 'Select a node to view its connections'}
-          >
-            <Network className="w-3.5 h-3.5" /> View connections
-          </button>
-        </div>
-        <div className="text-[11px] text-theme-muted font-mono">
+        </label>
+        <Select
+          value={graphFilters.nodeType}
+          onChange={(nextNodeType) => {
+            const nextFilters = { ...graphFilters, nodeType: nextNodeType };
+            onGraphFiltersChanged(nextFilters);
+            void onLoadGraph({ nodeType: nextNodeType });
+          }}
+          className="v8-repo-context__select v8-repo-context__select--node"
+          placeholder="All node types"
+          searchPlaceholder="Search node types..."
+          options={[
+            { value: '', label: 'All node types' },
+            ...nodeTypes.map((item) => ({
+              value: String(item.type),
+              label: String(item.type),
+              sublabel: `${Number(item.count ?? 0)} nodes`,
+            })),
+          ]}
+        />
+        <Select
+          value={graphFilters.relationship}
+          onChange={(nextRelationship) => {
+            const nextFilters = { ...graphFilters, relationship: nextRelationship };
+            onGraphFiltersChanged(nextFilters);
+            void onLoadGraph({ relationship: nextRelationship });
+          }}
+          className="v8-repo-context__select v8-repo-context__select--relationship"
+          placeholder="All relationships"
+          searchPlaceholder="Search relationships..."
+          options={[
+            { value: '', label: 'All relationships' },
+            ...relationships.map((item) => ({
+              value: String(item.relationship),
+              label: String(item.relationship),
+              sublabel: `${Number(item.count ?? 0)} edges`,
+            })),
+          ]}
+        />
+        <button type="button" onClick={() => void onLoadGraph()} className="v8-repo-context__pill v8-repo-context__pill--ghost">
+          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Apply
+        </button>
+        <button
+          type="button"
+          onClick={() => void openConnections(selectedNodeConnectionId)}
+          disabled={!selectedNodeConnectionId}
+          className="v8-repo-context__pill v8-repo-context__pill--ghost"
+          title={selectedNodeConnectionId ? 'Open the selected node neighborhood graph' : 'Select a node to view its connections'}
+        >
+          <Network className="w-3.5 h-3.5" /> View connections
+        </button>
+      </div>
+      <div className="v8-repo-context__graph-grid">
+        <div className="v8-repo-context__graph-main min-w-0">
+        <div className="v8-repo-context__graph-counts">
           {Number(graph?.nodeCount ?? 0).toLocaleString()} nodes · {Number(graph?.edgeCount ?? 0).toLocaleString()} edges · preview {Number(graph?.previewNodeCount ?? graph?.nodes?.length ?? 0).toLocaleString()} / {Number(graph?.previewEdgeCount ?? graph?.edges?.length ?? 0).toLocaleString()}
         </div>
-        <div className="h-[620px] border border-app rounded bg-app-card overflow-hidden relative">
+        <div className="v8-repo-context__graph-canvas">
           {graphBuildNote && (
             <div className="absolute inset-x-3 top-3 z-10 rounded border border-app bg-app-card/95 px-3 py-2 text-xs text-theme-secondary shadow-popover">
               {graphBuildNote}
@@ -762,6 +764,7 @@ function ContextGraphSection({
                   selectedEdge={selectedGraphEdge}
                   fitPadding={0.01}
                   fitMaxZoom={2.2}
+                  compact
                   onSelectNode={(node) => void selectNode(node)}
               onSelectEdge={(edge) => {
                 onSelectedChanged({ ...edge, __selectionType: 'edge', ...edgeEndpointNodes(graph, edge) });
@@ -773,7 +776,7 @@ function ContextGraphSection({
           </ReactFlowProvider>
         </div>
       </div>
-      <div className="space-y-3">
+      <div className="v8-repo-context__graph-rail">
         <Panel title="Graph summary">
           <KeyValue rows={[
             ['provider', graph?.provider],
@@ -2015,8 +2018,8 @@ function KeyValue({ rows }: { rows: Array<[string, unknown]> }) {
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="border border-app rounded bg-app-card/40 p-3">
-      <h3 className="text-xs font-semibold text-theme-primary mb-2">{title}</h3>
+    <div className="v8-repo-context__panel">
+      <h3>{title}</h3>
       {children}
     </div>
   );
@@ -2024,9 +2027,9 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
 
 function Metric({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded border border-app bg-app-card/60 p-2">
-      <div className="text-[10px] text-theme-muted uppercase tracking-wide">{label}</div>
-      <div className="text-sm text-theme-primary font-mono truncate">{value}</div>
+    <div className="v8-repo-context__metric">
+      <div>{label}</div>
+      <div>{value}</div>
     </div>
   );
 }

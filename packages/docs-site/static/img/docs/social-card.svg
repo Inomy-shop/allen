@@ -1,6 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <rect width="1200" height="630" fill="#0b1020"/>
-  <circle cx="180" cy="120" r="220" fill="#5b6ee1" opacity="0.35"/>
-  <text x="96" y="250" fill="#fff" font-family="Inter, Arial, sans-serif" font-size="88" font-weight="700">Allen Docs</text>
-  <text x="100" y="330" fill="#cbd5e1" font-family="Inter, Arial, sans-serif" font-size="34">Agentic software work, visible from chat to PR.</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Allen Docs</title>
+  <desc id="desc">Documentation for operating Allen's agents, workflows, workspaces, and integrations.</desc>
+  <rect width="1200" height="630" fill="#fbfcfe"/>
+  <rect width="1200" height="76" fill="#fff"/>
+  <path d="M0 75.5h1200" stroke="#0d1e2f" stroke-opacity=".1"/>
+  <rect x="64" y="19" width="38" height="38" rx="10" fill="#16181d"/>
+  <path d="M83 26l2.3 7.7L93 36l-7.7 2.3L83 46l-2.3-7.7L73 36l7.7-2.3z" fill="#fbfcfe"/>
+  <text x="118" y="45" fill="#16181d" font-family="Inter, SF Pro Text, Segoe UI, sans-serif" font-size="22" font-weight="600">allen</text>
+  <text x="180" y="45" fill="#64748b" font-family="SF Mono, JetBrains Mono, monospace" font-size="14">docs</text>
+  <rect x="64" y="138" width="1072" height="406" rx="18" fill="#fff" stroke="#0d1e2f" stroke-opacity=".1"/>
+  <rect x="64" y="138" width="246" height="406" rx="18" fill="#f7fafd"/>
+  <path d="M310 138v406" stroke="#0d1e2f" stroke-opacity=".1"/>
+  <rect x="96" y="190" width="150" height="12" rx="6" fill="#edeffb"/>
+  <rect x="96" y="224" width="104" height="9" rx="4.5" fill="#dbe0e6"/>
+  <rect x="96" y="254" width="126" height="9" rx="4.5" fill="#dbe0e6"/>
+  <rect x="96" y="284" width="91" height="9" rx="4.5" fill="#dbe0e6"/>
+  <text x="374" y="260" fill="#16181d" font-family="Inter, SF Pro Text, Segoe UI, sans-serif" font-size="72" font-weight="650">Allen Docs</text>
+  <text x="378" y="320" fill="#3c4654" font-family="Inter, SF Pro Text, Segoe UI, sans-serif" font-size="28">Operate agents, workflows, and workspaces</text>
+  <text x="378" y="360" fill="#3c4654" font-family="Inter, SF Pro Text, Segoe UI, sans-serif" font-size="28">with clear human checkpoints.</text>
+  <rect x="378" y="418" width="152" height="42" rx="8" fill="#5e6ad2"/>
+  <text x="410" y="445" fill="#fff" font-family="Inter, SF Pro Text, Segoe UI, sans-serif" font-size="16" font-weight="600">Read the docs</text>
 </svg>
