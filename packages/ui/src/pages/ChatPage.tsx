@@ -4,7 +4,7 @@ import { useChat, type ChatSession } from '../hooks/useChat';
 import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
 import { useFileDropZone, FileDropOverlay } from '../hooks/useFileDropZone';
 import { buildSkillSlashCommands } from '../hooks/useSkillSlashCommands';
-import ChatMessageList from '../components/chat/ChatMessageList';
+import ChatMessageList, { type ChatMessageListHandle } from '../components/chat/ChatMessageList';
 import CommandPalette from '../components/chat/CommandPalette';
 import ConversationLogs from '../components/chat/ConversationLogs';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
@@ -17,7 +17,7 @@ import ChatDetailHeader from '../components/chat/ChatDetailHeader';
 import TeamClassificationSelect from '../components/common/TeamClassificationSelect';
 import ChatExportDialog from '../components/chat/ChatExportDialog';
 import ImportedChatBanner from '../components/chat/ImportedChatBanner';
-import { Activity, AppWindow, ArrowLeft, BookOpen, Code2, FileText, ListTree, MoreHorizontal, PanelRightOpen, Server, Terminal, X, Check, Navigation2, Pencil, Trash2, Upload } from 'lucide-react';
+import { Activity, AppWindow, ArrowDown, ArrowLeft, BookOpen, Code2, FileText, ListTree, MoreHorizontal, PanelRightOpen, Server, Terminal, X, Check, Navigation2, Pencil, Trash2, Upload } from 'lucide-react';
 import { XTerminal, type TerminalSourceType } from '../components/workspace/XTerminal';
 import WorkspaceServersTab from '../components/workspace/WorkspaceServersTab';
 import DocumentTabHost from '../components/artifacts/DocumentTabHost';
@@ -192,6 +192,8 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
     planMode?: boolean | null;
   }>(config?.defaultReasoningEffort ? { reasoningEffort: config.defaultReasoningEffort } : {});
   const chatInputRef = useRef<ChatInputHandle | null>(null);
+  const chatMessageListRef = useRef<ChatMessageListHandle | null>(null);
+  const [messageListAtBottom, setMessageListAtBottom] = useState(true);
   const processedDeepLinkRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<ChatQueueItem[]>([]);
   const editingQueuedIdRef = useRef<string | null>(null);
@@ -1720,6 +1722,10 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
       sessionId: activeSessionId,
     });
 
+  useEffect(() => {
+    setMessageListAtBottom(true);
+  }, [activeResourceScopeKey]);
+
   useLayoutEffect(() => {
     if (activeWorkspaceConversationScope) {
       setWorkspaceResourceScopeKey(activeWorkspaceConversationScope);
@@ -2086,6 +2092,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
         {!chatAlternateTabActive && (activeSessionId || messages.length > 0 || streaming) && (
           <div className={loadingMessages && messages.length === 0 && !streaming ? 'hidden' : 'flex-1 min-h-0 flex flex-col'}>
             <ChatMessageList
+              ref={chatMessageListRef}
               messages={messages}
               streamText={streamText}
               thinkingText={thinkingText}
@@ -2109,6 +2116,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
               documentCount={documentCount}
               provider={activeSession?.provider}
               resourceScopeKey={activeResourceScopeKey}
+              onAtBottomChange={setMessageListAtBottom}
               model={activeSession?.model}
               onOpenFileReference={handleOpenFileReference}
               onOpenChatReference={handleOpenChatReference}
@@ -2255,6 +2263,19 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
                 );
               })}
             </div>
+          </div>
+        )}
+        {!messageListAtBottom && (
+          <div className="chat-scroll-to-bottom-anchor">
+            <button
+              type="button"
+              className="chat-scroll-to-bottom"
+              onClick={() => chatMessageListRef.current?.scrollToBottom()}
+              aria-label="Scroll to latest message"
+              title="Scroll to latest message"
+            >
+              <ArrowDown aria-hidden="true" strokeWidth={1.6} />
+            </button>
           </div>
         )}
         <ChatInput
