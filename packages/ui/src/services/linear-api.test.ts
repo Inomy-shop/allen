@@ -7,12 +7,13 @@
  *
  * Covers:
  *   AC-015 – linear.issues({ assignee: 'me', ... }) → URL contains assignee=me
+ *   teamId  – linear.issues({ teamId: ... }) → URL contains teamId=<encoded id>
  */
 import { describe, expect, it } from 'vitest';
 
 // ---------------------------------------------------------------------------
-// Inline mirror of the linear.issues() URL builder from api.ts
-// This is the exact same logic as in packages/ui/src/services/api.ts
+// Inline mirror of the linear.issues() URL builder from apiSecondary.ts
+// This is the exact same logic as in packages/ui/src/services/apiSecondary.ts
 // ---------------------------------------------------------------------------
 function buildLinearIssuesUrl(
   filters: {
@@ -21,6 +22,7 @@ function buildLinearIssuesUrl(
     q?: string;
     limit?: number;
     assignee?: 'me';
+    teamId?: string;
   } = {},
 ): string {
   const qs = new URLSearchParams();
@@ -29,6 +31,7 @@ function buildLinearIssuesUrl(
   if (filters.q) qs.set('q', filters.q);
   if (filters.limit) qs.set('limit', String(filters.limit));
   if (filters.assignee === 'me') qs.set('assignee', 'me');
+  if (filters.teamId) qs.set('teamId', filters.teamId);
   const query = qs.toString();
   return `/linear/issues${query ? `?${query}` : ''}`;
 }
@@ -83,6 +86,47 @@ describe('linear.issues() URL construction (api.ts)', () => {
   it('includes query string search term when provided', () => {
     const url = buildLinearIssuesUrl({ q: 'bug fix', assignee: 'me' });
     expect(url).toContain('q=bug+fix');
+    expect(url).toContain('assignee=me');
+  });
+
+  // teamId filter ─────────────────────────────────────────────────────────────
+
+  it('teamId set → URL contains teamId=<encoded id>', () => {
+    const url = buildLinearIssuesUrl({ teamId: 'team-abc-123' });
+    expect(url).toContain('teamId=team-abc-123');
+  });
+
+  it('teamId with special characters is properly encoded', () => {
+    const url = buildLinearIssuesUrl({ teamId: 'team/special id' });
+    // URLSearchParams encodes spaces and slashes
+    expect(url).toContain('teamId=');
+    expect(url).not.toContain(' ');
+  });
+
+  it('teamId empty string → teamId absent from URL', () => {
+    const url = buildLinearIssuesUrl({ teamId: '' });
+    expect(url).not.toContain('teamId');
+  });
+
+  it('teamId absent → teamId absent from URL', () => {
+    const url = buildLinearIssuesUrl({ state: 'started', limit: 10 });
+    expect(url).not.toContain('teamId');
+  });
+
+  it('teamId composes with projectId, state, q, limit, and assignee in one URL', () => {
+    const url = buildLinearIssuesUrl({
+      teamId: 'team-eng',
+      projectId: 'proj-core',
+      state: 'started,unstarted',
+      q: 'auth bug',
+      limit: 50,
+      assignee: 'me',
+    });
+    expect(url).toContain('teamId=team-eng');
+    expect(url).toContain('projectId=proj-core');
+    expect(url).toContain('state=');
+    expect(url).toContain('q=');
+    expect(url).toContain('limit=50');
     expect(url).toContain('assignee=me');
   });
 });

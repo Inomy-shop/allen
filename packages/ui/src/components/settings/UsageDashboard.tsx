@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import Select from '../common/Select';
 import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
+import ModelIcon, { modelIconColor } from '../common/ModelIcon';
 import TokenUsageDisplay from '../common/TokenUsageDisplay';
 import {
   usage as usageApi,
@@ -367,7 +368,12 @@ export default function UsageDashboard() {
                 ...(open
                   ? group.buckets.map((bucket) => (
                       <tr key={`${group.provider}:${bucket.model}`} className="border-b border-app last:border-b-0">
-                        <td className="px-3 py-2 pl-8 font-mono text-theme-secondary">{bucket.model}</td>
+                        <td className="px-3 py-2 pl-8 font-mono text-theme-secondary">
+                          <span className="inline-flex min-w-0 items-center gap-1.5">
+                            <ModelIcon provider={group.provider} className={`h-3.5 w-3.5 shrink-0 ${modelIconColor(group.provider)}`} />
+                            <span className="truncate">{bucket.model}</span>
+                          </span>
+                        </td>
                         <td className="px-3 py-2">
                           <span className="flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] text-theme-muted">
                             {(Object.keys(SOURCE_LABELS) as UsageSource[])

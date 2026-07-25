@@ -23,6 +23,7 @@ import { useToast } from '../common/Toast';
 import IconTooltipButton from '../common/IconTooltipButton';
 import Select from '../common/Select';
 import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
+import ModelIcon, { modelIconColor } from '../common/ModelIcon';
 import { useModelRegistry } from '../../hooks/useModelRegistry';
 import { buildModelOptionsForProvider } from '../../lib/model-catalog';
 import {
@@ -338,7 +339,8 @@ export function ImportAgentsFromRepoDialog({
                         </span>
                       )}
                       {isCreate && 'model' in v.agent && (
-                        <span className="rounded bg-accent-purple/10 px-1.5 font-mono text-[10px] text-accent-purple">
+                        <span className="inline-flex items-center gap-1 rounded bg-accent-purple/10 px-1.5 font-mono text-[10px] text-accent-purple">
+                          <ModelIcon provider="claude" className={`h-3 w-3 shrink-0 ${modelIconColor('claude')}`} />
                           {v.agent.model}
                         </span>
                       )}

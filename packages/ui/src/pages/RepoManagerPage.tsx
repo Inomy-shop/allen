@@ -15,6 +15,7 @@ import { workspaceCreateBaseBranch } from '../lib/workspace-create';
 import { useToast } from '../components/common/Toast';
 import IconTooltipButton from '../components/common/IconTooltipButton';
 import { workspaceChatPath } from '../lib/workspace-routes';
+import V8EmptyState from '../components/common/V8EmptyState';
 
 interface Repo {
   _id: string;
@@ -803,7 +804,7 @@ export default function RepoManagerPage() {
         {loading ? (
           <div className="v8-filter-empty">Loading repositories…</div>
         ) : repoList.length === 0 ? (
-          <div className="v8-empty"><span className="glyph"><FolderGit2 /></span><h2>No repositories connected</h2><p>Add a repo so Allen can build its context graph and start taking on work.</p><button className="v8-btn v8-btn--ink" type="button" onClick={() => setAddOpen(true)}>Add repository</button></div>
+          <V8EmptyState scene="repositories" title="No repositories connected" description="Add a repo so Allen can build its context graph and start taking on work." action={<button className="v8-btn v8-btn--ink" type="button" onClick={() => setAddOpen(true)}>Add repository</button>} />
         ) : (
           <div className="v8-panel v8-repo-panel">
             {repoList.map((repo) => {

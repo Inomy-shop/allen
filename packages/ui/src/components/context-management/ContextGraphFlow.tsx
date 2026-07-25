@@ -42,6 +42,7 @@ export function ContextReactFlow({
   onSelectNode,
   onSelectEdge,
   onExpand,
+  compact = false,
 }: {
   graph?: ContextGraph;
   layout?: GraphLayout;
@@ -49,11 +50,12 @@ export function ContextReactFlow({
   selectedEdge?: Record<string, any> | null;
   fitPadding?: number;
   fitMaxZoom?: number;
+  compact?: boolean;
   onSelectNode: (value: Record<string, any>) => void;
   onSelectEdge: (value: Record<string, any>) => void;
   onExpand: (id: string) => void;
 }) {
-  const { nodes, edges } = useMemo(() => toFlowGraph(graph, selectedNodeId, selectedEdge, layout), [graph, selectedNodeId, selectedEdge, layout]);
+  const { nodes, edges } = useMemo(() => toFlowGraph(graph, selectedNodeId, selectedEdge, layout, compact), [compact, graph, selectedNodeId, selectedEdge, layout]);
   return (
     <ReactFlow
       className="context-graph-flow"
@@ -77,7 +79,7 @@ export function ContextReactFlow({
   );
 }
 
-function ContextFlowNode({ data }: NodeProps<Node<{ label: string; type: string; raw: Record<string, any>; highlight: GraphHighlight }>>) {
+function ContextFlowNode({ data }: NodeProps<Node<{ label: string; type: string; raw: Record<string, any>; highlight: GraphHighlight; compact?: boolean }>>) {
   const color = graphNodeColor(data.type);
   const highlightClass = data.highlight === 'selected'
     ? 'ring-2 ring-accent shadow-lg'
@@ -86,6 +88,25 @@ function ContextFlowNode({ data }: NodeProps<Node<{ label: string; type: string;
       : data.highlight === 'dimmed'
         ? 'opacity-35'
         : '';
+  if (data.compact) {
+    const dotSize = compactNodeSize(data.raw);
+    const selected = data.highlight === 'selected';
+    return (
+      <div title={nodeTooltip(data.raw)} className={`context-flow-dot-wrap ${highlightClass}`}>
+        <Handle type="target" position={Position.Left} />
+        <div
+          className="context-flow-dot"
+          style={{
+            width: dotSize,
+            height: dotSize,
+            backgroundColor: selected ? '#745cf5' : color.dot,
+            borderColor: selected ? '#745cf5' : color.dotBorder,
+          }}
+        />
+        <Handle type="source" position={Position.Right} />
+      </div>
+    );
+  }
   return (
     <div title={nodeTooltip(data.raw)} className={`relative flex flex-col items-center gap-1 transition-opacity ${highlightClass}`}>
       <Handle type="target" position={Position.Left} />
@@ -103,11 +124,19 @@ function ContextFlowNode({ data }: NodeProps<Node<{ label: string; type: string;
   );
 }
 
+function compactNodeSize(node: Record<string, any>): number {
+  const degree = Number(node.degree ?? node.relationshipCount ?? node.edgeCount ?? 0);
+  if (degree >= 25) return 18;
+  if (degree >= 10) return 14;
+  return 10;
+}
+
 function toFlowGraph(
   graph?: ContextGraph,
   selectedNodeId?: string | null,
   selectedEdge?: Record<string, any> | null,
   layout: GraphLayout = 'auto',
+  compact = false,
 ): { nodes: Node[]; edges: Edge[] } {
   const rawNodes = graph?.nodes ?? [];
   const rawEdges = graph?.edges ?? [];
@@ -150,6 +179,7 @@ function toFlowGraph(
         type: String(node.type ?? 'node'),
         raw: node,
         highlight: graphNodeHighlight(String(node.id), selectedNodeId, linkedNodeIds),
+        compact,
       },
     };
   });
@@ -160,7 +190,7 @@ function toFlowGraph(
       const edgeId = String(edge.id ?? `${edge.source}-${edge.target}`);
       const highlighted = highlightedEdgeIds.has(edgeId);
       const dimmed = Boolean((selectedNodeId || selectedEdge) && !highlighted);
-      const stroke = highlighted ? '#38bdf8' : '#64748b';
+      const stroke = highlighted ? '#2563eb' : '#94a3b8';
       return {
         id: edgeId,
         source: String(edge.source),
@@ -168,7 +198,7 @@ function toFlowGraph(
         label: highlighted ? shortEdgeLabel(String(edge.label ?? edge.relationship ?? '')) : undefined,
         type: 'bezier',
         markerEnd: { type: MarkerType.ArrowClosed, width: highlighted ? 18 : 14, height: highlighted ? 18 : 14, color: stroke },
-        style: { stroke, strokeWidth: highlighted ? 2.2 : 0.9, opacity: dimmed ? 0.12 : highlighted ? 0.95 : 0.34 },
+        style: { stroke, strokeWidth: highlighted ? 2.3 : 1.1, opacity: dimmed ? 0.2 : highlighted ? 0.95 : 0.54 },
         labelStyle: { fill: highlighted ? '#e0f2fe' : '#94a3b8', fontSize: 9, fontFamily: 'monospace', opacity: dimmed ? 0.25 : 1 },
         labelBgStyle: { fill: 'rgba(15, 23, 42, 0.82)', fillOpacity: highlighted ? 0.9 : 0.72 },
         data: { raw: edge },
@@ -457,20 +487,20 @@ function uniqueGraphItems(items: Array<Record<string, any>>): Array<Record<strin
   return unique;
 }
 
-function graphNodeColor(type: string): { border: string; background: string } {
+function graphNodeColor(type: string): { border: string; background: string; dot: string; dotBorder: string } {
   switch (type) {
     case 'Entity':
-      return { border: '#22c55e', background: 'rgba(34, 197, 94, 0.12)' };
+      return { border: '#22c55e', background: 'rgba(34, 197, 94, 0.12)', dot: '#2f9c69', dotBorder: 'rgba(47, 156, 105, 0.45)' };
     case 'EntityType':
-      return { border: '#a855f7', background: 'rgba(168, 85, 247, 0.12)' };
+      return { border: '#a855f7', background: 'rgba(168, 85, 247, 0.12)', dot: '#39a06f', dotBorder: 'rgba(57, 160, 111, 0.45)' };
     case 'DocumentChunk':
-      return { border: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)' };
+      return { border: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', dot: '#3aa06f', dotBorder: 'rgba(58, 160, 111, 0.45)' };
     case 'TextSummary':
-      return { border: '#f59e0b', background: 'rgba(245, 158, 11, 0.14)' };
+      return { border: '#f59e0b', background: 'rgba(245, 158, 11, 0.14)', dot: '#3ca773', dotBorder: 'rgba(60, 167, 115, 0.45)' };
     case 'TextDocument':
-      return { border: '#64748b', background: 'rgba(100, 116, 139, 0.12)' };
+      return { border: '#64748b', background: 'rgba(100, 116, 139, 0.12)', dot: '#4aa878', dotBorder: 'rgba(74, 168, 120, 0.45)' };
     default:
-      return { border: '#94a3b8', background: 'rgba(148, 163, 184, 0.10)' };
+      return { border: '#94a3b8', background: 'rgba(148, 163, 184, 0.10)', dot: '#4aa878', dotBorder: 'rgba(74, 168, 120, 0.45)' };
   }
 }
 

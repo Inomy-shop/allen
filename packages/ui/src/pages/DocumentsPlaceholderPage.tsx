@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { artifacts as artifactsApi, type ArtifactDoc } from '../services/api';
 import { resourceScopeKey, useDocumentTabStore } from '../stores/documentTabStore';
 import TeamClassificationSelect from '../components/common/TeamClassificationSelect';
+import V8EmptyState from '../components/common/V8EmptyState';
 import {
   TEAM_CLASSIFICATION_META,
   teamClassificationKey,
@@ -173,6 +174,30 @@ export default function DocumentsPlaceholderPage() {
     }
   }
 
+  function openLinkedChatDocument(item: ArtifactDoc) {
+    if (item.rootType === 'chat' && item.rootId) {
+      navigate(`/chat/${encodeURIComponent(item.rootId)}`, {
+        state: {
+          linkedDocument: item,
+          linkedDocumentSourceLabel: 'Documents',
+          linkedDocumentOpenNonce: `${item.artifactId}:${Date.now()}`,
+        },
+      });
+      return;
+    }
+
+    const scopeKey = resourceScopeKey('surface', 'documents');
+    setActiveResourceScope(scopeKey);
+    openDocument(item, { sourceLabel: 'Documents', scopeKey });
+  }
+
+  function openLinkedChatSession(item: ArtifactDoc) {
+    if (item.rootType !== 'chat' || !item.rootId) return;
+    const scopeKey = resourceScopeKey('chat', item.rootId);
+    setActiveResourceScope(scopeKey);
+    navigate(`/chat/${encodeURIComponent(item.rootId)}`);
+  }
+
   function createDocument() {
     const prompt = `Create a ${type.toLowerCase()} document titled "${title.trim() || 'Untitled document'}" and save it as an Allen artifact.`;
     navigate(`/chat?prompt=${encodeURIComponent(prompt)}`);
@@ -212,12 +237,12 @@ export default function DocumentsPlaceholderPage() {
         {!loading && !error && actionError && <div className="v8-documents-inline-error">{actionError}</div>}
 
         {!loading && !error && visible.length === 0 && (
-          <div className="v8-empty">
-            <span className="glyph"><FileText /></span>
-            <h2>{items.length ? 'No documents match this filter' : 'No saved documents yet'}</h2>
-            <p>{items.length ? 'Try another space, view, or search.' : 'Open a session document and choose Save to add it here. Saving does not mark it as a favorite.'}</p>
-            {!items.length && <button className="v8-btn v8-btn--ink" type="button" onClick={() => setModalOpen(true)}>New document</button>}
-          </div>
+          <V8EmptyState
+            scene="documents"
+            title={items.length ? 'No documents match this filter' : 'No documents yet'}
+            description={items.length ? 'Try another space, view, or search.' : 'Documents your agents write in sessions land here — versioned, open for comments, and easy to trace back to their source.'}
+            action={!items.length && <button className="v8-btn v8-btn--ink" type="button" onClick={() => setModalOpen(true)}>New document</button>}
+          />
         )}
 
         {!loading && !error && (Object.keys(TEAM_CLASSIFICATION_META) as TeamClassificationKey[]).map(key => {
@@ -228,14 +253,10 @@ export default function DocumentsPlaceholderPage() {
               <div className="v8-documents-spacehead"><i style={{ background: TEAM_CLASSIFICATION_META[key].color }} /><h2>{TEAM_CLASSIFICATION_META[key].label}</h2><span>{Array.from(roots.values()).reduce((sum, docs) => sum + docs.length, 0)}</span></div>
               {Array.from(roots.entries()).map(([rootKey, docs]) => (
                 <div className="v8-documents-group" key={rootKey}>
-                  <div className="v8-documents-session"><MessageCircle /><span>{docs[0]?.description || `${docs[0]?.rootType} session · ${docs[0]?.rootId}`}</span>{docs[0]?.rootType === 'chat' && <button type="button" onClick={() => navigate(`/chat/${docs[0].rootId}`)}>Open session →</button>}</div>
+                  <div className="v8-documents-session"><MessageCircle /><span>{docs[0]?.description || `${docs[0]?.rootType} session · ${docs[0]?.rootId}`}</span>{docs[0]?.rootType === 'chat' && <button type="button" onClick={() => openLinkedChatSession(docs[0])}>Open session →</button>}</div>
                   {docs.map(item => (
                     <div className="v8-documents-row" key={item.artifactId}>
-                      <button className="v8-documents-open" type="button" onClick={() => {
-                        const scopeKey = resourceScopeKey('surface', 'documents');
-                        setActiveResourceScope(scopeKey);
-                        openDocument(item, { sourceLabel: 'Documents', scopeKey });
-                      }}>
+                      <button className="v8-documents-open" type="button" onClick={() => openLinkedChatDocument(item)}>
                         <span className="v8-documents-icon"><FileText /></span>
                         <span className="v8-documents-copy">
                           <b>{displayTitle(item.filename)}<em>{extension(item.filename)}</em></b>

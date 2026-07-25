@@ -6,6 +6,28 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.24] - 2026-07-25
+
+### Added
+
+- **Linear team filter** (`packages/ui`, `packages/server`): a single-select Linear-team filter on the Linear tickets page, carried through the UI client, the Express route, the Linear integration service, and caching.
+- **Markdown preview toggle for file tabs** (`packages/ui`): file tabs can toggle between raw and rendered markdown.
+- **Dashboard recent-activity rows** (`packages/ui`): a recent-activity section on the dashboard.
+
+### Changed
+
+- **Onboarding aligned with the V8 design** (`packages/ui`): revamped onboarding and empty states, including corrected action-text contrast.
+- **Repo context management page** (`packages/ui`): UI revamped.
+- **Chat surface polish** (`packages/ui`): uniform chat background, improved activity-timeline rendering, and document-tab refinements.
+- **Dashboard and document controls** (`packages/ui`): refined controls; agent team-member rows polished; the topbar is hidden on prototype routes.
+- **Updated Allen app icon assets** (`packages/desktop`).
+- **Documentation site visual polish** (`packages/docs-site`): aligned the theme foundation with the Allen V8 design, refreshed branding and navigation chrome, updated the favicon, polished reading surfaces and responsive layout, and added a GitHub star call-to-action.
+
+### Fixed
+
+- **Onboarding scripts, ports, and health check** (`scripts/setup.sh`, root `package.json`): restored the root npm scripts dropped in the desktop-root conversion (`setup`, `setup:context`, `health`, `start`, `test:e2e`), corrected port references, and stopped misattributing health-check failures to CLI auth (ALL-44).
+- **Linear ticket dispatch prompt copy** (`packages/ui`).
+
 ## [0.1.23] - 2026-07-24
 
 ### Added

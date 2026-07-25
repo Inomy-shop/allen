@@ -113,7 +113,7 @@ http://localhost:5173
 If API calls fail, check:
 
 ```bash
-curl http://localhost:4000/api/health
+curl http://localhost:4023/api/health
 ```
 
 If the API is on a different port, make sure the UI configuration and API calls are pointed at the right backend.

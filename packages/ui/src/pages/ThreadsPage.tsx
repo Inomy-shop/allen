@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Inbox, Search } from 'lucide-react';
+import { Search } from 'lucide-react';
+import ModelIcon, { modelIconColor } from '../components/common/ModelIcon';
+import V8EmptyState from '../components/common/V8EmptyState';
 import { chat as chatApi, executions as executionsApi, type ChatSession } from '../services/api';
 import { getModelDisplay } from '../hooks/useModelRegistry';
 import {
@@ -102,7 +104,7 @@ export default function ThreadsPage() {
 
         {loading ? <div className="v8-filter-empty">Loading sessions…</div> : visible.length === 0 ? (
           sessions.length === 0 ? (
-            <div className="v8-empty"><span className="glyph"><Inbox /></span><h2>No sessions yet</h2><p>Start your first session and it will show up here with live status, diffs, and checkpoints.</p><button className="v8-btn v8-btn--ink" type="button" onClick={() => navigate('/chat')}>New session</button></div>
+            <V8EmptyState scene="sessions" title="No sessions yet" description="Start your first session and it will show up here with live status, diffs, and checkpoints." action={<button className="v8-btn v8-btn--ink" type="button" onClick={() => navigate('/chat')}>New session</button>} />
           ) : <div className="v8-filter-empty">No sessions match this filter.</div>
         ) : (
           <div className="v8-panel">
@@ -127,7 +129,10 @@ export default function ThreadsPage() {
                     </p>
                   </div>
                   <div className="v8-row-cols">
-                    <span className="v8-model">{model}</span>
+                    <span className="v8-model">
+                      <ModelIcon provider={session.provider} className={modelIconColor(session.provider)} />
+                      {model}
+                    </span>
                     <span className={`v8-status ${state}`}>{sessionStateLabel(state)}</span>
                     <time>{shortAge(session.lastMessageAt)}</time>
                   </div>

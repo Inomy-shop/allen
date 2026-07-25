@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import CostDisplay from '../common/CostDisplay';
+import ModelIcon, { modelIconColor } from '../common/ModelIcon';
 import type { SpawnedChild, TokenUsageInfo } from '../../services/api';
 
 /**
@@ -41,6 +42,7 @@ function methodBadge(method?: string | null) {
 export default function SpawnCostBreakdown({
   ownLabel,
   ownModel,
+  ownProvider,
   ownCost,
   ownTokenUsage,
   ownStatus,
@@ -50,6 +52,7 @@ export default function SpawnCostBreakdown({
 }: {
   ownLabel: string;
   ownModel?: string | null;
+  ownProvider?: string | null;
   ownCost: { actual: number | null; estimated?: number; method?: string } | null;
   ownTokenUsage: TokenUsageInfo | null | undefined;
   ownStatus?: string;
@@ -117,7 +120,12 @@ export default function SpawnCostBreakdown({
           <tbody>
             <tr className="border-b border-[rgb(var(--color-border)/0.35)]">
               <td className="px-4 py-1.5 font-mono text-theme-primary">{ownLabel} <span className="text-theme-subtle">(this run)</span></td>
-              <td className="px-3 py-1.5 font-mono text-theme-secondary">{ownModel ?? '—'}</td>
+              <td className="px-3 py-1.5 font-mono text-theme-secondary">
+                <span className="inline-flex min-w-0 items-center gap-1.5">
+                  <ModelIcon provider={ownProvider} className={`h-3.5 w-3.5 shrink-0 ${modelIconColor(ownProvider)}`} />
+                  <span className="truncate">{ownModel ?? '—'}</span>
+                </span>
+              </td>
               {tokenCells(ownTokenUsage)}
               <td className="px-4 py-1.5 text-right">
                 <span className="inline-flex items-center gap-1.5">
@@ -139,7 +147,12 @@ export default function SpawnCostBreakdown({
                     {running && <Loader2 className="ml-1.5 inline h-3 w-3 animate-spin text-theme-muted" />}
                     {c.status === 'failed' && <span className="ml-1.5 text-[9px] uppercase tracking-wider text-accent-red/80 font-label">failed</span>}
                   </td>
-                  <td className="px-3 py-1.5 font-mono text-theme-secondary">{c.model ?? '—'}</td>
+                  <td className="px-3 py-1.5 font-mono text-theme-secondary">
+                    <span className="inline-flex min-w-0 items-center gap-1.5">
+                      <ModelIcon provider={c.provider} className={`h-3.5 w-3.5 shrink-0 ${modelIconColor(c.provider)}`} />
+                      <span className="truncate">{c.model ?? '—'}</span>
+                    </span>
+                  </td>
                   {tokenCells(c.tokenUsage)}
                   <td className="px-4 py-1.5 text-right">
                     <span className="inline-flex items-center gap-1.5">

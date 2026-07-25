@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useRef } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { useChat, type ChatSession } from '../hooks/useChat';
 import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOption, type SlashCommandOption } from '../components/chat/ChatInput';
 import { useFileDropZone, FileDropOverlay } from '../hooks/useFileDropZone';
@@ -10,7 +10,7 @@ import ConversationLogs from '../components/chat/ConversationLogs';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
 import ChatRunSidebar, { FileChangesPanel, type ChatRunPanelTab } from '../components/chat/ChatRunSidebar';
 import { ToolCallLog } from '../components/common/ToolCallLog';
-import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, skills as skillsApi, artifacts as artifactsApi, type ChatQueueItem, type SkillRecord } from '../services/api';
+import { chat as chatApi, mcp as mcpApi, learnings as learningsApi, agents as agentsApi, repos as reposApi, skills as skillsApi, artifacts as artifactsApi, type ChatQueueItem, type SkillRecord, type ArtifactDoc } from '../services/api';
 import { workspaces as workspacesApi } from '../services/workspaceService';
 import { type WorkspaceChatTab, type WorkspaceResourceTab, getTabKey } from '../components/chat/WorkspaceChatTabs';
 import ChatDetailHeader from '../components/chat/ChatDetailHeader';
@@ -65,6 +65,12 @@ type PendingSendOptions = {
     reasoningEffort?: ReasoningEffortValue | null;
     planMode?: boolean | null;
   };
+};
+
+type LinkedDocumentNavigationState = {
+  linkedDocument?: ArtifactDoc;
+  linkedDocumentSourceLabel?: string;
+  linkedDocumentOpenNonce?: string;
 };
 
 type ExternalIdeId = 'vscode' | 'cursor';
@@ -154,6 +160,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const isDesignMode = Boolean(config?.designMode);
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlWorkspaceId = searchParams.get('workspaceId');
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
@@ -190,6 +197,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const editingQueuedIdRef = useRef<string | null>(null);
   const wsLoadedForSessionRef = useRef<string | null>(null);
   const pendingWorkspaceTempTabRef = useRef<{ workspaceId: string; tab: WorkspaceChatTab } | null>(null);
+  const processedLinkedDocumentRef = useRef<string | null>(null);
   const workspaceTabsWorkspaceIdRef = useRef<string | null>(null);
   const ideMenuRef = useRef<HTMLDivElement | null>(null);
   const documentsSidebarAutoHiddenRef = useRef(false);
@@ -223,6 +231,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   const [teamClassificationError, setTeamClassificationError] = useState<string | null>(null);
   const chatTerminalCounterRef = useRef(0);
   const pendingChatTempTabRef = useRef<string | null>(null);
+  const openDocument = useDocumentTabStore(state => state.openDocument);
   const openFile = useDocumentTabStore(state => state.openFile);
   const documentTabs = useDocumentTabStore(state => state.tabs);
   const fileTabs = useDocumentTabStore(state => state.fileTabs);
@@ -237,7 +246,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
 
   const {
     sessions, activeSessionId, messages, streaming, streamText,
-    thinkingText, activeToolCalls, agentReports,
+    thinkingText, streamActivityTimeline, activeToolCalls, agentReports,
     spawnedAgents, pendingUserQuestion, answerUserQuestion, answerWorkflowIntervention,
     loadingMessages,
     sendMessage, createSession, switchSession, cancelStream,
@@ -256,6 +265,46 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
   ].join(':');
   const activeProvider = activeSession?.provider ?? selectedProvider;
   const activeWorkflowName = spawnedAgents.find(run => run.runContext?.runType === 'workflow')?.runContext?.execution.workflowName ?? null;
+
+  useEffect(() => {
+    const navigationState = location.state as LinkedDocumentNavigationState | null;
+    const artifact = navigationState?.linkedDocument;
+    if (!artifact || artifact.rootType !== 'chat' || !artifact.rootId) return;
+
+    const sessionId = String(artifact.rootId);
+    if (urlSessionId && sessionId !== urlSessionId) return;
+
+    const signature = navigationState.linkedDocumentOpenNonce || `${sessionId}:${artifact.artifactId}`;
+    if (processedLinkedDocumentRef.current === signature) return;
+    processedLinkedDocumentRef.current = signature;
+
+    const scopeKey = resourceScopeKey('chat', sessionId);
+    const fallbackTitle = activeSession?.title || artifact.description || 'Linked chat';
+
+    setActiveResourceScope(scopeKey);
+    setActiveChatTerminalId(null);
+    setActiveChatUtilityId(null);
+    setActiveChatTabId(sessionId);
+    setOpenChatTabs(current => current.some(tab => tab.id === sessionId)
+      ? current.map(tab => tab.id === sessionId ? { ...tab, title: tab.title || fallbackTitle, isTemp: false } : tab)
+      : [...current, { id: sessionId, title: fallbackTitle, isTemp: false }]);
+    setChatTabOrder(current => current.includes(chatSessionTabKey(sessionId))
+      ? current
+      : insertSiblingTab(current, activeChatViewKey(), key => key, chatSessionTabKey(sessionId)));
+
+    openDocument(artifact, { sourceLabel: navigationState.linkedDocumentSourceLabel || 'Documents', scopeKey });
+
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [
+    activeSession?.title,
+    location.pathname,
+    location.search,
+    location.state,
+    navigate,
+    openDocument,
+    setActiveResourceScope,
+    urlSessionId,
+  ]);
 
   useEffect(() => {
     setTeamClassificationOverride(activeSession?.teamClassification ?? null);
@@ -2040,6 +2089,7 @@ export default function ChatPage({ config }: { config?: ChatPageConfig } = {}) {
               messages={messages}
               streamText={streamText}
               thinkingText={thinkingText}
+              streamActivityTimeline={streamActivityTimeline}
               streaming={streaming}
               activeToolCalls={activeToolCalls}
               agentReports={agentReports}

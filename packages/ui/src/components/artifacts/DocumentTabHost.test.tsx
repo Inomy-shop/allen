@@ -8,6 +8,10 @@ vi.mock('./ArtifactViewer', () => ({
   default: () => <div>Document content</div>,
 }));
 
+vi.mock('../chat/ChatMessageList', () => ({
+  renderMarkdown: (content: string) => <div data-testid="markdown-preview">{content}</div>,
+}));
+
 vi.mock('../common/DirectMonacoEditor', () => ({
   default: ({ value, language }: { value: string; language: string }) => (
     <pre data-testid="direct-file-viewer" data-language={language}>{value}</pre>
@@ -126,7 +130,7 @@ describe('DocumentTabHost tab creation', () => {
     expect(useDocumentTabStore.getState().activeArtifactId).toBeNull();
   });
 
-  it('renders workspace files with the bundled editor instead of the CDN-backed loader', () => {
+  it('opens markdown workspace files in preview mode by default with a raw toggle', () => {
     useDocumentTabStore.getState().openFile({
       path: 'docs/concepts/workflows.md',
       content: '# Workflows\nVisible immediately.',
@@ -143,7 +147,38 @@ describe('DocumentTabHost tab creation', () => {
     );
 
     expect(screen.queryByLabelText('Chat and open resources')).not.toBeInTheDocument();
+    expect(screen.getByTestId('markdown-preview')).toHaveTextContent('Visible immediately.');
+    expect(screen.queryByTestId('direct-file-viewer')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show raw markdown for docs/concepts/workflows.md' }));
+
     expect(screen.getByTestId('direct-file-viewer')).toHaveAttribute('data-language', 'markdown');
     expect(screen.getByTestId('direct-file-viewer')).toHaveTextContent('Visible immediately.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview markdown for docs/concepts/workflows.md' }));
+
+    expect(screen.getByTestId('markdown-preview')).toHaveTextContent('Visible immediately.');
+    expect(screen.queryByTestId('direct-file-viewer')).not.toBeInTheDocument();
+  });
+
+  it('keeps non-markdown workspace files in the raw bundled editor without a preview toggle', () => {
+    useDocumentTabStore.getState().openFile({
+      path: 'packages/ui/src/App.tsx',
+      content: 'export default App;',
+      sourceKind: 'workspace',
+      sourceId: 'workspace-1',
+      sourceLabel: 'UI workspace',
+      scopeKey,
+    });
+
+    render(
+      <MemoryRouter>
+        <DocumentTabHost workspaceId="workspace-1" showTabStrip={false} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId('direct-file-viewer')).toHaveAttribute('data-language', 'typescript');
+    expect(screen.getByTestId('direct-file-viewer')).toHaveTextContent('export default App;');
+    expect(screen.queryByRole('button', { name: /markdown for packages\/ui\/src\/App\.tsx/i })).not.toBeInTheDocument();
   });
 });

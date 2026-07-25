@@ -12,6 +12,7 @@ import { auth, system } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { BRAND_SLUG } from '../lib/brand';
 import ForgotPasswordModal from '../components/auth/ForgotPasswordModal';
+import { V8AllenMark } from '../components/common/V8SidebarIcons';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -54,7 +55,7 @@ export default function LoginPage() {
             : progress.step === 'first_workflow'
               ? '/onboarding/first-workflow'
               : progress.step === 'model_defaults'
-                ? '/onboarding/model-defaults'
+                ? '/onboarding/repository'
                 : '/onboarding/health';
           navigate(path, { replace: true });
         } else {
@@ -93,7 +94,7 @@ export default function LoginPage() {
             : progress.step === 'first_workflow'
               ? '/onboarding/first-workflow'
               : progress.step === 'model_defaults'
-                ? '/onboarding/model-defaults'
+                ? '/onboarding/repository'
                 : '/onboarding/health';
           navigate(path, { replace: true });
         } else {
@@ -124,8 +125,8 @@ export default function LoginPage() {
       <div className="mx-auto flex min-h-screen w-full max-w-[1180px] flex-col px-5 py-5 sm:px-7 lg:px-8">
         <header className="flex h-11 shrink-0 items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="inline-flex items-center justify-center rounded-md border border-accent/25 bg-accent-soft px-1.5 py-0.5 font-mono text-[13px] font-semibold text-accent">
-              [a]
+            <div className="auth-brand-mark" aria-hidden="true">
+              <V8AllenMark />
             </div>
             <div className="flex items-baseline gap-2">
               <span className="text-[14px] font-semibold lowercase text-theme-primary">{BRAND_SLUG}</span>

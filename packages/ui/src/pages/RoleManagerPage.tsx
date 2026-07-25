@@ -4,6 +4,7 @@ import { useAgents } from '../hooks/useAgents';
 import { agents as agentsApi, teams as teamsApi, repos as reposApi, executions as executionsApi, skills as skillsApi, type SkillRecord } from '../services/api';
 import RoleIcon from '../components/common/RoleIcon';
 import ProviderIcon, { providerIconColor } from '../components/common/ProviderIcon';
+import ModelIcon, { modelIconColor } from '../components/common/ModelIcon';
 import RoleDialog from '../components/common/RoleDialog';
 import Select from '../components/common/Select';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
@@ -168,7 +169,15 @@ export function AgentDetailPanel({
                       </span>
                     )}
                   />
-                  <DetailRow k="Model" v={<span className="font-mono text-theme-primary">{detailModelLabel}</span>} />
+                  <DetailRow
+                    k="Model"
+                    v={(
+                      <span className="inline-flex min-w-0 items-center gap-1.5 font-mono text-theme-primary">
+                        <ModelIcon provider={provider} className={`h-4 w-4 shrink-0 ${modelIconColor(provider)}`} />
+                        <span className="truncate">{detailModelLabel}</span>
+                      </span>
+                    )}
+                  />
                   {reasoningEffort && (
                     <DetailRow k="Reasoning" v={<span className="font-mono text-theme-primary">{reasoningEffort}</span>} />
                   )}
@@ -283,7 +292,9 @@ export function AgentDetailPanel({
             <span className="inline-flex items-center gap-1.5">
               Read-only view · {teamName ? `Member of ${teamName}` : 'Unassigned'} ·
               <ProviderIcon provider={provider} className={`h-3.5 w-3.5 shrink-0 ${providerIconColor(provider)}`} />
-              {detailProviderLabel}/{detailModelLabel}
+              {detailProviderLabel}/
+              <ModelIcon provider={provider} className={`h-3.5 w-3.5 shrink-0 ${modelIconColor(provider)}`} />
+              {detailModelLabel}
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -2138,13 +2149,23 @@ function LibraryTeamsAgentsPane({
               const provider = String(member.provider ?? 'claude');
               const model = String(member.model ?? registryDefaultModelForProvider(provider));
               const { modelLabel } = getModelDisplay(provider, model);
+              const isSelected = selectedAgents.has(String(member.name));
+              const description = member.description || String(member.system ?? '').split('\n')[0] || 'Specialist agent for this team.';
               return (
-                <div className="v8-team-detail__row" key={member.name}>
-                  <button className="v8-team-detail__checkbox" type="button" aria-label={`Select ${member.displayName ?? member.name}`} onClick={() => onToggleSelect(String(member.name))} />
+                <div className={`v8-team-detail__row ${isSelected ? 'is-selected' : ''}`} key={member.name}>
+                  <button
+                    className="v8-team-detail__checkbox"
+                    type="button"
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    aria-label={`Select ${member.displayName ?? member.name}`}
+                    onClick={() => onToggleSelect(String(member.name))}
+                  />
                   <button className="v8-team-detail__who" type="button" onClick={() => onViewAgent(member)}>
                     <strong><span className="agent">agent</span>{member.displayName ?? member.name}</strong>
-                    <small>{member.name}</small>
-                    <p>{member.description || String(member.system ?? '').split('\n')[0] || 'Specialist agent for this team.'}</p>
+                    <span className="v8-team-detail__who-meta">
+                      <span>{description}</span>
+                    </span>
                   </button>
                   <span className="v8-team-detail__row-model">
                     <ProviderIcon provider={provider} className={providerIconColor(provider)} />
@@ -2165,8 +2186,9 @@ function LibraryTeamsAgentsPane({
                 <span className="v8-team-detail__checkbox" />
                 <span className="v8-team-detail__who">
                   <strong><span className="skill">skill</span>{skill.displayName ?? skill.name}</strong>
-                  <small>{skill.name}</small>
-                  <p>{skill.description || 'Routing and operating guidance for this team.'}</p>
+                  <span className="v8-team-detail__who-meta">
+                    <span>{skill.description || 'Routing and operating guidance for this team.'}</span>
+                  </span>
                 </span>
                 <span className="v8-team-detail__skill-meta">{skill.category ?? 'routing'} · p{skill.priority ?? 0}</span>
                 <span className="v8-team-detail__row-actions"><span aria-hidden="true"><ChevronRight /></span></span>
@@ -2234,7 +2256,10 @@ function LibraryAgentListRow({
           <ProviderIcon provider={provider} className={`h-3.5 w-3.5 shrink-0 ${providerIconColor(provider)}`} />
           <span className="truncate">{rowProviderLabel}</span>
         </div>
-        <div className="truncate text-theme-muted">{rowModelLabel}</div>
+        <div className="flex min-w-0 items-center gap-1.5 text-theme-muted">
+          <ModelIcon provider={provider} className={`h-3.5 w-3.5 shrink-0 ${modelIconColor(provider)}`} />
+          <span className="truncate">{rowModelLabel}</span>
+        </div>
       </div>
       <div className="flex items-center justify-end gap-1">
         <IconTooltipButton label="Run agent" side="left" onClick={onRun} className="h-8 w-8">
@@ -2613,7 +2638,7 @@ function DirectoryTab({
                 </span>
               )}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
               {members.map(a => (
                 <AgentRow
                   key={a.name}
@@ -2665,7 +2690,9 @@ function AgentRow({ agent, runs7d, onClick }: { agent: any; runs7d: number; onCl
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-mono text-theme-muted">
           <ProviderIcon provider={provider} className={`h-3.5 w-3.5 shrink-0 ${providerIconColor(provider)}`} />
-          <span className="truncate">{rowProviderLabel} · {rowModelLabel}</span>
+          <span className="truncate">{rowProviderLabel} ·</span>
+          <ModelIcon provider={provider} className={`h-3.5 w-3.5 shrink-0 ${modelIconColor(provider)}`} />
+          <span className="truncate">{rowModelLabel}</span>
           {isActive && (
             <span className="shrink-0">
               <span className="mx-1 text-theme-subtle">·</span>
@@ -2898,7 +2925,10 @@ function DistributionCard({ title, entries, accent }: { title: string; entries: 
         <div className="space-y-2">
           {entries.map(([key, count]) => (
             <div key={key} className="flex items-center justify-between text-[11px]">
-              <span className={`font-mono ${tone}`}>{key}</span>
+              <span className={`inline-flex min-w-0 items-center gap-1.5 font-mono ${tone}`}>
+                {title === 'Models' && <ModelIcon className={`h-3.5 w-3.5 shrink-0 ${modelIconColor()}`} />}
+                <span className="truncate">{key}</span>
+              </span>
               <span className="font-mono text-theme-muted">{count}</span>
             </div>
           ))}
@@ -3061,7 +3091,7 @@ function TeamDetailContent({
             No members match "{memberSearch}".
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             {filteredMembers.map((agent: any) => (
               <AgentCard
                 key={agent.name}
@@ -3111,7 +3141,7 @@ function UnassignedContent({
           No unassigned agents.
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-2.5">
           {agents.map((agent: any) => (
             <AgentCard
               key={agent.name}

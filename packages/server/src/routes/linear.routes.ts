@@ -37,10 +37,20 @@ export function linearRoutes(db: Db): Router {
     }
   });
 
-  // GET /api/linear/issues?projectId=&state=backlog,started&q=&limit=
+  // GET /api/linear/teams
+  router.get('/teams', async (_req: AuthedRequest, res: Response) => {
+    try {
+      res.json(await service.listTeams());
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /api/linear/issues?projectId=&state=backlog,started&q=&limit=&teamId=
   router.get('/issues', async (req: AuthedRequest, res: Response) => {
     try {
       const projectId = typeof req.query.projectId === 'string' && req.query.projectId ? req.query.projectId : undefined;
+      const teamId = typeof req.query.teamId === 'string' && req.query.teamId ? req.query.teamId : undefined;
       const stateTypes = parseStateTypes(req.query.state);
       const q = typeof req.query.q === 'string' ? req.query.q : undefined;
       const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : NaN;
@@ -58,7 +68,7 @@ export function linearRoutes(db: Db): Router {
         }
       }
 
-      const issues = await service.listIssues({ projectId, stateTypes, q, limit, assigneeEmail });
+      const issues = await service.listIssues({ projectId, teamId, stateTypes, q, limit, assigneeEmail });
       res.json(issues);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

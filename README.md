@@ -114,7 +114,7 @@ npm run build
 npm start
 ```
 
-This starts the API server on `http://localhost:4000` and the UI on `http://localhost:5173`.
+This starts the API server on `http://localhost:4023` and the UI on `http://localhost:5173`.
 
 ### 5. Create the first admin
 
@@ -182,7 +182,7 @@ See [`docs/first-workflow.md`](docs/first-workflow.md) for a step-by-step walkth
 
 ## Architecture
 
-Allen is a TypeScript monorepo using npm workspaces and Turbo.
+Allen is a TypeScript monorepo using npm workspaces.
 
 - **`packages/engine`** — Workflow engine: YAML loading and validation, agent loading (`agents.yml`) and keyword routing (`router.yml`), node execution (Claude via CLI or in-process SDK; Codex via subprocess), template rendering, condition evaluation (Filtrex), parallel-branch merging, state persistence, MCP loading, 4-layer output extraction, and embedding-backed learnings.
 - **`packages/server`** — Express API + MongoDB. Auth (JWT access/refresh, first-admin bootstrap), the seeded agent org, chat, executions, workspaces (git worktrees + PTY terminals + reverse proxy), cron scheduler, integrations (Linear/Slack/GitHub), MCP registry, self-healing monitor, and SSE streams. ~28 route modules, ~65 services.
@@ -197,7 +197,7 @@ See [`docs/architecture.md`](docs/architecture.md) for the full breakdown.
 
 | Service | Port | Override |
 |---|---|---|
-| API server | `4000` | `PORT` |
+| API server | `4023` | `PORT` |
 | UI (Vite dev) | `5173` | `UI_PORT` |
 | Workspace terminal + file-watch WebSocket | `4024` | `TERMINAL_WS_PORT` |
 | Workspace service/preview ports | `15000`+ (10 per workspace) | — |

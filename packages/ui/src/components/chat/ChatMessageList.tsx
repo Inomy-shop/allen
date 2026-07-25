@@ -5,10 +5,11 @@ import { Bot, AlertCircle, AlertTriangle, Copy, Check, Clock, Wrench, CheckCircl
   ChevronDown, ChevronRight, GitPullRequest, FolderGit2, FileText, PlayCircle, StopCircle, Timer,
   Send, Bookmark, Search, PencilLine, Database, ListTodo, Globe2, Workflow,
 } from 'lucide-react';
-import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentReport, SpawnedAgent, WorkflowInterventionAnswer } from '../../hooks/useChat';
+import type { ChatMessage, ToolCallRecord, ActiveToolCall, AgentReport, SpawnedAgent, WorkflowInterventionAnswer, ChatActivityTimelineItem } from '../../hooks/useChat';
 import { AgentQuestionPrompt } from './AgentQuestionPrompt';
 import RoleIcon from '../common/RoleIcon';
 import TokenUsageDisplay from '../common/TokenUsageDisplay';
+import ModelIcon, { modelIconColor } from '../common/ModelIcon';
 import MermaidChatBlock from './MermaidChatBlock';
 import { WatcherStatusLines } from './WatcherStatusLines';
 import { agents as agentsApi, artifacts as artifactsApi, type ArtifactDoc, type WatcherUIDoc } from '../../services/api';
@@ -36,6 +37,7 @@ interface ChatMessageListProps {
   messages: ChatMessage[];
   streamText: string;
   thinkingText?: string;
+  streamActivityTimeline?: ChatActivityTimelineItem[];
   streaming: boolean;
   activeToolCalls?: ActiveToolCall[];
   agentReports?: AgentReport[];
@@ -198,29 +200,22 @@ function MessageCopyButton({ text }: { text: string }) {
 }
 
 /* ── Thinking block ──────────────────────────────────────────────────────── */
-function ThinkingBlock({ text, durationMs, active }: { text: string; durationMs?: number; active?: boolean }) {
-  const [expanded, setExpanded] = useState(true);
-  const label = active ? 'Thinking' : durationMs ? `Thought for ${formatDuration(durationMs)}` : 'Thought';
+function thinkingLines(text: string): string[] {
+  return normalizeThinkingText(text)
+    .split(/\n+/)
+    .map(line => line.trim().replace(/^\*\*(.*?)\*\*$/g, '$1'))
+    .filter(Boolean);
+}
+
+function ThinkingBlock({ text, active }: { text: string; durationMs?: number; active?: boolean }) {
+  const lines = thinkingLines(text);
+  if (lines.length === 0) return null;
 
   return (
-    <div className="chat-activity-group thinking" data-active={Boolean(active)}>
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="chat-activity-summary"
-        title={expanded ? 'Collapse thinking' : 'Expand thinking'}
-      >
-        <span>{label}</span>
-        {expanded ? (
-          <ChevronDown />
-        ) : (
-          <ChevronRight />
-        )}
-      </button>
-      {expanded && (
-        <div className="chat-activity-expansion chat-thinking-copy">
-          {renderMarkdown(normalizeThinkingText(text))}
-        </div>
-      )}
+    <div className="chat-thinking-message" data-active={Boolean(active)}>
+      {lines.map((line, index) => (
+        <p key={`${index}-${line.slice(0, 16)}`}>{line}</p>
+      ))}
     </div>
   );
 }
@@ -2054,6 +2049,38 @@ function ActiveToolCallsSection({ calls }: { calls: ActiveToolCall[] }) {
   );
 }
 
+function fallbackActivityTimeline(thinkingText?: string, toolCalls?: ToolCallRecord[]): ChatActivityTimelineItem[] {
+  const items: ChatActivityTimelineItem[] = [];
+  if (thinkingText?.trim()) {
+    items.push({ id: 'legacy-thinking', type: 'thinking', timestamp: '', text: thinkingText });
+  }
+  for (const [index, call] of (toolCalls ?? []).entries()) {
+    items.push({
+      id: `legacy-tool:${call.toolUseId ?? call.tool}:${index}`,
+      type: 'tool',
+      timestamp: call.timestamp,
+      toolUseId: call.toolUseId,
+      toolCall: { ...call, status: 'completed' },
+    });
+  }
+  return items;
+}
+
+function ChatActivityTimeline({ items, active }: { items: ChatActivityTimelineItem[]; active?: boolean }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="chat-activity-timeline" aria-label="Assistant activity timeline">
+      {items.map((item, index) => {
+        if (item.type === 'thinking') {
+          return <ThinkingBlock key={item.id || `thinking-${index}`} text={item.text} active={active && index === items.length - 1} />;
+        }
+        const running = item.toolCall.status === 'running';
+        return <ToolCallCard key={item.id || `tool-${index}`} call={item.toolCall} active={active || running} />;
+      })}
+    </div>
+  );
+}
+
 function ChatCodeDiffPreview({
   runs,
   sessionId,
@@ -2352,7 +2379,12 @@ function WorkflowStepCard({ step, run }: { step: NonNullable<SpawnedAgent['runCo
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-theme-muted">
             <span className="font-mono capitalize">{humanLabel(status)}</span>
             <span className="font-mono">{attempts > 1 ? `${attempts} attempts` : attempts === 1 ? '1 attempt' : 'pending'}</span>
-            {step.model && <span className="truncate max-w-[220px]">{getModelDisplay(step.agent ?? '', step.model).modelLabel}</span>}
+            {step.model && (
+              <span className="inline-flex min-w-0 max-w-[220px] items-center gap-1.5 truncate">
+                <ModelIcon provider={step.agent} className={`h-3 w-3 shrink-0 ${modelIconColor(step.agent)}`} />
+                <span className="truncate">{getModelDisplay(step.agent ?? '', step.model).modelLabel}</span>
+              </span>
+            )}
           </div>
           <div className="mt-2 grid grid-cols-1 gap-1 font-mono text-[10px] text-theme-subtle sm:grid-cols-3">
             <span className="flex min-w-0 items-center gap-1 truncate" title="Started at">
@@ -3004,7 +3036,7 @@ function WorkflowInterventionPrompt({
   );
 }
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streaming, activeToolCalls = [], agentReports = [], pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel, watchers = [], conversationTitle, conversationTag, conversationWorkflow, documentCount = 0, provider, model, onOpenFileReference, onOpenChatReference, onOpenInternalReference, resourceScopeKey }: ChatMessageListProps) {
+export default function ChatMessageList({ messages, streamText, thinkingText, streamActivityTimeline = [], streaming, activeToolCalls = [], agentReports = [], pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel, watchers = [], conversationTitle, conversationTag, conversationWorkflow, documentCount = 0, provider, model, onOpenFileReference, onOpenChatReference, onOpenInternalReference, resourceScopeKey }: ChatMessageListProps) {
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
   const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
   const hasActiveSpawnedRuns = spawnedAgents.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
@@ -3153,7 +3185,9 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             </div>
           );
         }
-        const showThinking = msg.role === 'assistant' && Boolean(msg.thinkingText);
+        const activityTimeline = msg.role === 'assistant'
+          ? (msg.activityTimeline && msg.activityTimeline.length > 0 ? msg.activityTimeline : fallbackActivityTimeline(msg.thinkingText, msg.toolCalls))
+          : [];
         const senderLabel = msg.role === 'user' ? userDisplayName(msg) : '';
         const visibleContent = msg.role === 'assistant' ? sanitizeChatAssistantResponse(msg.content) : msg.content;
         const visibleError = msg.role === 'assistant' ? sanitizeChatAssistantResponse(msg.error) : msg.error;
@@ -3177,8 +3211,12 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
               <span className="ch-msg-who">
                 {msg.role === 'user' ? senderLabel : assistantDisplayName(activeAgent ? agentMap[activeAgent] : undefined)}
               </span>
-              {msg.role !== 'user' && provider && <span className={`ch-provider-mark ${provider.includes('claude') ? 'claude' : 'codex'}`} aria-hidden="true">◆</span>}
-              {msg.role !== 'user' && model && <span className="ch-msg-model">{getModelDisplay(provider ?? '', model).modelLabel}</span>}
+              {msg.role !== 'user' && model && (
+                <span className="ch-msg-model">
+                  <ModelIcon provider={provider} className={`h-3 w-3 shrink-0 ${modelIconColor(provider)}`} />
+                  <span className="truncate">{getModelDisplay(provider ?? '', model).modelLabel}</span>
+                </span>
+              )}
               <span className="ch-msg-ts" title={formatTimestampTitle(msg.createdAt)}>
                 {formatTime(msg.createdAt)}
               </span>
@@ -3200,8 +3238,8 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
             )}
 
             <div className={`ch-msg-text ${msg.status === 'failed' || msg.status === 'interrupted' || msg.status === 'cancelled' ? 'failed' : ''}`}>
-              {showThinking && (
-                <ThinkingBlock text={msg.thinkingText ?? ''} durationMs={msg.durationMs} />
+              {msg.role === 'assistant' && activityTimeline.length > 0 && (
+                <ChatActivityTimeline items={activityTimeline} />
               )}
               {diffSplit.text && (msg.role === 'user' ? (() => {
                 const slash = splitLeadingSlashCommand(diffSplit.text);
@@ -3219,7 +3257,7 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                   {renderMarkdown(diffSplit.text)}
                 </div>
               ))}
-              {msg.role === 'assistant' && !messageHasActiveRuns && (
+              {msg.role === 'assistant' && !messageHasActiveRuns && activityTimeline.length === 0 && (
                 <ToolCallsSection calls={msg.toolCalls} />
               )}
               {visibleError && (
@@ -3294,9 +3332,15 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
                 <span className="ch-msg-ts">generating</span>
               </div>
               <div className="ch-msg-text">
-              {thinkingText && <ThinkingBlock text={thinkingText} active />}
-              <ActiveToolCallsSection calls={activeToolCalls} />
-              <div className={activeToolCalls.length > 0 || thinkingText ? 'mt-2' : undefined}>
+              {streamActivityTimeline.length > 0 ? (
+                <ChatActivityTimeline items={streamActivityTimeline} active />
+              ) : (
+                <>
+                  {thinkingText && <ThinkingBlock text={thinkingText} active />}
+                  <ActiveToolCallsSection calls={activeToolCalls} />
+                </>
+              )}
+              <div className={activeToolCalls.length > 0 || thinkingText || streamActivityTimeline.length > 0 ? 'mt-2' : undefined}>
                 {streamText ? (
                   <>
                     {renderMarkdown(sanitizeChatAssistantResponse(streamText))}

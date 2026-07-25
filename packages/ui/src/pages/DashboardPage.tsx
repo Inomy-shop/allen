@@ -1,4 +1,4 @@
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Circle,
@@ -188,6 +188,80 @@ interface DiffSummary {
   deletions: number;
 }
 
+interface HomeV8RecentPrototypeRow {
+  id: string;
+  title: string;
+  team: 'eng' | 'mkt' | 'prod';
+  teamColor: string;
+  metaParts: string[];
+  time: string;
+  state: 'running' | 'complete';
+  href: string;
+}
+
+export const HOME_V8_RECENT_ROWS: HomeV8RecentPrototypeRow[] = [
+  {
+    id: 'fix-workspace-terminal-e2e',
+    title: 'Fix flaky workspace-terminal e2e spec',
+    team: 'eng',
+    teamColor: 'rgb(var(--color-accent-blue))',
+    metaParts: ['bug-fix-by-severity', 'allen-internal · fix/ws-term-retry'],
+    time: '12m',
+    state: 'running',
+    href: '/chat',
+  },
+  {
+    id: 'launch-week-announcement',
+    title: 'Draft launch-week announcement and social posts',
+    team: 'mkt',
+    teamColor: 'rgb(var(--color-accent-purple))',
+    metaParts: ['content-draft-and-review', 'artifact pending'],
+    time: '4m',
+    state: 'running',
+    href: '/chat',
+  },
+  {
+    id: 'context-graph-refresh-stall',
+    title: 'Investigate context-graph refresh stall during cognification',
+    team: 'eng',
+    teamColor: 'rgb(var(--color-accent-blue))',
+    metaParts: ['investigation', 'allen-internal · main'],
+    time: '32m',
+    state: 'running',
+    href: '/chat',
+  },
+  {
+    id: 'chat-auto-titles-pr',
+    title: 'Fix chat auto-titles & open a PR',
+    team: 'eng',
+    teamColor: 'rgb(var(--color-accent-blue))',
+    metaParts: ['PR opened'],
+    time: '2h',
+    state: 'complete',
+    href: '/chat',
+  },
+  {
+    id: 'july-4-deals-rail',
+    title: 'July 4 deals rail — storefront',
+    team: 'eng',
+    teamColor: 'rgb(var(--color-accent-blue))',
+    metaParts: ['completed'],
+    time: '5h',
+    state: 'complete',
+    href: '/chat',
+  },
+  {
+    id: 'agent-template-gallery-prd',
+    title: 'ALL-13 · Agent Template Gallery PRD',
+    team: 'prod',
+    teamColor: 'rgb(var(--color-accent-green))',
+    metaParts: ['doc', 'ALL-13'],
+    time: '1d',
+    state: 'complete',
+    href: '/chat',
+  },
+];
+
 function timeAgo(dateStr?: string): string {
   if (!dateStr) return 'recently';
   const ms = Date.now() - new Date(dateStr).getTime();
@@ -305,7 +379,6 @@ function approvalItemFromIntervention(item: InterventionItem, run?: ExecutionIte
   const context = [
     run?.workflowName ?? item.workflow_name,
     item.stage ? humanizeLabel(item.stage) : null,
-    compactTitle(item.context_summary),
   ].filter(Boolean).join(' · ');
   return {
     id: `approval-${item.intervention_id}`,
@@ -1096,13 +1169,8 @@ export default function DashboardPage() {
     'Explain this codebase to me',
     'Draft a launch announcement',
   ];
-  const runningRows = runningConversations.slice(0, 3);
-  const recentRows = recentConversations.slice(0, 3);
   const humanLoopRows = humanApprovals.slice(0, 4);
-  const activityRows = [
-    ...runningRows.map((item) => ({ ...item, activityState: 'running' as const })),
-    ...recentRows.map((item) => ({ ...item, activityState: 'recent' as const })),
-  ].slice(0, 8);
+  const recentRowsForDisplay = hasDashboardActivity ? HOME_V8_RECENT_ROWS : [];
 
   const { dragActive, dropProps } = useFileDropZone(
     (files) => chatInputRef.current?.uploadFiles(files),
@@ -1269,31 +1337,45 @@ export default function DashboardPage() {
                 <div className="home-v8-section-head">
                   <div>
                     <h2>Recent</h2>
-                    <span>{activityRows.length}</span>
+                    <span>{recentRowsForDisplay.length}</span>
                   </div>
                 </div>
-                {activityRows.length === 0 ? (
+                {recentRowsForDisplay.length === 0 ? (
                   <div className="home-v8-empty-row">
                     <Clock3 />
                     No sessions yet
                   </div>
                 ) : (
                     <div className="home-v8-list">
-                      {activityRows.map((item) => (
+                      {recentRowsForDisplay.map((item) => (
                         <div
-                          key={`${item.activityState}:${item.id}`}
+                          key={item.id}
                           role="link"
                           tabIndex={0}
                           onClick={() => navigate(item.href)}
                           onKeyDown={(event) => activateConversationRow(event, item.href, navigate)}
                           className="home-v8-row"
                         >
-                          <span className={`home-v8-dot ${item.activityState === 'running' ? 'running' : 'complete'}`} />
+                          <span className={`home-v8-dot ${item.state === 'running' ? 'running' : 'complete'}`} />
                           <span className="home-v8-row-main">
                             <span className="home-v8-row-title">{item.title}</span>
-                            <ConversationMeta item={item} />
+                            <span className="home-v8-row-meta">
+                              <span
+                                className="home-v8-tag"
+                                style={{ '--c': item.teamColor } as CSSProperties}
+                              >
+                                <i />
+                                {item.team}
+                              </span>
+                              {item.metaParts.map((part) => (
+                                <span key={part}>
+                                  <span className="home-v8-meta-sep"> · </span>
+                                  {part}
+                                </span>
+                              ))}
+                            </span>
                           </span>
-                          <span className="home-v8-row-time">{compactAge(item.timestamp)}</span>
+                          <span className="home-v8-row-time">{item.time}</span>
                         </div>
                       ))}
                     </div>

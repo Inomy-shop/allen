@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DocumentsPage from '../DocumentsPlaceholderPage';
 import { useDocumentTabStore } from '../../stores/documentTabStore';
@@ -14,6 +14,20 @@ vi.mock('../../services/api', () => ({
 }));
 
 const { artifacts } = await import('../../services/api');
+
+function LocationProbe() {
+  const location = useLocation();
+  const state = location.state as { linkedDocument?: { artifactId?: string }; linkedDocumentSourceLabel?: string } | null;
+  return (
+    <output
+      data-testid="location"
+      data-linked-artifact={state?.linkedDocument?.artifactId ?? ''}
+      data-linked-source={state?.linkedDocumentSourceLabel ?? ''}
+    >
+      {location.pathname}{location.search}
+    </output>
+  );
+}
 
 describe('DocumentsPage', () => {
   beforeEach(() => {
@@ -47,7 +61,7 @@ describe('DocumentsPage', () => {
   it('opens the prototype-matched new-document form', async () => {
     vi.mocked(artifacts.list).mockResolvedValue([]);
     render(<MemoryRouter><DocumentsPage /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByText('No saved documents yet')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('No documents yet')).toBeInTheDocument());
     fireEvent.click(screen.getAllByRole('button', { name: 'New document' })[0]);
     expect(screen.getByRole('dialog', { name: 'New document' })).toBeInTheDocument();
     expect(screen.getByLabelText('Title')).toBeInTheDocument();
@@ -65,8 +79,26 @@ describe('DocumentsPage', () => {
     expect(useDocumentTabStore.getState().activeArtifactId).toBe('a1');
     expect(useDocumentTabStore.getState().tabs[0]).toMatchObject({
       sourceLabel: 'Documents',
+      scopeKey: 'surface:documents',
       artifact: { filename: 'document-management.md' },
     });
+  });
+
+  it('routes chat documents to ChatPage with the linked document payload', async () => {
+    vi.mocked(artifacts.list).mockResolvedValue([{
+      artifactId: 'chat-doc', rootType: 'chat', rootId: 'session-123', spawnContext: { originType: 'chat' },
+      filename: 'linked-brief.md', relativePath: 'linked-brief.md', contentType: 'markdown', sizeBytes: 42,
+      description: 'Linked brief', createdAt: new Date().toISOString(), createdByAgent: 'product-manager', saved: true,
+    }] as any);
+
+    render(<MemoryRouter initialEntries={['/documents']}><DocumentsPage /><LocationProbe /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /linked brief/i }));
+
+    const location = screen.getByTestId('location');
+    expect(location).toHaveTextContent('/chat/session-123');
+    expect(location).toHaveAttribute('data-linked-artifact', 'chat-doc');
+    expect(location).toHaveAttribute('data-linked-source', 'Documents');
+    expect(useDocumentTabStore.getState().tabs).toEqual([]);
   });
 
   it('shows only explicitly saved documents and does not favorite them by default', async () => {

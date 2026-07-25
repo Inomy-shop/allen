@@ -15,6 +15,7 @@ import { executions as api, authHeaders, interventions as interventionsApi, repo
 import StatusBadge from '../components/common/StatusBadge';
 import Select from '../components/common/Select';
 import ProviderIcon, { providerIconColor } from '../components/common/ProviderIcon';
+import ModelIcon, { modelIconColor } from '../components/common/ModelIcon';
 import CostDisplay from '../components/common/CostDisplay';
 import TokenUsageDisplay from '../components/common/TokenUsageDisplay';
 import SpawnCostBreakdown from '../components/execution/SpawnCostBreakdown';
@@ -412,7 +413,11 @@ function ModelRecoveryDialog({
                 <ProviderIcon provider={failedProvider} className={`h-4 w-4 ${providerIconColor(failedProvider)}`} />
                 <span className="font-mono text-theme-primary">{failedProvider ?? 'unknown'}</span>
               </div>
-              <div>Failed model: <span className="font-mono text-theme-primary">{failedModel ?? 'unknown'}</span></div>
+              <div className="flex items-center gap-1.5">
+                Failed model:
+                <ModelIcon provider={failedProvider} className={`h-4 w-4 ${modelIconColor(failedProvider)}`} />
+                <span className="font-mono text-theme-primary">{failedModel ?? 'unknown'}</span>
+              </div>
               <div>Attempt: <span className="font-mono text-theme-primary">{Number.isFinite(attempt) ? attempt : 1}/{Number.isFinite(maxAttempts) ? maxAttempts : 1}</span></div>
             </div>
             {sanitizedError && (
@@ -478,7 +483,12 @@ function ModelRecoveryDialog({
 
         <div className="flex items-center justify-between gap-3 border-t border-[rgb(var(--color-border)/0.55)] px-6 py-4">
           <div className="text-xs text-theme-muted">
-            Selection: <span className="font-mono text-theme-primary">{selectedProviderLabel || '—'} / {selectedModel || '—'}</span>
+            Selection: <span className="inline-flex items-center gap-1.5 font-mono text-theme-primary">
+              <ProviderIcon provider={selectedProvider} className={`h-3.5 w-3.5 ${providerIconColor(selectedProvider)}`} />
+              {selectedProviderLabel || '—'} /
+              <ModelIcon provider={selectedProvider} className={`h-3.5 w-3.5 ${modelIconColor(selectedProvider)}`} />
+              {selectedModel || '—'}
+            </span>
           </div>
           <div className="flex gap-2">
             <button className="rounded-lg border border-[rgb(var(--color-border)/0.7)] px-4 py-2 text-sm text-theme-muted hover:bg-app-muted hover:text-theme-primary" onClick={onClose} disabled={submitting}>
@@ -602,7 +612,10 @@ function WorkflowTraceTable({
                         className="inline-flex items-center gap-1 rounded border border-accent-orange/25 bg-accent-orange/5 px-1.5 py-0.5 text-[9px] font-mono text-accent-orange"
                         title={`Failed provider: ${recoveryAttempt.originalProvider}/${recoveryAttempt.originalModel} · ${recoveryAttempt.failureCategory}`}
                       >
-                        Recovery #{recoveryAttempt.recoveryAttempt} → {recoveryAttempt.selectedProvider}/{recoveryAttempt.selectedModel}
+                        Recovery #{recoveryAttempt.recoveryAttempt} → {recoveryAttempt.selectedProvider}/<span className="inline-flex items-center gap-1">
+                          <ModelIcon provider={recoveryAttempt.selectedProvider} className={`h-3 w-3 ${modelIconColor(recoveryAttempt.selectedProvider)}`} />
+                          {recoveryAttempt.selectedModel}
+                        </span>
                       </span>
                     </div>
                   )}
@@ -2712,7 +2725,18 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
         <div className="min-w-0 space-y-4">
           <section className="grid gap-2 rounded-md border border-app bg-app-muted/25 p-2 sm:grid-cols-2 2xl:grid-cols-4">
             <AgentMetric icon={<Clock className="h-3.5 w-3.5" />} label="Duration" value={durationMs > 0 ? formatDuration(durationMs) : '—'} />
-            <AgentMetric icon={<Terminal className="h-3.5 w-3.5" />} label="Model" value={modelLabel} />
+            <AgentMetric
+              icon={<Terminal className="h-3.5 w-3.5" />}
+              label="Model"
+              value={(
+                <span className="inline-flex min-w-0 items-center gap-1.5">
+                  <ProviderIcon provider={resolvedProvider} className={`h-3.5 w-3.5 shrink-0 ${providerIconColor(resolvedProvider)}`} />
+                  <span className="truncate">{execProviderLabel} /</span>
+                  <ModelIcon provider={resolvedProvider} className={`h-3.5 w-3.5 shrink-0 ${modelIconColor(resolvedProvider)}`} />
+                  <span className="truncate">{execModelLabel}</span>
+                </span>
+              )}
+            />
             <AgentMetric
               icon={<DollarSign className="h-3.5 w-3.5" />}
               label="Cost (own)"
@@ -2745,6 +2769,7 @@ function AgentExecutionView({ execution, agentName, traces, id, liveToolCalls, r
             <SpawnCostBreakdown
               ownLabel={agentName}
               ownModel={modelLabel}
+              ownProvider={resolvedProvider}
               ownCost={ownCost}
               ownTokenUsage={ownTokenUsage}
               ownStatus={execution.status}

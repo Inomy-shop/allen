@@ -278,7 +278,7 @@ export default function OnboardingModelDefaultsPage() {
 
   return (
     <OnboardingShell
-      step="model_defaults"
+      step="repository"
       eyebrow="desktop models"
       title="Choose model defaults"
       description="Choose which local AI provider Allen should use by default. These choices are used only by this desktop app when it creates new chats, inbuilt agents, and inbuilt workflow templates."

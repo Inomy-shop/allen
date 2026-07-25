@@ -23,12 +23,18 @@ import { StateManager } from '@allen/engine';
 // roll GraphQL queries that fetch everything in one request AND cache the
 // result for a short window.
 const PROJECTS_TTL_MS = 60_000;
+const TEAMS_TTL_MS = 60_000;
 const ISSUES_TTL_MS = 30_000;
 const STATUS_TTL_MS = 300_000;
 
 export const LINEAR_TOKEN_ENV_KEY = 'ALLEN_LINEAR_ACCESS_TOKEN';
 
 export type LinearStateType = 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | 'triage';
+
+export interface LinearTeamSummary {
+  id: string;
+  name: string;
+}
 
 export interface LinearProjectSummary {
   id: string;
@@ -73,6 +79,7 @@ export interface LinearStatus {
 
 export interface ListIssuesFilters {
   projectId?: string;
+  teamId?: string;
   stateTypes?: LinearStateType[];
   q?: string;
   limit?: number;
@@ -123,6 +130,7 @@ export class LinearService {
   // Module-level caches, shared across service instances.
   private static statusCache: { at: number; data: LinearStatus; token: string } | null = null;
   private static projectsCache: { at: number; data: LinearProjectSummary[]; token: string } | null = null;
+  private static teamsCache: { at: number; data: LinearTeamSummary[]; token: string } | null = null;
   private static issuesCache = new Map<string, { at: number; data: LinearIssueSummary[] }>();
 
   constructor(db: Db) {
@@ -206,6 +214,7 @@ export class LinearService {
   static invalidateCaches() {
     LinearService.statusCache = null;
     LinearService.projectsCache = null;
+    LinearService.teamsCache = null;
     LinearService.issuesCache.clear();
   }
 
@@ -284,6 +293,31 @@ export class LinearService {
     return data;
   }
 
+  async listTeams(): Promise<LinearTeamSummary[]> {
+    const token = await this.getToken();
+    if (!token) return [];
+    const cached = LinearService.teamsCache;
+    if (cached && cached.token === token && Date.now() - cached.at < TEAMS_TTL_MS) {
+      return cached.data;
+    }
+    const resp = await this.rawRequest<{ teams: { nodes: Array<{ id: string; name: string }> } }>(`
+      query LinearTeams { teams(first: 250) { nodes { id name } } }
+    `);
+    const data: LinearTeamSummary[] = (resp.teams?.nodes ?? [])
+      .map(t => ({ id: t.id, name: t.name }))
+      .sort((a, b) => {
+        const aLower = a.name.toLowerCase();
+        const bLower = b.name.toLowerCase();
+        if (aLower < bLower) return -1;
+        if (aLower > bLower) return 1;
+        if (a.name < b.name) return -1;
+        if (a.name > b.name) return 1;
+        return a.id.localeCompare(b.id);
+      });
+    LinearService.teamsCache = { at: Date.now(), data, token };
+    return data;
+  }
+
   async listIssues(filters: ListIssuesFilters = {}): Promise<LinearIssueSummary[]> {
     const token = await this.getToken();
     if (!token) return [];
@@ -292,6 +326,9 @@ export class LinearService {
     const linearFilter: Record<string, unknown> = {};
     if (filters.projectId) {
       linearFilter.project = { id: { eq: filters.projectId } };
+    }
+    if (filters.teamId) {
+      linearFilter.team = { id: { eq: filters.teamId } };
     }
     if (filters.stateTypes && filters.stateTypes.length > 0) {
       linearFilter.state = { type: { in: filters.stateTypes } };

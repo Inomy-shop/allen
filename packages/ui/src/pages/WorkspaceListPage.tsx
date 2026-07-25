@@ -20,6 +20,7 @@ import { XTerminal } from '../components/workspace/XTerminal';
 import { getMonacoTheme, setupMonaco } from '../lib/monaco-theme';
 import { workspaceChatPath } from '../lib/workspace-routes';
 import { humanizeWorkspaceName, workspaceActivityState } from '../lib/activity-status';
+import V8EmptyState from '../components/common/V8EmptyState';
 
 type Workspace = {
   _id: string;
@@ -863,12 +864,12 @@ export default function WorkspaceListPage() {
         {loading && workspaceList.length === 0 ? (
           <div className="v8-filter-empty"><Loader2 className="v8-inline-spinner animate-spin" /> Loading workspaces…</div>
         ) : workspaceList.length === 0 ? (
-          <div className="v8-empty v8-workspace-empty">
-            <span className="glyph"><FolderGit2 /></span>
-            <h2>No workspaces yet</h2>
-            <p>Workspaces are isolated git worktrees Allen creates when it starts work on a repo — terminals, previews, and watchers included.</p>
-            <button className="v8-btn v8-btn--ink" onClick={() => startCreateWorkspace()} type="button">New workspace</button>
-          </div>
+          <V8EmptyState
+            scene="workspaces"
+            title="No workspaces yet"
+            description="Workspaces are isolated git worktrees Allen creates when it starts work on a repo — terminals, previews, and watchers included."
+            action={<button className="v8-btn v8-btn--ink" onClick={() => startCreateWorkspace()} type="button">New workspace</button>}
+          />
         ) : filteredWorkspaceGroups.length === 0 ? (
           <div className="v8-filter-empty">No {workspaceFilter} workspaces — idle worktrees are pruned automatically.</div>
         ) : (

@@ -5,6 +5,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import WorkflowRunDialog from '../components/workflow/WorkflowRunDialog';
+import V8EmptyState from '../components/common/V8EmptyState';
 import { workflowEdges, workflowNodes } from '../utils/workflowShape';
 import DeleteConfirmDialog from '../components/common/DeleteConfirmDialog';
 import { workflows as workflowsApi } from '../services/api';
@@ -239,11 +240,12 @@ export default function WorkflowListPage() {
         {error ? (
           <div className="v8-workflows__error" role="alert"><b>Couldn’t load workflows</b><p>{error}</p><button className="v8-btn v8-btn--ghost" type="button" onClick={() => void refresh()}>Try again</button></div>
         ) : workflows.length === 0 ? (
-          <div className="v8-empty">
-            <span className="glyph"><PageIcon name="tray" /></span><h2>No workflows yet</h2>
-            <p>Describe a process once and Allen turns it into a reusable, review-gated pipeline.</p>
-            <Link to="/workflows/new" className="v8-btn v8-btn--ink">New workflow</Link>
-          </div>
+          <V8EmptyState
+            scene="workflows"
+            title="No workflows yet"
+            description="Describe a process once and Allen turns it into a reusable, review-gated pipeline."
+            action={<Link to="/workflows/new" className="v8-btn v8-btn--ink">New workflow</Link>}
+          />
         ) : (
           <div className="v8-workflows__panel">
             {filteredWorkflows.map((workflow: any) => {

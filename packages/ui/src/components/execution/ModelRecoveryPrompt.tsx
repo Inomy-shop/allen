@@ -4,6 +4,7 @@ import { executions as executionsApi } from '../../services/api';
 import { useModelRegistry, getModelDisplay } from '../../hooks/useModelRegistry';
 import Select from '../common/Select';
 import ProviderIcon, { providerIconColor } from '../common/ProviderIcon';
+import ModelIcon, { modelIconColor } from '../common/ModelIcon';
 import {
   reasoningEffortOptionsFor,
   type ReasoningEffortValue,
@@ -238,6 +239,7 @@ export default function ModelRecoveryPrompt({
           </span>
           <span className="text-[10px] font-mono text-theme-muted">model:</span>
           <span className="inline-flex items-center gap-1 rounded-full border border-app bg-app-card px-2 py-0.5 text-[10px] font-mono text-theme-secondary">
+            <ModelIcon provider={failedProvider} className={`h-3.5 w-3.5 ${modelIconColor(failedProvider)}`} />
             {failedDisplay.modelLabel}
           </span>
         </div>

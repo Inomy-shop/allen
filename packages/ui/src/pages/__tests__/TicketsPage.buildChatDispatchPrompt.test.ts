@@ -55,6 +55,8 @@ describe('buildBulkChatDispatchPrompt', () => {
     });
     expect(prompt).toContain('ENG-42 · Fix the flaky login test');
     expect(prompt).toContain('ENG-43 · Fix logout');
+    expect(prompt).toContain('You have been assigned these 2 Linear tickets as one visible batch.');
+    expect(prompt).not.toContain('Dispatch these 2 Linear tickets through Allen');
     expect(prompt).toContain('Dispatch preference: agent: engineering-lead');
     expect(prompt).toContain('Do not silently skip a ticket');
   });
@@ -63,6 +65,12 @@ describe('buildBulkChatDispatchPrompt', () => {
 // ── buildChatDispatchPrompt ───────────────────────────────────────────────────
 
 describe('buildChatDispatchPrompt', () => {
+  it('T0: starts with assignment wording, not dispatch-through wording', () => {
+    const p = buildChatDispatchPrompt(makeIssue(), BASE_ARGS);
+    expect(p).toMatch(/^You have been assigned this ticket\./);
+    expect(p).not.toContain('Dispatch this Linear ticket through Allen');
+  });
+
   it('T1: contains ticket identifier and title', () => {
     const p = buildChatDispatchPrompt(makeIssue(), BASE_ARGS);
     expect(p).toContain('ENG-42');

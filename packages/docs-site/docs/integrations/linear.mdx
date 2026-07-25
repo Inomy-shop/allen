@@ -21,12 +21,12 @@ The Linear page supports **List** and **Board** views.
 
 - Use **All**, **Active**, **Running**, and **Done** to focus on Allen work state.
 - Search issue identifiers, titles, or descriptions.
-- Filter by project or Linear assignee.
+- Filter by Linear team, project, or Linear assignee. The team filter lists the teams in the connected Linear workspace and starts on **All teams**; it combines with the project, assignee, state, and search filters.
 - In Board view, review issues by their Linear workflow state.
 - Select an issue to inspect its description, priority, state, team, project, labels, assignee, and timestamps.
 - Use **Open in Linear** when you need the authoritative issue history or to make a native Linear change.
 
-Select **Refresh** after an external update if the page has not yet reflected it.
+Select **Refresh** after an external update if the page has not yet reflected it. Refresh reloads teams, projects, and issues; a selected team that no longer exists in the workspace falls back to **All teams**.
 
 ## Bring a ticket into chat
 
@@ -86,7 +86,7 @@ Routing work in Allen does not automatically mean the native Linear assignee cha
 | Problem | What to check |
 | --- | --- |
 | **Linear is not connected** remains visible | Reopen the preset, verify the token, test the MCP server, then select **Recheck**. |
-| Projects or issues are missing | Clear filters, select **Refresh**, and verify that the token can access the expected Linear workspace. |
+| Teams, projects, or issues are missing | Clear filters (including the team filter), select **Refresh**, and verify that the token can access the expected Linear workspace. |
 | `@linear` cannot find an issue | Confirm the connection, search by the exact identifier, and verify that the issue is visible to the connected account. |
 | Dispatch cannot continue | Select a registered repository for agent or lead work, or fill every required workflow input. |
 | The ticket shows failed work | Open the linked execution or workspace, review the error, then retry from chat with corrected context rather than silently redispatching. |
