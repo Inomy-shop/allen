@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import ModelIcon, { modelIconColor } from '../components/common/ModelIcon';
+import TeamClassificationTag from '../components/common/TeamClassificationTag';
 import V8EmptyState from '../components/common/V8EmptyState';
 import { chat as chatApi, executions as executionsApi, type ChatSession } from '../services/api';
 import { getModelDisplay } from '../hooks/useModelRegistry';
@@ -123,7 +124,7 @@ export default function ThreadsPage() {
                   <div className="v8-row-main">
                     <h2>{session.title || 'Untitled conversation'}</h2>
                     <p>
-                      <span className={`v8-space-tag ${itemSpace}`}><i />{TEAM_CLASSIFICATION_META[itemSpace].short}</span>
+                      <TeamClassificationTag classification={itemSpace} />
                       {session.studioWorkspaceId && <><b>·</b><span className="v8-studio-tag">Studio</span></>}
                       <b>·</b>{session.activeAgent || 'allen assistant'}<b>·</b>{context}
                     </p>

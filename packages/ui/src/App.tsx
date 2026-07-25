@@ -1311,6 +1311,7 @@ export default function App() {
 
   return (
     <div className={`app-shell ${shellNavState} ${isSettingsRoute ? 'settings-shell' : ''}`}>
+      <div className="desktop-sidebar-drag-region" aria-hidden="true" />
       {/* Navigation sidebar — collapsible and resizable */}
       {isSettingsRoute ? (
         <nav className="sidebar settings-mode-sidebar [animation:none]">
@@ -1767,6 +1768,9 @@ export default function App() {
       )}
 
       <main className="flex-1 min-w-0 bg-app relative flex flex-col overflow-hidden">
+        {(isPrototypePageRoute || documentTabOpen) && (
+          <div className="desktop-window-drag-region" aria-hidden="true" />
+        )}
         {!isPrototypePageRoute && !documentTabOpen && <AppTopbar
           title={title}
           detail={detail}

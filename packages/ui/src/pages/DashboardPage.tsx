@@ -1,4 +1,4 @@
-import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Circle,
@@ -12,6 +12,7 @@ import ChatInput, { type ChatInputHandle, type ReasoningEffortValue, type RepoOp
 import { useSkillSlashCommands } from '../hooks/useSkillSlashCommands';
 import { useFileDropZone, FileDropOverlay } from '../hooks/useFileDropZone';
 import AgentChatDropdown from '../components/chat/AgentChatDropdown';
+import TeamClassificationTag from '../components/common/TeamClassificationTag';
 import {
   V8SetupAgentsIcon,
   V8SetupGithubIcon,
@@ -25,6 +26,11 @@ import {
   executionActivityState,
   sessionActivityState,
 } from '../lib/activity-status';
+import {
+  teamClassificationKey,
+  type TeamClassification,
+  type TeamClassificationKey,
+} from '../types/teamClassification';
 
 interface ExecutionItem {
   id: string;
@@ -56,6 +62,7 @@ interface ExecutionItem {
     task?: string;
     prompt?: string;
     request?: string;
+    agent_name?: string;
     linear_identifier?: string;
     linear_title?: string;
     ticket_id?: string;
@@ -135,6 +142,8 @@ interface ChatSessionItem {
   workspaceBaseBranch?: string;
   workspacePrNumber?: number;
   workspacePrUrl?: string;
+  studioWorkspaceId?: string;
+  teamClassification?: TeamClassification | null;
   streaming?: boolean;
   archivedWorkspace?: {
     id: string;
@@ -155,7 +164,8 @@ interface ChatSessionItem {
 interface HumanApprovalItem {
   id: string;
   title: string;
-  sub: string;
+  metaParts: string[];
+  teamLabel?: string;
   href: string;
   createdAt?: string;
   kind: 'approval' | 'question' | 'blocked' | 'waiting';
@@ -167,9 +177,10 @@ interface ChatConversationItem {
   sub: string;
   href: string;
   timestamp?: string;
-  messageCount?: number;
   run?: ExecutionItem;
-  ownerLabel?: string;
+  teamClassificationKey?: TeamClassificationKey;
+  teamLabel?: string;
+  workflowLabel?: string;
   contextLabel?: string;
   pullRequest?: {
     number?: number;
@@ -188,79 +199,22 @@ interface DiffSummary {
   deletions: number;
 }
 
-interface HomeV8RecentPrototypeRow {
-  id: string;
-  title: string;
-  team: 'eng' | 'mkt' | 'prod';
-  teamColor: string;
-  metaParts: string[];
-  time: string;
-  state: 'running' | 'complete';
-  href: string;
+interface DashboardActivityRow extends ChatConversationItem {
+  activityState: 'running' | 'recent';
 }
 
-export const HOME_V8_RECENT_ROWS: HomeV8RecentPrototypeRow[] = [
-  {
-    id: 'fix-workspace-terminal-e2e',
-    title: 'Fix flaky workspace-terminal e2e spec',
-    team: 'eng',
-    teamColor: 'rgb(var(--color-accent-blue))',
-    metaParts: ['bug-fix-by-severity', 'allen-internal · fix/ws-term-retry'],
-    time: '12m',
-    state: 'running',
-    href: '/chat',
-  },
-  {
-    id: 'launch-week-announcement',
-    title: 'Draft launch-week announcement and social posts',
-    team: 'mkt',
-    teamColor: 'rgb(var(--color-accent-purple))',
-    metaParts: ['content-draft-and-review', 'artifact pending'],
-    time: '4m',
-    state: 'running',
-    href: '/chat',
-  },
-  {
-    id: 'context-graph-refresh-stall',
-    title: 'Investigate context-graph refresh stall during cognification',
-    team: 'eng',
-    teamColor: 'rgb(var(--color-accent-blue))',
-    metaParts: ['investigation', 'allen-internal · main'],
-    time: '32m',
-    state: 'running',
-    href: '/chat',
-  },
-  {
-    id: 'chat-auto-titles-pr',
-    title: 'Fix chat auto-titles & open a PR',
-    team: 'eng',
-    teamColor: 'rgb(var(--color-accent-blue))',
-    metaParts: ['PR opened'],
-    time: '2h',
-    state: 'complete',
-    href: '/chat',
-  },
-  {
-    id: 'july-4-deals-rail',
-    title: 'July 4 deals rail — storefront',
-    team: 'eng',
-    teamColor: 'rgb(var(--color-accent-blue))',
-    metaParts: ['completed'],
-    time: '5h',
-    state: 'complete',
-    href: '/chat',
-  },
-  {
-    id: 'agent-template-gallery-prd',
-    title: 'ALL-13 · Agent Template Gallery PRD',
-    team: 'prod',
-    teamColor: 'rgb(var(--color-accent-green))',
-    metaParts: ['doc', 'ALL-13'],
-    time: '1d',
-    state: 'complete',
-    href: '/chat',
-  },
-];
+export function selectDashboardRecentRows(
+  running: ChatConversationItem[],
+  recent: ChatConversationItem[],
+  limit = 8,
+): DashboardActivityRow[] {
+  return [
+    ...running.map((item) => ({ ...item, activityState: 'running' as const })),
+    ...recent.map((item) => ({ ...item, activityState: 'recent' as const })),
+  ]
+    .sort((a, b) => new Date(b.timestamp ?? 0).getTime() - new Date(a.timestamp ?? 0).getTime())
+    .slice(0, limit);
+}
 
 function timeAgo(dateStr?: string): string {
   if (!dateStr) return 'recently';
@@ -375,27 +329,92 @@ function linearIdentifierForRun(run: ExecutionItem): string | null {
   return haystack.match(/\b[A-Z][A-Z0-9]+-\d+\b/)?.[0] ?? null;
 }
 
-function approvalItemFromIntervention(item: InterventionItem, run?: ExecutionItem): HumanApprovalItem {
-  const context = [
-    run?.workflowName ?? item.workflow_name,
+function agentNameForRun(run?: ExecutionItem): string | null {
+  if (!run) return null;
+  if (run.input?.agent_name) return run.input.agent_name;
+  const workflowName = run.workflowName ?? '';
+  if (workflowName.includes(':spawn_agent/')) {
+    return workflowName.split(':spawn_agent/').pop() || null;
+  }
+  if (run.type === 'agent') {
+    return run.currentNodes?.find((node) => node && node !== 'END') ?? null;
+  }
+  return null;
+}
+
+function workflowLabelForRun(run?: ExecutionItem): string | undefined {
+  if (!run?.workflowName) return undefined;
+  return run.workflowName.includes(':spawn_agent/')
+    ? run.workflowName.split(':spawn_agent/').pop() || undefined
+    : run.workflowName;
+}
+
+export function dashboardTeamLabel(teamName?: string | null): string | undefined {
+  const normalized = teamName?.trim().toLowerCase().replace(/\s+team$/, '');
+  if (!normalized) return undefined;
+  if (normalized.includes('engineering')) return 'eng';
+  if (/(marketing|growth)/.test(normalized)) return 'mkt';
+  if (normalized.includes('product')) return 'prod';
+  if (normalized.includes('design')) return 'design';
+  if (/(quality|\bqa\b)/.test(normalized)) return 'qa';
+  if (normalized.includes('executive')) return 'exec';
+  if (normalized.includes('builder') || normalized === 'meta') return 'meta';
+  return normalized.replace(/\s+/g, '-');
+}
+
+function teamLabelForRun(run: ExecutionItem | undefined, agentTeamByName: Map<string, string>): string | undefined {
+  const agentName = agentNameForRun(run);
+  return dashboardTeamLabel(agentName ? agentTeamByName.get(agentName) : undefined);
+}
+
+export function dashboardSessionTeamKey(
+  session?: Pick<ChatSessionItem, 'teamClassification' | 'studioWorkspaceId'> | null,
+): TeamClassificationKey | undefined {
+  if (!session) return undefined;
+  return teamClassificationKey(session.teamClassification, session.studioWorkspaceId);
+}
+
+function approvalItemFromIntervention(
+  item: InterventionItem,
+  run: ExecutionItem | undefined,
+  agentTeamByName: Map<string, string>,
+): HumanApprovalItem {
+  const currentStep = run ? stepLabel(run) : null;
+  const metaParts = [
+    workflowLabelForRun(run) ?? item.workflow_name,
     item.stage ? humanizeLabel(item.stage) : null,
-  ].filter(Boolean).join(' · ');
+    currentStep && currentStep !== 'waiting on you' && humanizeLabel(item.stage) !== currentStep
+      ? currentStep
+      : null,
+    compactTitle(item.context_summary),
+  ].filter((part): part is string => Boolean(part));
   return {
     id: `approval-${item.intervention_id}`,
     kind: item.severity === 'escalation' ? 'blocked' : item.severity === 'question' ? 'question' : 'approval',
     title: item.title || (run ? runTitle(run) : 'Execution approval'),
-    sub: context || 'Workflow execution',
+    metaParts: metaParts.length > 0 ? metaParts : ['Workflow execution'],
+    teamLabel: teamLabelForRun(run, agentTeamByName),
     href: `/executions/${item.workflow_run_id}`,
     createdAt: item.created_at,
   };
 }
 
-function approvalItemFromWaitingRun(run: ExecutionItem): HumanApprovalItem {
+function approvalItemFromWaitingRun(
+  run: ExecutionItem,
+  agentTeamByName: Map<string, string>,
+): HumanApprovalItem {
+  const currentStep = stepLabel(run);
   return {
     id: `waiting-${run.id}`,
     kind: 'waiting',
     title: runTitle(run),
-    sub: stepLabel(run) ?? 'Waiting for input',
+    metaParts: [
+      workflowLabelForRun(run),
+      currentStep && currentStep !== 'waiting on you' ? currentStep : null,
+    ].filter((part): part is string => Boolean(part)).concat(
+      currentStep && currentStep !== 'waiting on you' ? [] : ['Waiting for input'],
+    ),
+    teamLabel: teamLabelForRun(run, agentTeamByName),
     href: `/executions/${run.id}`,
     createdAt: run.startedAt,
   };
@@ -451,16 +470,18 @@ function recentRunHref(run: ExecutionItem): string {
   return run.meta?.chatSessionId ? `/chat/${run.meta.chatSessionId}` : `/executions/${run.id}`;
 }
 
+export function dashboardSessionHref(sessionId: string, studioWorkspaceId?: string): string {
+  return studioWorkspaceId
+    ? `/studio/sessions/${sessionId}?ws=${encodeURIComponent(studioWorkspaceId)}`
+    : `/chat/${sessionId}`;
+}
+
 function sessionTimestamp(session: ChatSessionItem): string | undefined {
   return session.lastMessageAt ?? session.updatedAt ?? session.createdAt;
 }
 
 function sessionTitle(session?: ChatSessionItem | null, run?: ExecutionItem): string {
   return compactTitle(session?.title) ?? (run ? runTitle(run) : 'Untitled conversation');
-}
-
-function sessionOwnerLabel(session?: ChatSessionItem | null): string | undefined {
-  return compactTitle(session?.ownerName) ?? compactTitle(session?.ownerEmail) ?? undefined;
 }
 
 function isStreamingSession(
@@ -713,42 +734,47 @@ function collapseTaskRuns(items: ExecutionItem[]): ExecutionItem[] {
   });
 }
 
+function teamTone(teamLabel: string): string {
+  if (teamLabel === 'mkt') return 'marketing';
+  if (teamLabel === 'prod') return 'product';
+  if (teamLabel === 'design') return 'design';
+  if (teamLabel === 'qa') return 'quality';
+  if (teamLabel === 'exec') return 'executive';
+  if (teamLabel === 'meta') return 'meta';
+  return 'engineering';
+}
+
+function TeamTag({ label }: { label: string }) {
+  return (
+    <span className={`home-v8-tag ${teamTone(label)}`}>
+      <i />
+      {label}
+    </span>
+  );
+}
+
+export function dashboardPrStatusLabel(status?: string | null): string {
+  if (status === 'open') return 'PR opened';
+  if (status === 'merged') return 'PR merged';
+  if (status === 'closed') return 'PR closed';
+  return 'PR';
+}
+
 function ConversationMeta({ item }: { item: ChatConversationItem }) {
   const pr = item.pullRequest;
-  const diff = item.diffSummary ?? null;
-  const changedFiles = pr?.changedFiles ?? diff?.files;
-  const additions = pr?.additions ?? diff?.additions;
-  const deletions = pr?.deletions ?? diff?.deletions;
-  const hasDiff = Boolean(changedFiles != null || additions != null || deletions != null);
-  if (!item.ownerLabel && !item.contextLabel && !item.sub && !pr && !hasDiff) return null;
+  const prLabel = pr ? dashboardPrStatusLabel(pr.status) : null;
+  const sub = prLabel && /^(completed|done)$/i.test(item.sub) ? '' : item.sub;
+  if (!item.teamClassificationKey && !item.teamLabel && !item.workflowLabel && !item.contextLabel && !sub && !prLabel) return null;
   const sections = [
-    item.ownerLabel ? <span key="owner">{item.ownerLabel}</span> : null,
+    item.teamClassificationKey
+      ? <TeamClassificationTag key="session-team" classification={item.teamClassificationKey} />
+      : item.teamLabel
+        ? <TeamTag key="team" label={item.teamLabel} />
+        : null,
+    item.workflowLabel ? <span key="workflow">{item.workflowLabel}</span> : null,
     item.contextLabel ? <span key="context">{item.contextLabel}</span> : null,
-    pr ? (
-      pr.url ? (
-        <a
-          key="pr"
-          href={pr.url}
-          target="_blank"
-          rel="noreferrer"
-          title="Open pull request"
-          onClick={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
-        >
-          PR {pr.number ? `#${pr.number}` : ''}{pr.status ? ` · ${pr.status}` : ''}
-        </a>
-      ) : (
-        <span key="pr">PR {pr.number ? `#${pr.number}` : ''}{pr.status ? ` · ${pr.status}` : ''}</span>
-      )
-    ) : null,
-    hasDiff ? (
-      <span key="diff">
-        {changedFiles != null && `${changedFiles} file${changedFiles === 1 ? '' : 's'}`}
-        {additions != null && <span className="home-v8-diff-add"> +{additions}</span>}
-        {deletions != null && <span className="home-v8-diff-del"> -{deletions}</span>}
-      </span>
-    ) : null,
-    item.sub ? <span key="sub">{item.sub}</span> : null,
+    prLabel ? <span key="pr">{prLabel}</span> : null,
+    sub ? <span key="sub">{sub}</span> : null,
   ].filter(Boolean);
   return (
     <div className="home-v8-row-meta">
@@ -759,6 +785,23 @@ function ConversationMeta({ item }: { item: ChatConversationItem }) {
         </span>
       ))}
     </div>
+  );
+}
+
+function ApprovalMeta({ item }: { item: HumanApprovalItem }) {
+  const sections = [
+    item.teamLabel ? <TeamTag key="team" label={item.teamLabel} /> : null,
+    ...item.metaParts.map((part, index) => <span key={`${index}:${part}`}>{part}</span>),
+  ].filter(Boolean);
+  return (
+    <span className="home-v8-row-meta">
+      {sections.map((section, index) => (
+        <span key={index}>
+          {index > 0 && <span className="home-v8-meta-sep"> · </span>}
+          {section}
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -921,6 +964,18 @@ export default function DashboardPage() {
     () => new Map(chatSessions.map((session) => [session._id, session])),
     [chatSessions],
   );
+  const agentTeamByName = useMemo(
+    () => new Map<string, string>(
+      allAgents.flatMap((agent) => {
+        const teamName = typeof agent.teamName === 'string' ? agent.teamName : '';
+        if (!teamName) return [];
+        return [agent.name, agent.displayName]
+          .filter((name): name is string => typeof name === 'string' && Boolean(name))
+          .map((name) => [name, teamName] as const);
+      }),
+    ),
+    [allAgents],
+  );
   const runningConversations = useMemo<ChatConversationItem[]>(() => {
     const runItems = runs
       .filter((run) => executionActivityState(run) === 'active' && !isWaitingForHumanInput(run))
@@ -936,12 +991,17 @@ export default function DashboardPage() {
         return {
           id: sessionId ?? run.id,
           title: sessionTitle(session, run),
-          sub: sessionSubline(session, run, { includeTimestamp: false }),
-          href: sessionId ? `/chat/${sessionId}` : `/executions/${run.id}`,
+          sub: sessionSubline(session, run, { includeTimestamp: false, includeMessageCount: false }),
+          href: session
+            ? dashboardSessionHref(session._id, session.studioWorkspaceId)
+            : sessionId
+              ? dashboardSessionHref(sessionId)
+              : `/executions/${run.id}`,
           timestamp: session ? sessionTimestamp(session) : run.startedAt,
-          messageCount: session?.messageCount,
           run,
-          ownerLabel: sessionOwnerLabel(session),
+          teamClassificationKey: dashboardSessionTeamKey(session),
+          teamLabel: teamLabelForRun(run, agentTeamByName),
+          workflowLabel: workflowLabelForRun(run),
           contextLabel: sessionContextLabel(session),
           pullRequest,
           diffSummary: sessionId ? chatDiffSummaries[sessionId] : null,
@@ -957,15 +1017,17 @@ export default function DashboardPage() {
           undefined,
           chatDiffSummaries[session._id],
         );
-        const details = sessionSubline(session, undefined, { includeTimestamp: false });
+        const details = sessionSubline(session, undefined, {
+          includeTimestamp: false,
+          includeMessageCount: false,
+        });
         return {
           id: session._id,
           title: sessionTitle(session),
           sub: ['streaming', details].filter(Boolean).join(' · '),
-          href: `/chat/${session._id}`,
+          href: dashboardSessionHref(session._id, session.studioWorkspaceId),
           timestamp: sessionTimestamp(session),
-          messageCount: session.messageCount,
-          ownerLabel: sessionOwnerLabel(session),
+          teamClassificationKey: dashboardSessionTeamKey(session),
           contextLabel: sessionContextLabel(session),
           pullRequest,
           diffSummary: chatDiffSummaries[session._id] ?? null,
@@ -974,7 +1036,7 @@ export default function DashboardPage() {
     return [...runItems, ...streamingSessionItems]
       .sort((a, b) => new Date(b.timestamp ?? 0).getTime() - new Date(a.timestamp ?? 0).getTime())
       .slice(0, 8);
-  }, [activityRuns, allPullRequests, chatDiffSummaries, chatSessionById, chatSessions, runs]);
+  }, [activityRuns, agentTeamByName, allPullRequests, chatDiffSummaries, chatSessionById, chatSessions, runs]);
   const runningConversationIds = useMemo(
     () => new Set(runningConversations.map((item) => item.id)),
     [runningConversations],
@@ -994,12 +1056,13 @@ export default function DashboardPage() {
         return {
           id: session._id,
           title: sessionTitle(session),
-          sub: sessionSubline(session, undefined, { includeTimestamp: false, includeMessageCount: false }),
-          href: `/chat/${session._id}`,
+          sub: sessionSubline(session, run, { includeTimestamp: false, includeMessageCount: false }),
+          href: dashboardSessionHref(session._id, session.studioWorkspaceId),
           timestamp: sessionTimestamp(session),
-          messageCount: session.messageCount,
           run,
-          ownerLabel: sessionOwnerLabel(session),
+          teamClassificationKey: dashboardSessionTeamKey(session),
+          teamLabel: teamLabelForRun(run, agentTeamByName),
+          workflowLabel: workflowLabelForRun(run),
           contextLabel: sessionContextLabel(session),
           pullRequest,
           diffSummary: chatDiffSummaries[session._id] ?? null,
@@ -1016,11 +1079,12 @@ export default function DashboardPage() {
           id: sessionId ?? run.id,
           title: sessionTitle(session, run),
           sub: sessionSubline(session, run, { includeTimestamp: false, includeMessageCount: false }),
-          href: recentRunHref(run),
+          href: session ? dashboardSessionHref(session._id, session.studioWorkspaceId) : recentRunHref(run),
           timestamp: session ? sessionTimestamp(session) : run.startedAt,
-          messageCount: session?.messageCount,
           run,
-          ownerLabel: sessionOwnerLabel(session),
+          teamClassificationKey: dashboardSessionTeamKey(session),
+          teamLabel: teamLabelForRun(run, agentTeamByName),
+          workflowLabel: workflowLabelForRun(run),
           contextLabel: sessionContextLabel(session),
           pullRequest: conversationPullRequest(
             session,
@@ -1032,7 +1096,7 @@ export default function DashboardPage() {
         };
       })
       .slice(0, 8);
-  }, [activityRuns, allPullRequests, chatDiffSummaries, chatSessionById, chatSessions, runningConversationIds, runs]);
+  }, [activityRuns, agentTeamByName, allPullRequests, chatDiffSummaries, chatSessionById, chatSessions, runningConversationIds, runs]);
   const humanApprovals = useMemo(
     () => {
       const runById = new Map(runs.map((run) => [run.id, run]));
@@ -1040,15 +1104,15 @@ export default function DashboardPage() {
         ...pendingInterventions
           .map((item) => {
             const run = runById.get(item.workflow_run_id);
-            return canNeedHumanInput(run) ? approvalItemFromIntervention(item, run) : null;
+            return canNeedHumanInput(run) ? approvalItemFromIntervention(item, run, agentTeamByName) : null;
           })
           .filter((item): item is HumanApprovalItem => Boolean(item)),
         ...runs
           .filter(isWaitingForHumanInput)
-          .map(approvalItemFromWaitingRun),
+          .map((run) => approvalItemFromWaitingRun(run, agentTeamByName)),
       ]).sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
     },
-    [pendingInterventions, runs],
+    [agentTeamByName, pendingInterventions, runs],
   );
   const homeMeta = useMemo(() => {
     const date = new Intl.DateTimeFormat('en-US', {
@@ -1170,7 +1234,7 @@ export default function DashboardPage() {
     'Draft a launch announcement',
   ];
   const humanLoopRows = humanApprovals.slice(0, 4);
-  const recentRowsForDisplay = hasDashboardActivity ? HOME_V8_RECENT_ROWS : [];
+  const recentRowsForDisplay = selectDashboardRecentRows(runningConversations, recentConversations);
 
   const { dragActive, dropProps } = useFileDropZone(
     (files) => chatInputRef.current?.uploadFiles(files),
@@ -1319,7 +1383,7 @@ export default function DashboardPage() {
                           <span className={`home-v8-dot ${item.kind === 'blocked' ? 'error' : 'human'}`} />
                           <span className="home-v8-row-main">
                             <span className="home-v8-row-title">{item.title}</span>
-                            <span className="home-v8-row-meta">{item.sub}</span>
+                            <ApprovalMeta item={item} />
                           </span>
                           <span className={`home-v8-attention-status ${item.kind === 'blocked' ? 'error' : ''}`}>
                             {item.kind === 'blocked' ? 'paused' : `waiting ${waitingAge(item.createdAt)}`}
@@ -1349,33 +1413,19 @@ export default function DashboardPage() {
                     <div className="home-v8-list">
                       {recentRowsForDisplay.map((item) => (
                         <div
-                          key={item.id}
+                          key={`${item.activityState}:${item.id}`}
                           role="link"
                           tabIndex={0}
                           onClick={() => navigate(item.href)}
                           onKeyDown={(event) => activateConversationRow(event, item.href, navigate)}
                           className="home-v8-row"
                         >
-                          <span className={`home-v8-dot ${item.state === 'running' ? 'running' : 'complete'}`} />
+                          <span className={`home-v8-dot ${item.activityState === 'running' ? 'running' : 'complete'}`} />
                           <span className="home-v8-row-main">
                             <span className="home-v8-row-title">{item.title}</span>
-                            <span className="home-v8-row-meta">
-                              <span
-                                className="home-v8-tag"
-                                style={{ '--c': item.teamColor } as CSSProperties}
-                              >
-                                <i />
-                                {item.team}
-                              </span>
-                              {item.metaParts.map((part) => (
-                                <span key={part}>
-                                  <span className="home-v8-meta-sep"> · </span>
-                                  {part}
-                                </span>
-                              ))}
-                            </span>
+                            <ConversationMeta item={item} />
                           </span>
-                          <span className="home-v8-row-time">{item.time}</span>
+                          <span className="home-v8-row-time">{compactAge(item.timestamp)}</span>
                         </div>
                       ))}
                     </div>

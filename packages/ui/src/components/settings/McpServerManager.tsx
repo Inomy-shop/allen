@@ -12,10 +12,11 @@ import {
   Server, Plus, Trash2, RefreshCw, PowerOff,
   CheckCircle, XCircle, HelpCircle, ExternalLink, ChevronDown, ChevronRight, Wrench,
   Package, FolderGit2, Loader2, AlertCircle, X as XIcon, Copy, Check,
-  Search, Github, FileText, Table2, Video, Figma, BriefcaseBusiness, Database,
-  HardDrive, MessageSquare, Brain, Folder, AlertTriangle, Pencil,
+  Search, Video, MessageSquare, Brain, Folder, AlertTriangle, Pencil,
 } from 'lucide-react';
 import IconTooltipButton from '../common/IconTooltipButton';
+import BrandMarkIcon from '../common/BrandMarkIcon';
+import { getBrandMark } from '../common/brandMarks';
 import Select from '../common/Select';
 
 // ── Status badge ────────────────────────────────────────────────────────────
@@ -1036,77 +1037,63 @@ function presetCategory(preset: McpPreset): PresetCategory {
 
 function PresetIcon({ preset, className = 'h-4 w-4' }: { preset: McpPreset; className?: string }) {
   const name = preset.name;
+
+  // Real vendor mark wherever one exists.
+  if (getBrandMark(name)) return <BrandMarkIcon id={name} className={className} />;
+
+  // Slack and Playwright have no authentic mark available (see brandMarks.ts),
+  // so they keep a generic glyph rather than an invented logo.
   const Icon =
-    name === 'github' ? Github
-    : name === 'google-docs' ? FileText
-    : name === 'google-sheets' ? Table2
-    : name === 'google-meet' ? Video
-    : name === 'google-workspace' ? HardDrive
-    : name === 'figma' ? Figma
-    : name === 'jira' || name === 'linear' ? BriefcaseBusiness
-    : name === 'postgres' || name === 'mongodb' || name === 'mysql' ? Database
-    : name === 'slack' ? MessageSquare
+    name === 'slack' ? MessageSquare
+    : name === 'playwright' ? Video
     : name === 'memory' ? Brain
     : name === 'filesystem' ? Folder
     : Package;
   return <Icon className={className} />;
 }
 
+/** True when a mark is dark enough that its brand hex would vanish on a dark surface. */
+function isDarkMark(hex: string): boolean {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b < 70; // Rec. 601 luma
+}
+
+/** 8x8 tile carrying a vendor's real logo, brand-coloured unless too dark to read. */
+function BrandMarkTile({ id }: { id: string }) {
+  const mark = getBrandMark(id);
+  if (!mark) return null;
+  const dark = isDarkMark(mark.hex);
+  return (
+    <div
+      className="flex h-8 w-8 items-center justify-center rounded-md border border-app bg-app-card"
+      title={mark.title}
+    >
+      <BrandMarkIcon
+        id={id}
+        tone={dark ? 'current' : 'brand'}
+        className={`h-[18px] w-[18px] ${dark ? 'text-theme-primary' : ''}`}
+      />
+    </div>
+  );
+}
+
 function NativePresetIcon({ preset }: { preset: McpPreset }) {
   const name = preset.name;
-  if (name === 'figma') {
-    return (
-      <div className="grid h-8 w-8 grid-cols-2 grid-rows-3 overflow-hidden rounded-md border border-app bg-app-card p-1">
-        <span className="rounded-full bg-[#f24e1e]" />
-        <span className="rounded-full bg-[#ff7262]" />
-        <span className="rounded-full bg-[#a259ff]" />
-        <span className="rounded-full bg-[#1abcfe]" />
-        <span className="rounded-full bg-[#0acf83]" />
-      </div>
-    );
-  }
-  if (name === 'github') {
-    return (
-      <div className="flex h-8 w-8 items-center justify-center rounded-md border border-app bg-app-card text-theme-primary">
-        <Github className="h-4 w-4" />
-      </div>
-    );
-  }
-  if (name === 'google-docs') return <BrandTile label="D" color="bg-[#1a73e8]" Icon={FileText} />;
-  if (name === 'google-sheets') return <BrandTile label="S" color="bg-[#188038]" Icon={Table2} />;
-  if (name === 'google-meet') return <BrandTile label="M" color="bg-[#1a73e8]" Icon={Video} />;
-  if (name === 'google-workspace') return <GoogleTile />;
-  if (name === 'jira') return <BrandTile label="J" color="bg-[#0c66e4]" Icon={BriefcaseBusiness} />;
-  if (name === 'linear') return <BrandTile label="L" color="bg-[#5e6ad2]" Icon={BriefcaseBusiness} />;
+
+  // Authentic vendor mark wherever one exists — covers github, figma, linear,
+  // jira, notion, posthog, the google surfaces, the databases and x.
+  if (getBrandMark(name)) return <BrandMarkTile id={name} />;
+
+  // No authentic mark available (see brandMarks.ts): keep a generic glyph in the
+  // vendor's colour rather than inventing a logo.
   if (name === 'slack') return <BrandTile label="S" color="bg-[#4a154b]" Icon={MessageSquare} />;
-  if (name === 'notion') return <NotionTile />;
-  if (name === 'posthog') return <PostHogTile />;
   if (name === 'playwright') return <BrandTile label="P" color="bg-[#2eAD33]" Icon={Video} />;
-  if (name === 'xapi') return <BrandTile label="X" color="bg-black" Icon={XIcon} />;
-  if (name === 'postgres') return <PostgresTile />;
-  if (name === 'mongodb') return <MongoDbTile />;
-  if (name === 'mysql') return <MySqlTile />;
   if (name === 'memory') return <BrandTile label="M" color="bg-app-muted" Icon={Brain} muted />;
   if (name === 'filesystem') return <BrandTile label="F" color="bg-app-muted" Icon={Folder} muted />;
   return (
     <div className={`flex h-8 w-8 items-center justify-center rounded-md border ${CATEGORY_STYLES[presetCategory(preset)]}`}>
       <PresetIcon preset={preset} className="h-4 w-4" />
-    </div>
-  );
-}
-
-function NotionTile() {
-  return (
-    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-app bg-white text-black">
-      <span className="font-serif text-[15px] font-black leading-none" aria-hidden="true">N</span>
-    </div>
-  );
-}
-
-function PostHogTile() {
-  return (
-    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-[#f9bd2b]/35 bg-[#f9bd2b] text-[#1d1f27]">
-      <span className="text-[14px] font-black leading-none" aria-hidden="true">PH</span>
     </div>
   );
 }
@@ -1124,100 +1111,6 @@ function BrandTile({
   return (
     <div className={`flex h-8 w-8 items-center justify-center rounded-md border ${muted ? 'border-app text-theme-secondary' : 'border-transparent text-white'} ${color}`}>
       <Icon className="h-3.5 w-3.5" />
-    </div>
-  );
-}
-
-function GoogleTile() {
-  return (
-    <div className="grid h-8 w-8 grid-cols-2 overflow-hidden rounded-md border border-app bg-app-card">
-      <span className="bg-[#4285f4]" />
-      <span className="bg-[#34a853]" />
-      <span className="bg-[#fbbc04]" />
-      <span className="bg-[#ea4335]" />
-    </div>
-  );
-}
-
-function PostgresTile() {
-  return (
-    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-transparent bg-[#336791] text-white">
-      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path
-          d="M6.7 13.4C5.3 12.5 4.5 11 4.5 9.3c0-3.1 2.9-5.4 6.6-5.4h2c3.7 0 6.4 2.4 6.4 5.6 0 1.8-.8 3.3-2.4 4.2"
-          stroke="currentColor"
-          strokeWidth="1.7"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M8.3 8.6v6.7c0 1.4 1 2.4 2.4 2.4h.9"
-          stroke="currentColor"
-          strokeWidth="1.7"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M15.7 8.6v7.2c0 2.7-1.5 4.1-3.7 4.1-.9 0-1.8-.2-2.5-.7"
-          stroke="currentColor"
-          strokeWidth="1.7"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M15.8 13.8c1.3.1 2.3.5 2.8 1.2.5.7.3 1.5-.3 1.9-.9.6-2.6.2-4.2-.9"
-          stroke="currentColor"
-          strokeWidth="1.7"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <circle cx="9" cy="9.3" r=".8" fill="currentColor" />
-        <circle cx="15" cy="9.3" r=".8" fill="currentColor" />
-      </svg>
-    </div>
-  );
-}
-
-function MongoDbTile() {
-  return (
-    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-[#13aa52]/25 bg-app-card">
-      <svg className="h-5 w-5 text-[#13aa52]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path
-          d="M12.2 2.7c3.2 3.1 5.2 6.6 5.2 10 0 4.1-2.4 6.9-5.2 8.6-2.8-1.7-5.1-4.5-5.1-8.6 0-3.4 1.9-6.9 5.1-10Z"
-          fill="currentColor"
-        />
-        <path
-          d="M12.2 5.5v14.9"
-          stroke="white"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          opacity=".85"
-        />
-      </svg>
-    </div>
-  );
-}
-
-function MySqlTile() {
-  return (
-    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-[#00758f]/25 bg-app-card">
-      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path
-          d="M4.5 15.8c2.1-4.5 6.2-7.4 11.3-7.9 1.7-.2 3.1.1 4.1.9-1.3.1-2.3.5-3 1.3 1.4.2 2.5.9 3.2 2-2.1-.4-3.9-.1-5.4.8-1.8 1.1-2.9 3.2-4.6 4.4-2 1.4-4.4.8-5.6-1.5Z"
-          fill="#00758f"
-        />
-        <path
-          d="M8.1 12.8c1.2-.7 2.7-1 4.2-.9-1.1.7-2 1.6-2.7 2.7-.8-.4-1.3-1-1.5-1.8Z"
-          fill="#f29111"
-        />
-        <path
-          d="M15.1 8.3c.6-1.1 1.5-1.8 2.7-2.2-.2 1.1-.8 2-1.8 2.7"
-          stroke="#00758f"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
     </div>
   );
 }

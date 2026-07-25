@@ -6,6 +6,18 @@ Allen is currently pre-release, so behavior can change between commits. Versione
 
 ## [Unreleased]
 
+## [0.1.25] - 2026-07-26
+
+### Added
+
+- **Real vendor logos for model providers and MCP integrations** (`packages/ui`): model providers and MCP integrations now render the vendor's actual brand mark (new `BrandMarkIcon` + `brandMarks` set) instead of hand-drawn approximations — including a real GLM/Z.AI (`zai`) mark, which previously had no icon and fell through to a generic default.
+- **Chat scroll-to-bottom control** (`packages/ui`): a scroll-to-bottom button in the chat message list.
+
+### Fixed
+
+- **Window dragging restored across the app shell** (`packages/desktop`, `packages/ui`): the desktop window can be dragged again from the app shell.
+- **Recent sessions and dispatch alignment** (`packages/ui`): improved alignment of the dashboard recent-sessions and dispatch surfaces.
+
 ## [0.1.24] - 2026-07-25
 
 ### Added

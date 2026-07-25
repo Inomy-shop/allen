@@ -33,6 +33,10 @@ const AGENT_ICONS: Record<string, React.ElementType> = {
   terminal: Terminal, code: Code, rocket: Rocket, shield: Shield, hexagon: Hexagon, flame: Flame,
 };
 
+export interface ChatMessageListHandle {
+  scrollToBottom: () => void;
+}
+
 interface ChatMessageListProps {
   messages: ChatMessage[];
   streamText: string;
@@ -65,6 +69,7 @@ interface ChatMessageListProps {
   onOpenChatReference?: (sessionId: string) => void;
   onOpenInternalReference?: (path: string) => void;
   resourceScopeKey?: string;
+  onAtBottomChange?: (atBottom: boolean) => void;
 }
 
 type MarkdownResourceContextValue = {
@@ -3036,7 +3041,7 @@ function WorkflowInterventionPrompt({
   );
 }
 
-export default function ChatMessageList({ messages, streamText, thinkingText, streamActivityTimeline = [], streaming, activeToolCalls = [], agentReports = [], pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel, watchers = [], conversationTitle, conversationTag, conversationWorkflow, documentCount = 0, provider, model, onOpenFileReference, onOpenChatReference, onOpenInternalReference, resourceScopeKey }: ChatMessageListProps) {
+const ChatMessageList = React.forwardRef<ChatMessageListHandle, ChatMessageListProps>(function ChatMessageList({ messages, streamText, thinkingText, streamActivityTimeline = [], streaming, activeToolCalls = [], agentReports = [], pendingUserQuestion, onAnswerUserQuestion, activeAgent, spawnedAgents = [], onAnswerWorkflowIntervention, onSaveToLearnings, onOpenExecutionsPanel, onOpenFilesPanel, watchers = [], conversationTitle, conversationTag, conversationWorkflow, documentCount = 0, provider, model, onOpenFileReference, onOpenChatReference, onOpenInternalReference, resourceScopeKey, onAtBottomChange }, ref) {
   const [agentMap, setAgentMap] = useState<Record<string, { displayName?: string; icon?: string; color?: string }>>({});
   const pendingWorkflowIntervention = onAnswerWorkflowIntervention ? workflowInterventionFromRuns(spawnedAgents) : null;
   const hasActiveSpawnedRuns = spawnedAgents.some(run => !TERMINAL_RUN_STATUSES.has(run.runContext?.status ?? run.status));
@@ -3099,8 +3104,15 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
   const containerRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
   const initialHistoryRef = useRef(true);
+  const streamingRef = useRef(false);
   const conversationKey = resourceScopeKey ?? messages[0]?.sessionId;
   const sessionRef = useRef<string | undefined>(conversationKey);
+  const scrollToBottom = useCallback(() => {
+    autoScrollRef.current = true;
+    onAtBottomChange?.(true);
+    bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+  }, [onAtBottomChange]);
+  React.useImperativeHandle(ref, () => ({ scrollToBottom }), [scrollToBottom]);
   const scrollToBottomIfPinned = useCallback(() => {
     if (autoScrollRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: streaming ? 'smooth' : 'instant' });
@@ -3112,13 +3124,17 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
     if (!container) return;
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = container;
-      autoScrollRef.current = scrollHeight - scrollTop - clientHeight < 100;
+      const atBottom = scrollHeight - scrollTop - clientHeight < 100;
+      autoScrollRef.current = atBottom;
+      onAtBottomChange?.(atBottom);
     };
     container.addEventListener('scroll', handleScroll);
     return () => container.removeEventListener('scroll', handleScroll);
-  }, []);
+  }, [onAtBottomChange]);
 
   useEffect(() => {
+    const streamingStarted = streaming && !streamingRef.current;
+    streamingRef.current = streaming;
     if (sessionRef.current !== conversationKey) {
       sessionRef.current = conversationKey;
       initialHistoryRef.current = true;
@@ -3127,14 +3143,18 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
       const container = containerRef.current;
       if (container) container.scrollTop = container.scrollHeight;
       autoScrollRef.current = true;
+      onAtBottomChange?.(true);
       initialHistoryRef.current = false;
       return;
     }
-    if (streaming) autoScrollRef.current = true;
+    if (streamingStarted) {
+      autoScrollRef.current = true;
+      onAtBottomChange?.(true);
+    }
     if (autoScrollRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: streaming ? 'smooth' : 'instant' });
     }
-  }, [conversationKey, messages, streamText, pendingWorkflowIntervention?.intervention.intervention_id, streaming]);
+  }, [conversationKey, messages, onAtBottomChange, streamText, pendingWorkflowIntervention?.intervention.intervention_id, streaming]);
 
   const renderWorkflowInterventionHeaderAction = (run: SpawnedAgent) => {
     if (!pendingWorkflowIntervention || !onAnswerWorkflowIntervention) return null;
@@ -3402,4 +3422,6 @@ export default function ChatMessageList({ messages, streamText, thinkingText, st
     </div>
     </MarkdownResourceContext.Provider>
   );
-}
+});
+
+export default ChatMessageList;

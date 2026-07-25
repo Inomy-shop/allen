@@ -11,7 +11,7 @@
  */
 
 import React from 'react';
-import { fireEvent, render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, beforeAll } from 'vitest';
 
 // ─── jsdom stubs ────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ vi.mock('react-dom', async () => {
 });
 
 // ─── Component under test ────────────────────────────────────────────────────
-import ChatMessageList from '../ChatMessageList';
+import ChatMessageList, { type ChatMessageListHandle } from '../ChatMessageList';
 import type { ChatMessage } from '../../hooks/useChat';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -115,6 +115,34 @@ describe('ChatMessageList scroll behaviour', () => {
       scrollHeight.mockRestore();
     },
   );
+
+  it('reports when the user leaves the bottom and supports an instant return', () => {
+    const onAtBottomChange = vi.fn();
+    const ref = React.createRef<ChatMessageListHandle>();
+    const { container } = render(
+      <ChatMessageList
+        ref={ref}
+        messages={[makeMessage({ _id: 'm1', role: 'user', content: 'Hello' })]}
+        streamText=""
+        streaming={false}
+        onAtBottomChange={onAtBottomChange}
+      />,
+    );
+    const messageList = container.querySelector<HTMLElement>('.chat-stream-v2');
+    expect(messageList).not.toBeNull();
+    Object.defineProperties(messageList!, {
+      scrollHeight: { configurable: true, value: 1_200 },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    messageList!.scrollTop = 300;
+
+    fireEvent.scroll(messageList!);
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(false);
+
+    act(() => ref.current?.scrollToBottom());
+    expect(capturedBehaviors().at(-1)).toBe('instant');
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(true);
+  });
 
   it(
     // AC-2: historical updates remain instant once the view is pinned
@@ -212,4 +240,38 @@ describe('ChatMessageList scroll behaviour', () => {
       });
     },
   );
+
+  it('keeps the return-to-bottom state while new streaming text arrives', () => {
+    const onAtBottomChange = vi.fn();
+    const message = makeMessage({ _id: 'm1', role: 'assistant', content: 'Streaming response' });
+    const { container, rerender } = render(
+      <ChatMessageList
+        messages={[message]}
+        streamText="Streaming"
+        streaming={true}
+        onAtBottomChange={onAtBottomChange}
+      />,
+    );
+    const messageList = container.querySelector<HTMLElement>('.chat-stream-v2');
+    Object.defineProperties(messageList!, {
+      scrollHeight: { configurable: true, value: 1_200 },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    messageList!.scrollTop = 300;
+    fireEvent.scroll(messageList!);
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(false);
+    const scrollCallsBeforeUpdate = capturedBehaviors().length;
+
+    rerender(
+      <ChatMessageList
+        messages={[message]}
+        streamText="Streaming response continues"
+        streaming={true}
+        onAtBottomChange={onAtBottomChange}
+      />,
+    );
+
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(false);
+    expect(capturedBehaviors()).toHaveLength(scrollCallsBeforeUpdate);
+  });
 });

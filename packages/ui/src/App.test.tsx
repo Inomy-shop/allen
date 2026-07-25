@@ -131,4 +131,17 @@ describe('V8 sidebar', () => {
     expect(screen.getByRole('link', { name: 'Allen Design' })).toHaveAttribute('href', '/studio');
     expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings/general');
   });
+
+  it('provides native window drag regions across the main and navigation areas', () => {
+    const { container } = renderApp();
+    expect(container.querySelector('.desktop-window-drag-region')).toHaveAttribute('aria-hidden', 'true');
+    expect(container.querySelector('.desktop-sidebar-drag-region')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('keeps the draggable legacy topbar instead of adding a second drag region', () => {
+    const { container } = renderApp('/activity');
+    expect(container.querySelector('.desktop-window-drag-region')).not.toBeInTheDocument();
+    expect(container.querySelector('.desktop-sidebar-drag-region')).toHaveAttribute('aria-hidden', 'true');
+    expect(container.querySelector('.topbar')).toBeInTheDocument();
+  });
 });
